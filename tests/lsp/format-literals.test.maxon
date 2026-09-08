@@ -1,0 +1,58 @@
+// format-literals.test.maxon — a multiline MAP LITERAL, indented inside a function body and at the top
+// level. Two of the thirteen recovered formatting tests.
+//
+// ⭐ **THE PAIR IS THE POINT.** The same literal is laid out once inside a block and once with no
+// enclosing block at all, and a formatter that derives a continuation's indent from its enclosing scope
+// can get one right and the other wrong.
+//
+// ⭐⭐ **THIS FILE CARRIES THE BYTE-EXACTNESS RISK OF THE FORMATTING SET.** `formatting indents top-level
+// multiline map literal correctly` asserts on byte 0 with a `startsWith` and pins the closing bracket at
+// the start of a line — so a fixture representation that added a leading newline or stripped indentation
+// would break both, and no other test in the port would notice. A `b"…"` literal is byte-exact: a raw
+// newline in one IS the byte it spells, indentation is neither stripped nor added, and the closing quote
+// sits immediately after the last source character.
+//
+// The probe, the tab size and `formattedDocumentText` are `format-indent.test.maxon`'s.
+
+function mapLiteralFixture() returns String
+	return String.from(b"function getConfig()
+var config = [
+\"width\": 100,
+\"height\": 200
+]
+return config
+end 'getConfig'")
+end 'mapLiteralFixture'
+
+// The same construct as `mapLiteralFixture`, one level shallower. Nothing encloses it, so the formatter
+// must indent its entries once and leave the `let` and the closing bracket on column 0.
+function topLevelMapFixture() returns String
+	return String.from(b"let config = [
+\"width\": 100,
+\"height\": 200
+]")
+end 'topLevelMapFixture'
+
+test 'formatting indents multiline map literal correctly'
+	// Multiline map literal with no indentation - formatter should add proper indentation
+	let source = mapLiteralFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	try Expect.contains(text, needle: "\tvar config = [", message: "the declaration opening the map literal was not indented one tab.")
+	try Expect.contains(text, needle: "\t\t\"width\":", message: "a map entry was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\t\"height\":", message: "the second map entry was not indented two tabs.")
+	try Expect.contains(text, needle: "\t]", message: "the literal's closing bracket did not return to the declaration's level.")
+end 'formatting indents multiline map literal correctly'
+
+test 'formatting indents top-level multiline map literal correctly'
+	// Top-level map literal with no indentation - formatter should add proper indentation
+	let source = topLevelMapFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// ⭐ A prefix assertion on byte 0, and the sharpest detector in the port of a fixture representation
+	// that trims or prepends: nothing may precede the `let`.
+	try Expect.startsWith(text, needle: "let config = [", message: "the formatted document does not begin with the declaration. A top-level `let` opens at column 0, so anything before it — an indent, a blank line — is invented.")
+	try Expect.contains(text, needle: "\t\"width\":", message: "a top-level map entry was not indented exactly one tab.")
+	try Expect.contains(text, needle: "\t\"height\":", message: "the second top-level map entry was not indented exactly one tab.")
+	try Expect.contains(text, needle: "\n]", message: "the closing bracket of a top-level literal did not sit at column 0 on its own line.")
+end 'formatting indents top-level multiline map literal correctly'

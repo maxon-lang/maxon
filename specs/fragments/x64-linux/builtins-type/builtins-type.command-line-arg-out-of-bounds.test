@@ -1,0 +1,71 @@
+// Test: builtins-type.command-line-arg-out-of-bounds
+function main() returns ExitCode
+	let managed = __Builtins.commandLineArg(9999)
+	let s = String.init(managed)
+	if s == "" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+Args: one
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 9999
+    x64.callDirect __cl_arg
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.init
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; ""
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

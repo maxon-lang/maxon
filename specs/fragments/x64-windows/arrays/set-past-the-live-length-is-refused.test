@@ -1,0 +1,113 @@
+// Test: set-past-the-live-length-is-refused
+function main() returns ExitCode
+	var arr = ["one long heap allocated string value here"]
+	arr.reserve(8)
+	try arr.set(2, value: "two long heap allocated string value here") otherwise 'pastLength'
+		return 42
+	end 'pastLength'
+	return arr.count()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "one long heap allocated string value here"
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 8
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.reserve
+    x64.movRegImm32 rbx, 2
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "two long heap allocated string value here"
+    x64.callDirect __str_retain
+    x64.loadRegBaseDisp.word64 rax, [r12 + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.jmp __im_cont
+  __im_store:
+    x64.leaRegRegImm32 rax, rax, 16
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 42
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at set-past-the-live-length-is-refused.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,47 @@
+// Test: scalar-double-store
+typealias Integer = int(i64.min to i64.max)
+type IntPair
+	export var a as Integer
+	export var b as Integer
+	export static function create(n Integer) returns Self
+		return Self{a: n, b: n}
+	end 'create'
+end 'IntPair'
+function main() returns ExitCode
+	let p = IntPair.create(7)
+	return p.a - 7
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.sub x0, x0, 7
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at scalar-double-store.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

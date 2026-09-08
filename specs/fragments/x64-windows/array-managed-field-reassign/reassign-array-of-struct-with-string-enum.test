@@ -1,0 +1,340 @@
+// Test: reassign-array-of-struct-with-string-enum
+export union QueryKey
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
+end 'QueryKey'
+
+export type Dependency
+		export var dependent as QueryKey
+		export var dependency as QueryKey
+
+		static function create(dependent QueryKey, dependency QueryKey) returns Self
+			return Self{dependent: dependent, dependency: dependency}
+		end 'create'
+end 'Dependency'
+
+typealias DependencyArray = Array with Dependency
+
+export type Database
+		export var dependencies as DependencyArray
+
+		static function create(dependencies DependencyArray) returns Self
+			return Self{dependencies: dependencies}
+		end 'create'
+end 'Database'
+
+function clearDepsFor(db Database)
+		var newDeps = DependencyArray.create()
+		for dep in db.dependencies 'scan'
+				match dep.dependent 'check'
+						sourceFile then newDeps.push(dep)
+						tokens then newDeps.push(dep)
+						allModule then continue
+						codeResult then newDeps.push(dep)
+				end 'check'
+		end 'scan'
+		db.dependencies = newDeps
+end 'clearDepsFor'
+
+function main() returns ExitCode
+		var deps = DependencyArray.create()
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
+		deps.push(Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
+		deps.push(Dependency.create(QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")))
+		let db = Database.create(deps)
+		clearDepsFor(db)
+		return db.dependencies.count()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Dependency.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_QueryKey
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_QueryKey
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Database.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @clearDepsFor {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Dependency]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegImm32 r14, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc greaterEqual, forexit
+  scan:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=forstep, [3]=matcharm#8] @__jumptable_7
+  matchdead:
+  matcharm#5:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_push
+    x64.jmp forstep
+  matcharm#6:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_push
+    x64.jmp forstep
+  matcharm#8:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp forhdr
+  forexit:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Dependency]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.leaRegRdata r13, [rip + __str_rec_3]  ; "test.maxon"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect Dependency.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.leaRegRdata r13, [rip + __str_rec_3]  ; "test.maxon"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect Dependency.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.leaRegRdata r13, [rip + __str_rec_4]  ; "other.maxon"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect Dependency.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata r12, [rip + __str_rec_5]  ; "a.maxon"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.leaRegRdata r12, [rip + __str_rec_5]  ; "a.maxon"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect Dependency.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Database.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect clearDepsFor
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Database
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at reassign-array-of-struct-with-string-enum.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

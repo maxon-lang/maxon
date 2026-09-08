@@ -1,0 +1,188 @@
+// Test: overloads-three-way-each-carry-their-own-default
+typealias Integer = int(i64.min to i64.max)
+
+function tag(value Integer, mark String = "a") returns Integer
+	return value + mark.count()
+end 'tag'
+
+function tag(value String, mark String = "bb") returns Integer
+	return value.count() + mark.count()
+end 'tag'
+
+function tag(value bool, mark String = "ccc") returns Integer
+	if value 'yes'
+		return mark.count()
+	end 'yes'
+	return 0
+end 'tag'
+
+function main() returns ExitCode
+	return (tag(1) + tag("xy") + tag(true)) as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @tag {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callDirect String.count
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tag#String#String {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect String.count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.count
+    x64.leaRegRegReg r8, r12, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tag#bool#String {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  yes:
+    x64.movRegReg rcx, rdx
+    x64.callDirect String.count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.callDirect __paramDefault#tag#1
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect tag
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata r13, [rip + __str_rec_4]  ; "xy"
+    x64.callDirect __paramDefault#tag#String#String#1
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect tag#String#String
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 r13, 1
+    x64.callDirect __paramDefault#tag#bool#String#1
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect tag#bool#String
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at overloads-three-way-each-carry-their-own-default.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__paramDefault#tag#1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "a"
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__paramDefault#tag#String#String#1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "bb"
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__paramDefault#tag#bool#String#1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "ccc"
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

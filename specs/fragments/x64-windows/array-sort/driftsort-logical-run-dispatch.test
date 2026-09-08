@@ -1,0 +1,284 @@
+// Test: driftsort-logical-run-dispatch
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var base = 0
+	var blk = 0
+	while blk < 25 'blocks'
+		a.push(base + 4)
+		a.push(base + 3)
+		a.push(base + 2)
+		a.push(base + 1)
+		base = base + 10
+		blk = blk + 1
+	end 'blocks'
+	Log.startCapture()
+	a.sort(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "driftsort.logicalRun") 'lr'
+		print("logicalRun ")
+	end 'lr'
+	if not Log.fired(keys, key: "driftsort.eagerRun") 'ne'
+		print("no-eager ")
+	end 'ne'
+	var ok = true
+	for i in 1 upto 100 'c'
+		let p = try a.get(i - 1) otherwise return 90
+		let cv = try a.get(i) otherwise return 91
+		if p > cv 'bad'
+			ok = false
+		end 'bad'
+	end 'c'
+	if ok 'o'
+		print("sorted")
+	end 'o'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.cmpRegImm32 r13, 25
+    x64.jcc greaterEqual, whileexit
+  blocks:
+    x64.leaRegRegImm32 rdx, r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 rdx, r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 rdx, r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 rdx, r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 r12, r12, 10
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.callDirect Log.startCapture
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.callDirect Log.stopCapture
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_21]  ; "driftsort.logicalRun"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#5
+  lr:
+    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; "logicalRun "
+    x64.callDirect print
+  ifcont#5:
+    x64.leaRegRdata rdx, [rip + __str_rec_23]  ; "driftsort.eagerRun"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#7
+  ne:
+    x64.leaRegRdata rcx, [rip + __str_rec_24]  ; "no-eager "
+    x64.callDirect print
+  ifcont#7:
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 r14, 1
+  forhdr:
+    x64.cmpRegImm32 r14, 100
+    x64.jcc greaterEqual, forexit
+  c:
+    x64.leaRegRegImm32 rdx, r14, -1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_109]  ; "panic at driftsort-logical-run-dispatch.test:32: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#27
+  __im_load#28:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + rdx*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#33
+  __im_empty#29:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, critsplit#34
+  __im_slow#27:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r15, r8
+    x64.jmp __im_cont#26
+  critsplit#34:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#26
+  critsplit#33:
+    x64.movRegReg r10, rax
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#12
+  tryerr#13:
+    x64.movRegImm32 r13, 90
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc aboveEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, critsplit#31
+  __im_empty#25:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#32
+  __im_slow#23:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#22
+  critsplit#32:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#22
+  critsplit#31:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#22:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#14
+  tryerr#15:
+    x64.movRegImm32 r13, 91
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#14:
+    x64.cmpRegReg r15, r8
+    x64.jcc lessEqual, critsplit#30
+  bad:
+    x64.movRegImm32 rax, 0
+    x64.jmp forstep
+  critsplit#30:
+    x64.movRegReg rax, r13
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg r13, rax
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, ifcont#19
+  o:
+    x64.leaRegRdata rcx, [rip + __str_rec_25]  ; "sorted"
+    x64.callDirect print
+  ifcont#19:
+    x64.leaRegRdata rcx, [rip + __str_rec_26]  ; "\x0a"
+    x64.callDirect print
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

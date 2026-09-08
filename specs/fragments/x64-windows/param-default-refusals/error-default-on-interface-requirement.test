@@ -1,0 +1,19 @@
+// Test: error-default-on-interface-requirement
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(times Integer = 2) returns Integer
+end 'Greeter'
+
+type Loud implements Greeter
+	export function greet(times Integer) returns Integer
+		return times
+	end 'greet'
+end 'Loud'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:5:31: Unsupported: a default value on interface requirement parameter 'times' — a witness dispatch slots its arguments against the INTERFACE's formals, which are in no signature registry, so no dispatch site can read a default from the requirement. Declare the default on each conforming type's method

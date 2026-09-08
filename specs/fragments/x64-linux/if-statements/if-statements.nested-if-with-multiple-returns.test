@@ -1,0 +1,47 @@
+// Test: if-statements.nested-if-with-multiple-returns
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(c Integer, next Integer) returns Integer
+	if c == 0 'maybePrefix'
+		if next == 1 'isHex'
+			return 1
+		end 'isHex'
+		if next == 2 'isBinary'
+			return 2
+		end 'isBinary'
+	end 'maybePrefix'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5, next: 0)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  ifcont:
+    x64.movRegImm32 r8, 42
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at if-statements.nested-if-with-multiple-returns.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

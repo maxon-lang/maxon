@@ -1,0 +1,31 @@
+// Test: error.match-consume-then-use
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(5))
+	let first = match s 'check'
+		empty gives 0
+		solid(b) gives b.mass
+	end 'check'
+	let second = match s 'again'
+		empty gives 0
+		solid(b) gives b.mass
+	end 'again'
+	return first + second
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:23:21: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment

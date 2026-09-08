@@ -1,0 +1,143 @@
+// rename-symbols.test.maxon — the two recovered `rename` tests: renaming a block label and renaming a
+// function, each of which Maxon spells twice.
+//
+// ⛔ **NEITHER IS PORTED AS WRITTEN, AND THE REASON IS THAT NEITHER TESTED ITS OWN SUBJECT.** Both Zig
+// bodies asserted `edits.len == 2` and inspected nothing else — so a rename that produced two edits with
+// the WRONG TEXT, or two edits pointing at the WRONG PLACES, passed. Each test here keeps the count and
+// adds the two claims the original omitted: every edit's `newText` is exactly the requested name, and the
+// two ranges are the declaration and the closing label.
+//
+// ⚠ **THE FOUR COLUMN NUMBERS IN EACH TEST ARE DERIVED HERE, NOT RECOVERED** — the Zig tests never
+// stated them. They are counted off the fixture bytes (`    if true '` is 13 characters, `    end '` is
+// 9, `function ` is 9, `end '` is 5) and corroborated by the `linkedEditingRange` test that DID state its
+// equivalents for a 10-character name: 9/19 and 5/15. Confirm them against the first real server response.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let RenameUri = "file:///test.maxon"
+
+let RenameUnreportedSession = "the session ended without saying how"
+
+union RenameEditsOutcome
+	observed(edits TextEditArray)
+	broke(detail String)
+end 'RenameEditsOutcome'
+
+test 'rename block identifier updates all occurrences'
+	var client = LspClient.start()
+	var outcome = RenameEditsOutcome.broke(RenameUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(RenameUri, content: renameMyBlockFixture())
+
+		// Request rename on 'myBlock' (line 1, col 14)
+		outcome = RenameEditsOutcome.observed(client.rename(RenameUri, line: 1, character: 14, newName: "newBlock").edits)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = RenameEditsOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = RenameEditsOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = RenameEditsOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'blockRename'
+		observed(edits) then try assertRenameOfBlockLabel(edits)
+		broke(detail) then try Expect.fail("renaming a block label did not complete: {detail}")
+	end 'blockRename'
+end 'rename block identifier updates all occurrences'
+
+test 'rename function updates function name and end label'
+	var client = LspClient.start()
+	var outcome = RenameEditsOutcome.broke(RenameUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(RenameUri, content: renameOldNameFixture())
+
+		// Request rename on 'oldName' (line 0, col 12)
+		outcome = RenameEditsOutcome.observed(client.rename(RenameUri, line: 0, character: 12, newName: "newName").edits)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = RenameEditsOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = RenameEditsOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = RenameEditsOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'functionRename'
+		observed(edits) then try assertRenameOfFunction(edits)
+		broke(detail) then try Expect.fail("renaming a function did not complete: {detail}")
+	end 'functionRename'
+end 'rename function updates function name and end label'
+
+function assertRenameOfBlockLabel(edits TextEditArray) throws TestFailure
+	// Should have edits for both occurrences
+	try assertRenameCountAndText(edits, newName: "newBlock", subject: "a block label")
+
+	// Line 1 is `    if true 'myBlock'`: `    if true '` is 13 characters and `myBlock` is 7.
+	try Expect.isTrue(renameEditsSpan(edits, startLine: 1, startCharacter: 13, endLine: 1, endCharacter: 20), message: "no edit covered the OPENING label on line 1, characters 13-20. An edit inside the quotes is what leaves the quotes standing.")
+
+	// Line 3 is `    end 'myBlock'`: `    end '` is 9 characters.
+	try Expect.isTrue(renameEditsSpan(edits, startLine: 3, startCharacter: 9, endLine: 3, endCharacter: 16), message: "no edit covered the CLOSING label on line 3, characters 9-16. Renaming only the opening half leaves the file unparseable, which is exactly the failure this test exists to catch.")
+end 'assertRenameOfBlockLabel'
+
+function assertRenameOfFunction(edits TextEditArray) throws TestFailure
+	// Should have edits for function name and end label
+	try assertRenameCountAndText(edits, newName: "newName", subject: "a function")
+
+	// Line 0 is `function oldName() returns int`: `function ` is 9 characters and `oldName` is 7.
+	try Expect.isTrue(renameEditsSpan(edits, startLine: 0, startCharacter: 9, endLine: 0, endCharacter: 16), message: "no edit covered the DECLARATION name on line 0, characters 9-16.")
+
+	// Line 2 is `end 'oldName'`: `end '` is 5 characters.
+	try Expect.isTrue(renameEditsSpan(edits, startLine: 2, startCharacter: 5, endLine: 2, endCharacter: 12), message: "no edit covered the END LABEL on line 2, characters 5-12.")
+end 'assertRenameOfFunction'
+
+// The count and the TEXT, together. The count alone is what the recovered tests asserted, and it passes
+// for a rename that writes the wrong word in the right two places.
+function assertRenameCountAndText(edits TextEditArray, newName String, subject String) throws TestFailure
+	let observedCount = edits.count()
+	let expectedCount = 2
+	try Expect.equal(observedCount, expected: expectedCount, message: "renaming {subject} did not produce two edits. Maxon names a block twice — at its head and at its `end` — so both halves move or the file stops parsing.")
+
+	for edit in edits 'eachEdit'
+		let observedText = edit.newText
+		let expectedText = newName
+		try Expect.equal(observedText, expected: expectedText, message: "an edit of the rename wrote something other than the requested name. The name goes in UNQUOTED even where it lands between quotes, because the range covers the identifier and not the quotes around it.")
+	end 'eachEdit'
+end 'assertRenameCountAndText'
+
+function renameEditsSpan(edits TextEditArray, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns bool
+	for edit in edits 'eachEdit'
+		if edit.range.startLine == startLine and edit.range.startCharacter == startCharacter and edit.range.endLine == endLine and edit.range.endCharacter == endCharacter 'hit'
+			return true
+		end 'hit'
+	end 'eachEdit'
+
+	return false
+end 'renameEditsSpan'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, no indentation stripped and no trailing newline. Every column
+// derived above is counted against exactly these bytes.
+function renameMyBlockFixture() returns String
+	return String.from(b"function test() returns int
+    if true 'myBlock'
+        return 1
+    end 'myBlock'
+    return 0
+end 'test'")
+end 'renameMyBlockFixture'
+
+function renameOldNameFixture() returns String
+	return String.from(b"function oldName() returns int
+    return 42
+end 'oldName'")
+end 'renameOldNameFixture'

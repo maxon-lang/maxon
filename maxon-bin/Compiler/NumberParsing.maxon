@@ -1,0 +1,317 @@
+// Pure number parsing functions for the compiler.
+// Converts string representations of integer and float literals to numeric values.
+
+export typealias ParsedInt = int(i64.min to i64.max)
+
+// A column of parsed integers. Lives HERE, beside the type it is a column OF, because two passes
+// now keep one — the parser's constant folder and `foldConstOperands`' ConstValueMap — and a
+// typealias declared twice over the same element type is the same fact written down twice.
+//
+// A `ParsedInt` is SIGNED, so this is NOT a `DenseColumn` (which is unsigned): never widen one into
+// the other.
+export typealias ParsedIntArray = Array with ParsedInt
+
+// How a literal's text can fail to become a number. EXACTLY the two failures `parseInt` /
+// `__float_bitsFromText` actually raise — `unhandledToken`, `typeError` and `unexpectedEof` sat here
+// unthrown and unmatched, and a dead arm in an error union is a case every handler has to invent a
+// story for. There is now no arm without a raiser.
+export union ParserError
+	overflow
+	// ⚠ A byte the number grammar does not admit — `3,14`, `1.0x`, a value with no digit at all.
+	// DISTINCT from `overflow`, and the distinction is load-bearing rather than cosmetic: the two
+	// have different CAUSES and therefore different correct responses. An overflow is a real program
+	// saying a real thing too big to hold; a malformed literal cannot come from the lexer at all
+	// (`Lexer.scanNumber` hands over digits, `_`, `.`, `e`/`E` and an exponent sign, and nothing
+	// else), so from the parser it is a compiler invariant violation — while from
+	// `Testing/PeSectionReader`, which parses spec-file text that NO lexer guards, it is exactly the
+	// typo that must be REJECTED rather than silently read as some other number.
+	malformed
+end 'ParserError'
+
+// The i64 boundary magnitudes, as digit bytes, for the overflow checks below. Built ONCE:
+// `parseInt` consults `I64MaxDigits` for EVERY 19-digit literal and `parseNegatedInt`
+// consults `I64MinMagnitudeDigits` for every negated one.
+let I64MaxDigits = b"9223372036854775807"
+let I64MinMagnitudeDigits = b"9223372036854775808"
+
+// ⭐⭐ **THE FLOAT HALF OF THIS FILE MOVED TO `stdlib/Builtins.maxon` (spec-port: sin).** Text ↔
+// binary64 — `__float_bitsFromText`, `__float_textFromBits`, the bignum they rest on, and the
+// shortest-round-trip digit search — now lives there, because a THIRD caller appeared that this file
+// could never serve: `"{x}"` interpolating a float in an EMITTED PROGRAM, which needs the routine at
+// the program's runtime rather than at the compiler's. `stdlib/` is the one place both reach. What is
+// left here is integer literal parsing, which has no such second caller.
+//
+// ⚠ `ParserError` stays HERE and is the INTEGER path's: the float entry point answers with
+// `__FloatTextResult` instead, for the reason that union's header gives.
+
+// ⭐⭐ **A SCALAR CONSTANT AS THE TEXT SOMEBODY WROTE — the ONE renderer, for a payload the compiler
+// carries as a bare `ParsedInt` in both of the shapes it can mean.** An integer constant IS its number;
+// a FLOAT constant is an f64 BIT PATTERN, and printing the pattern names a number nobody wrote
+// (`4614253070214989087` for `3.14`). The caller knows which it holds and nothing else can.
+//
+// It lives beside the PARSE direction because it is the same fact read backwards, and it is here rather
+// than in either caller's file because its callers are in different TIERS and neither may reach the
+// other: `TypeRules.formatRangeDisplay` renders an E3005's range bounds in the Maxon tier, and
+// `TargetPrinter.printDataSection` renders a `.data` slot's initial value in the Target tier — which is
+// the read that found it, having spelled `f64 4614253070214989087` into every golden holding a float
+// global. Two copies of "an f64 pattern, as text" is one fact written twice.
+//
+// FLOAT renders through `stdlib/Builtins.maxon`'s `__float_textFromBits`: the shortest decimal that reads
+// back as the same double, and its own hex bits for the non-finite patterns no literal can produce.
+//
+// ⭐⭐ **IT IS SPELLED `float.textFromBits`, AND THE RESERVED SPELLING IS NOT AVAILABLE HERE.** This file
+// is COMPILER source, and to the compiler compiling it that is an ordinary user program: a `__` callee
+// written out in a file that does not DECLARE the name is refused by
+// `Parser.requireCalleeIsNotReservedName` (E3004), which is the rule
+// `specs/reserved-double-underscore.md` pins as *"a `__` name may be REFERENCED from exactly one
+// file, not from user code generally"*. The PRIMITIVE-STATIC spelling is the surface over that reserved
+// name — `Parser.primitiveStaticCallee` mints exactly the `__float_textFromBits` bytes out of it — so
+// this reaches the identical stdlib body through the door the rule leaves open, and self-compilation
+// needs no exemption. `Parser.floatLiteralBits` spells its own reader the same way for the same reason.
+//
+// ⚠ **THE `u64.max` SENTINEL IS DELIBERATELY NOT SPELLED HERE** — a renderer holding ONE number cannot
+// tell a stored `-1` that means `u64.max` from one that means `-1`. `TypeRules.formatRangeDisplay` holds
+// BOTH bounds, is the only party that can ask, and carries that reasoning in full.
+module function scalarConstantText(value ParsedInt, isFloat bool) returns String
+	if isFloat 'float'
+		return float.textFromBits(value)
+	end 'float'
+
+	return "{value}"
+end 'scalarConstantText'
+
+// ⭐⭐ **THE THREE BIT FACTS ABOUT A `ParsedInt` THAT HOLDS A DOUBLE, AND THEY LIVE HERE FOR
+// `scalarConstantText`'s REASON.** A float constant rides this file's `ParsedInt` as an IEEE-754 BIT
+// PATTERN, and three separate tiers now have to take that pattern apart: the PARSER folds a leading `-`
+// into a literal's sign bit, `TypeRules` folds `abs`/`-x` over a constant, and `IR/Std/FoldConstants`
+// asks whether a folded answer came out a NaN. `module` rather than `export`, and that is enough: the
+// visibility is the `Compiler/` subtree, which is exactly the three of them.
+//
+// ⚠ **THEY ARE BIT OPERATIONS, DELIBERATELY, WHERE THE HOST'S OWN `abs`/`-` WOULD HAVE READ SHORTER.**
+// Reinterpreting to f64 and letting the host negate would make the answer depend on how the compiler
+// COMPILING THIS FILE spells a float negate — and that has been `0.0 - x` in a shipped compiler, which
+// is `+0.0` for `-(+0.0)` and loses a NaN's sign. An `xor`/`and` over the pattern is the operation
+// IEEE-754 defines and every target emits, and it computes the same answer under any compiler.
+//
+// ⚠ `stdlib/Builtins.maxon` holds `__FloatSignBit`/`__FloatMagnitudeMask` for the EMITTED program's
+// runtime, and those are not a second copy of these: they are the same facts in the other program.
+// Neither file can reach the other's — stdlib's are file-private and this one is the compiler's.
+
+// IEEE-754's sign bit — the top bit of the 64-bit pattern. It rides `ParsedInt`, which is SIGNED, so
+// the constant IS `i64.min`: the same bit pattern `0x8000000000000000`, spelled as the number Maxon
+// can write.
+let FloatSignBit = i64.min as ParsedInt
+
+// Everything BELOW the sign bit — the exponent and the significand together. DERIVED from
+// `FloatSignBit` rather than spelled `i64.max`, so the two cannot come to disagree about where the
+// boundary is.
+let FloatMagnitudeMask = (not FloatSignBit) as ParsedInt
+
+// The magnitude of ±infinity: a saturated exponent with a zero significand. It is the BOUNDARY of the
+// NaN space rather than a member of it — every larger magnitude has a non-zero significand under a
+// saturated exponent, which is what a NaN is.
+let FloatInfinityMagnitude = 0x7FF0000000000000 as ParsedInt
+
+// `-<float>` — the bits of a double's negation. THE one spelling of a float's sign flip at COMPILE
+// time, shared by the declaration sweep (a field default has no code to emit into and must be a NUMBER
+// by the time the layout is hashed), the range-bound reader, the expression parser's negated-literal
+// fold (`Parser.parseNegatedFloatLiteral`), the const evaluator's `-K` and `TypeRules.foldFloatUnaryOp`.
+// A body's `-x` over a non-literal is the same flip at RUN time, `MaxonUnaryOp.fneg` — so a zero keeps
+// its sign either way.
+module function negatedFloatBits(bits ParsedInt) returns ParsedInt
+	return bits xor FloatSignBit
+end 'negatedFloatBits'
+
+// `abs(<float>)` — the sign bit CLEARED. `negatedFloatBits`' twin, and the same operation `f64.abs`,
+// arm64's `FABS` and x64's synthesized `absF64RegReg` each perform: it computes nothing else, so a
+// NaN's payload and an infinity's exponent ride through untouched.
+module function absFloatBits(bits ParsedInt) returns ParsedInt
+	return bits and FloatMagnitudeMask
+end 'absFloatBits'
+
+// True when a pattern is a NaN — ANY NaN, quiet or signalling, either sign. The sign is masked off
+// first because it says nothing about NaN-ness, and the comparison is then between two non-negative
+// magnitudes, where `ParsedInt`'s signedness cannot bite.
+module function floatBitsAreNaN(bits ParsedInt) returns bool
+	return absFloatBits(bits) > FloatInfinityMagnitude
+end 'floatBitsAreNaN'
+
+// Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
+// Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
+//
+// Takes the literal's BYTES — the caller hands over the token's zero-copy slice of the
+// source directly. This function only ever read the digits as bytes (as the prefix
+// helpers below always have); a `String` parameter merely meant every caller built one
+// so that the first statement here could immediately unbuild it again.
+export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
+	let sLen = bytes.count()
+
+	if sLen < 1 'empty'
+		return 0
+	end 'empty'
+
+	if sLen >= 2 'checkPrefix'
+		let first = try bytes.get(0) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(0) failed")
+		let second = try bytes.get(1) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(1) failed")
+
+		if first == '0' and (second == 'x' or second == 'X') 'isHex'
+			return try parseHexInt(bytes, startIndex: 2)
+		end 'isHex' else if first == '0' and (second == 'b' or second == 'B') 'isBin'
+			return try parseBinaryInt(bytes, startIndex: 2)
+		end 'isBin' else if first == '0' and (second == 'o' or second == 'O') 'isOct'
+			return try parseOctalInt(bytes, startIndex: 2)
+		end 'isOct'
+	end 'checkPrefix'
+
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in 0 upto sLen 'digits'
+		let b = try bytes.get(pi) otherwise panic("parseInt.digits: pi < sLen = bytes.count() but get({pi}) failed")
+		if b >= '0' and b <= '9' 'digit'
+			result = result * 10 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
+		end 'digit'
+	end 'digits'
+
+	// >19 significant digits always overflows i64
+	if digitCount > 19 'tooMany'
+		throw ParserError.overflow
+	end 'tooMany'
+
+	// Exactly 19 digits: compare digit-by-digit against i64.max
+	if digitCount == 19 'checkMax'
+		var mi = 0
+		var pastLeading = false
+		for pi in 0 upto sLen 'cmp'
+			let b = try bytes.get(pi) otherwise panic("parseInt.cmp: pi < sLen but get({pi}) failed")
+			if b == '_' 'skipUs'
+				continue
+			end 'skipUs'
+			if not pastLeading and b == '0' 'skipLz'
+				continue
+			end 'skipLz'
+			if b >= '0' and b <= '9' 'cmpDigit'
+				pastLeading = true
+				let maxByte = try I64MaxDigits.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = I64MaxDigits.count() but get({mi}) failed")
+				if b > maxByte 'bigger'
+					throw ParserError.overflow
+				end 'bigger' else if b < maxByte 'smaller'
+					return result
+				end 'smaller'
+				mi = mi + 1
+			end 'cmpDigit'
+		end 'cmp'
+	end 'checkMax'
+
+	return result
+end 'parseInt'
+
+// Parse a NEGATED integer literal magnitude `s` (the digits after a leading
+// unary `-`). The magnitude `9223372036854775808` (= i64.max + 1) overflows a
+// positive i64 but `-9223372036854775808` is exactly i64.min, so it is accepted
+// here and returned as i64.min. Every other magnitude parses through `parseInt`
+// (which throws on a true overflow) and is negated. The caller must apply this
+// ONLY when a `-` immediately precedes the literal.
+export function parseNegatedInt(bytes ByteArray) returns ParsedInt throws ParserError
+	if digitsWithoutSeparators(bytes).equals(I64MinMagnitudeDigits) 'isI64Min'
+		return i64.min
+	end 'isI64Min'
+	return -(try parseInt(bytes))
+end 'parseNegatedInt'
+
+// The literal's digits with `_` separators removed, so a magnitude can be compared
+// against a fixed digit string. Only the i64.min check needs this: every other path
+// skips separators inline as it scans.
+function digitsWithoutSeparators(bytes ByteArray) returns ByteArray
+	var digits = ByteArray.create()
+	for b in bytes 'each'
+		if b != '_' 'keep'
+			digits.push(b)
+		end 'keep'
+	end 'each'
+	return digits
+end 'digitsWithoutSeparators'
+
+// Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
+function parseHexInt(s ByteArray, startIndex ByteOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in startIndex upto s.count() 'hexDigits'
+		let b = try s.get(pi) otherwise panic("parseHexInt.hexDigits: pi < s.count() but get({pi}) failed")
+		if b >= '0' and b <= '9' 'decDigit'
+			result = result * 16 + (b - '0')
+			if not leadingZeros or b != '0' 'sigDec'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'sigDec'
+		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
+			result = result * 16 + (b - 'a' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
+			result = result * 16 + (b - 'A' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'upperHex'
+	end 'hexDigits'
+	if digitCount > 16 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseHexInt'
+
+// Throws ParserError.overflow if more than 64 significant binary digits.
+function parseBinaryInt(s ByteArray, startIndex ByteOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in startIndex upto s.count() 'binDigits'
+		let b = try s.get(pi) otherwise panic("parseBinaryInt.binDigits: pi < s.count() but get({pi}) failed")
+		if b == '0' 'zeroBit'
+			result = result * 2
+			if not leadingZeros 'sigZero'
+				digitCount = digitCount + 1
+			end 'sigZero'
+		end 'zeroBit' else if b == '1' 'oneBit'
+			result = result * 2 + 1
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'oneBit'
+	end 'binDigits'
+	if digitCount > 64 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseBinaryInt'
+
+// Throws ParserError.overflow if more than 21 significant octal digits,
+// or exactly 21 with a leading digit > 1 (exceeds 64 bits).
+function parseOctalInt(s ByteArray, startIndex ByteOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	var firstSignificantDigit = 0
+	for pi in startIndex upto s.count() 'octDigits'
+		let b = try s.get(pi) otherwise panic("parseOctalInt.octDigits: pi < s.count() but get({pi}) failed")
+		if b >= '0' and b <= '7' 'octDigit'
+			result = result * 8 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				if leadingZeros 'firstSig'
+					firstSignificantDigit = b - '0'
+				end 'firstSig'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
+		end 'octDigit'
+	end 'octDigits'
+	// 64 bits = 21 octal digits max, but first digit can be at most 1 (0o1777...7)
+	if digitCount > 21 or (digitCount == 21 and firstSignificantDigit > 1) 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseOctalInt'

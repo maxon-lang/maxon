@@ -1,0 +1,39 @@
+// Test: bool-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+function test_bool_param(flag bool) returns Integer
+	if flag 'check'
+		return 1
+	end 'check' else 'else_check'
+		return 0
+	end 'else_check'
+end 'test_bool_param'
+
+function main() returns ExitCode
+	return test_bool_param(true)
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  check:
+    arm64.movImm x0, 1
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at bool-parameter.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

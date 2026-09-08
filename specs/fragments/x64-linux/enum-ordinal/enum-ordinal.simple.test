@@ -1,0 +1,25 @@
+// Test: enum-ordinal.simple
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.green
+	// `.ordinal` may only be observed as data, not compared (E3097) — surface
+	// it as the exit code; green is the second case, so ordinal 1.
+	return c.ordinal as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

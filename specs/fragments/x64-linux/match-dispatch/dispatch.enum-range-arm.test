@@ -1,0 +1,363 @@
+// Test: dispatch.enum-range-arm
+enum Day
+	mon
+	tue
+	wed
+	thu
+	fri
+	sat
+	sun
+end 'Day'
+
+function kind(d Day) returns ExitCode
+	return match d 'm'
+		mon gives 1
+		tue gives 2
+		wed to fri gives 3
+		sat gives 4
+		sun gives 5
+	end 'm'
+end 'kind'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	if kind(Day.mon) == 1 'a'
+		n = n + 1
+	end 'a'
+	if kind(Day.tue) == 2 'b'
+		n = n + 1
+	end 'b'
+	if kind(Day.wed) == 3 'c'
+		n = n + 1
+	end 'c'
+	if kind(Day.thu) == 3 'd'
+		n = n + 1
+	end 'd'
+	if kind(Day.fri) == 3 'e'
+		n = n + 1
+	end 'e'
+	if kind(Day.sat) == 4 'f'
+		n = n + 1
+	end 'f'
+	if kind(Day.sun) == 5 'g'
+		n = n + 1
+	end 'g'
+	return n
+end 'main'
+---
+ExitCode: 7
+---
+func @kind {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2..4]=matcharm#3, [5]=matcharm#4, [6]=matcharm#5] @__jumptable_2
+  matchdead:
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matcharm#2:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matcharm#3:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matcharm#4:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matcharm#5:
+    x64.movRegImm32 r8, 5
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.enum-range-arm.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+  __il_body#19:
+    x64.jumpTable rcx, default=matchdead#25 [[0]=matcharm#20, [1]=matcharm#21, [2..4]=matcharm#22, [5]=matcharm#23, [6]=matcharm#24] @__jumptable_3
+  matchdead#25:
+  matcharm#20:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#26
+  matcharm#21:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#26
+  matcharm#22:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#26
+  matcharm#23:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#26
+  matcharm#24:
+    x64.movRegImm32 rax, 5
+  matchcont#26:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#29
+  __rc_chk#28:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#27
+  __il_slow#29:
+    x64.callDirect kind
+    x64.jmp __il_cont#18
+  __rc_ok#27:
+    x64.movRegReg r8, rax
+  __il_cont#18:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont#2
+  a:
+    x64.movRegImm32 rbx, 1
+  ifcont#2:
+    x64.movRegImm32 rcx, 1
+  __il_body#31:
+    x64.jumpTable rcx, default=matchdead#37 [[0]=matcharm#32, [1]=matcharm#33, [2..4]=matcharm#34, [5]=matcharm#35, [6]=matcharm#36] @__jumptable_4
+  matchdead#37:
+  matcharm#32:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#38
+  matcharm#33:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#38
+  matcharm#34:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#38
+  matcharm#35:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#38
+  matcharm#36:
+    x64.movRegImm32 rax, 5
+  matchcont#38:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#41
+  __rc_chk#40:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#39
+  __il_slow#41:
+    x64.callDirect kind
+    x64.jmp __il_cont#30
+  __rc_ok#39:
+    x64.movRegReg r8, rax
+  __il_cont#30:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, ifcont#4
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#4:
+    x64.movRegImm32 rcx, 2
+  __il_body#43:
+    x64.jumpTable rcx, default=matchdead#49 [[0]=matcharm#44, [1]=matcharm#45, [2..4]=matcharm#46, [5]=matcharm#47, [6]=matcharm#48] @__jumptable_5
+  matchdead#49:
+  matcharm#44:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#50
+  matcharm#45:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#50
+  matcharm#46:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#50
+  matcharm#47:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#50
+  matcharm#48:
+    x64.movRegImm32 rax, 5
+  matchcont#50:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#53
+  __rc_chk#52:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#51
+  __il_slow#53:
+    x64.callDirect kind
+    x64.jmp __il_cont#42
+  __rc_ok#51:
+    x64.movRegReg r8, rax
+  __il_cont#42:
+    x64.cmpRegImm32 r8, 3
+    x64.jcc notEqual, ifcont#6
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#6:
+    x64.movRegImm32 rcx, 3
+  __il_body#55:
+    x64.jumpTable rcx, default=matchdead#61 [[0]=matcharm#56, [1]=matcharm#57, [2..4]=matcharm#58, [5]=matcharm#59, [6]=matcharm#60] @__jumptable_6
+  matchdead#61:
+  matcharm#56:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#62
+  matcharm#57:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#62
+  matcharm#58:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#62
+  matcharm#59:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#62
+  matcharm#60:
+    x64.movRegImm32 rax, 5
+  matchcont#62:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#65
+  __rc_chk#64:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#63
+  __il_slow#65:
+    x64.callDirect kind
+    x64.jmp __il_cont#54
+  __rc_ok#63:
+    x64.movRegReg r8, rax
+  __il_cont#54:
+    x64.cmpRegImm32 r8, 3
+    x64.jcc notEqual, ifcont#8
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#8:
+    x64.movRegImm32 rcx, 4
+  __il_body#67:
+    x64.jumpTable rcx, default=matchdead#73 [[0]=matcharm#68, [1]=matcharm#69, [2..4]=matcharm#70, [5]=matcharm#71, [6]=matcharm#72] @__jumptable_7
+  matchdead#73:
+  matcharm#68:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#74
+  matcharm#69:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#74
+  matcharm#70:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#74
+  matcharm#71:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#74
+  matcharm#72:
+    x64.movRegImm32 rax, 5
+  matchcont#74:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#77
+  __rc_chk#76:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#75
+  __il_slow#77:
+    x64.callDirect kind
+    x64.jmp __il_cont#66
+  __rc_ok#75:
+    x64.movRegReg r8, rax
+  __il_cont#66:
+    x64.cmpRegImm32 r8, 3
+    x64.jcc notEqual, ifcont#10
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#10:
+    x64.movRegImm32 rcx, 5
+  __il_body#79:
+    x64.jumpTable rcx, default=matchdead#85 [[0]=matcharm#80, [1]=matcharm#81, [2..4]=matcharm#82, [5]=matcharm#83, [6]=matcharm#84] @__jumptable_8
+  matchdead#85:
+  matcharm#80:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#86
+  matcharm#81:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#86
+  matcharm#82:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#86
+  matcharm#83:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#86
+  matcharm#84:
+    x64.movRegImm32 rax, 5
+  matchcont#86:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#89
+  __rc_chk#88:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#87
+  __il_slow#89:
+    x64.callDirect kind
+    x64.jmp __il_cont#78
+  __rc_ok#87:
+    x64.movRegReg r8, rax
+  __il_cont#78:
+    x64.cmpRegImm32 r8, 4
+    x64.jcc notEqual, ifcont#12
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#12:
+    x64.movRegImm32 rcx, 6
+  __il_body#91:
+    x64.jumpTable rcx, default=matchdead#97 [[0]=matcharm#92, [1]=matcharm#93, [2..4]=matcharm#94, [5]=matcharm#95, [6]=matcharm#96] @__jumptable_9
+  matchdead#97:
+  matcharm#92:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#98
+  matcharm#93:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#98
+  matcharm#94:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont#98
+  matcharm#95:
+    x64.movRegImm32 rax, 4
+    x64.jmp matchcont#98
+  matcharm#96:
+    x64.movRegImm32 rax, 5
+  matchcont#98:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#101
+  __rc_chk#100:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#99
+  __il_slow#101:
+    x64.callDirect kind
+    x64.jmp __il_cont#90
+  __rc_ok#99:
+    x64.movRegReg r8, rax
+  __il_cont#90:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc notEqual, critsplit
+  g:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont#14
+  critsplit:
+    x64.movRegReg r8, rbx
+  ifcont#14:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#17:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#15
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at dispatch.enum-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#15:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

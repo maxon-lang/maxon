@@ -1,0 +1,77 @@
+// Test: crossfile-float-alias-against-a-nominal-declaration
+// --- file: a.maxon
+typealias Level = float(0.0 to 5.0)
+
+export function fromA() returns Level
+	return 2.5
+end 'fromA'
+
+// --- file: b.maxon
+enum Level
+	low = 1
+	high = 9
+end 'Level'
+
+export function fromB() returns Level
+	return Level.high
+end 'fromB'
+
+export function rankOf(l Level) returns ExitCode
+	return l.rawValue
+end 'rankOf'
+
+// --- file: main.maxon
+typealias Whole = int(0 to 100)
+
+function main() returns ExitCode
+	let scaled = trunc(fromA() * 2.0) as Whole
+
+	return scaled + rankOf(fromB())
+end 'main'
+---
+ExitCode: 14
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body#8:
+    x64.movsdRegRip xmm0, [rip + __fconst_2.5]
+  __il_cont#7:
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.cvttsd2siRegReg rax, xmm0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __il_body#12
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'Whole'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __il_body#12:
+    x64.movRegImm32 rcx, 9
+  __il_cont#9:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at main.maxon:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,226 @@
+// Test: many-guarded-return-sites-in-range
+typealias Small = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Small
+	if n == 0 'a'
+		return n + 1
+	end 'a'
+
+	if n == 1 'b'
+		return n + 2
+	end 'b'
+
+	if n == 2 'c'
+		return n + 3
+	end 'c'
+
+	if n == 3 'd'
+		return n + 4
+	end 'd'
+
+	if n == 4 'e'
+		return n + 5
+	end 'e'
+
+	return n + 6
+end 'pick'
+
+function main() returns ExitCode
+	var acc = 0
+	acc = acc + pick(0)
+	acc = acc + pick(1)
+	acc = acc + pick(2)
+	acc = acc + pick(3)
+	acc = acc + pick(4)
+	acc = acc + pick(9)
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 40
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#12
+  __rc_chk#13:
+    x64.cmpRegImm32 rcx, 100000
+    x64.jcc lessEqual, __rc_ok#11
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at many-guarded-return-sites-in-range.test:5: Range check failed: value outside typealias 'Wide'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#11:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont#2
+  a:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#15
+  __rc_chk#16:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#14
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at many-guarded-return-sites-in-range.test:7: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#14:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, ifcont#4
+  b:
+    x64.leaRegRegImm32 r8, rcx, 2
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#18
+  __rc_chk#19:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#17
+  __rc_panic#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at many-guarded-return-sites-in-range.test:11: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#17:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, ifcont#6
+  c:
+    x64.leaRegRegImm32 r8, rcx, 3
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#21
+  __rc_chk#22:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#20
+  __rc_panic#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at many-guarded-return-sites-in-range.test:15: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#20:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc notEqual, ifcont#8
+  d:
+    x64.leaRegRegImm32 r8, rcx, 4
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#24
+  __rc_chk#25:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#23
+  __rc_panic#24:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at many-guarded-return-sites-in-range.test:19: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#23:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc notEqual, ifcont#10
+  e:
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#27
+  __rc_chk#28:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#26
+  __rc_panic#27:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at many-guarded-return-sites-in-range.test:23: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#26:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.leaRegRegImm32 r8, rcx, 6
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#30
+  __rc_chk#31:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#29
+  __rc_panic#30:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at many-guarded-return-sites-in-range.test:26: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#29:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect pick
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 3
+    x64.callDirect pick
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 4
+    x64.callDirect pick
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 9
+    x64.callDirect pick
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at many-guarded-return-sites-in-range.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

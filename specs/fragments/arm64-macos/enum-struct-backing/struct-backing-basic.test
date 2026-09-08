@@ -1,0 +1,37 @@
+// Test: struct-backing-basic
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let value as Latency
+
+	static function create(value Latency) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(1)
+	mul = Meta.create(3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.mul
+	return op.rawValue.value
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,17 @@
+// Test: array-source-stays-locked
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	var total = 0
+	for n in arr 'l'
+		total = total + n
+		arr.push(9)
+	end 'l'
+	return total
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:11:7: cannot pass 'arr' to function that mutates parameter 'self' (in main)

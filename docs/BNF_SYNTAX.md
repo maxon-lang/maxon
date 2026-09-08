@@ -1,0 +1,1007 @@
+# Maxon Language — BNF Syntax Reference
+
+This document defines the complete grammar of the Maxon programming language in
+extended BNF notation.
+
+## Notation Conventions
+
+| Notation       | Meaning                                   |
+|----------------|-------------------------------------------|
+| `'keyword'`    | Terminal keyword or symbol (literal text)  |
+| `TOKEN`        | Terminal token produced by the lexer       |
+| `rule`         | Non-terminal (grammar rule)               |
+| `a b`          | Sequence (a followed by b)                |
+| `a \| b`       | Alternation (a or b)                      |
+| `[ a ]`        | Optional (zero or one)                    |
+| `{ a }`        | Repetition (zero or more)                 |
+| `( a \| b )`   | Grouping                                  |
+| `NEWLINE`      | Required line break                       |
+| `LABEL`        | Character literal used as block label     |
+
+---
+
+## 1 — Lexical Grammar
+
+### 1.1 Characters
+
+```
+letter        = 'a'..'z' | 'A'..'Z'
+digit         = '0'..'9'
+hex_digit     = digit | 'a'..'f' | 'A'..'F'
+bin_digit     = '0' | '1'
+oct_digit     = '0'..'7'
+```
+
+### 1.2 Identifiers
+
+```
+IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
+```
+
+### 1.3 Keywords
+
+```
+KEYWORD       = '__file__' | '__line__'
+              | 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
+              | 'countof' | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
+              | 'extension' | 'fallthrough' | 'false' | 'float'
+              | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
+              | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
+              | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
+              | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
+              | 'sizeof' | 'static' | 'then' | 'throw' | 'throws' | 'to'
+              | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
+              | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
+```
+
+### 1.4 Literals
+
+```
+INTEGER       = decimal_int | hex_int | bin_int | oct_int
+decimal_int   = digit { digit | '_' }
+hex_int       = '0x' hex_digit { hex_digit | '_' }
+bin_int       = '0b' bin_digit { bin_digit | '_' }
+oct_int       = '0o' oct_digit { oct_digit | '_' }
+
+FLOAT         = digit { digit } '.' digit { digit } [ ('e' | 'E') ['+' | '-'] digit { digit } ]
+
+STRING        = '"' { string_char | escape_seq } '"'
+STRING_INTERP = '"' { string_char | escape_seq | '{' expression [ ':' format_spec ] '}' } '"'
+string_char   = <any character except '"', '\', '{', '}', or newline>
+escape_seq    = '\n' | '\t' | '\r' | '\0' | '\\' | '\"' | '\{' | '\}' | hex_escape | unicode_escape
+hex_escape    = '\x' hex_digit hex_digit
+unicode_escape = '\u' hex_digit hex_digit hex_digit hex_digit
+format_spec   = int_format | float_format
+int_format    = ['0'] [width] [int_type]
+int_type      = 'd' | 'x' | 'X' | 'b' | 'o'
+float_format  = ['0'] [width] '.' precision
+width         = digit { digit }
+precision     = digit { digit }
+
+BYTE_STRING   = 'b"' { string_char | escape_seq } '"'
+
+CHARACTER     = "'" ( grapheme_cluster | char_escape ) "'"
+grapheme_cluster = <any extended grapheme cluster>
+char_escape   = '\n' | '\t' | '\r' | '\0' | '\\' | '\'' | hex_escape | unicode_escape
+
+BOOL          = 'true' | 'false'
+```
+
+### 1.5 Labels
+
+Block labels are character literals used as identifiers for block structures.
+
+```
+LABEL         = "'" IDENTIFIER "'"
+TEST_NAME     = "'" { any character except "'" } "'"
+```
+
+A `LABEL` names a block and is spelled as an identifier. A `TEST_NAME` is the same character
+literal token, but its content is PROSE — spaces, digits and punctuation are all allowed, and
+the lexer validates none of it. It appears only in `test_decl`, where the trailing `end` must
+repeat it verbatim.
+
+### 1.6 Operators and Punctuation
+
+```
+'+'   '-'   '*'   '/'
+'='   '=='  '!='  '<'  '<='  '>'  '>='
+'('   ')'   '{'   '}'   '['   ']'
+','   ':'   '.'
+```
+
+### 1.7 Comments
+
+```
+comment       = line_comment | block_comment
+line_comment  = '//' { <any character except newline> } NEWLINE
+block_comment = '/*' { <any character> } '*/'
+doc_comment   = '///' { <any character except newline> } NEWLINE
+```
+
+### 1.8 Conditional Compilation Directives
+
+```
+hash_if       = '#if'
+hash_else     = '#else'
+hash_endif    = '#endif'
+
+conditional_block
+              = '#if' condition NEWLINE
+                { <tokens> }
+                [ '#else' NEWLINE { <tokens> } ]
+                '#endif' NEWLINE
+
+condition     = or_expr
+or_expr       = and_expr { 'or' and_expr }
+and_expr      = unary_expr { 'and' unary_expr }
+unary_expr    = 'not' unary_expr | atom
+atom          = 'os' '(' IDENTIFIER ')'
+              | 'arch' '(' IDENTIFIER ')'
+              | 'testing' '(' BOOL ')'
+              | 'rcSanitize' '(' BOOL ')'
+              | 'leakReport' '(' BOOL ')'
+              | 'compiler' '(' IDENTIFIER ')'
+              | '(' condition ')'
+```
+
+Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Supported `rcSanitize` values: `true`, `false` (true in `--rc-sanitize` builds). Supported `leakReport` values: `true`, `false` (true in `--leak-report` builds). Nested `#if` blocks are supported.
+
+---
+
+## 2 — Program Structure
+
+```
+program       = { top_level_decl }
+
+top_level_decl
+              = function_decl
+              | test_decl
+              | extern_decl
+              | type_decl
+              | enum_decl
+              | union_decl
+              | interface_decl
+              | extension_block
+              | typealias_decl
+              | top_level_var
+              | top_level_let
+              | conditional_block
+```
+
+### 2.1 Visibility
+
+```
+visibility_prefix = [ 'export' | 'module' ]
+```
+
+Any top-level declaration may be preceded by `export` to make it visible
+everywhere in the compilation, or by `module` to make it visible to every
+file in the declaring directory subtree (same directory + any subdirectory).
+The two modifiers are mutually exclusive — combining them is a parse error.
+`module` is a contextual keyword: it is recognised only when followed by a
+declaration token; in any other position it lexes as an identifier.
+
+A `test_decl` takes no `visibility_prefix` — a test is never referenced by name,
+so there is nothing for a visibility modifier to control.
+
+---
+
+## 3 — Declarations
+
+### 3.0 Test Declaration
+
+```
+test_decl     = 'test' TEST_NAME NEWLINE
+                body
+                'end' TEST_NAME
+```
+
+A test takes **no parameters** and **no `returns`**: `ExpectNewline` ends the header
+at the name, so `test 'x'(a int)` and `test 'x' returns int` are parse errors.
+
+`test` is a contextual keyword, recognised only at declaration position when the
+next token is a `TEST_NAME`; anywhere else it lexes as an identifier. The position
+half matters as much as the word: `match expression LABEL` makes `match test 'check'`
+the same two tokens, and only the declaration position separates them.
+
+Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`); the
+clause is never written and cannot be. A `test_decl` is legal only in a file whose
+name ends in `.test.maxon`.
+
+### 3.1 Function Declaration
+
+```
+function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
+                [ 'returns' type_ref ] [ throws_clause ] NEWLINE
+                body
+                'end' LABEL
+
+param_list    = param { ',' param }
+param         = IDENTIFIER type_ref [ '=' default_value ]    (* IDENTIFIER '_' discards the parameter *)
+
+default_value = [ '-' ] INTEGER                              (* integer literal *)
+              | [ '-' ] FLOAT                                (* float literal *)
+              | BOOL                                         (* boolean literal *)
+              | STRING                                       (* string literal *)
+              | CHARACTER                                    (* character literal, e.g. '/' *)
+              | BYTE_STRING                                  (* byte string literal, e.g. b"data" *)
+              | IDENTIFIER '.' IDENTIFIER                    (* enum case, e.g. Priority.medium *)
+              | array_literal                                (* array literal, e.g. [10, 20, 12] *)
+              | struct_literal                               (* struct constructor, e.g. Point{x: 0, y: 0} *)
+              | caller_location                              (* caller-location default, see below *)
+
+caller_location
+              = '__line__'                                   (* line of the call site *)
+              | '__file__'                                   (* calling file, relative to the compile root *)
+
+                (* caller_location is legal ONLY inside a parameter's default_value, and it is
+                   expanded at the CALL SITE, so each caller supplies its own. Anywhere else --
+                   an ordinary expression, or a field_default, which shares the `= expr`
+                   spelling but expands at a struct literal rather than a call -- is E2060. *)
+
+throws_clause = 'throws' type_ref
+```
+
+### 3.2 Extern Function Declaration
+
+```
+extern_decl   = 'extern' 'function' IDENTIFIER '(' [ param_list ] ')'
+                [ 'returns' type_ref ] NEWLINE
+```
+
+### 3.3 Type (Struct) Declaration
+
+```
+type_decl     = visibility_prefix 'type' IDENTIFIER [ uses_clause ]
+                [ conformance_clause ] [ where_clause ] NEWLINE
+                { type_member }
+                'end' LABEL
+
+type_member   = field_decl
+              | method_decl
+              | static_field_decl
+              | static_method_decl
+              | typealias_decl
+
+field_decl    = visibility_prefix ('var' | 'let') IDENTIFIER
+                ( 'as' type_ref [ '=' expression ]
+                | '=' literal_default )
+                NEWLINE
+
+                (* literal_default is the shorthand form — type is inferred from the literal.
+                   Accepts: signed/unsigned integer, float, bool, or enum case (TypeName.caseName).
+                   For any other default expression, the type_ref form is required. *)
+
+literal_default
+              = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | 'true' | 'false'
+              | IDENTIFIER '.' IDENTIFIER  (* enum case *)
+
+method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
+                [ 'returns' type_ref ] [ throws_clause ] NEWLINE
+                body
+                'end' LABEL
+
+static_field_decl
+              = 'static' ('var' | 'let') IDENTIFIER '=' expression NEWLINE
+
+static_method_decl
+              = visibility_prefix 'static' 'function' IDENTIFIER '(' [ param_list ] ')'
+                [ 'returns' type_ref ] [ throws_clause ] NEWLINE
+                body
+                'end' LABEL
+```
+
+### 3.4 Enum Declaration
+
+Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that).
+
+```
+enum_decl     = visibility_prefix 'enum' IDENTIFIER [ backing_type ]
+                [ conformance_clause ] NEWLINE
+                { enum_case NEWLINE }
+                { method_decl }
+                'end' LABEL
+
+backing_type  = 'int' | 'float' | 'String'
+
+enum_case     = IDENTIFIER                                          (* simple case *)
+              | IDENTIFIER '=' raw_value                            (* raw-value case *)
+
+raw_value     = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | STRING
+              | CHARACTER
+              | struct_raw_literal                                   (* struct-backed: TypeName{field: value, ...} *)
+              | IDENTIFIER                                            (* function-backed: top-level function name *)
+
+struct_raw_literal
+              = IDENTIFIER '{' raw_field_init { ',' raw_field_init } '}'
+
+raw_field_init
+              = IDENTIFIER ':' ( [ '-' ] INTEGER | [ '-' ] FLOAT | 'true' | 'false'
+              | IDENTIFIER '.' IDENTIFIER                              (* enum member reference *)
+              | IDENTIFIER                                             (* constant reference *)
+              | struct_raw_literal )
+```
+
+### 3.5 Union Declaration
+
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly, but expose a synthesized `.unionCases` companion enum — `U.unionCases` is an int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization. Unions can also tag each variant with a compile-time struct backing (read via `.rawValue`, identical shape to struct-backed enums).
+
+```
+union_decl    = visibility_prefix 'union' IDENTIFIER
+                [ conformance_clause ] NEWLINE
+                { union_case NEWLINE }
+                { method_decl }
+                'end' LABEL
+
+union_case    = IDENTIFIER                                                 (* simple case *)
+              | IDENTIFIER '(' assoc_fields ')'                            (* associated-value case *)
+              | IDENTIFIER '=' struct_raw_literal                           (* struct-backed simple variant *)
+              | IDENTIFIER '(' assoc_fields ')' '=' struct_raw_literal      (* struct-backed associated-value variant *)
+
+assoc_fields  = assoc_field { ',' assoc_field }
+assoc_field   = IDENTIFIER type_ref
+```
+
+When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type (see `struct_raw_literal` in §3.4). The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`.
+
+### 3.6 Interface Declaration
+
+```
+interface_decl
+              = visibility_prefix 'interface' IDENTIFIER [ extends_clause ]
+                [ uses_clause ] NEWLINE
+                { interface_method NEWLINE }
+                'end' LABEL
+
+extends_clause
+              = 'extends' IDENTIFIER { ',' IDENTIFIER }
+
+interface_method
+              = visibility_prefix [ 'static' ] 'function' IDENTIFIER
+                '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
+```
+
+### 3.7 Extension Block
+
+```
+extension_block
+              = 'extension' IDENTIFIER [ conformance_clause ] [ where_clause ] NEWLINE
+                { method_decl }
+                'end' LABEL
+```
+
+### 3.8 Type Alias Declaration
+
+```
+typealias_decl
+              = visibility_prefix 'typealias' IDENTIFIER '=' typealias_rhs NEWLINE
+
+typealias_rhs = ranged_type
+              | raw_pattern_type
+              | generic_type
+              | tuple_type
+              | function_type
+
+ranged_type   = primitive_type '(' range_bound ('to' | 'upto') range_bound ')'
+
+; `bits` is an ordinary IDENTIFIER, not a keyword: what selects this production is
+; the name followed by '('. Legal widths are 1, 2, 4, 8, 16, 32 and 64 — the widths
+; a slot or a sub-byte packed field can hold; any other is E3146.
+raw_pattern_type
+              = 'bits' '(' INTEGER ')'
+
+primitive_type
+              = 'int' | 'float' | 'byte'
+
+range_bound   = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | sized_type_ref '.' ('min' | 'max')
+
+sized_type_ref
+              = 'u8' | 'u16' | 'u32' | 'u64'
+              | 'i8' | 'i16' | 'i32' | 'i64'
+              | 'f32' | 'f64'
+```
+
+**Range validation constraints:**
+
+- Lower bound must be less than upper bound (or less than or equal for `to`)
+- When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
+- A signed type qualifier (`iN.max`) cannot be paired with a literal on the other side — use the full range (`iN.min to iN.max`) or an unsigned type (`0 to uN.max`)
+- Integer ranges cannot span both negative values and values above `i64.max`
+- `byte` ranges must have bounds within 0 to u8.max
+
+```
+generic_type  = generic_base 'with' type_args
+generic_base  = IDENTIFIER [ '.' IDENTIFIER ]
+
+tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
+```
+
+### 3.9 Top-Level Variables
+
+```
+top_level_var = visibility_prefix 'var' IDENTIFIER '=' expression NEWLINE
+top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
+```
+
+---
+
+## 4 — Type System Clauses
+
+```
+uses_clause   = 'uses' IDENTIFIER { ',' IDENTIFIER }
+
+conformance_clause
+              = 'implements' conformance_entry { ',' conformance_entry }
+
+conformance_entry
+              = IDENTIFIER [ 'with' type_args ]
+
+type_args     = type_ref
+              | '(' type_ref { ',' type_ref } ')'
+
+where_clause  = 'where' constraint { ',' constraint }
+
+constraint    = IDENTIFIER 'is' IDENTIFIER { 'and' IDENTIFIER }
+
+type_ref      = 'bool'
+              | 'cstring'
+              | 'Self'
+              | IDENTIFIER '.' IDENTIFIER
+              | IDENTIFIER
+              | function_type
+              | tuple_type
+
+function_type = 'function' '(' [ type_ref { ',' type_ref } ] ')' [ 'returns' type_ref ]
+              (* `returns` is optional; without it, the function type
+                 returns void. The literal `function(...)` form is legal
+                 only as the topmost type of a `typealias` RHS — at every
+                 other use site (parameter types, return types, struct
+                 fields, generic arguments) reference the alias by name. *)
+```
+
+---
+
+## 5 — Statements
+
+```
+body          = statement NEWLINE { statement NEWLINE }   (* at least one statement required; empty blocks are E3082 *)
+
+statement     = return_stmt
+              | annotated_decl
+              | var_decl
+              | let_decl
+              | discard_stmt
+              | if_stmt
+              | while_stmt
+              | for_stmt
+              | match_stmt
+              | break_stmt
+              | continue_stmt
+              | throw_stmt
+              | panic_stmt
+              | try_stmt
+              | assignment_stmt
+              | tuple_assign_stmt
+              | expression_stmt
+
+expression_stmt
+              = expression
+```
+
+### 5.1 Variable Declarations
+
+```
+annotated_decl
+              = '@heap' ( var_decl | let_decl )
+
+var_decl      = 'var' IDENTIFIER '=' expression
+              | 'var' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
+
+let_decl      = 'let' IDENTIFIER '=' expression
+              | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
+
+discard_stmt  = '_' '=' expression
+```
+
+Constraints:
+- The expression in `discard_stmt` must be a function call (error E3067)
+- `var _ = ...` and `let _ = ...` are not allowed; use `_ = ...` instead
+
+### 5.2 Assignment
+
+```
+assignment_stmt
+              = target '=' expression
+
+target        = IDENTIFIER
+              | IDENTIFIER '.' IDENTIFIER { '.' IDENTIFIER }
+              | 'self' '.' IDENTIFIER { '.' IDENTIFIER }
+              | IDENTIFIER '.' IDENTIFIER '=' expression     (* via .set() *)
+```
+
+### 5.2.1 Tuple Assignment
+
+Assigns multiple return values to existing mutable variables in one statement:
+
+```
+tuple_assign_stmt
+              = '(' tuple_assign_target { ',' tuple_assign_target } ')' '=' expression
+
+tuple_assign_target
+              = IDENTIFIER    (* must refer to an existing var-declared variable *)
+              | '_'           (* discard this element *)
+```
+
+Constraints:
+- Each `IDENTIFIER` must refer to a `var`-declared (mutable) variable in scope
+- `let` variables are not valid targets (error E2013)
+- The number of targets must equal the tuple's element count (error E3005)
+
+### 5.3 Return
+
+```
+return_stmt   = 'return' [ expression ]
+```
+
+### 5.4 If Statement
+
+```
+if_stmt       = 'if' condition LABEL NEWLINE
+                body
+                'end' LABEL [ else_clause ]
+              | if_try_stmt
+
+else_clause   = 'else' if_stmt
+              | 'else' LABEL NEWLINE body 'end' LABEL
+              | 'else' '(' IDENTIFIER ')' LABEL NEWLINE body 'end' LABEL
+
+condition     = expression
+
+if_try_stmt   = 'if' 'try' expression LABEL NEWLINE
+                body
+                'end' LABEL [ else_clause ]
+              | 'if' ('let' | 'var') IDENTIFIER '=' 'try' expression LABEL NEWLINE
+                body
+                'end' LABEL [ else_clause ]
+```
+
+### 5.5 While Loop
+
+```
+while_stmt    = 'while' expression LABEL NEWLINE
+                body
+                'end' LABEL
+```
+
+### 5.6 For Loop
+
+```
+for_stmt      = 'for' loop_var 'in' iterable_expr LABEL NEWLINE
+                body
+                'end' LABEL
+
+loop_var      = IDENTIFIER                                      (* '_' discards the value *)
+              | '(' IDENTIFIER { ',' IDENTIFIER } ')'           (* '_' discards individual elements *)
+
+iterable_expr = expression ('to' | 'upto') expression          (* range form *)
+              | expression '.' 'withIterator' '(' ')'          (* iterator + element tuple form *)
+              | expression                                      (* iterator form *)
+```
+
+### 5.7 Match Statement
+
+```
+match_stmt    = 'match' expression LABEL NEWLINE
+                { match_arm NEWLINE }
+                'end' LABEL
+
+match_arm     = match_patterns 'then' match_action
+              | 'default' 'then' match_action
+              | 'default' 'throws' expression                     (* enum: throws error for unmatched cases *)
+              | 'default' 'panic' '(' STRING ')'                  (* terminates with error message *)
+
+match_action  = statement [ 'and' 'fallthrough' ]
+              | 'break' [ LABEL ]
+
+match_patterns
+              = match_pattern { 'or' NEWLINE match_pattern }      (* one alternative per line; E3147 otherwise *)
+
+match_pattern = literal_pattern
+              | case_pattern
+              | range_pattern
+
+literal_pattern
+              = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | STRING
+              | CHARACTER
+              | BOOL
+
+case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for union associated values *)
+
+binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings; all-discard is error E3081 *)
+
+range_pattern = expression 'to' expression              (* inclusive both bounds *)
+              | expression 'upto' expression            (* exclusive upper bound *)
+              | expression 'to' 'max'                   (* open upper bound *)
+              | 'min' 'to' expression                   (* open lower, inclusive upper *)
+              | 'min' 'upto' expression                 (* open lower, exclusive upper *)
+```
+
+An arm's alternatives are joined by `or`, and the NEWLINE after each `or` is REQUIRED: one
+alternative per line, the chain continuing after a trailing `or`, with the last alternative
+carrying the arm's `then`/`gives` and its body. Packing two onto one line is E3147. The newline is
+admitted only AFTER an `or`, never before one — a line may not begin with `or`, which is itself a
+legal case name.
+
+There is no case-range pattern. `red to blue` over an enum or union is E3146: a range covered the
+cases whose declaration position fell in its span, so a case added inside that span was absorbed
+silently. `range_pattern` above is for SCALARS only (integers, characters, floats), whose domains
+admit no such insertion.
+
+Match arms for enum and union types use **bare case names** (e.g., `red`, `pending`), not
+qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
+a compile error (E3075).
+
+Although `match_action` reduces to `statement`, the parser rejects the block-opening
+statements `if`, `while`, `for`, nested `match`, and the multi-line block forms of
+`try` (`try 'label' ... end 'label'` and `try call() otherwise 'label' ... end 'label'`)
+in match arms with E2049. Every single-statement `try` form (bare propagation,
+`otherwise panic`, `otherwise ignore`, `otherwise return/break/continue/throw`, and
+`otherwise <expr>`) is allowed.
+
+### 5.8 Break and Continue
+
+```
+break_stmt    = 'break' [ LABEL ]   (* LABEL must NOT name the innermost
+                                       enclosing loop; that's E2048 *)
+
+continue_stmt = 'continue' [ LABEL ] (* same E2048 rule as `break` *)
+```
+
+### 5.9 Throw
+
+```
+throw_stmt    = 'throw' expression
+```
+
+### 5.11 Panic
+
+```
+panic_stmt    = 'panic' '(' ( STRING | STRING_INTERP ) ')'
+```
+
+### 5.12 Try Statement
+
+```
+try_stmt      = 'try' expression 'otherwise' otherwise_clause
+              | 'try' expression                                (* propagation — only in throwing functions *)
+              | try_block
+
+otherwise_clause
+              = 'ignore'
+              | 'panic' '(' ( STRING | STRING_INTERP ) ')'      (* panic on error *)
+              | ( return_stmt | break_stmt | continue_stmt | throw_stmt )  (* single-statement form *)
+              | expression                                      (* default value *)
+              | [ '(' IDENTIFIER ')' ] LABEL NEWLINE
+                body
+                'end' LABEL
+
+(* try block wraps multiple throwing calls under a shared handler. Inside the body,
+   bare calls to throwing functions do not require the `try` keyword. The block-handler
+   form must contain a match on the error binding; the terminal forms either panic or
+   re-throw, and may bind `(e)` for use in the panic message or throw expression. *)
+try_block     = 'try' LABEL NEWLINE
+                body
+                'end' LABEL NEWLINE
+                'otherwise' try_block_otherwise
+
+try_block_otherwise
+              = '(' IDENTIFIER ')' LABEL NEWLINE
+                body                                            (* must contain `match` on binding *)
+                'end' LABEL
+              | [ '(' IDENTIFIER ')' ] 'panic' '(' ( STRING | STRING_INTERP ) ')'   (* terminal panic *)
+              | [ '(' IDENTIFIER ')' ] 'throws' expression                          (* re-throw fixed error *)
+```
+
+---
+
+## 6 — Expressions
+
+### 6.1 Precedence (lowest to highest)
+
+| Level | Operators / Forms                     | Associativity |
+|------:|---------------------------------------|---------------|
+| 0     | `if`...`else` (conditional)           | Right         |
+| 1     | `or`                                  | Left          |
+| 2     | `xor`                                 | Left          |
+| 3     | `and`                                 | Left          |
+| 4     | `==`  `!=`  `<`  `>`  `<=`  `>=`  `is`  `is not` | Left          |
+| 5     | `shl`  `shr`                          | Left          |
+| 6     | `+`  `-`                              | Left          |
+| 7     | `*`  `/`  `mod`                       | Left          |
+| 8     | `as` (type cast)                      | Left (postfix)|
+| 9     | `-` (unary negation), `not`           | Right (prefix)|
+| 10    | `.` (member access), `()` (call)      | Left (postfix)|
+
+### 6.2 Expression Grammar
+
+```
+expression    = conditional_expr
+
+conditional_expr
+              = or_expr 'if' expression 'else' conditional_expr   (* ternary, right-associative *)
+              | or_expr
+
+or_expr       = xor_expr { 'or' xor_expr }
+
+xor_expr      = and_expr { 'xor' and_expr }
+
+and_expr      = comparison { 'and' comparison }
+
+comparison    = shift_expr { ( cmp_op shift_expr ) | ( 'is' ['not'] shift_expr ) }
+cmp_op        = '==' | '!=' | '<' | '>' | '<=' | '>='
+
+shift_expr    = additive { ('shl' | 'shr') additive }
+
+additive      = multiplicative { ('+' | '-') multiplicative }
+
+multiplicative
+              = cast_expr { ('*' | '/' | 'mod') cast_expr }
+
+cast_expr     = unary_expr { 'as' type_ref }
+
+unary_expr    = '-' postfix_expr
+              | 'not' unary_expr
+              | postfix_expr
+
+postfix_expr  = primary { postfix_op }
+
+postfix_op    = '.' IDENTIFIER [ '(' [ arg_list ] ')' ]   (* method call or field access *)
+              | '.' INTEGER                                 (* tuple positional access: .0, .1, ... *)
+              | '(' [ arg_list ] ')'                        (* function call *)
+```
+
+### 6.3 Primary Expressions
+
+```
+primary       = INTEGER
+              | FLOAT
+              | STRING
+              | STRING_INTERP
+              | BYTE_STRING
+              | CHARACTER
+              | 'true'
+              | 'false'
+              | 'self'
+              | array_literal
+              | map_literal
+              | tuple_literal
+              | paren_expr
+              | struct_literal
+              | enum_access
+              | static_access
+              | closure
+              | match_expr
+              | try_expr
+              | from_expr
+              | async_expr
+              | await_expr
+              | type_bound_expr
+              | sizeof_expr
+              | countof_expr
+              | IDENTIFIER
+
+array_literal = '[' [ expression { ',' expression } ] ']'
+
+map_literal   = '[' expression ':' expression { ',' expression ':' expression } ']'
+
+tuple_literal = '(' expression ',' expression { ',' expression } ')'
+
+paren_expr    = '(' expression ')'
+
+struct_literal
+              = IDENTIFIER '{' [ field_init { ',' field_init } ] '}'
+
+field_init    = IDENTIFIER ':' expression
+
+                (* Semantic rule (E3086): every field of the constructed type must be
+                   initialized. A field counts as initialized if (a) its declaration
+                   supplies a default via `= expr`, (b) it appears as a field_init in
+                   the literal, or (c) the literal is the direct return expression of
+                   a `static` function whose return type is the enclosing type, and
+                   `self.field = expr` assigns it on every control-flow path reaching
+                   the literal. A literal-provided value always wins over a default. *)
+
+                (* Ranged-primitive construction is performed via the postfix `as`
+                   cast (see `cast_expr`) — `8080 as Port`, `n as PoolA.Idx`.
+                   The dedicated `TypeName{value}` syntax was removed in favor
+                   of unifying with `as`. *)
+
+enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+              | IDENTIFIER '.' 'allCases'                            (* Array of all cases — enums only *)
+              | IDENTIFIER '.' 'allCaseNames'                        (* Array with String of case names — enums and unions *)
+              | IDENTIFIER '.' 'unionCases' '.' IDENTIFIER           (* synthesized discriminant-enum case — unions only *)
+              | IDENTIFIER '.' 'unionCases' '.' 'allCases'           (* Array of all discriminant cases — unions only *)
+              | IDENTIFIER '.' 'unionCases' '.' 'fromRawValue' '(' expression ')'  (* lift int discriminant to companion enum *)
+
+static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+
+type_bound_expr
+              = sized_type_name '.' ( 'min' | 'max' )         (* e.g., u64.max, i32.min *)
+
+sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time size in bytes *)
+
+countof_expr  = 'countof' '(' type_ref ')'                    (* element count of a fixed-size container type *)
+
+from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
+
+closure       = 'function' '(' [ closure_params ] ')' 'gives' expression
+closure_params
+              = closure_param { ',' closure_param }
+closure_param = IDENTIFIER [ type_ref ]                          (* '_' discards the parameter *)
+```
+
+### 6.4 Match Expression
+
+```
+match_expr    = 'match' expression LABEL NEWLINE
+                { match_expr_arm NEWLINE }
+                'end' LABEL
+
+match_expr_arm
+              = match_patterns 'gives' expression
+              | match_patterns 'panic' '(' ( STRING | STRING_INTERP ) ')'   (* per-arm panic *)
+              | match_patterns 'throws' expression                          (* per-arm throw *)
+              | 'default' 'gives' expression
+              | 'default' 'throws' expression                     (* enum: throws error for unmatched cases *)
+              | 'default' 'panic' '(' STRING ')'                  (* terminates with error message *)
+```
+
+### 6.5 Try Expression
+
+```
+try_expr      = 'try' expression 'otherwise' otherwise_clause
+              | 'try' expression
+```
+
+### 6.6 Async/Await Expressions
+
+```
+async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* start a coroutine, returns promise *)
+              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* the same, on a static method *)
+
+await_expr    = 'await' expression                          (* wait for promise, returns result *)
+
+try_await     = 'try' 'await' expression                    (* await throwing promise, propagate error *)
+              | 'try' 'await' expression 'otherwise' otherwise_clause  (* see 5.12 for all forms *)
+
+cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine *)
+```
+
+**Restrictions:**
+- `async` can only be applied to direct function calls (not closures or indirect calls)
+- `async` target function must yield (contain I/O operations or `await` points)
+- Throwing async functions require `try await` (not plain `await`)
+
+
+### 6.7 Spawn Expressions
+
+```
+spawn_expr    = 'spawn' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* start a service, returns TYPE.handle *)
+```
+
+**Restrictions:**
+- `spawn` is a CONTEXTUAL keyword, not a reserved word: it is an identifier followed by a name. `spawn`
+  therefore remains a perfectly good spelling for a function, a static, a parameter, a field or a local
+  (`Subprocess.spawn(cmd)` and `static function spawn() returns Self` are both live in this tree).
+- the target must be a STATIC FACTORY of a declared `type` that returns that type; there is no bare
+  `spawn f()` green thread (E3134). The unit of concurrency is a service.
+- `spawn Self.…` is refused: the whole-program walk that decides which types are services reads tokens
+  with no type scope.
+- naming a type in a `spawn` makes it a SERVICE program-wide, which synthesizes `TYPE.request` and
+  `TYPE.handle` beside it. That is a semantic rule over `visibility_prefix`, not a grammar change: no
+  `type_decl` production moves.
+- a message SEND has no production of its own either: it is `call_expr`'s method form (6.8) whose receiver
+  happens to be a `TYPE.handle`. Dispatch is decided by the receiver's TYPE, so the same spelling is a
+  direct call on a value and a message on a handle.
+- a `spawn` compiled for a target with no green-thread substrate is refused with E3104 — see 6.6's note;
+  the grammar is target-neutral and the refusal is not.
+
+### 6.8 Function and Method Calls
+
+```
+call_expr     = IDENTIFIER '(' [ arg_list ] ')'
+              | postfix_expr '.' IDENTIFIER '(' [ arg_list ] ')'
+
+arg_list      = arg { ',' arg }
+
+arg           = expression                                  (* first argument: positional *)
+              | IDENTIFIER ':' expression                   (* subsequent arguments: named *)
+```
+
+**Calling convention:** the first argument is positional; all subsequent
+arguments must use `name: value` syntax and may appear in any order.
+Arguments with default values may be omitted.
+
+---
+
+## 7 — Summary of Block Structure
+
+Every compound statement in Maxon requires a single-quoted label after
+the opening keyword and a matching label after `end`.
+
+```
+if <cond> 'label'  ...  end 'label'
+while <cond> 'label'  ...  end 'label'
+for <var> in <iter> 'label'  ...  end 'label'
+match <expr> 'label'  ...  end 'label'
+try <expr> otherwise 'label'  ...  end 'label'
+else 'label'  ...  end 'label'
+```
+
+Type, enum, union, interface, and extension bodies also end with a matching label:
+
+```
+type Point  ...  end 'Point'
+enum Color  ...  end 'Color'
+union Result  ...  end 'Result'
+interface Hashable  ...  end 'Hashable'
+extension Iterable  ...  end 'Iterable'
+function main()  ...  end 'main'
+```
+
+---
+
+## 8 — Reserved for Future Use
+
+The following tokens are recognized but not yet fully specified:
+
+- `'of'` — reserved keyword
+- `'extends'` — used in interface inheritance
+
+---
+
+## Appendix A — Complete Token Table
+
+| Token Type         | Lexeme(s)                                       |
+|--------------------|-------------------------------------------------|
+| `Identifier`       | `[a-zA-Z_][a-zA-Z0-9_]*`                        |
+| `IntegerLiteral`   | `42`, `0xFF`, `0b1010`, `0o777`, `1_000`         |
+| `FloatLiteral`     | `3.14`, `1.0e10`                                 |
+| `StringLiteral`    | `"hello"`                                        |
+| `StringInterp`     | `"hello {name}"`                                 |
+| `CharacterLiteral` | `'A'`, `'\n'`                                    |
+| `Plus`             | `+`                                              |
+| `Minus`            | `-`                                              |
+| `Star`             | `*`                                              |
+| `Slash`            | `/`                                              |
+| `Equals`           | `=`                                              |
+| `EqualsEquals`     | `==`                                             |
+| `NotEquals`        | `!=`                                              |
+| `LessThan`         | `<`                                              |
+| `LessEquals`       | `<=`                                             |
+| `GreaterThan`      | `>`                                              |
+| `GreaterEquals`    | `>=`                                             |
+| `LeftParen`        | `(`                                              |
+| `RightParen`       | `)`                                              |
+| `LeftBrace`        | `{`                                              |
+| `RightBrace`       | `}`                                              |
+| `LeftBracket`      | `[`                                              |
+| `RightBracket`     | `]`                                              |
+| `Comma`            | `,`                                              |
+| `Colon`            | `:`                                              |
+| `Dot`              | `.`                                              |
+| `Newline`          | `\n`                                             |
+| `DocComment`       | `/// ...`                                        |
+| `HashIf`           | `#if`                                            |
+| `HashElse`         | `#else`                                          |
+| `HashEndif`        | `#endif`                                         |
+| `Eof`              | end of input                                     |

@@ -1,0 +1,62 @@
+// Test: Self-as-a-type-and-as-an-expression-base-in-one-body
+enum Toggle
+	off
+	on
+
+	export function same() returns Self
+		return self
+	end 'same'
+
+	export function matches(other Self) returns bool
+		return self == other
+	end 'matches'
+
+	export function isOff() returns bool
+		return self.matches(Self.off)
+	end 'isOff'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t.isOff() 'ok'
+		if t.same() == Toggle.off 'ok2'
+			return 42
+		end 'ok2'
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @Toggle.isOff {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, r8
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Toggle.isOff
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  ok2:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

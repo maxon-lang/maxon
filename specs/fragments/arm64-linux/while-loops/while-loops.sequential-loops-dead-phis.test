@@ -1,0 +1,133 @@
+// Test: while-loops.sequential-loops-dead-phis
+function work(x Integer) returns Integer
+	return x + 1
+end 'work'
+
+function big(n Integer) returns Integer
+	var total = 0
+	var a0 = 1
+	var a1 = 2
+	var a2 = 3
+	var a3 = 4
+	var a4 = 5
+	var a5 = 6
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a0 = a0 + r
+		a1 = a1 + r
+		a2 = a2 + r
+		a3 = a3 + r
+		a4 = a4 + r
+		a5 = a5 + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a0 + a1 + a2 + a3 + a4 + a5
+	var b0 = 1
+	var b1 = 2
+	var b2 = 3
+	var b3 = 4
+	var b4 = 5
+	var b5 = 6
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b0 = b0 + s
+		b1 = b1 + s
+		b2 = b2 + s
+		b3 = b3 + s
+		b4 = b4 + s
+		b5 = b5 + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b0 + b1 + b2 + b3 + b4 + b5
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 114
+---
+func @big {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.movImm x3, 3
+    arm64.movImm x4, 4
+    arm64.movImm x5, 5
+    arm64.movImm x6, 6
+    arm64.movImm x7, 0
+  whilehdr#1:
+    arm64.cmp x7, x0
+    arm64.b.ge whileexit#3
+  __il_body#8:
+    arm64.add x7, x7, 1
+  __il_cont#7:
+    arm64.add x1, x1, x7
+    arm64.add x2, x2, x7
+    arm64.add x3, x3, x7
+    arm64.add x4, x4, x7
+    arm64.add x5, x5, x7
+    arm64.add x6, x6, x7
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x1, x1, x6
+    arm64.movImm x2, 1
+    arm64.movImm x3, 2
+    arm64.movImm x4, 3
+    arm64.movImm x5, 4
+    arm64.movImm x6, 5
+    arm64.movImm x7, 6
+    arm64.movImm x8, 0
+  whilehdr#4:
+    arm64.cmp x8, x0
+    arm64.b.ge whileexit#6
+  __il_body#10:
+    arm64.add x8, x8, 1
+  __il_cont#9:
+    arm64.add x2, x2, x8
+    arm64.add x3, x3, x8
+    arm64.add x4, x4, x8
+    arm64.add x5, x5, x8
+    arm64.add x6, x6, x8
+    arm64.add x7, x7, x8
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.add x0, x1, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.bl big
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.sequential-loops-dead-phis.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

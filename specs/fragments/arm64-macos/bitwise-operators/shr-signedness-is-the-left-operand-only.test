@@ -1,0 +1,58 @@
+// Test: shr-signedness-is-the-left-operand-only
+typealias Num = int(i64.min to i64.max)
+typealias ShiftBits = int(0 to 63)
+
+function shiftRight(value Num, distance ShiftBits) returns Num
+	return value shr distance
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftRight(-8, distance: 60) != -1 'rangedDistance'
+		return 1
+	end 'rangedDistance'
+	if shiftRight(-1, distance: 63) != -1 'allSign'
+		return 2
+	end 'allSign'
+	if shiftRight(8, distance: 2) != 2 'nonNegative'
+		return 3
+	end 'nonNegative'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_ok#9:
+    arm64.movImm x0, 18446744073709551615
+  __il_cont#7:
+    arm64.cmp x0, -1
+    arm64.b.eq __rc_ok#14
+  rangedDistance:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#14:
+    arm64.movImm x0, 18446744073709551615
+  __il_cont#12:
+    arm64.cmp x0, -1
+    arm64.b.eq __rc_ok#19
+  allSign:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#19:
+    arm64.movImm x0, 2
+  __il_cont#17:
+    arm64.cmp x0, 2
+    arm64.b.eq ifcont
+  nonNegative:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

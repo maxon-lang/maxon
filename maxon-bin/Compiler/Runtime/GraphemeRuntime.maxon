@@ -1,0 +1,534 @@
+// Runtime/GraphemeRuntime.maxon — the `Character` values a grapheme scan mints, and the three array
+// views over a String's bytes (P1.8 slice B / slice E).
+//
+// ⭐ **A `Character` IS A STRING RECORD.** It carries the same fused 56-byte layout `StringRuntime` owns
+// (`buffer@0`, `length@8`, `capacity@16`, `elementSize@24`, `parent@32`, `element_destroy@40`,
+// `singleByteGraphemes@48` — the first SIX slots are a whole `__ManagedMemory` since W157), holding one
+// grapheme cluster's UTF-8 bytes — so it is dropped by `__str_decref`, cloned by `__str_clone`, printed by
+// reading `buffer@0`/`length@8`, and compared by `__str_eq`. Not one line of that machinery is rebuilt
+// here; this file adds only the one MINTING door and the views. The type-level distinction between a
+// String and a Character lives entirely in `MaxonType`/`ValueTypeTag` — see `TypeRules.tagIsByteRecord`,
+// which states exactly which questions the shared representation answers and which it does not.
+//
+// ⭐⭐ **THE SEGMENTER USED TO LIVE HERE, AS A HAND-BUILT `StdOp` PORT OF
+// `stdlib/helpers/string/grapheme.maxon`. IT IS GONE, AND THE CORPUS IS NOW THE ONE IMPLEMENTATION.**
+// 661 lines went: the UAX #29 property table (`__gbp`), the Extended_Pictographic table (`__ext_pict`),
+// the GB3–GB999 rules (`__gr_break`), the RI/emoji state machine (`__gr_state`), the segmenter itself
+// (`__gr_end`), the counter (`__gr_count`) and the two UTF-8 decoders (`__utf8_cp_at` / `__utf8_len_at`).
+// Every one of them had a twin in `stdlib/helpers/string/`, which the compiler has LOADED since BATCH2 slice 6 —
+// so `s.count()` ran the port while a user's own `countGraphemes(s)` ran the corpus, two implementations
+// of one table that a differential spec existed only to keep in agreement.
+//
+// The port was written when its premise was true — *"the compiler reads no stdlib"* — and the premise expired
+// without the code noticing. What replaced it is not a mechanism: `for c in s` emits an ORDINARY Maxon-tier
+// call (`Parser.CorpusFindGraphemeEnd`) and `String.count()` is a corpus body calling a corpus body, so
+// every edge is one the reachability walk follows for itself.
+//
+// ⚠⚠ **IT DID NEED ONE MECHANISM AND NO LONGER DOES, WHICH IS THE STATE TO KNOW BEFORE ADDING A BODY HERE.**
+// The Std bodies that walked clusters — the trim, the `StringIndex` walks, `__cs_contains` — named a corpus
+// callee from inside a graph no Maxon module contains, so their edges did not exist when reachability was
+// computed and `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` declared them. Every one of those bodies
+// has since retired (W49 waves 3–6, then W129) and that seed is DELETED. ⇒ **No body in this file names a
+// corpus function**, and one that did would need the seed rebuilt — see the paragraph `StdlibSource`
+// keeps where it stood, which records the two things it paid for.
+//
+// ⚠ **THE TWO DIVERGENCES THE PORT DOCUMENTED ARE NOT LOST — ONE WAS NEVER REAL AND THE OTHER MOVED.**
+// The CRLF divergence was against the reference's `computeGraphemeLen` shortcut, which the port declined
+// to copy; the corpus's own `countGraphemes` → `findGraphemeEnd` honours GB3 and answers **1** for
+// a CR followed by an LF, which is the answer the compiler already gave and
+// `grapheme-clusters/grapheme-boundary-crlf` still
+// pins. The Extend-block gap is the corpus's own and is now simply the corpus's to own.
+//
+// ⚠ **AND ONE DIVERGENCE WAS REAL, UNDOCUMENTED, AND THE PORT WAS THE CORRECT SIDE.** A truncated UTF-8
+// sequence made the corpus `panic` where the port decoded the lead byte and advanced one. Converging
+// surfaced it as a red spec (`string-views/truncated-sequences-stop-at-the-buffer-end`) and the rule moved
+// INTO the corpus (`utf8.maxon`'s `utf8WidthFits`), because a lead byte that promises more than the buffer
+// holds is a reachable input — `String.from(bytes)` — and not a corrupt-memory signal.
+
+// ⭐⭐ **THE UTF-8 ENCODING'S BIT LAYOUT — THE ONE DECLARATION, `export`ed, exactly as `StringRuntime`
+// exports the fused record's field offsets** (`stdlib/helpers/string/utf8.maxon`, verbatim). The three
+// LEAD-BYTE floors that give a sequence its length, the three codepoint ceilings that pick an encoding's
+// width, and the masks/shifts that assemble a codepoint. The reference spells the masking as `mod 32` /
+// `mod 64` and the shifts as `* 64` / `* 4096`; here they are the equivalent `and`/`shl`, which is what
+// `Character.codepoint` (`stdlib/Character.maxon:127-146`) already uses for the identical decode — same
+// arithmetic, and the form a machine-word graph wants.
+//
+// ⚠ **THIS FILE'S RUNTIME DECODER AND THE PARSER'S COMPILE-TIME ONE ARE TWO IMPLEMENTATIONS OF ONE
+// SPECIFICATION, AND THEY HELD TWO COPIES OF THE NUMBERS.** The compiler decodes UTF-8 in two places for two
+// genuinely different reasons — `Parser.decodeUtf8Sequence`/`appendUtf8Encoded` work on source bytes at
+// COMPILE time (a character literal, a `\uNNNN` escape), `__utf8_cp_at`/`__utf8_len_at` work on a record's
+// buffer at RUN time — and each had declared the same seven masks and shifts for itself, in a different
+// BASE (`0x3F` there, `63` here), plus a third spelling of 128 (`Utf8AsciiLimit` beside
+// `Utf8OneByteCeiling`) and two names apiece for 0xE0/0xF0. Nothing made the copies agree, and a
+// threshold corrected in one and not the other is exactly the failure `emitUtf8LeadLadder`'s header
+// describes one level down: a literal whose bytes the compiler writes one way and the segmenter reads
+// another, with no error raised anywhere. One declaration, read by both.
+export let Utf8ContinuationMask = 0x3F as ParsedInt
+export let Utf8ContinuationBits = 6 as ParsedInt
+export let Utf8LeadTwoByteMask = 0x1F as ParsedInt
+export let Utf8LeadThreeByteMask = 0x0F as ParsedInt
+export let Utf8LeadFourByteMask = 0x07 as ParsedInt
+export let Utf8ThreeByteHighShift = 12 as ParsedInt
+export let Utf8FourByteHighShift = 18 as ParsedInt
+
+// The LEAD-BYTE floors. `Utf8LeadThreeByteFloor`/`Utf8LeadFourByteFloor` are also the upper limits of the
+// 2-byte / 3-byte bands, which is how the DECODER reads them (`emitUtf8LeadLadder`'s `lead < limit`) —
+// one boundary, one number, whichever side of it a reader stands on.
+//
+// ⚠ `Utf8LeadTwoByteFloor` (0xC0) is the only one the runtime ladder does NOT test: the compile-time
+// decoder refuses a bare continuation byte as a lead, while the runtime one classifies 0x80..0xDF as a
+// 2-byte sequence, matching the reference. That is a real difference in what the two decoders CHECK, not
+// a difference in what the encoding IS, so it lives in the code and not in the numbers.
+export let Utf8LeadTwoByteFloor = 0xC0 as ParsedInt
+export let Utf8LeadThreeByteFloor = 0xE0 as ParsedInt
+export let Utf8LeadFourByteFloor = 0xF0 as ParsedInt
+
+// The CODEPOINT ceilings that pick an encoding's width, and the continuation byte's `0b10` tag.
+// `Utf8OneByteCeiling` doubles as the ASCII boundary — the same 128 both decoders fork on, and the
+// number `Parser.AsciiCeiling` states about a source BYTE rather than a codepoint.
+export let Utf8OneByteCeiling = 128 as ParsedInt
+export let Utf8TwoByteCeiling = 2048 as ParsedInt
+export let Utf8ThreeByteCeiling = 65536 as ParsedInt
+export let Utf8ContinuationFloor = 0x80 as ParsedInt
+
+let Utf8OneByteLength = 1 as ParsedInt
+
+// The other three widths of the SAME ladder, named for `Utf8OneByteLength`'s reason: the encoder
+// (`buildCharFromCodepoint`) allocates a record of exactly the width its arm took, and "3" spelled bare
+// beside `Utf8ThreeByteHighShift` would be the one number in the group that had to be re-derived to read.
+let Utf8TwoByteLength = 2 as ParsedInt
+let Utf8ThreeByteLength = 3 as ParsedInt
+let Utf8FourByteLength = 4 as ParsedInt
+
+// ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
+// value and the reference's state is a two-field struct (`GraphemeState{riCount, inEmojiSeq}`,
+// `grapheme.maxon:496-503`). Bit 0 is `inEmojiSeq`; the remaining bits are `riCount`.
+//
+// The COUNT is carried in full rather than just its parity, even though `isGraphemeBreak` reads only
+// `riCount mod 2`: keeping the reference's own field means a future GB rule that needs the count finds it,
+// and a shift costs exactly what a parity toggle would. A run long enough to overflow the shift is a run
+// of 2^62 regional indicators.
+
+// ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
+// signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;
+// each declares its own transitive floor in `recordCallUsage` exactly as the String family does.
+//
+//   * `__gbp(cp)` — the Grapheme_Cluster_Break property, 0..13. ALSO user-callable as the bare free
+//     function `graphemeBreakProperty(cp)`, which is how the corpus tests it.
+//   * `__ext_pict(cp)` — Extended_Pictographic. User-callable as `isExtendedPictographic(cp)`.
+//   * `__utf8_cp_at(addr)` / `__utf8_len_at(addr)` — decode / sequence length at a raw ADDRESS rather than
+//     at a `(String, pos)` pair, because every caller here has already resolved a buffer and an offset and
+//     passing the record would make them re-derive what they hold.
+//   * `__gr_break(prevGbp, currGbp, currCp, state)` — the GB3–GB999 rules.
+//   * `__gr_state(state, gbp, cp)` — the RI-parity + emoji-ZWJ state transition.
+//   * `__gr_end(strRec, startPos)` — the END of the cluster starting at `startPos`. THE segmenter; both
+//     `count()` and `for c in s` go through it, which is what makes them agree (divergence 1).
+//   * `__gr_count(strRec)` — the cluster count, i.e. `String.count()`.
+//   * `__char_at(strRec, startPos, endPos)` — mint an OWNED `Character` from the byte range `[startPos,
+//     endPos)`. The ONE door a Character is born through.
+//   * `__char_from_cp(cp)` — mint an OWNED `Character` from a CODEPOINT, `__char_at`'s dual: it ENCODES
+//     UTF-8 where that one copies already-encoded bytes. The one producer of a Character with no String
+//     behind it, and what makes `for c in 'a' to 'e'` yield Characters (A5m-ab).
+//   * `__char_cmp(a, b)` — `a.compare(b)` as an `Ordering` tag: the lexicographic byte order of two
+//     Characters (`stdlib/Character.maxon:80-104`), which is what `<`/`>`/`<=`/`>=` lower to (A5m-c). It
+//     BORROWS both records. The GRAPH is `BuiltinConformanceRuntime.buildByteRecordCompare`, installed there
+//     under `Character.compare` for the witness door as well — see it for why the operator door needs a
+//     `__`-prefixed name of its own rather than calling the conformer symbol the way `int.compare` is called.
+//   * `__char_ascii(charRec)` — `Character.asciiValue()`: the cluster's single ASCII byte, THROWING
+//     `CharacterError.notAscii` through the dual-register `errorReturn` ABI when the cluster is not one
+//     byte, or is one byte that is not ASCII (`stdlib/Character.maxon:154-166`). It BORROWS its record.
+//   * `__str_to_bytes(charRec, arr)` — fill a caller-created `Array with Byte` with the record's bytes,
+//     i.e. `Character.bytes()`. The array is created by the PARSER through `emitArrayCreateOp` (the one
+//     array-creation door); this only pushes. It is the LAST such entry point — `__str_split` was the
+//     other, and retired onto the corpus at W49 wave 5.
+//
+// ⚠ **`__str_to_codepoints` AND `__str_to_utf16` STOOD BESIDE IT AND WENT AT W49 WAVE 6**, with
+// `String.codepoints()`/`String.utf16()`, onto the corpus's LAZY `CodepointView`/`UTF16View`
+// (`stdlib/helpers/string/views.maxon`). `__str_to_bytes` outlived them because its `String` half retired
+// too and its `Character` half did not — see `Parser.parseByteView` for why that receiver is a different
+// trade rather than an oversight.
+export let CharAtName = b"__char_at"
+export let CharFromCodepointName = b"__char_from_cp"
+export let CharCmpName = b"__char_cmp"
+export let CharAsciiValueName = b"__char_ascii"
+export let StrToBytesName = b"__str_to_bytes"
+
+// The error `__char_ascii` throws, and its flag. `CharacterError` has exactly ONE case
+// (`stdlib/Character.maxon:15-17`), so `notAscii` is ordinal 0, biased into an error flag exactly as every
+// sibling family's is — DERIVED from the one `ErrorFlagOrdinalBias` rather than written as a bare `1`, so
+// the encode here cannot drift from the parser's decode.
+//
+// ⚠ **THE ENUM IS NOT SEEDED AS A DECLARATION, AND THAT IS `runtimeThrowsClause`'s STANDING RULE RATHER
+// THAN AN OMISSION** — see there: a family joins that composer when a committed case BINDS and
+// DISCRIMINATES its error, and no case does for this one (`character-type.md`'s two `asciiValue` cases test
+// the SUCCESS-vs-FAILURE fork with `if try`, never the error's identity). The clause below is stamped for
+// the ABI's sake only, which is `__gt_process_run`'s arrangement with `RunProcessError`, verbatim. The day a
+// case discriminates `notAscii`, seed the enum in `Project` and add the arm — both, in one edit.
+//
+// ⛔⛔ **SEEDING AND GUARDING ARE TWO DIFFERENT QUESTIONS, AND THE PARAGRAPH ABOVE ANSWERED ONLY ONE — SO
+// THIS FAMILY'S ORDINAL WENT UNWATCHED (W135 review).** "No case discriminates it" is an argument about the
+// DECODE half, and it is sound; it says nothing about the ENCODE half, which is the literal `0` below held
+// against a case position `stdlib/Character.maxon` owns. MEASURED: inserting a case ahead of `notAscii`
+// there moved the declared ordinal to 1 while `buildCharAscii` went on emitting 0, and the compile exited
+// **0 with no diagnostic** — the same silence `BuiltinErrorOrdinalCheck.requireTotal` had just withdrawn
+// from the six families that WERE on `Compiler.compileToCodeResult`'s roster. `RunProcessError`, named
+// above as the identical arrangement, is NOT the identical case and needs no guard: its ordinals name a
+// type no corpus file declares (`GtRuntime`'s own header — that is what makes an `otherwise (e)` decode
+// land on scalars), so it has no second half to drift from, exactly as retired `StringError` has none.
+let CharacterNotAsciiOrdinal = 0 as ParsedInt
+let CharacterNotAsciiFlag = CharacterNotAsciiOrdinal + ErrorFlagOrdinalBias
+
+// WHO transcribed the ordinal, for the diagnostic — the sibling families' spelling.
+let CharacterErrorOrdinalInstaller = b"the Character runtime"
+
+function characterThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(CharacterErrorTypeName))
+end 'characterThrows'
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `CharacterError`** — the twin of `verifyManagedDirectoryOrdinals`, which
+// carries the whole argument. It is `overDeclared` and not `overSynthesized` for `claimArrayErrorOrdinals`'
+// MEASURED reason: this name is spelled by the CORPUS, so a check against a layout the compiler rebuilt
+// would compare the compiler with itself and agree unconditionally while the program ran on the corpus's
+// order. `notDeclared` returns without a second complaint — `declaredBuiltinErrorEnum` has already reported
+// the missing declaration, and every arm behind it would say the same thing again.
+export function verifyCharacterErrorOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: CharacterErrorTypeName, installer: CharacterErrorOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimCharacterErrorOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyCharacterErrorOrdinals'
+
+function claimCharacterErrorOrdinals(project Project, declaration EnumLayout)
+	var characterErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: CharacterErrorOrdinalInstaller)
+	characterErrors.claim(CharacterNotAsciiCaseName, ordinal: CharacterNotAsciiOrdinal)
+	// ONE case, and `verifyDivisionByZeroOrdinals`' argument applies verbatim: a walk that is already total
+	// is the one shape that makes this call look redundant, which is exactly why it is not — the day a
+	// second case is declared beside `notAscii`, this is what says so rather than exempting it by silence.
+	characterErrors.requireTotal()
+end 'claimCharacterErrorOrdinals'
+
+// The THROWING `Character` runtime callees — one, and `isThrowingGtRuntimeCallee`'s argument for shipping
+// without an install-time drift guard holds here for the same three reasons: there is exactly ONE member,
+// both this predicate and `buildCharAscii`'s `throws` stamp key on the SAME `CharAsciiValueName` constant
+// (not a copied literal), and `runtimeCalleeSourceMethod` answers it from that same constant rather than
+// from a map that could lose an arm. If a SECOND throwing `Character` callee is ever added, add the guard —
+// as `installManagedDirectoryRuntime` carries it, the moment a family stops being built by one builder —
+// rather than a second name in this `or`.
+export function isThrowingCharacterRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(CharAsciiValueName)
+end 'isThrowingCharacterRuntimeCallee'
+
+// ⚠ **THE FIVE UTF-16 ENCODING CONSTANTS STOOD HERE FOR `__str_to_utf16` AND WENT WITH IT (W49 wave 6).**
+// They were a second copy of `stdlib/helpers/string/utf16.maxon:49-60`'s numbers, named rather than written
+// bare because a surrogate split spelled as four literals is four chances to transpose a bound. With the
+// builder retired the corpus's `utf16LeadSurrogate`/`utf16TrailSurrogate` are the only statement of them,
+// which is one copy where there were two.
+
+// Install the referenced grapheme runtime functions into the lowered Std module. Called AFTER the
+// pipeline (like `installStringRuntime`), so these are appended already-lowered — what runs over that
+// appended band is stated once, in `Compiler.compileToCodeResult`'s install block.
+// Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
+export function installGraphemeRuntime(module StdModule, usage RuntimeUsage, ordering EnumLayout)
+	if usage.usesCharAt 'charat'
+		buildCharAt(module)
+	end 'charat'
+	if usage.usesCharFromCodepoint 'charfromcp'
+		buildCharFromCodepoint(module)
+	end 'charfromcp'
+	if usage.usesCharCmp 'charcmp'
+		buildByteRecordCompare(module, name: CharCmpName, ordering: ordering)
+	end 'charcmp'
+	if usage.usesCharAsciiValue 'charascii'
+		buildCharAscii(module)
+	end 'charascii'
+	if usage.usesStrToBytes 'tobytes'
+		buildStrToBytes(module)
+	end 'tobytes'
+end 'installGraphemeRuntime'
+
+// ⭐ **`__char_at(strRec, startPos, endPos) -> Character` — THE ONE DOOR A `Character` IS BORN THROUGH.**
+// A fresh OWNED record holding a COPY of the bytes `[startPos, endPos)`, built through
+// `emitBuildOwnedInlineString` — the one fused-record encoder — so a Character is byte-for-byte the record
+// a String is and is independently droppable through `__str_decref`.
+//
+// ⚠ **IT COPIES; IT IS NOT A VIEW INTO THE SOURCE.** The reference is emphatic about this
+// (`Character.clone` deep-copies, and `String.makeCharFromBytes` mints its own managed memory), and it is
+// what makes `for c in s` safe when the body outlives or mutates the string: a view would dangle.
+//
+// `singleByteGraphemes@48` is inherited from the SOURCE, which is conservative-correct in the one direction that
+// matters. If the source is all-ASCII every cluster is a single ASCII byte, so `true` is exact; if it is
+// not, a one-byte ASCII cluster is marked non-ASCII, which only ever costs a fast path, never an answer.
+// Deriving it exactly would be a load, a compare and a phi per iteration for that.
+function buildCharAt(module StdModule)
+	var func = IrFunction.createFromStd(CharAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 3)
+	let record = 0 as ValueId
+	let startPos = 1 as ValueId
+	let endPos = 2 as ValueId
+
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let singleByteGraphemes = emitLoadField(module, block: entry, record: record, offset: StringSingleByteGraphemesOffset, ids: ids)
+	let clusterStart = emitBin(module, block: entry, a: buf, b: startPos, opcode: StdBinOpcode.add, ids: ids)
+	let byteLen = emitBin(module, block: entry, a: endPos, b: startPos, opcode: StdBinOpcode.sub, ids: ids)
+	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: clusterStart, srcLen: byteLen, singleByteGraphemes: singleByteGraphemes)
+	module.setTerminator(entry, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildCharAt'
+
+// ⭐⭐ **`__char_from_cp(cp) -> Character` — THE SECOND DOOR A `Character` IS BORN THROUGH, AND THE ONLY ONE
+// WITH NO STRING BEHIND IT.** `__char_at` COPIES bytes that are already UTF-8 in some record; this one
+// ENCODES a codepoint into a fresh owned record. `for c in 'a' to 'e'` is its consumer: a character range
+// iterates CODEPOINTS (both bounds are literals, so `Parser` knows them) and the body needs a real Character
+// per trip, which no byte range in memory holds.
+//
+// It is the dual of `Parser.appendUtf8Encoded` and of `stdlib/Character.maxon`'s `fromCodepoint`
+// (`:170-235`) — the SAME four-way ladder and the same bit layout, off the same eleven constants this file
+// already declares for the DECODER. A fifth spelling of "0xC0 | cp >> 6" would be the drift those constants
+// exist to prevent.
+//
+// The record is `emitAllocOwnedInlineString`'s, so a minted Character is byte-for-byte the record
+// `__char_at` mints and `__str_decref` reclaims it identically. `singleByteGraphemes@48` is EXACT here rather than
+// inherited-and-conservative: the encoder knows which arm it took, so the one-byte arm publishes `true` and
+// the three wide arms publish `false`.
+//
+// ⚠ **NO ARM VALIDATES `cp`.** Its one caller decodes a character LITERAL, so the value is a codepoint the
+// lexer already accepted; a surrogate or an out-of-range number would encode to the same bytes the reference
+// encoder produces for it, which is the reference's behaviour too (`fromCodepoint` has no guard either).
+function buildCharFromCodepoint(module StdModule)
+	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var wide = module.addBlock(func, label: b"wide")
+	var three = module.addBlock(func, label: b"three")
+	var oneByte = module.addBlock(func, label: b"one")
+	var oneByteCr = module.addBlock(func, label: b"oneCr")
+	var oneByteOther = module.addBlock(func, label: b"oneOther")
+	var twoByte = module.addBlock(func, label: b"two")
+	var threeByte = module.addBlock(func, label: b"three3")
+	var fourByte = module.addBlock(func, label: b"four")
+
+	emitParams(module, block: entry, count: 1)
+	let cp = 0 as ValueId
+
+	emitUtf8WidthFork(module, block: entry, cp: cp, ceiling: Utf8OneByteCeiling, narrow: oneByte, wider: wide, ids: ids)
+	emitUtf8WidthFork(module, block: wide, cp: cp, ceiling: Utf8TwoByteCeiling, narrow: twoByte, wider: three, ids: ids)
+	emitUtf8WidthFork(module, block: three, cp: cp, ceiling: Utf8ThreeByteCeiling, narrow: threeByte, wider: fourByte, ids: ids)
+
+	// ASCII is the one width whose lead byte IS the codepoint, so it has no floor to add and it is the one
+	// width that CAN publish `singleByteGraphemes@48 = true`.
+	//
+	// ⚠⚠ **BUT NOT UNCONDITIONALLY, AND THE ONE EXCEPTION IS `U+000D`.** A lone CR is, on its own, one
+	// grapheme of one byte — so the flag looks true of THIS record read in isolation. It may not be
+	// published, because the field is not a fact about a record in isolation: a concatenation composes it by
+	// ANDing the two operands' flags, so a `'\r'` Character carrying `true` would let `"a\r"` + `"\nb"`
+	// publish `true` over a buffer whose CR+LF is a SINGLE two-byte cluster under GB3. That is precisely why
+	// the corpus defines the flag CR-FREE rather than CRLF-free — *"'no CR' is a property of each byte on its
+	// own, so it survives both slicing and concatenation"* (`stdlib/String.maxon:80-82`) — and a producer
+	// that publishes `true` for a CR is the one input that breaks the composition.
+	//
+	// The byte and the return are written once and forked over, rather than the arm being duplicated with
+	// one constant changed: a second copy of the store is how the two arms come to disagree about anything
+	// but the flag they exist to differ on.
+	emitSingleByteWidthFork(module, block: oneByte, cp: cp, isCr: oneByteCr, notCr: oneByteOther, ids: ids)
+	emitOneByteCharArm(module, block: oneByteCr, cp: cp, singleByteGraphemes: PredicateFalse, ids: ids)
+	emitOneByteCharArm(module, block: oneByteOther, cp: cp, singleByteGraphemes: PredicateTrue, ids: ids)
+
+	let twoBuf = emitCharRecordBuffer(module, block: twoByte, byteLength: Utf8TwoByteLength, singleByteGraphemes: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: twoByte, buf: twoBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: twoByte, cp: cp, floor: Utf8LeadTwoByteFloor, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: twoByte, buf: twoBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: twoByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(twoByte, op: StdOp.ret(twoBuf.record))
+
+	let threeBuf = emitCharRecordBuffer(module, block: threeByte, byteLength: Utf8ThreeByteLength, singleByteGraphemes: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: threeByte, cp: cp, floor: Utf8LeadThreeByteFloor, shift: Utf8ThreeByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: threeByte, cp: cp, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 2, value: emitUtf8ContinuationByte(module, block: threeByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(threeByte, op: StdOp.ret(threeBuf.record))
+
+	let fourBuf = emitCharRecordBuffer(module, block: fourByte, byteLength: Utf8FourByteLength, singleByteGraphemes: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: fourByte, cp: cp, floor: Utf8LeadFourByteFloor, shift: Utf8FourByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: Utf8ThreeByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 2, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 3, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(fourByte, op: StdOp.ret(fourBuf.record))
+
+	module.functions.push(func)
+end 'buildCharFromCodepoint'
+
+// The ONE-BYTE arm's own fork: is this codepoint the CR that clears `singleByteGraphemes@48`? Separate from
+// `emitUtf8WidthFork` because it is not a width question — both sides encode to one byte — and folding it in
+// would make a ladder rung mean two different things.
+function emitSingleByteWidthFork(module StdModule, block IrBlock, cp ValueId, isCr IrBlock, notCr IrBlock, ids ValueMinter)
+	let crByte = emitConst(module, block: block, value: CarriageReturnByte as ParsedInt, ids: ids)
+	let matchesCr = emitCmp(module, block: block, a: cp, b: crByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(matchesCr, thenBlockId: isCr.id, elseBlockId: notCr.id))
+end 'emitSingleByteWidthFork'
+
+// Encode a one-byte codepoint into a fresh Character record carrying the flag the caller decided, and return
+// it. The two CR arms differ in that one constant and in nothing else, which is what this exists to enforce.
+function emitOneByteCharArm(module StdModule, block IrBlock, cp ValueId, singleByteGraphemes ParsedInt, ids ValueMinter)
+	let buf = emitCharRecordBuffer(module, block: block, byteLength: Utf8OneByteLength, singleByteGraphemes: singleByteGraphemes, ids: ids)
+	emitStoreByteAtOffset(module, block: block, buf: buf.buffer, offset: 0, value: cp)
+	module.setTerminator(block, op: StdOp.ret(buf.record))
+end 'emitOneByteCharArm'
+
+// One rung of the encoder's width ladder: `cp < ceiling` picks `narrow`, anything else `wider`. Three
+// identical forks written once, so a ceiling cannot be tested with the wrong predicate in one arm and the
+// right one in another (`emitRangeTable`'s reason, one function up).
+function emitUtf8WidthFork(module StdModule, block IrBlock, cp ValueId, ceiling ParsedInt, narrow IrBlock, wider IrBlock, ids ValueMinter)
+	let bound = emitConst(module, block: block, value: ceiling, ids: ids)
+	let fits = emitCmp(module, block: block, a: cp, b: bound, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(fits, thenBlockId: narrow.id, elseBlockId: wider.id))
+end 'emitUtf8WidthFork'
+
+// A fresh owned Character record of `byteLength` bytes, plus the address its bytes start at — the pair
+// every encoder arm needs and the one place the two are taken together.
+function emitCharRecordBuffer(module StdModule, block IrBlock, byteLength ParsedInt, singleByteGraphemes ParsedInt, ids ValueMinter) returns CharRecordBuffer
+	let len = emitConst(module, block: block, value: byteLength, ids: ids)
+	let ascii = emitConst(module, block: block, value: singleByteGraphemes, ids: ids)
+	let record = emitAllocOwnedInlineString(module, block: block, ids: ids, byteLen: len, singleByteGraphemes: ascii)
+	return CharRecordBuffer.of(record, buffer: emitInlineStringBuffer(module, block: block, ids: ids, record: record))
+end 'emitCharRecordBuffer'
+
+// The record `emitCharRecordBuffer` allocated and the address of its inline bytes. Two values one caller
+// always wants together, so they travel as one rather than as two returns nobody can keep in step.
+type CharRecordBuffer
+	export let record as ValueId
+	export let buffer as ValueId
+
+	static function of(record ValueId, buffer ValueId) returns Self
+		return Self{record: record, buffer: buffer}
+	end 'of'
+end 'CharRecordBuffer'
+
+// `buf[offset] = value` as a byte — `emitStoreByte`'s constant-index twin, which every encoder arm uses
+// because its offsets are known and an index register would be an add per store.
+function emitStoreByteAtOffset(module StdModule, block IrBlock, buf ValueId, offset ByteOffset, value ValueId)
+	module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
+end 'emitStoreByteAtOffset'
+
+// A UTF-8 LEAD byte: the width's floor OR the codepoint's high bits.
+function emitUtf8LeadByte(module StdModule, block IrBlock, cp ValueId, floor ParsedInt, shift ParsedInt, ids ValueMinter) returns ValueId
+	let high = emitBin(module, block: block, a: cp, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	return emitBin(module, block: block, a: high, b: emitConst(module, block: block, value: floor, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitUtf8LeadByte'
+
+// A UTF-8 CONTINUATION byte: `0b10` followed by the six payload bits at `shift` —
+// `Parser.utf8ContinuationByte`, emitted rather than computed.
+function emitUtf8ContinuationByte(module StdModule, block IrBlock, cp ValueId, shift ParsedInt, ids ValueMinter) returns ValueId
+	let shifted = emitBin(module, block: block, a: cp, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let payload = emitBin(module, block: block, a: shifted, b: emitConst(module, block: block, value: Utf8ContinuationMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: payload, b: emitConst(module, block: block, value: Utf8ContinuationFloor, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitUtf8ContinuationByte'
+
+// ⭐ **`__char_ascii(charRec) -> (byte, flag)` — `Character.asciiValue()`, THE ONE THROWING `Character`
+// MEMBER**, transcribed from `stdlib/Character.maxon:154-166` rule for rule: a cluster whose byte length is
+// not 1 throws `notAscii`, and so does a single byte with the high bit set.
+//
+// ⚠ **BOTH GUARDS ARE THE REFERENCE'S AND BOTH ARE KEPT, even though the second looks redundant here.** A
+// `Character` minted through `__char_at` off well-formed UTF-8 cannot be one byte and non-ASCII — a lead
+// byte `>= 128` announces continuation bytes the cluster would then hold. But a String's bytes are not
+// guaranteed well-formed (`String.from(bytes)` takes whatever it is given), so the byte test is a real
+// second question about a reachable record rather than a transcription of a tautology. The reference asks
+// both; asking one would be a divergence, and a silent one.
+//
+// It reads TWO fields of the record and calls nothing, so it allocates nothing and pulls in no other
+// runtime — which is why `closeGraphemeNeeds` has no arm for it (`recordGraphemeUsage`'s note).
+//
+// ⚠ The two numbers are `Utf8OneByteLength` and `Utf8OneByteCeiling`, this file's own — "one byte" and "the
+// ASCII boundary" are the same two facts the UTF-8 decoder forks on, and the header over `Utf8OneByteCeiling`
+// is explicit that its 128 IS the ASCII boundary. A third and fourth spelling of them here is precisely the
+// drift that header records paying for once already.
+function buildCharAscii(module StdModule)
+	var func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: characterThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkAscii = module.addBlock(func, label: b"chkascii")
+	var ok = module.addBlock(func, label: b"ok")
+	var notAscii = module.addBlock(func, label: b"notascii")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let oneByte = emitConst(module, block: entry, value: Utf8OneByteLength, ids: ids)
+	let isSingleByte = emitCmp(module, block: entry, a: len, b: oneByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isSingleByte, thenBlockId: checkAscii.id, elseBlockId: notAscii.id))
+
+	let buffer = emitLoadField(module, block: checkAscii, record: record, offset: StringBufferOffset, ids: ids)
+	let byteValue = emitLoadByteAt(module, block: checkAscii, addr: buffer, ids: ids)
+	let ceiling = emitConst(module, block: checkAscii, value: Utf8OneByteCeiling, ids: ids)
+	let singleByteGraphemes = emitCmp(module, block: checkAscii, a: byteValue, b: ceiling, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkAscii, op: StdOp.condBranch(singleByteGraphemes, thenBlockId: ok.id, elseBlockId: notAscii.id))
+
+	emitOkReturn(module, block: ok, value: byteValue, ids: ids)
+	emitErrorReturn(module, block: notAscii, flag: CharacterNotAsciiFlag, ids: ids)
+
+	module.functions.push(func)
+end 'buildCharAscii'
+
+// ⭐ **`__str_to_bytes(strRec, arr)` — `.bytes()`, filling a CALLER-CREATED `Array with Byte`.** The array
+// is built by the PARSER through `emitArrayCreateOp` (the one array-creation door), so a `.bytes()` result
+// and a `b"…"` literal cannot disagree about what an `Array with Byte` is — they are the same interned
+// instance (`internArrayByteInstance`).
+//
+// ⚠ This materializes rather than answering with a lazy view: there is no `Iterable`, no associated types
+// and no cursor protocol to build one on, which is the same reason `for x in <array>` is an index counter.
+// Materializing into the one collection that does exist keeps `.bytes().count()` and `for b in x.bytes()`
+// working through machinery already present, at the cost of one allocation and a copy — O(n) on a String.
+// ⚠⚠ **THE COUNTED BYTE WALK WAS `emitStringWalkSkeleton`, SHARED BY THREE BUILDERS, AND IT IS BACK INLINE
+// (W49 wave 6).** It was extracted at the P1.8 Slice E review because `__str_to_bytes`,
+// `__str_to_codepoints` and `__str_to_utf16` had written it out three times byte for byte, and the failure
+// mode was a WRONG ANSWER rather than a compile error: nothing made the three agree that the bound test is
+// `>=` against the BYTE length, so a `>` in one copy would have run one iteration past the end of that view
+// alone, silently. Wave 6 retired `String.codepoints()`/`String.utf16()` onto the corpus's lazy
+// `CodepointView`/`UTF16View`, which took both decoding builders with them. **A shared description with one
+// subject is not a shared description — it is a hop**, and the invariant it protected cannot be broken by an
+// edit to a copy that no longer exists. `StringWalkCursor` went with it: with the decoders gone nothing read
+// its `length` at all, so the struct was carrying one live field to one caller.
+//
+// ⇒ The day a second counted byte walk is synthesized, extract it again — and note that the extraction was
+// worth its keep while it had three subjects (sabotage reds 27).
+function buildStrToBytes(module StdModule)
+	var func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let arr = 1 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	// `>=` against the BYTE length, not `>`: the cursor is the index about to be read, so equality with the
+	// length is already one past the last byte.
+	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	let raw = emitLoadByteIndexed(module, block: body, base: buf, index: i, ids: ids)
+	let pushed = ids.mint()
+	module.appendOp(body, op: StdOp.call(pushed, callee: ManagedPushName, args: twoArgs(arr, second: raw)))
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.functions.push(func)
+end 'buildStrToBytes'

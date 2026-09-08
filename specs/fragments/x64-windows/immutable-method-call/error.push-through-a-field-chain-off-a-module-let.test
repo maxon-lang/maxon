@@ -1,0 +1,22 @@
+// Test: error.push-through-a-field-chain-off-a-module-let
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+let SharedFacts = Facts.create()
+
+function main() returns ExitCode
+	SharedFacts.counts.push(1)
+
+	return SharedFacts.counts.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:16:21: cannot pass 'SharedFacts' to function that mutates parameter 'self' (in main)

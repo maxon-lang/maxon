@@ -1,0 +1,82 @@
+// Test: module-var-struct-of-empty-containers-still-allocates
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+typealias NameArray = Array with String
+
+type Facts
+	export var counts as CountArray = CountArray.create()
+	export var names as NameArray = NameArray.create()
+	export static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+var MutableFacts = Facts.create()
+
+function main() returns ExitCode
+	return (MutableFacts.counts.count() + MutableFacts.names.count()) as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_MutableFacts@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_MutableFacts
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.leaGlobal x1, __data_MutableFacts
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at module-var-struct-of-empty-containers-still-allocates.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__fieldDefault#Facts#counts {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__fieldDefault#Facts#names {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.epilogue 16
+    arm64.ret
+}

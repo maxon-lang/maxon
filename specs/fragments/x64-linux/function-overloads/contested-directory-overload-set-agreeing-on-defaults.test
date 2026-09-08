@@ -1,0 +1,136 @@
+// Test: contested-directory-overload-set-agreeing-on-defaults
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a + b
+end 'pick'
+
+export function pick(a bool, b Num = 5) returns Num
+	return b if a else 0
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return ((alpha.pick(2) + alpha.pick(true)) as ExitCode) + (beta.pick(3) as ExitCode)
+end 'main'
+---
+ExitCode: 65
+---
+func @alpha.pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, -1000
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, -1000
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.cmpRegImm32 r8, -1000
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a.maxon:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+  __il_body#13:
+    x64.movRegImm32 rdx, 5
+  __il_cont#12:
+    x64.callDirect alpha.pick
+  __il_body#14:
+    x64.movRegImm32 rax, 5
+  __il_cont#10:
+    x64.leaRegRegReg rax, r8, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#24
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#24:
+    x64.movRegImm32 rcx, 53
+  __il_cont#22:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

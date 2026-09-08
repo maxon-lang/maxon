@@ -1,0 +1,1499 @@
+// PE64 writer for Windows executables — the format-neutral CodeResult → PE seam.
+//
+// THIN for maxon-bin: writes the smallest runnable x64-windows PE — `.text`
+// (the code) + `.idata` (a single kernel32 `ExitProcess` import) + `.rsrc` (the embedded
+// `asInvoker` application manifest) + headers, with an optional `.rdata` / `.symtab` /
+// `.data` section when the backend produced any and a trailing COFF symbol table for
+// debuggers when debug symbols are present. P1.0d.5b added `.data`: a WRITABLE section
+// holding the initial image of every top-level `var`. The `.rsrc` manifest opts every
+// produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
+// The import table is MULTI-DLL as of the socket slice — kernel32 and ws2_32, one thunk run,
+// one directory entry and one Hint/Name region each, derived from `ImportDll` rather than from
+// a hard-coded count (see `ImportDll`, and `emittedDllCount` for the derivation). A `--coverage`
+// build's counters need no section of their own — they are a reserved run inside `.data`. The arm64
+// relocation paths are deferred to the arm64 milestone.
+
+// A relative virtual address — an OFFSET from the image base, and a PE one is 32-bit, so it can
+// never carry bit 63. A coordinate, not a pattern.
+typealias Rva = int(0 to u64.max)
+
+// The RVA `offset` bytes into the section based at `base`, and the same as the word a directory
+// field holds.
+function rvaAt(base Rva, offset ByteOffset) returns Rva
+	return base + (offset as Rva)
+end 'rvaAt'
+
+function rvaWord(base Rva, offset ByteOffset) returns MachineWord
+	return rvaAt(base, offset: offset) as MachineWord
+end 'rvaWord'
+
+// A PE section's `Characteristics` — a 32-BIT field in the file format, and every `IMAGE_SCN_*`
+// constant below fits one (`0xC0000040` is the widest). Bit 31 is a real flag; bit 63 is not a value
+// this alias has.
+typealias SectionFlags = bits(32)
+typealias SymbolTally = int(0 to u64.max)
+
+let FileAlignment = 512
+let SectionAlignment = 4096
+
+// Fixed non-relocatable image base; DYNAMIC_BASE is cleared in DllCharacteristics
+// so the loader pins the image here (M1 emits no base-relocation table).
+let ImageBase = 0x140000000
+
+// One PE data-directory entry is 8 bytes (RVA + size). Used to skip the
+// directories M1 leaves empty (Export, TLS, …); Resource (#2) now points at `.rsrc`.
+let DataDirEntrySize = 8
+
+// --- Section characteristics ---
+let SectionTextFlags = 0x60000020  // CODE | EXECUTE | READ
+let SectionRdataFlags = 0x40000040  // INITIALIZED_DATA | READ
+let SectionIdataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
+let SectionSymtabFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
+
+// `.data` — INITIALIZED_DATA | READ | WRITE. The WRITE bit is the whole point of the section:
+// a top-level `var` is stored to at run time, and a global in read-only `.rdata` would fault on
+// its first assignment.
+//
+// ⚠ What routes a label HERE is the RELOCATION KIND — `dataSectionRipRelDisp32`, measured from
+// `dataRva` by `patchRdataRelocationsX86` — and NOT the `__data_` name prefix. (An earlier draft of
+// this comment credited a `classifyGlobalLabel` that had no callers and has since been deleted; see
+// `DataLabelPrefix` in SignatureIndex.maxon for the measurement that settled it.)
+let SectionDataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
+
+// `.rsrc` — INITIALIZED_DATA | READ. The embedded application manifest is read-only data,
+// like `.rdata`; the loader reads it but never writes it, so no WRITE bit.
+let SectionRsrcFlags = 0x40000040  // INITIALIZED_DATA | READ
+
+// --- Fixed header field sizes ---
+let DosAndPeSigBytes = 68  // 64-byte DOS stub + 4-byte "PE\0\0"
+let CoffHeaderBytes = 20
+let OptionalHeaderBytes = 240
+let SectionHeaderBytes = 40
+
+// --- COFF header constants ---
+// IMAGE_FILE_MACHINE_* — the CPU architecture the image targets.
+let CoffMachineX64 = 0x8664
+let CoffMachineArm64 = 0xAA64
+
+// Characteristics: IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE.
+let CoffCharacteristics = 0x22
+
+// --- COFF symbol-table constants (trailing debug symbols) ---
+// IMAGE_SYM_TYPE: 0 = no type; a function carries DTYPE_FUNCTION in the high byte.
+let CoffSymTypeNone = 0x0000
+let CoffSymTypeFunction = 0x0020
+
+// IMAGE_SYM_CLASS storage classes.
+let CoffSymClassExternal = 2
+let CoffSymClassStatic = 3
+
+// One auxiliary record follows a section symbol; a function symbol carries none.
+let CoffAuxCountSection = 1
+let CoffAuxCountNone = 0
+
+// Function symbols all resolve into `.text`, which the writer emits first.
+let TextSectionNumber = 1
+
+// --- Import table layout ---
+let PointerSize = 8
+let ImportDirEntrySize = 20  // one IMAGE_IMPORT_DESCRIPTOR
+let ImportHintFieldBytes = 2  // the hint word that precedes the name in an IMAGE_IMPORT_BY_NAME
+let ImportHintNameNulBytes = 1  // the NUL that terminates that name
+
+// Which DLL provides an import. The table carries one thunk run, one directory entry and one Hint/Name
+// region PER DLL — kernel32 and ws2_32. shell32 is not imported at all; see `GetCommandLineA` for why it
+// is not needed.
+//
+// ⚠ **THE ORDER HERE IS THE EMISSION ORDER AND IT MUST AGREE WITH `IatSlot`'s.** Each DLL's slots are one
+// CONTIGUOUS run in `IatSlot`, in this enum's order, which is what lets `iatSlotByteOffset` reach a slot as
+// "its DLL's run offset plus its position within that run" rather than as a general interleaving. A later
+// DLL's slots pay for the null qword terminating each earlier run; see `iatSlotByteOffset`, which is the one
+// place that arithmetic is written.
+enum ImportDll
+	kernel32
+	ws2_32
+	// ⛔⛔ **`ntdll` IS A STATIC IMPORT AND THE RISK IS ACCEPTED — see `NtGetNextThread`'s own case for what
+	// that costs on a host whose ntdll lacks the export.** LAST, because the layout rule above is about the
+	// DLL BLOCK BOUNDARY: every slot of a DLL is contiguous, and a new DLL's run goes after every existing
+	// one so no existing slot changes its position within its own run.
+	ntdll
+end 'ImportDll'
+
+let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
+
+// --- IAT slots ---
+// The Win32 imports the emitted runtime needs. Each case is named EXACTLY as its Win32
+// symbol, so `.name` is the import string and `.ordinal` is the IAT slot index — the two
+// facets the call-site relocation and the import-table builder need, with no parallel
+// array to keep in lockstep. GROWS one appended case per new import at its milestone;
+// everything downstream (the thunk table, the Hint/Name table, the IAT size) sizes itself
+// off `allCases`, so appending a case is the whole change.
+//
+// `ExitProcess` terminates with main's return code. The other three are the panic runtime
+// (P1.0d.3): `GetStdHandle` + `WriteFile` are how a panic reaches stderr — the emitted
+// program links no CRT, so there is no `fprintf` and stderr is a HANDLE you ask for — and
+// `AddVectoredExceptionHandler` is what lets the runtime see a `#DE` at all, since the CPU
+// raises the trap and Windows offers it to VEH before anything else.
+//
+// `VirtualAlloc` (P1.0r) is the allocator's page source — the one OS call `__slab_alloc` makes.
+// ⭐ IT IS NAMED HERE AND NOWHERE ELSE, and that is the point of the `StdOp.osAllocPages` spelling:
+// the Std tier asks for PAGES, and only this file — the Windows PE writer — knows that pages come
+// from `VirtualAlloc` through an import table. A `mmap`/`memory.grow` backend names its own, here.
+//
+// `QueryPerformanceCounter`/`QueryPerformanceFrequency`/`Sleep` (P1.5 mid-body-yield) are the green-thread
+// SLEEP substrate's clock and netpoll wait: `__gt_now_ns` reads the monotonic high-resolution counter
+// (QPC ticks scaled by the QPF frequency — NOT `GetTickCount64`, whose ~15.6 ms coarseness makes a
+// tick-derived deadline expire early), and the scheduler's netpoll waits on the earliest timer deadline
+// with a real `Sleep(ms)` rather than busy-spinning. They lower from the Std `osReadClock`/`osSleepMs` ops.
+// APPENDED AFTER `VirtualAlloc` so every existing slot INDEX (and hence every existing `iatCall`
+// relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` (P1.5
+// subprocess seed) are the green-thread SUBPROCESS substrate's spawn + yielding-wait + reap: `__gt_process_run`
+// spawns a child with CreateProcessA and parks the GT; the scheduler's netpoll blocks the M that holds the
+// single-poller claim (`GtRuntime.GtProcPollerLabel`) on
+// WaitForMultipleObjects (or per-handle WaitForSingleObject polls) and, once a child exits, reads its code with
+// GetExitCodeProcess and closes both handles. They lower from the Std `osProcessSpawn`/`osProcessExitCode`/
+// `osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops. APPENDED AFTER `Sleep` so every existing slot INDEX (and
+// hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// `VirtualFree` (P1.5-B1a′) is the page-FREE twin of `VirtualAlloc` — the relocating morestack releases a GT's
+// OLD stack after copying to the doubled one, and `__gt_drive_until` releases a completed GT's (possibly grown)
+// stack, both via `VirtualFree(base, 0, MEM_RELEASE)`. It lowers from the Std `osFreePages` op (and the hand-
+// assembled `__gt_morestack` chunk calls it directly). APPENDED AFTER `CloseHandle` so every existing slot INDEX
+// (and hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// `CreateNamedPipeW`/`CreateFileW`/`SetHandleInformation`/`CreateIoCompletionPort`/`SetFileCompletionNotificationModes`/
+// `GetQueuedCompletionStatus`/`CreateThread`/`CreateEventA`/`SetEvent`/`InitializeCriticalSection`/
+// `EnterCriticalSection`/`LeaveCriticalSection`/`ReadFile`/`GetLastError`/`GetCurrentProcessId` (P1.5 dogfood slice 1a —
+// the IOCP overlapped-read substrate) are the async-subprocess-stdio core: an overlapped named pipe (CreateNamedPipeW +
+// CreateFileW + SetHandleInformation) is registered with a process-wide IOCP (CreateIoCompletionPort +
+// SetFileCompletionNotificationModes), a dedicated completion thread (CreateThread) drains it with
+// GetQueuedCompletionStatus and re-readies the parked green thread under a CRITICAL_SECTION (Initialize/Enter/Leave),
+// waking the netpoll's WaitForSingleObject via an auto-reset CreateEventA/SetEvent; the yielding read is a ReadFile whose
+// FALSE return is classified by GetLastError (997 pending → yield, 109 broken-pipe → EOF); GetCurrentProcessId makes the
+// pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
+// relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// `GetSystemTimeAsFileTime` is the WALL clock — the one import that answers a CALENDAR question rather than
+// a stopwatch one. `__clock_now_unix_s` (`__Builtins.currentUnixTimeSeconds`) reads it into a `.data` word,
+// shifts the 1601→1970 epoch and divides by the 100 ns tick. It lowers from the Std `osReadWallClock` op.
+// APPENDED AFTER `CancelIoEx` so every existing slot INDEX (and hence every existing `iatCall` relocation) is
+// unchanged — a reorder would silently repoint every prior import.
+//
+// ⛔ **THIS IS NO LONGER ONE DLL, AND THIS LINE CLAIMED IT WAS.** It closed with *"All are kernel32, so
+// this is still ONE DLL and `Kernel32DirEntries` stays 1"* while the eight `ws2_32` cases sat a few lines
+// below it and `Kernel32DirEntries` had been DELETED. The directory count is now DERIVED —
+// `emittedDllCount` walks `ImportDll` and asks `dllIsEmitted` — so there is no constant to keep at any
+// value, and which DLL a slot belongs to is `slotDll`'s single answer. See `ImportDll` for the layout rule
+// the two runs obey.
+// Which DLL an import comes from, stated AT the case. The two runs are laid out by DLL, and a thunk
+// pointing into another library's Hint/Name table is not a failure any test would catch — so the fact
+// sits where the import is declared, and an import added without one is E3032 (a struct-backed enum
+// admits no bare case) at the declaration the author is already standing in.
+type IatSlotMeta
+	export let dll as ImportDll
+end 'IatSlotMeta'
+
+export enum IatSlot
+	ExitProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	GetStdHandle = IatSlotMeta{dll: ImportDll.kernel32}
+	WriteFile = IatSlotMeta{dll: ImportDll.kernel32}
+	AddVectoredExceptionHandler = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualAlloc = IatSlotMeta{dll: ImportDll.kernel32}
+	QueryPerformanceCounter = IatSlotMeta{dll: ImportDll.kernel32}
+	QueryPerformanceFrequency = IatSlotMeta{dll: ImportDll.kernel32}
+	Sleep = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateProcessA = IatSlotMeta{dll: ImportDll.kernel32}
+	GetExitCodeProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	WaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
+	WaitForMultipleObjects = IatSlotMeta{dll: ImportDll.kernel32}
+	CloseHandle = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualFree = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateNamedPipeW = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateFileW = IatSlotMeta{dll: ImportDll.kernel32}
+	SetHandleInformation = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateIoCompletionPort = IatSlotMeta{dll: ImportDll.kernel32}
+	SetFileCompletionNotificationModes = IatSlotMeta{dll: ImportDll.kernel32}
+	GetQueuedCompletionStatus = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateThread = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateEventA = IatSlotMeta{dll: ImportDll.kernel32}
+	SetEvent = IatSlotMeta{dll: ImportDll.kernel32}
+	InitializeCriticalSection = IatSlotMeta{dll: ImportDll.kernel32}
+	EnterCriticalSection = IatSlotMeta{dll: ImportDll.kernel32}
+	LeaveCriticalSection = IatSlotMeta{dll: ImportDll.kernel32}
+	ReadFile = IatSlotMeta{dll: ImportDll.kernel32}
+	GetLastError = IatSlotMeta{dll: ImportDll.kernel32}
+	GetCurrentProcessId = IatSlotMeta{dll: ImportDll.kernel32}
+	CancelIoEx = IatSlotMeta{dll: ImportDll.kernel32}
+	GetSystemTimeAsFileTime = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⚠ The `A` variant, deliberately, where `CreateFileW` is already imported two lines up: FILES open
+	// through `CreateFileA`, and `CreateFileW` is reserved for wide DEVICE names and pipe ends — its two
+	// sites are both named-pipe plumbing.
+	// ⇒ The reason is that a Maxon path arrives as a UTF-8 BYTE array, and handing those bytes to
+	// `CreateFileW` is broken even for pure ASCII: `"abc"` is the bytes `61 62 63`, which the W entry point
+	// reads as the single UTF-16 unit `0x6261`. Using it would require a UTF-8→UTF-16 widening pass that
+	// buys nothing the corpus needs.
+	// ⚠ **KNOWN LIMITATION, matching the reference rather than exceeding it:** `CreateFileA` interprets its
+	// bytes in the system ANSI codepage, so a non-ASCII path is misread on a host whose codepage is not
+	// UTF-8. Every acceptance path in `specs/managed-file.md` is ASCII. The eventual fix is the W entry
+	// point plus a real widening of the byte buffer; it is not this rung's, and it is written down rather
+	// than discovered later.
+	CreateFileA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **R4.2 — THE REST OF THE FILE-IO IMPORTS.** APPENDED AFTER `CreateFileA` so every existing slot
+	// INDEX (and hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint
+	// every prior import. All five are kernel32, so they extend that DLL's existing run and add no import
+	// DIRECTORY entry (see `ImportDll`).
+	//
+	// `GetFileSizeEx` answers `size()`; `DeleteFileA` and `MoveFileExA` are `delete`/`rename`.
+	//
+	// ⭐ **`FindFirstFileA` + `FindClose` SERVE BOTH `stat` AND `exists`, WHICH IS WHY THERE IS NO
+	// `GetFileAttributesA` HERE.** The find record carries the timestamps and sizes `stat` packs AND the
+	// `dwFileAttributes` word whose directory bit is the whole of `exists`'s answer, so importing a second
+	// entry point would be two ways to ask one question — and two ways can disagree.
+	//
+	// ⚠ `ReadFile` is NOT here: it was already imported for the P1.5 IOCP substrate, and `osReadFile`
+	// reuses that slot rather than taking a second one for the same entry point.
+	GetFileSizeEx = IatSlotMeta{dll: ImportDll.kernel32}
+	DeleteFileA = IatSlotMeta{dll: ImportDll.kernel32}
+	MoveFileExA = IatSlotMeta{dll: ImportDll.kernel32}
+	FindFirstFileA = IatSlotMeta{dll: ImportDll.kernel32}
+	FindClose = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **R4.3 — THE FOUR DIRECTORY IMPORTS.** APPENDED AFTER `FindClose` so every existing slot INDEX (and
+	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
+	// import. All four are kernel32, so they extend that DLL's existing run and add no import DIRECTORY
+	// entry (see `ImportDll`).
+	//
+	// ⚠ **`FindNextFileA` IS NEW, EVEN THOUGH `FindFirstFileA` AND `FindClose` ARE NOT.** R4.2 imported the
+	// first and the last for `stat`/`exists`, which open a search only to read ONE record and close it —
+	// neither ever iterates. This is the first rung that walks a directory.
+	//
+	// `CreateDirectoryA`/`GetCurrentDirectoryA` are `create()`/`currentPath()`. `GetFileAttributesA` answers
+	// `exists()`, which takes a bare DIRECTORY path rather than a search pattern — see the
+	// `osFileAttributes` op's own comment for why the "no second entry point" argument `FindFirstFileA`
+	// carries does not reach this case.
+	//
+	// ⚠ All four are the `A` variants for the reason `CreateFileA` above is, and inherit its stated
+	// LIMITATION unchanged: a non-ASCII path is read in the system ANSI codepage.
+	FindNextFileA = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
+	GetCurrentDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
+	GetFileAttributesA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE COMMAND-LINE IMPORT.** APPENDED AFTER `GetFileAttributesA` so every existing slot INDEX (and
+	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
+	// import. It is kernel32, so it extends that DLL's existing run and adds no import DIRECTORY entry (see
+	// `ImportDll`) — which is exactly what makes this a ONE-LINE addition rather than a new directory.
+	//
+	// ⚠ The `A` variant, and here it is not merely consistent — it is what keeps shell32 out. `GetCommandLineW`
+	// needs shell32's `CommandLineToArgvW` plus `WideCharToMultiByte` to get back to bytes: three imports and a
+	// second DLL. The `A` entry point costs one import and no new directory entry, and the deciding reason is
+	// not the count: every other path this backend hands Windows goes through an `A` entry point
+	// (`CreateFileA`, `FindFirstFileA`, `GetCurrentDirectoryA`, `GetFileAttributesA`), so a UTF-8 argv would be
+	// the one producer disagreeing with every consumer — and `openRead(args.get(1))` is the first thing anyone
+	// writes.
+	//
+	// ⚠ It inherits `CreateFileA`'s stated LIMITATION unchanged, and inherits it CONSISTENTLY: a non-ASCII
+	// argument is read in the system ANSI codepage, exactly as a non-ASCII path is. The eventual fix is the
+	// same one — the W entry points plus a real widening — for the whole lane at once, which is the property
+	// a lone UTF-8 producer here would have destroyed.
+	GetCommandLineA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE PROCESS-INTROSPECTION IMPORT (W5).** APPENDED AFTER `GetCommandLineA` for the reason that
+	// case states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⚠ **`GetStdHandle` IS NOT ADDED HERE — IT HAS BEEN A SLOT SINCE P1.2 wave A**, where `print` needed
+	// it, and `osStdHandle` reaches the same slot with the selector it is handed. That is the whole reason
+	// standard INPUT — and, since the subprocess rung, an INHERITED child stream — costs no import at all.
+	//
+	// ⚠ The `A` variant, inheriting `CreateFileA`'s stated LIMITATION unchanged and inheriting it
+	// CONSISTENTLY: a path whose bytes are non-ASCII comes back in the system ANSI codepage — which is
+	// exactly what the rest of this lane will then hand to `CreateFileA`, so the round trip holds. A `W`
+	// entry point here alone would be the lone wide producer feeding narrow consumers.
+	GetModuleFileNameA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS (Workstream O3).** APPENDED AFTER `GetModuleFileNameA` for the reason
+	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
+	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so they add no import
+	// DIRECTORY entry (see `ImportDll`).
+	//
+	// They are emitted ONLY into a `--debugstream` build, and an import nothing references still costs its
+	// Hint/Name entry and its thunk — which is why the whole family is gated at the install rather than being
+	// unconditional vocabulary. See `DebugStreamRuntime`.
+	//
+	// `GetEnvironmentVariableA` reads `MAXON_DEBUGSTREAM`, whose VALUE names the segment `OpenFileMappingA`
+	// then opens and `MapViewOfFile` maps; `CloseHandle` (already a slot since P1.5) drops the section handle
+	// once the view exists. `GetTickCount64` is the millisecond stopwatch every ring entry's timestamp delta
+	// is measured against — the SAME counter `maxon monitor` seeds the segment header with.
+	//
+	// ⚠ The `A` variant of `GetEnvironmentVariableA`, inheriting `CreateFileA`'s stated LIMITATION unchanged
+	// and inheriting it CONSISTENTLY: the value comes back in the system ANSI codepage, and it is handed
+	// straight to `OpenFileMappingA`, which reads it in the same one. The monitor names its segments
+	// `maxon_ds_<pid>_<hex>`, which is ASCII in every codepage.
+	GetEnvironmentVariableA = IatSlotMeta{dll: ImportDll.kernel32}
+	OpenFileMappingA = IatSlotMeta{dll: ImportDll.kernel32}
+	MapViewOfFile = IatSlotMeta{dll: ImportDll.kernel32}
+	GetTickCount64 = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE TWO ATTACHED-SUBPROCESS IMPORTS.** APPENDED AFTER `GetTickCount64` for the reason every entry
+	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`).
+	//
+	// `PeekNamedPipe` is what makes collecting a child's stdout AND stderr deadlock-free — see `osPipePeek`,
+	// which carries the argument in full. `TerminateProcess` is the kill a `timeoutMs` deadline owes.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four do and for the identical reason: an import nothing references still costs its IAT thunk, its
+	// import-lookup entry and its Hint/Name record, and a program that spawns no child should not pay for
+	// two. See `isOptionalTrailingImport`.
+	PeekNamedPipe = IatSlotMeta{dll: ImportDll.kernel32}
+	TerminateProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE MACHINE-QUERY IMPORT.** APPENDED AFTER `TerminateProcess` for the reason every entry above
+	// states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⚠ `GetActiveProcessorCount`, not `GetSystemInfo`. `GetSystemInfo` reports `dwNumberOfProcessors` in a
+	// 48-byte struct it fills, which cannot be read here without putting a Windows struct into the
+	// target-neutral Std tier or allocating on the heap for a 4-byte read — `StdOp.osCpuCount`'s comment
+	// carries the argument — and the direct-return API is the better answer anyway:
+	// `dwNumberOfProcessors` reports the CALLING THREAD's processor group, so on a host with more than 64
+	// logical processors it under-reports the machine, while `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`
+	// does not. The two agree on every single-group host, which is every host with at most 64 processors.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four and the attached-subprocess two do and for the identical reason: an import nothing references
+	// still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and a program that never
+	// asks how many cores the machine has should not pay for one.
+	GetActiveProcessorCount = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE THREAD-CPU-TIME IMPORT.** APPENDED AFTER `GetActiveProcessorCount` for the reason every entry
+	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`), and it is the LAST kernel32
+	// slot — see the `ws2_32` note below, which this append is bounded by.
+	//
+	// ⭐⭐ **`QueryThreadCycleTime`, AND THE HANDLE IT TAKES COSTS NO SECOND IMPORT.** It wants a thread
+	// HANDLE, and `GetCurrentThread()` answers the pseudo-handle `(HANDLE)-2` — a compile-time constant, not
+	// something to open or close — so the lowering materializes it inline and never calls that API.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four, the attached-subprocess two and the machine query do, and for the identical reason: an import
+	// nothing references still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and a
+	// program that never measures its own CPU time should not pay for one.
+	QueryThreadCycleTime = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE TWO PER-OS-THREAD-STORAGE IMPORTS (G1).** APPENDED AFTER `QueryThreadCycleTime` for the reason
+	// every entry above states, and it is the LAST kernel32 append — the `ws2_32` note below still bounds it.
+	//
+	// `TlsAlloc` reserves the one slot the scheduler keeps its per-OS-thread `ProcContext*` in, once, at
+	// `__gt_init`; `TlsSetValue` publishes that pointer as each M adopts its P. There is deliberately no
+	// `TlsGetValue`: the READ is `mov reg, gs:[index*8 + 0x1480]`, two loads and no call at all, which is why
+	// it is an instruction (`TargetOp.x64GsLoadRegBase`) rather than an import. See `StdOp.tlsSlotLoad`.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND, exactly as the DebugStream four, the attached-subprocess two, the
+	// machine query and the thread-CPU read do. A green-thread program needs the band anyway — its scheduler
+	// init reads `MAXON_MAX_PROCS` through `GetEnvironmentVariableA` and its processor count through
+	// `GetActiveProcessorCount`, both already in it — so the two additions cost such a program nothing beyond
+	// themselves, and cost a program with no green threads nothing at all.
+	TlsAlloc = IatSlotMeta{dll: ImportDll.kernel32}
+	TlsSetValue = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE TWO PROCESS-PRIORITY IMPORTS.** APPENDED AFTER `TlsSetValue` for the reason every entry above
+	// states: every existing slot INDEX, and hence every emitted `iatCall` relocation, is unchanged. kernel32
+	// again, so they add no import DIRECTORY entry (see `ImportDll`), and they are the LAST kernel32 slots —
+	// the `ws2_32` note below still bounds this append.
+	//
+	// ⭐⭐ **TWO IMPORTS FOR ONE OP, AND THE SECOND IS WHAT MAKES THE FIRST TESTABLE.** `SetPriorityClass`
+	// alone would leave the op answering the value it just tried to write, which a lowering that called
+	// nothing could also answer; `GetPriorityClass` makes the result a genuine second reading. The HANDLE
+	// both take costs no third import: `GetCurrentProcess()` is the pseudo-handle `(HANDLE)-1`, a
+	// compile-time constant the lowering materializes inline, exactly as `QueryThreadCycleTime` does with
+	// `GetCurrentThread` = `-2`.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four, the attached-subprocess two, the machine query and the thread-CPU read do: a program that never
+	// asks to be de-prioritised should not pay two IAT thunks and two Hint/Name records for the privilege.
+	SetPriorityClass = IatSlotMeta{dll: ImportDll.kernel32}
+	GetPriorityClass = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE TWO WHOLE-ENVIRONMENT IMPORTS.** APPENDED AFTER `GetPriorityClass` for the reason every entry
+	// above states: every existing slot INDEX, and hence every emitted `iatCall` relocation, is unchanged.
+	// kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`), and they are the LAST kernel32
+	// slots — the `ws2_32` note below still bounds this append.
+	//
+	// ⭐⭐ **`GetEnvironmentVariableA` — already a slot four bands up — CANNOT ANSWER THIS QUESTION.** It reads
+	// ONE name the caller already knows. `Environment.inheritUpdating` means "the parent's environment plus
+	// these", and the parent's names are exactly what the caller does NOT know, so the whole block has to be
+	// enumerable. See `StdOp.osEnvBlock`.
+	//
+	// ⚠ **THE SNAPSHOT IS OWNED, WHICH IS WHY THE FREE IS AN IMPORT AND NOT AN OMISSION.**
+	// `GetEnvironmentStringsA` hands back a converted COPY; a program that spawned children in a loop and
+	// never released it would leak one environment per spawn.
+	//
+	// ⚠ The `A` variants, inheriting `CreateFileA`'s stated LIMITATION unchanged and inheriting it
+	// CONSISTENTLY: the block comes back in the system ANSI codepage and is handed straight back to
+	// `CreateProcessA`, which reads it in the same one — so the round trip holds, exactly as
+	// `GetCommandLineA`'s does.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, on the same terms as every
+	// band above: their only producer is the attached-subprocess substrate, so a program that spawns nothing
+	// pays neither.
+	GetEnvironmentStringsA = IatSlotMeta{dll: ImportDll.kernel32}
+	FreeEnvironmentStringsA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐ **THE TERMINAL-DETECTION IMPORT.** APPENDED AFTER `FreeEnvironmentStringsA` for the reason every
+	// entry above states, and it is the LAST kernel32 slot — the `ws2_32` note below still bounds it.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⭐⭐ **`GetFileType`, NOT `GetConsoleMode`, AND THE DIFFERENCE IS WHAT THE QUESTION IS.**
+	// `GetConsoleMode` succeeds only for a CONSOLE handle, so it answers "is this a Windows console" — a
+	// terminal emulator attached through a pty-like device would be refused by it and is exactly the case
+	// `--color=auto` exists to serve. `GetFileType` answers what KIND of object the handle names, and
+	// `FILE_TYPE_CHAR` is the character-device answer a file and a pipe both fail. The reference asks the
+	// same question through `Console.IsOutputRedirected`, which is this call underneath.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as its neighbours
+	// do and for the identical reason: an import nothing references still costs its IAT thunk, its
+	// import-lookup entry and its Hint/Name record, and a program that never asks whether it is talking to
+	// a terminal should not pay for one.
+	GetFileType = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE NAMED-SECTION PAIR THE CONSUMER HALF OF DebugStream NEEDS.** APPENDED AFTER `GetFileType` for
+	// the reason every entry above states, and they are the LAST kernel32 slots — the `ws2_32` note below
+	// still bounds this append. kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⭐⭐ **`OpenFileMappingA` — already a slot two bands up — CANNOT CREATE ONE.** It opens a section that
+	// already exists, which is the PRODUCER's half: a traced child finds the ring a monitor made. The monitor
+	// is the party that makes it, and `CreateFileMappingA` is the only call that does. `UnmapViewOfFile` is
+	// its teardown twin: a section object outlives `CloseHandle` for as long as any view of it is mapped, so
+	// releasing the handle alone leaks the whole section and its address range.
+	//
+	// ⚠ The `A` variant, for `CreateFileA`'s stated reason and inheriting it consistently: the name is
+	// published in the system ANSI codepage and read back by `OpenFileMappingA` in the same one, so the round
+	// trip between the two processes holds.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, on the same terms as every
+	// band above: their only producer is `stdlib/SharedMemory.maxon`, so a program that maps no section pays
+	// for neither.
+	CreateFileMappingA = IatSlotMeta{dll: ImportDll.kernel32}
+	UnmapViewOfFile = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE PROCESS-SAMPLING SURFACE — NINE THREAD-AND-MEMORY IMPORTS, AND THEY GO *ABOVE* THE SOCKET
+	// RUN RATHER THAN AT THE END OF THE ENUM.** Every append note above this one says "appended, so no
+	// existing slot index moved"; this one cannot say that, because the ws2_32 run's rule below (*"Never
+	// insert a kernel32 import below this line"*) is the stronger constraint — a kernel32 slot declared
+	// after a ws2_32 one would interleave the two runs and `iatSlotByteOffset` would need a general
+	// interleaving rather than one gap term per DLL.
+	//
+	// ⭐ **SHIFTING THE ws2_32 ORDINALS COSTS NOTHING, AND THAT IS A PROPERTY OF THIS FILE RATHER THAN AN
+	// ASSUMPTION.** No emitted artefact persists an ordinal: `iatSlotByteOffset` resolves every slot through
+	// `slotDll` + `dllRunOffset` + `slotPositionInRun`, all of which walk `allCases` generically, and a
+	// relocation is minted and patched inside ONE compiler run.
+	//
+	// The sampler's own loop: `OpenProcess` (a handle to the sampled process), `SuspendThread` /
+	// `ResumeThread` (the window in which a stack is coherent), `GetThreadContext` (RIP/RSP/RBP at the
+	// sample), `VirtualQueryEx` (is this word inside a committed stack region?), `ReadProcessMemory` (copy
+	// the stack window out), `GetThreadId` (attribute a sample to a thread), and the timer pair
+	// `CreateWaitableTimerExW` / `SetWaitableTimer` (a high-resolution tick the sampler waits on through
+	// the existing `osWaitHandle`).
+	//
+	// ⚠ **`CreateWaitableTimerExW` AND NOT `CreateWaitableTimerW`**: only the `Ex` form takes
+	// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, and without that flag the tick is quantised to the system
+	// timer resolution — a "1 ms" sampler that actually fires every ~15.6 ms, which is a profile of the
+	// timer rather than of the program.
+	OpenProcess = IatSlotMeta{dll: ImportDll.kernel32}
+	SuspendThread = IatSlotMeta{dll: ImportDll.kernel32}
+	GetThreadContext = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualQueryEx = IatSlotMeta{dll: ImportDll.kernel32}
+	ReadProcessMemory = IatSlotMeta{dll: ImportDll.kernel32}
+	ResumeThread = IatSlotMeta{dll: ImportDll.kernel32}
+	GetThreadId = IatSlotMeta{dll: ImportDll.kernel32}
+	CreateWaitableTimerExW = IatSlotMeta{dll: ImportDll.kernel32}
+	SetWaitableTimer = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE MODULE MAP — THREE TOOLHELP CALLS, AND THE MEASUREMENT THAT CONDEMNS TOOLHELP IS ABOUT A
+	// DIFFERENT SNAPSHOT CLASS.** `TH32CS_SNAPTHREAD` IGNORES the pid it is handed and hands back every
+	// thread on the box (MEASURED in the reference: 7,198 walked to find 6), which is why the thread walk
+	// is `NtGetNextThread` below and not this API. `TH32CS_SNAPMODULE` HONOURS the pid and walks the ~10
+	// modules of one process — the cheapest way to turn a sampled RIP into a module plus an offset.
+	// ⇒ do not delete these three on the strength of the thread-walk headline; they are not that call.
+	CreateToolhelp32Snapshot = IatSlotMeta{dll: ImportDll.kernel32}
+	Module32FirstW = IatSlotMeta{dll: ImportDll.kernel32}
+	Module32NextW = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
+	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
+	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
+	// (the DNS half, whose failure IS `resolveFailed`), `socket`/`connect` (whose failure IS `connectFailed`),
+	// `send`/`recv`, and `closesocket` for both the explicit `close()` and the RAII drop.
+	//
+	// ⚠ **THEY SIT AFTER EVERY kernel32 SLOT, AND THAT POSITION IS THE DLL BOUNDARY.** It keeps the whole
+	// kernel32 run contiguous, so `iatSlotByteOffset` needs one gap term per DLL rather than a general
+	// interleaving. **Never insert a kernel32 import below this line** — a kernel32 case declared here would
+	// split ws2_32's run in two, and the loader would bind the slots on either side of it to the wrong
+	// library. A kernel32 import goes ABOVE this line even when that shifts every ordinal below it, which
+	// costs nothing: no emitted artefact persists an ordinal (see the process-sampling band above).
+	WSAStartup = IatSlotMeta{dll: ImportDll.ws2_32}
+	getaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
+	freeaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
+	socket = IatSlotMeta{dll: ImportDll.ws2_32}
+	connect = IatSlotMeta{dll: ImportDll.ws2_32}
+	send = IatSlotMeta{dll: ImportDll.ws2_32}
+	recv = IatSlotMeta{dll: ImportDll.ws2_32}
+	closesocket = IatSlotMeta{dll: ImportDll.ws2_32}
+	// ⛔⛔ **THE ONE `ntdll.dll` IMPORT, AND IT CARRIES AN ACCEPTED RISK THAT IS WRITTEN DOWN HERE
+	// BECAUSE NOTHING ELSE CAN STATE IT.** `NtGetNextThread` is a STATIC PE import, so the Windows loader
+	// binds it before `main` runs: on a host whose ntdll does not export it, `maxon.exe` FAILS TO
+	// LOAD AT ALL — not just the sampler, the whole image. That is the ruling and the trade is accepted;
+	// the alternative (`LoadLibrary` + `GetProcAddress`) buys a graceful refusal at the price of a second
+	// import mechanism this writer does not have.
+	//
+	// ⛔ **AND IT IS WHY THERE IS NO CAPABILITY PROBE.** A static import cannot degrade — the process is
+	// either running with the export bound or it never started — so a runtime "does this host have a
+	// thread walk?" test would be a gate that can never fire.
+	//
+	// ⭐ **IT REPLACES A `TH32CS_SNAPTHREAD` WALK, WHICH IS THE WHOLE REASON TO PAY THIS.** Toolhelp's
+	// thread snapshot ignores its pid argument; this call enumerates ONE process's threads and hands back
+	// handles that already carry the access mask asked for, so there is no `OpenThread` either.
+	NtGetNextThread = IatSlotMeta{dll: ImportDll.ntdll}
+end 'IatSlot'
+
+// Which DLL an import comes from. `IatSlotMeta` carries it, so this is the one reader of that field
+// rather than a second place the partition is written down.
+function slotDll(slot IatSlot) returns ImportDll
+	return slot.rawValue.dll
+end 'slotDll'
+
+// The DLL's import-table name string.
+function dllFileName(dll ImportDll) returns String
+	return match dll 'name'
+		kernel32 gives "kernel32.dll"
+		ws2_32 gives "ws2_32.dll"
+		ntdll gives "ntdll.dll"
+	end 'name'
+end 'dllFileName'
+
+// ⭐⭐ **WHICH OF THIS BINARY'S IMPORT BANDS ARE LIVE — ONE RECORD, READ BY EVERY SIZER, THE TABLE BUILDER
+// AND THE RELOCATION PATCHER.** The eight functions below and the writer entry all need the same answers,
+// and the questions are not interchangeable: the table builder decides where each thunk lands and the
+// patcher points call sites at it, so the two must be asked IDENTICALLY. Passed as one value rather than as
+// positional bools, because three bools in a row at eight call sites is three chances per site to transpose
+// two of them silently — and the next DLL would make it four.
+type ImportGates
+	// The kernel32 OPTIONAL TRAILING BAND — see `isOptionalTrailingImport`. ONE gate with several
+	// producers, never one gate each.
+	export let optionalImports as bool
+	// Is `ws2_32.dll`'s whole run in this image?
+	export let sockets as bool
+	// Is `ntdll.dll`'s whole run in this image? See `IatSlot.NtGetNextThread` for the accepted load-time
+	// risk a `true` here takes on.
+	export let threadWalk as bool
+
+	static function create(optionalImports bool, sockets bool, threadWalk bool) returns ImportGates
+		return Self{optionalImports: optionalImports, sockets: sockets, threadWalk: threadWalk}
+	end 'create'
+end 'ImportGates'
+
+// ⭐ **DOES THIS BINARY CARRY `dll`'s IMPORT DIRECTORY ENTRY AT ALL?** kernel32 always — `ExitProcess` is
+// how every emitted program terminates. `ws2_32` only when a producer reached the socket runtime, on exactly
+// the argument `isOptionalTrailingImport` makes for the kernel32 optional band: an import nothing references
+// still costs its thunk, its lookup entry and its Hint/Name record, and a whole unused DLL additionally costs
+// the loader a `LoadLibrary` of Winsock in every binary in the language. A program that opens no socket
+// should not pay to have Winsock mapped.
+function dllIsEmitted(dll ImportDll, gates ImportGates) returns bool
+	return match dll 'emitted'
+		kernel32 gives true
+		ws2_32 gives gates.sockets
+		ntdll gives gates.threadWalk
+	end 'emitted'
+end 'dllIsEmitted'
+
+// The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
+// patches against. ONE accessor over the enum rather than a named function per import: a
+// per-slot wrapper would be a thin wrapper around `.ordinal`, and four of them would be
+// four places to get the mapping wrong.
+export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
+	return slot.ordinal as RelocSlotIndex
+end 'iatSlotIndex'
+
+// ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** Every import in it is emitted ONLY into a
+// build that has a producer for one of them — an import nothing references still costs its IAT thunk, its
+// import-lookup entry and its Hint/Name record, and a run of those in EVERY binary in the language is not a
+// price a debug instrument, a child-process runtime, a core-count query, a phase timer or a shared section
+// may charge a program that uses none of them. That is the same rule the `.data` slots, the box header and
+// the event sites follow (`DebugStreamRuntime`'s header states it once).
+//
+// ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
+// slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
+// one from the middle would silently repoint every import after it. This is a TOTAL match rather than an
+// `ordinal >=` test precisely so that a future import appended past this band fails to compile here
+// instead of quietly joining it.
+//
+// ⚠⚠ **IT IS ONE BAND WITH SEVERAL PRODUCERS, NOT ONE BAND EACH, AND THAT IS FORCED BY THE INDEXING ABOVE.**
+// Independently-gated bands would leave a HOLE in the emitted table whenever an earlier one was absent and
+// a later one present, and every slot after the hole would resolve to the wrong import. So the whole band is
+// emitted whenever ANY producer is present: a traced build pays for the subprocess imports, the machine
+// query and the thread-CPU read it does not call, and a spawning build pays for the DebugStream ones. A
+// handful of unreferenced imports in the rare build that wants one producer, against a silently-repointed
+// import table — the trade is not close.
+//
+// ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
+// `GetEnvironmentVariableA` through `Module32NextW`; a producer added later must extend that arm (or fail
+// this total match) and this comment with it.
+function isOptionalTrailingImport(slot IatSlot) returns bool
+	return match slot 'band'
+		GetEnvironmentVariableA or
+			OpenFileMappingA or
+			MapViewOfFile or
+			GetTickCount64 or
+			PeekNamedPipe or
+			TerminateProcess or
+			GetActiveProcessorCount or
+			QueryThreadCycleTime or
+			TlsAlloc or
+			TlsSetValue or
+			SetPriorityClass or
+			GetPriorityClass or
+			GetEnvironmentStringsA or
+			FreeEnvironmentStringsA or
+			GetFileType or
+			CreateFileMappingA or
+			UnmapViewOfFile or
+			OpenProcess or
+			SuspendThread or
+			GetThreadContext or
+			VirtualQueryEx or
+			ReadProcessMemory or
+			ResumeThread or
+			GetThreadId or
+			CreateWaitableTimerExW or
+			SetWaitableTimer or
+			CreateToolhelp32Snapshot or
+			Module32FirstW or
+			Module32NextW gives true
+		ExitProcess or
+			GetStdHandle or
+			WriteFile or
+			AddVectoredExceptionHandler or
+			VirtualAlloc or
+			QueryPerformanceCounter or
+			QueryPerformanceFrequency or
+			Sleep or
+			CreateProcessA or
+			GetExitCodeProcess or
+			WaitForSingleObject or
+			WaitForMultipleObjects or
+			CloseHandle or
+			VirtualFree or
+			CreateNamedPipeW or
+			CreateFileW or
+			SetHandleInformation or
+			CreateIoCompletionPort or
+			SetFileCompletionNotificationModes or
+			GetQueuedCompletionStatus or
+			CreateThread or
+			CreateEventA or
+			SetEvent or
+			InitializeCriticalSection or
+			EnterCriticalSection or
+			LeaveCriticalSection or
+			ReadFile or
+			GetLastError or
+			GetCurrentProcessId or
+			CancelIoEx or
+			GetSystemTimeAsFileTime or
+			CreateFileA or
+			GetFileSizeEx or
+			DeleteFileA or
+			MoveFileExA or
+			FindFirstFileA or
+			FindClose or
+			FindNextFileA or
+			CreateDirectoryA or
+			GetCurrentDirectoryA or
+			GetFileAttributesA or
+			GetCommandLineA or
+			GetModuleFileNameA gives false
+		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
+		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
+		// whether ws2_32's run exists at all. Answering `true` here would gate them on the DebugStream /
+		// subprocess producers — an unrelated question — and a socket binary built without a traced or
+		// spawning producer would lose its imports entirely.
+		WSAStartup or
+			getaddrinfo or
+			freeaddrinfo or
+			socket or
+			connect or
+			send or
+			recv or
+			closesocket gives false
+		// ⚠ **THE ntdll SLOT ANSWERS `false` FOR THE SOCKET RUN'S REASON, AND THE FAILURE IT AVOIDS IS THE
+		// SHARPER ONE.** `dllIsEmitted` decides whether ntdll's run exists at all; this band decides
+		// membership WITHIN a run. Answering `true` here would make the run's ONLY member depend on the
+		// kernel32 band's producers — so a build that walks threads but has no traced, spawning or
+		// green-thread producer would emit an ntdll directory entry over an EMPTY run, and the first
+		// `iatCall` naming the slot would panic in `slotPositionInRun`.
+		NtGetNextThread gives false
+	end 'band'
+end 'isOptionalTrailingImport'
+
+// How many DLLs this binary's import directory describes. Small by construction — one entry per
+// `ImportDll` case — but ranged rather than bare so a future DLL cannot silently overflow a tighter type.
+typealias DllTally = int(0 to 16)
+
+// The imports `dll` contributes, in slot (declaration) order, minus any optional trailing band this build
+// carries no producer for. ⭐ **ONE WALK SERVES BOTH DLLs** — the previous `kernel32ImportNames` hard-coded
+// the single-DLL assumption in its name, and a second copy for ws2_32 is exactly the one-fact-written-twice
+// bug this project keeps paying for.
+function importNamesFor(dll ImportDll, optionalImports bool) returns StringArray
+	var names = StringArray.create()
+	for slot in IatSlot.allCases 'each'
+		if slotDll(slot) == dll and slotIsEmitted(slot, optionalImports: optionalImports) 'include'
+			names.push(slot.name)
+		end 'include'
+	end 'each'
+	return names
+end 'importNamesFor'
+
+// ⭐ **DOES THIS IMPORT APPEAR IN ITS DLL'S RUN AT ALL?** ONE home for the membership test, asked by the
+// walk that BUILDS a run (`importNamesFor`) and by the walk that LOCATES a slot within it
+// (`slotPositionInRun`). Spelling it twice is how a thunk ends up pointing at its neighbour's Hint/Name
+// entry — the table would still be well-formed, and every call through that slot would enter the wrong
+// function.
+function slotIsEmitted(slot IatSlot, optionalImports bool) returns bool
+	return optionalImports or not isOptionalTrailingImport(slot)
+end 'slotIsEmitted'
+
+// Bytes one DLL's thunk run occupies in ONE pass: its emitted imports plus the null qword ending the run.
+// ⭐ **THAT TRAILING NULL IS THE WHOLE DIFFERENCE A SECOND DLL MAKES.** With one DLL it sat past every slot
+// and no offset had to account for it, which is why `iatSlotByteOffset` could be `slotIndex * PointerSize`.
+function dllThunkRunBytes(dll ImportDll, optionalImports bool) returns BytePos
+	return (importNamesFor(dll, optionalImports: optionalImports).count() + 1) * PointerSize
+end 'dllThunkRunBytes'
+
+// Byte offset of `dll`'s thunk run within one pass of the thunk table.
+function dllRunOffset(dll ImportDll, gates ImportGates) returns ByteOffset
+	var cursor = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, gates: gates) 'live'
+			if d == dll 'found'
+				return cursor
+			end 'found'
+
+			cursor = cursor + dllThunkRunBytes(d, optionalImports: gates.optionalImports)
+		end 'live'
+	end 'walk'
+	panic("dllRunOffset: '{dllFileName(dll)}' has no thunk run in this binary. Every caller asks only about a DLL `dllIsEmitted` admitted, so reaching this means an `iatCall` names a slot whose DLL was gated OFF — i.e. a producer emitted a socket call without the usage scan setting `usesSockets`")
+end 'dllRunOffset'
+
+// Total bytes of the thunk table in one pass, across every emitted DLL.
+function thunkTableBytes(gates ImportGates) returns ByteOffset
+	var total = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, gates: gates) 'live'
+			total = total + dllThunkRunBytes(d, optionalImports: gates.optionalImports)
+		end 'live'
+	end 'walk'
+	return total
+end 'thunkTableBytes'
+
+// Total bytes of the Hint/Name table across every emitted DLL — where the DLL-name strings begin.
+function totalHintBytes(gates ImportGates) returns ByteOffset
+	var total = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, gates: gates) 'live'
+			total = total + sumHintSizes(importNamesFor(d, optionalImports: gates.optionalImports))
+		end 'live'
+	end 'walk'
+	return total
+end 'totalHintBytes'
+
+// How many import directory entries this binary carries (excluding the null terminator).
+function emittedDllCount(gates ImportGates) returns DllTally
+	var n = 0
+	for d in ImportDll.allCases 'walk'
+		if dllIsEmitted(d, gates: gates) 'live'
+			n = n + 1
+		end 'live'
+	end 'walk'
+	return n
+end 'emittedDllCount'
+
+type ImportSection
+	export var data as ByteArray
+	export var iatRva as Rva
+	export var importDirRva as Rva
+	export var importDirSize as BytePos
+	// Byte size of the IAT run (thunks + null terminator) for data-directory #12.
+	export var iatDirSize as BytePos
+
+	static function create(data ByteArray, iatRva Rva, importDirRva Rva, importDirSize BytePos, iatDirSize BytePos) returns ImportSection
+		return Self{data: data, iatRva: iatRva, importDirRva: importDirRva, importDirSize: importDirSize, iatDirSize: iatDirSize}
+	end 'create'
+end 'ImportSection'
+
+// The bytes an IMAGE_IMPORT_BY_NAME occupies BEFORE PE's even-alignment pad: the 2-byte hint, the name,
+// the NUL.
+//
+// ⭐⭐ **THE ONE TRANSCRIPTION OF THE ENTRY'S LAYOUT.** The sizer and the appender below both read it, and
+// they are NOT interchangeable readers of one number: every thunk RVA `appendThunkPass` writes is advanced
+// by the SIZE, while the TABLE those RVAs point into is laid down by the APPENDER. Both used to spell
+// `2 + name.count() + 1` and decide the even-pad independently — one fact in two places, on a path where a
+// one-byte disagreement yields a perfectly well-formed import table in which every thunk after the first
+// points into the middle of its neighbour's entry, and the loader binds the wrong function with no
+// diagnostic anywhere.
+function importHintNameBodyBytes(name String) returns ByteOffset
+	return ImportHintFieldBytes + name.toByteArray().count() + ImportHintNameNulBytes
+end 'importHintNameBodyBytes'
+
+// Byte size of one Hint/Name entry for `name`: the body, padded up to an even total (PE requires even
+// alignment). This is the number a thunk RVA advances by.
+function importHintNameEntrySize(name String) returns ByteOffset
+	let body = importHintNameBodyBytes(name)
+	if body mod 2 != 0 'odd'
+		return body + 1
+	end 'odd'
+	return body
+end 'importHintNameEntrySize'
+
+// Append one Hint/Name entry: `\x00\x00` (hint=0) + name + NUL + even pad. The pad is whatever the SIZER
+// says the entry costs beyond its body, so the two cannot come to disagree about the alignment rule — and
+// this loop needs no assumption about how wide the pad is.
+function appendImportHintNameEntry(data ByteArray, name String)
+	data.append(b"\x00\x00")
+	data.append(name.toByteArray())
+	data.push(0)
+	var written = importHintNameBodyBytes(name)
+	let target = importHintNameEntrySize(name)
+	while written < target 'pad'
+		data.push(0)
+		written = written + 1
+	end 'pad'
+end 'appendImportHintNameEntry'
+
+// Sum of Hint/Name entry sizes across a run of imports — the offset delta from
+// the first entry to whatever follows the run in the table.
+function sumHintSizes(names StringArray) returns BytePos
+	var total = 0
+	for name in names 'each'
+		total = total + importHintNameEntrySize(name)
+	end 'each'
+	return total
+end 'sumHintSizes'
+
+// The even-padded DLL-name string field (name + NUL, plus one extra NUL when odd
+// so the strings that follow stay even-aligned).
+function dllNameField(name String) returns ByteArray
+	var field = ByteArray.create()
+	field.append(name.toByteArray())
+	field.push(0)
+	if field.count() mod 2 != 0 'odd'
+		field.push(0)
+	end 'odd'
+	return field
+end 'dllNameField'
+
+// ONE pass of the thunk table: every emitted DLL's run, each holding the RVA of its Hint/Name entry and
+// each closed by the all-zero qword the loader reads as "this library's imports end here". The IAT and the
+// ILT are byte-identical, which is why the caller simply runs this twice.
+//
+// The hoist out of `buildImportSection` is kept on its own merits: one pass of the thunk table is a
+// coherent unit and the caller reads better for it. `specs/while-loops.md`’s
+// `while-loops.counter-survives-a-narrow-ranged-neighbour` pins the rule this loop's counter rests on — a
+// variable carrying both an `i32` and an `i64` store needs the WIDER stack slot, or the wide store
+// overruns onto whatever sits above it.
+function appendThunkPass(data ByteArray, idataRva Rva, hintNameOffset ByteOffset, gates ImportGates)
+	var running = hintNameOffset
+	for dll in ImportDll.allCases 'perDll'
+		if dllIsEmitted(dll, gates: gates) 'live'
+			let names = importNamesFor(dll, optionalImports: gates.optionalImports)
+			for name in names 'thunk'
+				writeQword(data, value: rvaWord(idataRva, offset: running))
+				running = running + importHintNameEntrySize(name)
+			end 'thunk'
+			writeQword(data, value: 0)
+		end 'live'
+	end 'perDll'
+end 'appendThunkPass'
+
+// Build the `.idata` import section: ONE null-terminated thunk run, directory entry and Hint/Name region
+// per emitted DLL. Layout: IAT [run per DLL, each null-terminated], ILT [identical], import directory
+// [one descriptor per DLL + null], Hint/Name table (all DLLs, in order), DLL-name strings (same order).
+//
+// ⚠ **THE FOUR CURSORS BELOW ALL WALK `ImportDll.allCases` IN THE SAME ORDER, AND THAT IS THE CONTRACT.**
+// A descriptor's `Name` RVA is computed by one walk while the string it points at is written by another; if
+// the two disagreed on order, every DLL would be loaded under its neighbour's name. Emission order is the
+// enum's declaration order, once, in every loop here.
+function buildImportSection(idataRva Rva, gates ImportGates) returns ImportSection
+	var data = ByteArray.create()
+	data.reserve(256)
+
+	let thunkBytes = thunkTableBytes(gates)
+	let iatOffset = 0 as ByteOffset
+	let iltOffset = thunkBytes
+	// ⚠ `ImportThunkPasses`, not a literal 2: the SAME constant drives the emission loop below, so the
+	// directory can never land on top of a pass this writer actually wrote.
+	let importDirOffset = thunkBytes * ImportThunkPasses
+	let importDirBytes = ImportDirEntrySize * ((emittedDllCount(gates) + 1) as ByteOffset)
+	let hintNameOffset = importDirOffset + importDirBytes
+
+	// IAT then ILT (identical): each thunk holds the RVA of its Hint/Name entry, and an all-zero qword
+	// terminates EACH DLL's run — that per-run terminator is what the loader reads as "this library's
+	// imports end here".
+	for _ in 0 upto ImportThunkPasses 'iatIltPasses'
+		appendThunkPass(data, idataRva: idataRva, hintNameOffset: hintNameOffset, gates: gates)
+	end 'iatIltPasses'
+
+	// Import directory: one IMAGE_IMPORT_DESCRIPTOR per emitted DLL, then a null terminator.
+	var nameCursor = hintNameOffset + totalHintBytes(gates)
+	for dll in ImportDll.allCases 'descriptors'
+		if dllIsEmitted(dll, gates: gates) 'live'
+			let runOffset = dllRunOffset(dll, gates: gates)
+			writeDword(data, value: rvaWord(idataRva, offset: iltOffset + runOffset))  // OriginalFirstThunk (ILT RVA)
+			writeZeros(data, n: 8)  // TimeDateStamp + ForwarderChain
+			writeDword(data, value: rvaWord(idataRva, offset: nameCursor))  // Name RVA
+			writeDword(data, value: rvaWord(idataRva, offset: iatOffset + runOffset))  // FirstThunk (IAT RVA)
+			nameCursor = nameCursor + dllNameField(dllFileName(dll)).count()
+		end 'live'
+	end 'descriptors'
+	writeZeros(data, n: ImportDirEntrySize)  // null directory terminator
+
+	// Hint/Name table, then the DLL-name strings — both in `ImportDll` declaration order.
+	for dll in ImportDll.allCases 'hintNames'
+		if dllIsEmitted(dll, gates: gates) 'live'
+			let names = importNamesFor(dll, optionalImports: gates.optionalImports)
+			for name in names 'entry'
+				appendImportHintNameEntry(data, name: name)
+			end 'entry'
+		end 'live'
+	end 'hintNames'
+	for dll in ImportDll.allCases 'dllNames'
+		if dllIsEmitted(dll, gates: gates) 'live'
+			data.append(dllNameField(dllFileName(dll)))
+		end 'live'
+	end 'dllNames'
+
+	return ImportSection.create(data, iatRva: rvaAt(idataRva, offset: iatOffset), importDirRva: rvaAt(idataRva, offset: importDirOffset), importDirSize: ((ImportDirEntrySize * emittedDllCount(gates)) as BytePos), iatDirSize: thunkBytes as BytePos)
+end 'buildImportSection'
+
+// ⭐⭐ **BYTE OFFSET OF A SLOT WITHIN THE IAT — and it ASKS `slotDll` rather than deducing the DLL.**
+//
+// ⛔ **IT USED TO DEDUCE IT, AND THAT WAS A SECOND DECIDER FOR A FACT `slotDll` ALREADY OWNS.** The old form
+// was `if slotIndex < iatSlotIndex(IatSlot.WSAStartup)` — a bare ordinal comparison — which is exactly the
+// `ordinal >=` test `isOptionalTrailingImport` and `slotDll` each forbid in their own headers, for the
+// reason this function proves: **add a third DLL** (the file header's roadmap names `shell32`) and
+// `slotDll`'s total match FAILS TO COMPILE, which is the guard working — but once its arm is added, the
+// ordinal test still reads "not kernel32, therefore ws2_32" and lands the new slots inside ws2_32's run or
+// on its null terminator. Silently, past the only guard built to catch it.
+//
+// Asking `slotDll` also removes the old kernel32 arm's blind spot: an index past kernel32's emitted run no
+// longer resolves to `ordinal * PointerSize` (which, with the optional band absent, pointed at a live
+// Winsock slot) — it reaches `dllRunOffset`'s panic instead.
+function iatSlotByteOffset(slotIndex RelocSlotIndex, gates ImportGates) returns ByteOffset
+	for slot in IatSlot.allCases 'find'
+		if iatSlotIndex(slot) == slotIndex 'found'
+			return dllRunOffset(slotDll(slot), gates: gates) + (slotPositionInRun(slot, optionalImports: gates.optionalImports) * PointerSize) as ByteOffset
+		end 'found'
+	end 'find'
+
+	panic("iatSlotByteOffset: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
+end 'iatSlotByteOffset'
+
+// How many of `slot`'s OWN DLL's emitted imports precede it — its index within that DLL's thunk run.
+// Counts through the same `slotIsEmitted` membership test `importNamesFor` builds the run with, so the
+// position and the run cannot disagree.
+function slotPositionInRun(slot IatSlot, optionalImports bool) returns BytePos
+	let dll = slotDll(slot)
+	var position = 0
+	for other in IatSlot.allCases 'walk'
+		if iatSlotIndex(other) == iatSlotIndex(slot) 'reached'
+			if not slotIsEmitted(slot, optionalImports: optionalImports) 'omitted'
+				panic("iatSlotByteOffset: '{slot.name}' is in the optional trailing band and this build carries no producer for it, so it has no IAT slot to point at. An `iatCall` naming it means the band's gate and the emitter disagree")
+			end 'omitted'
+
+			return position
+		end 'reached'
+
+		if slotDll(other) == dll and slotIsEmitted(other, optionalImports: optionalImports) 'counts'
+			position = position + 1
+		end 'counts'
+	end 'walk'
+
+	panic("slotPositionInRun: '{slot.name}' is not in `IatSlot.allCases`, which cannot happen for a value of that type")
+end 'slotPositionInRun'
+
+// Patch each x64 IAT relocation (a disp32 in a `call [rip+disp32]`) to the RVA of
+// its IAT entry, relative to the end of the instruction.
+function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva, gates ImportGates)
+	for reloc in relocations 'patch'
+		let ripAtReloc = textRva + (reloc.codeOffset as Rva) + X64Disp32Width
+		let iatEntryRva = rvaAt(idataRva, offset: iatSlotByteOffset(reloc.slotIndex, gates: gates))
+		let rel = iatEntryRva - ripAtReloc
+		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel as MachineWord, what: PatchSite.x64IatDisp32, targetAddr: iatEntryRva as MachineWord)
+	end 'patch'
+end 'patchRelocationsX86'
+
+// Patch code→data-section relocations: a RIP-relative disp32 in the code gets the distance to its
+// target's slot. `ripRelDisp32` targets `.rdata` (still empty — strings arrive at P1.2);
+// `dataSectionRipRelDisp32` targets `.data` and is what a top-level `var`'s `lea` uses.
+//
+// The two arms differ ONLY in which section RVA they measure from, which is exactly what the kind
+// discriminates — `reloc.rdataOffset` was already resolved within its own section by the backend.
+// Every other kind still panics: the arm64 pairs never appear in an x64 image, and nothing addresses
+// `symdata` from code.
+// (The `.rdata`-INTERNAL descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an
+// `RdataRelocKind`: it rides `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.)
+// Naming the kinds one by one rather than defaulting is what makes the day one is emitted a loud failure
+// instead of a silently unpatched zero displacement.
+function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, dataRva Rva)
+	for reloc in rdataRelocs 'patch'
+		let ripAtReloc = textRva + (reloc.codeOffset as Rva) + X64Disp32Width
+		match reloc.kind 'kind'
+			ripRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: rdataRva, ripAtReloc: ripAtReloc)
+			dataSectionRipRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: dataRva, ripAtReloc: ripAtReloc)
+			symdataRipRelDisp32 then panic("PeWriter: symdata relocations are not emitted yet — the symbol table is referenced by chunk name, not by an rdata relocation")
+			arm64Adr or
+				arm64LdrLiteral or
+				symdataArm64Adr or
+				dataSectionArm64Adr or
+				arm64Adrp or
+				arm64PageOff or
+				dataSectionArm64Adrp or
+				dataSectionArm64PageOff then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
+		end 'kind'
+	end 'patch'
+end 'patchRdataRelocationsX86'
+
+// Patch one RIP-relative disp32 to `sectionRva + reloc.rdataOffset`. The two live arms above share
+// it: the arithmetic is identical and only the section differs, so writing it once means a `.data`
+// reference and an `.rdata` one cannot drift on the end-of-field convention.
+function patchSectionRipRel(code ByteArray, reloc RdataRelocation, sectionRva Rva, ripAtReloc Rva)
+	let targetRva = rvaAt(sectionRva, offset: reloc.rdataOffset)
+	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: ((targetRva - ripAtReloc) as MachineWord), what: PatchSite.x64RdataDisp32, targetAddr: targetRva as MachineWord)
+end 'patchSectionRipRel'
+
+// ⭐ **BAKE EVERY `.rdata` SLOT THAT NAMES ANOTHER `.rdata` PAYLOAD** (see `PendingRdataAbsReloc`) — a
+// String record's `buffer@0`, and a slot inside an imaged string table's element buffer. The address cannot
+// exist until `.rdata`'s RVA is known, so the producer left the slot seeded and this fills it.
+//
+// ⭐ **THE IMAGE IS FIXED-BASE (`ImageBase` pinned, DYNAMIC_BASE clear), SO NO BASE RELOCATION EXISTS OR IS
+// NEEDED** — `ImageBase + rdataRva + targetOffset` IS the target's runtime address, and the PE carries no
+// `.reloc` directory for the loader to apply. That is the same property `bakeFuncAbs64Relocs` bakes `.text`
+// addresses under; an ASLR'd image would need both a directory and an entry per slot here.
+//
+// It runs on the SAME `.rdata` bytes the writer is about to lay down, BEFORE they are written, so the
+// baked VA reaches the file. A wrong VA is a silent crash inside `WriteFile`/`__str_eq`, which the
+// print/equality specs catch.
+function patchRdataAbsRelocs(rdata ByteArray, globalData GlobalDataTable, rdataRva Rva)
+	for reloc in globalData.pendingRdataAbsRelocs 'each'
+		let absVa = (ImageBase + rvaAt(rdataRva, offset: rdataAbsTargetOffset(globalData, reloc: reloc))) as MachineWord
+		patchQword(rdata, offset: rdataAbsSlotOffset(globalData, reloc: reloc), value: absVa)
+	end 'each'
+end 'patchRdataAbsRelocs'
+
+// --- Section headers ---
+
+function writeSectionName(buf ByteArray, name String)
+	for ch in name 'chars'
+		// PE section names are ASCII literals; a non-ASCII char would be a caller bug.
+		let b = try ch.asciiValue() otherwise panic("writeSectionName: non-ASCII section name '{name}'")
+		buf.push(b)
+	end 'chars'
+	for _ in name.count() upto 8 'pad'
+		buf.push(0)
+	end 'pad'
+end 'writeSectionName'
+
+function writeSectionHeader(buf ByteArray, name String, virtualSize BytePos, virtualAddress Rva, rawDataSize BytePos, rawDataPointer ByteOffset, characteristics SectionFlags)
+	writeSectionName(buf, name: name)
+	writeDword(buf, value: virtualSize as MachineWord)
+	writeDword(buf, value: virtualAddress as MachineWord)
+	writeDword(buf, value: rawDataSize as MachineWord)
+	writeDword(buf, value: rawDataPointer as MachineWord)
+	// PointerToRelocations, PointerToLinenumbers, NumberOfRelocations, NumberOfLinenumbers — all zero.
+	buf.append(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	writeDword(buf, value: characteristics as MachineWord)
+end 'writeSectionHeader'
+
+// --- COFF symbol table (trailing, for debuggers; the loader ignores it) ---
+
+// One emitted PE section paired with its raw on-disk size (for the section
+// symbol's format-5 auxiliary record).
+type PeSectionRec
+	export var name as String
+	export var rawSize as BytePos
+
+	static function create(name String, rawSize BytePos) returns PeSectionRec
+		return Self{name: name, rawSize: rawSize}
+	end 'create'
+end 'PeSectionRec'
+
+typealias PeSectionList = Array with PeSectionRec
+
+// Write one 18-byte COFF symbol entry (short name inline, long name via the
+// string table).
+function writeCoffSymbolEntry(pe ByteArray, stringTable ByteArray, name String, value MachineWord, sectionNumber MachineWord, symType MachineWord, storageClass MachineWord, numAux MachineWord)
+	let nameBytes = name.toByteArray()
+	let nameLen = nameBytes.count()
+	if nameLen <= 8 'short'
+		pe.append(nameBytes)
+		for _ in nameLen upto 8 'pad'
+			pe.push(0)
+		end 'pad'
+	end 'short' else 'long'
+		writeDword(pe, value: 0)
+		writeDword(pe, value: stringTable.count())
+		stringTable.append(nameBytes)
+		stringTable.push(0)
+	end 'long'
+	writeDword(pe, value: value)
+	writeWord(pe, value: sectionNumber)
+	writeWord(pe, value: symType)
+	pe.push(storageClass and 0xFF)
+	pe.push(numAux and 0xFF)
+end 'writeCoffSymbolEntry'
+
+// Append section symbols (one per emitted section, in emission order, each with a
+// format-5 section-definition aux record) then one external function symbol per
+// DebugSymbol, then the COFF string table. Returns the total symbol count.
+function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, sections PeSectionList) returns SymbolTally
+	var stringTable = ByteArray.create()
+	writeZeros(stringTable, n: 4)  // reserved 4-byte size prefix, patched below
+
+	var total = 0 as SymbolTally
+	for (iter, section) in sections.withIterator() 'sectionSyms'
+		// Static-class symbol, no type, one section-definition auxiliary record.
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: section.name, value: 0, sectionNumber: ((iter.index() + 1) as MachineWord), symType: CoffSymTypeNone, storageClass: CoffSymClassStatic, numAux: CoffAuxCountSection)
+		total = total + 1
+		// Auxiliary format 5 (section definition): 18 bytes.
+		writeDword(pe, value: section.rawSize as MachineWord)  // Length
+		writeWord(pe, value: 0)  // NumberOfRelocations
+		writeWord(pe, value: 0)  // NumberOfLinenumbers
+		writeDword(pe, value: 0)  // CheckSum
+		writeWord(pe, value: 0)  // Number (COMDAT)
+		pe.push(0)  // Selection
+		writeZeros(pe, n: 3)  // Unused
+		total = total + 1
+	end 'sectionSyms'
+
+	// Function symbols all live in .text, typed DTYPE_FUNCTION with external
+	// storage class and no auxiliary record.
+	for sym in debugSymbols 'funcSyms'
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: String.from(sym.name), value: sym.codeOffset as MachineWord, sectionNumber: TextSectionNumber, symType: CoffSymTypeFunction, storageClass: CoffSymClassExternal, numAux: CoffAuxCountNone)
+		total = total + 1
+	end 'funcSyms'
+
+	patchDword(stringTable, offset: 0, value: stringTable.count())
+	pe.append(stringTable)
+	return total
+end 'writeCoffSymbolTable'
+
+// Build the emitted-section list in emission order — the section-symbol numbering
+// must match the section header order in `writePe`.
+function buildSectionList(codeSize BytePos, hasRdata bool, rdataSize BytePos, hasSymdata bool, symdataSize BytePos, hasData bool, dataSize BytePos, idataSize BytePos, rsrcSize BytePos) returns PeSectionList
+	var sections = PeSectionList.create()
+	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
+	if hasRdata 'rdata'
+		sections.push(PeSectionRec.create(".rdata", rawSize: rdataSize))
+	end 'rdata'
+	if hasSymdata 'symtab'
+		sections.push(PeSectionRec.create(".symtab", rawSize: symdataSize))
+	end 'symtab'
+	if hasData 'data'
+		sections.push(PeSectionRec.create(".data", rawSize: dataSize))
+	end 'data'
+	sections.push(PeSectionRec.create(".idata", rawSize: idataSize))
+	sections.push(PeSectionRec.create(".rsrc", rawSize: rsrcSize))
+	return sections
+end 'buildSectionList'
+
+// --- Resource section (.rsrc): embedded application manifest ---
+
+// Windows' Installer Detection heuristic treats an exe whose NAME contains an
+// installer-ish token ("update", "setup", "patch") as a legacy installer and demands
+// elevation at CreateProcess time UNLESS the binary declares an explicit
+// requestedExecutionLevel. Spec tests compile to exes named after the test
+// (`while-loops.loop-carried-var-narrower-than-its-update.exe`), so spawning them
+// failed with "The requested operation requires elevation"; a user compiling
+// `myapp-update.exe` hits the same wall. Embedding the standard `asInvoker` manifest
+// opts every produced binary out of the heuristic.
+//
+// The section holds the minimal single-resource tree:
+//   root IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → type dir   @24
+//   type IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → lang dir   @48
+//   lang IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → data entry @72
+//   IMAGE_RESOURCE_DATA_ENTRY (16)                     → manifest   @88
+let RsrcTypeDirOffset = 24
+let RsrcLangDirOffset = 48
+let RsrcDataEntryOffset = 72
+let RsrcManifestOffset = 88
+
+// High bit of a directory entry's offset field marks "points at a subdirectory".
+let RsrcSubdirBit = 0x80000000
+let RtManifestTypeId = 24
+let CreateProcessManifestResourceId = 1
+let RsrcLangIdEnUs = 0x409
+
+typealias ResourceEntryCount = int(0 to 65535)
+
+function manifestXml() returns ByteArray
+	let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/></requestedPrivileges></security></trustInfo></assembly>"
+	return xml.toByteArray()
+end 'manifestXml'
+
+// One IMAGE_RESOURCE_DIRECTORY header with `idEntries` ID-keyed entries.
+function writeResourceDirHeader(buf ByteArray, idEntries ResourceEntryCount)
+	writeDword(buf, value: 0)  // Characteristics
+	writeDword(buf, value: 0)  // TimeDateStamp
+	writeWord(buf, value: 0)  // MajorVersion
+	writeWord(buf, value: 0)  // MinorVersion
+	writeWord(buf, value: 0)  // NumberOfNamedEntries
+	writeWord(buf, value: idEntries as MachineWord)
+end 'writeResourceDirHeader'
+
+// Build the minimal 3-level resource tree carrying the single RT_MANIFEST resource.
+// `rsrcRva` is the `.rsrc` section's own RVA, needed because the data entry's manifest
+// pointer is IMAGE-relative (not section-relative like the directory-entry offsets).
+function buildRsrcSection(rsrcRva Rva) returns ByteArray
+	var rsrc = ByteArray.create()
+	let manifest = manifestXml()
+
+	// Root directory: one ID entry (the RT_MANIFEST type) → type subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RtManifestTypeId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcTypeDirOffset)
+
+	// Type-level directory: one entry (resource ID 1) → language subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: CreateProcessManifestResourceId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcLangDirOffset)
+
+	// Language-level directory: one entry (en-US) → data entry (leaf: no subdir bit).
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RsrcLangIdEnUs)
+	writeDword(rsrc, value: RsrcDataEntryOffset)
+
+	// IMAGE_RESOURCE_DATA_ENTRY: the manifest's RVA is image-relative (NOT
+	// section-relative, unlike the directory-entry offsets above).
+	writeDword(rsrc, value: ((rsrcRva + RsrcManifestOffset) as MachineWord))
+	writeDword(rsrc, value: manifest.count())
+	writeDword(rsrc, value: 0)  // CodePage
+	writeDword(rsrc, value: 0)  // Reserved
+
+	rsrc.append(manifest)
+	return rsrc
+end 'buildRsrcSection'
+
+// --- Main PE writer ---
+
+export function writePe(outputPath FilePath, codeResult CodeResult, target Target)
+	logInfo(LogCategory.binary, message: function() gives "Writing PE file: {outputPath}")
+	var pe = ByteArray.create()
+	pe.reserve(4096)
+
+	var code = codeResult.code
+	let codeSize = code.count()
+	let rdataSize = codeResult.rdata.count()
+	let symdataSize = codeResult.symdata.count()
+	// The `.data` image: the initial bytes of every top-level `var`. Empty for a program with no
+	// global, which is most of the corpus — and the section is then OMITTED ENTIRELY, so a
+	// global-free program's binary is byte-for-byte what it was before this rung.
+	let dataSize = codeResult.dataPrelude.count()
+	let hasRdata = rdataSize > 0
+	let hasSymdata = symdataSize > 0
+	let hasData = dataSize > 0
+
+	// Sections: .text + .idata + .rsrc always; .rdata / .symtab / .data only when non-empty.
+	var numSections = 3
+	if hasRdata 'countRdata'
+		numSections = numSections + 1
+	end 'countRdata'
+	if hasSymdata 'countSymdata'
+		numSections = numSections + 1
+	end 'countSymdata'
+	if hasData 'countData'
+		numSections = numSections + 1
+	end 'countData'
+
+	let headersSize = DosAndPeSigBytes + CoffHeaderBytes + OptionalHeaderBytes + SectionHeaderBytes * numSections
+	let headersAligned = alignUp(headersSize, alignment: FileAlignment)
+
+	// .text
+	let codeSizeAligned = alignUp(codeSize, alignment: FileAlignment)
+	let codeSizeVirtual = alignUp(codeSize, alignment: SectionAlignment)
+	let textRva = SectionAlignment
+
+	// .rdata (optional)
+	let rdataRva = textRva + codeSizeVirtual
+	let rdataSizeAligned = alignUp(rdataSize, alignment: FileAlignment)
+	var rdataSizeVirtual = 0
+	if hasRdata 'rdataVirtual'
+		rdataSizeVirtual = alignUp(rdataSize, alignment: SectionAlignment)
+	end 'rdataVirtual'
+
+	// .symtab (optional)
+	let symdataRva = rdataRva + rdataSizeVirtual
+	let symdataSizeAligned = alignUp(symdataSize, alignment: FileAlignment)
+	var symdataSizeVirtual = 0
+	if hasSymdata 'symdataVirtual'
+		symdataSizeVirtual = alignUp(symdataSize, alignment: SectionAlignment)
+	end 'symdataVirtual'
+
+	// .data (optional) — WRITABLE, and laid out between .symtab and .idata.
+	let dataRva = symdataRva + symdataSizeVirtual
+	let dataSizeAligned = alignUp(dataSize, alignment: FileAlignment)
+	var dataSizeVirtual = 0
+	if hasData 'dataVirtual'
+		dataSizeVirtual = alignUp(dataSize, alignment: SectionAlignment)
+	end 'dataVirtual'
+
+	// .idata
+	let idataRva = dataRva + dataSizeVirtual
+	// Both the table builder and the relocation patcher must answer these two questions the SAME way — the
+	// builder decides where each thunk lands and the patcher points call sites at it, so a disagreement
+	// would aim every call at the wrong import. Read once, passed to both.
+	// ⚠ `usesGt` joins the four producers (G1): the scheduler's per-P init reads `MAXON_MAX_PROCS` through
+	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
+	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
+	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
+	// binary byte-identical across this rung.
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling
+	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
+	// family, the timer pair and the module walk ride the optional kernel32 band above, while
+	// `NtGetNextThread` is the sole member of a directory entry no other program in the language has. Both
+	// are read off `stdModule` AFTER `pipeline.run()` replaced it (`Compiler.maxon`'s build seam); a read
+	// taken before that measures a module the lowering discards and emits `iatCall`s at slot indices past
+	// the end of the table it actually writes.
+	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling)
+	let idata = buildImportSection(idataRva as Rva, gates: gates)
+	let idataSize = idata.data.count()
+	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
+	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
+
+	// .rsrc — the embedded `asInvoker` manifest, ALWAYS emitted. Placed LAST so no
+	// existing section RVA shifts (the IAT relocations are RVA-sensitive). The manifest's
+	// data-entry pointer is image-relative, so `.rsrc`'s own RVA must be fixed before the
+	// section is built.
+	let rsrcRva = idataRva + idataSizeVirtual
+	let rsrcData = buildRsrcSection(rsrcRva as Rva)
+	let rsrcSize = rsrcData.count()
+	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
+	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)
+
+	let imageSize = rsrcRva + rsrcSizeVirtual
+
+	// Patch IAT + rdata relocations in the code image before it is written.
+	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva as Rva, gates: gates)
+	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva as Rva, dataRva: dataRva as Rva)
+	// Bake every `.rdata` slot naming another `.rdata` payload into the `.rdata` IMAGE now that `rdataRva` is fixed.
+	patchRdataAbsRelocs(codeResult.rdata, globalData: codeResult.globalData, rdataRva: rdataRva as Rva)
+	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
+	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
+	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva as MachineWord)
+	// Bake every `.rdata` slot holding a `.text` address — a witness-table method slot, or a managed-opaque
+	// descriptor's `destroyFunc@40`/`copyFunc@32` — with the target's absolute `.text` VA. A fixed-base image,
+	// so `ImageBase + textRva + funcOffset` IS the runtime address (P1.7 slice 3b-ii / P1.7a slice 2a).
+	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: ImageBase + textRva)
+
+	// AddressOfEntryPoint = the entry stub's RVA. `mainCallFixupOffset` carries
+	// mrt_start's `.text` offset (0, since augmentWithRuntime lays it out first).
+	let entryPointRva = textRva + codeResult.mainCallFixupOffset
+
+	// === DOS header (64 bytes) + "PE\0\0" ===
+	pe.append(b"MZ\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00PE\x00\x00")
+
+	// === COFF header (20 bytes) ===
+	let coffMachine = match target.cpu 'coffCpu'
+		x64 gives CoffMachineX64
+		arm64 gives CoffMachineArm64
+		default panic("PeWriter: PE format is not used for {targetToString(target)} — only x64/arm64 native targets")
+	end 'coffCpu'
+	writeWord(pe, value: coffMachine)
+	writeWord(pe, value: numSections)
+	writeZeros(pe, n: 4)  // TimeDateStamp
+	let pointerToSymbolTableOffset = pe.count()
+	writeZeros(pe, n: 4)  // PointerToSymbolTable (patched after the symbol table lands)
+	let numberOfSymbolsOffset = pe.count()
+	writeZeros(pe, n: 4)  // NumberOfSymbols (patched)
+	writeWord(pe, value: OptionalHeaderBytes)
+	writeWord(pe, value: CoffCharacteristics)  // EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+
+	// === Optional header PE32+ (240 bytes) ===
+	pe.append(b"\x0b\x02\x0e\x00")  // Magic (PE32+), MajorLinkerVersion 14, MinorLinkerVersion 0
+	writeDword(pe, value: codeSizeAligned as MachineWord)  // SizeOfCode
+	writeDword(pe, value: ((rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned) as MachineWord))  // SizeOfInitializedData
+	pe.append(b"\x00\x00\x00\x00")  // SizeOfUninitializedData
+	writeDword(pe, value: entryPointRva as MachineWord)  // AddressOfEntryPoint
+	writeDword(pe, value: textRva)  // BaseOfCode
+
+	// ImageBase(0x140000000), SectionAlignment(4096), FileAlignment(512),
+	// MajorOSVersion(6) MinorOSVersion(0) MajorImageVersion(0) MinorImageVersion(0)
+	// MajorSubsystemVersion(6) MinorSubsystemVersion(0) Win32VersionValue(0)
+	pe.append(b"\x00\x00\x00\x40\x01\x00\x00\x00\x00\x10\x00\x00\x00\x02\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00")
+	writeDword(pe, value: imageSize as MachineWord)  // SizeOfImage
+	writeDword(pe, value: headersAligned as MachineWord)  // SizeOfHeaders
+	// CheckSum(0), Subsystem(3=CONSOLE), DllCharacteristics(0x8100 = NX_COMPAT |
+	// TERMINAL_SERVER_AWARE; DYNAMIC_BASE cleared so ImageBase is pinned),
+	// StackReserve(0x100000) StackCommit(0x1000) HeapReserve(0x100000)
+	// HeapCommit(0x1000), LoaderFlags(0), NumberOfRvaAndSizes(16)
+	pe.append(b"\x00\x00\x00\x00\x03\x00\x00\x81\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+
+	// Data directories (16 entries × 8 bytes). #0 Export: empty. #1 Import.
+	// #2 Resource: the .rsrc manifest. #3-#11 (9 entries): empty. #12 IAT.
+	// #13-#15 (3 entries): empty.
+	writeZeros(pe, n: DataDirEntrySize)
+	writeDword(pe, value: idata.importDirRva as MachineWord)
+	writeDword(pe, value: idata.importDirSize as MachineWord)
+	writeDword(pe, value: rsrcRva as MachineWord)
+	writeDword(pe, value: rsrcSize)
+	writeZeros(pe, n: DataDirEntrySize * 9)
+	writeDword(pe, value: idata.iatRva as MachineWord)
+	writeDword(pe, value: idata.iatDirSize as MachineWord)
+	writeZeros(pe, n: DataDirEntrySize * 3)
+
+	// === Section headers ===
+	var nextFilePointer = headersAligned + codeSizeAligned
+	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned as ByteOffset, characteristics: SectionTextFlags)
+	if hasRdata 'rdataHeader'
+		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize, virtualAddress: rdataRva as Rva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRdataFlags)
+		nextFilePointer = nextFilePointer + rdataSizeAligned
+	end 'rdataHeader'
+	if hasSymdata 'symtabHeader'
+		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva as Rva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionSymtabFlags)
+		nextFilePointer = nextFilePointer + symdataSizeAligned
+	end 'symtabHeader'
+	if hasData 'dataHeader'
+		writeSectionHeader(pe, name: ".data", virtualSize: dataSize, virtualAddress: dataRva as Rva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionDataFlags)
+		nextFilePointer = nextFilePointer + dataSizeAligned
+	end 'dataHeader'
+	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva as Rva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionIdataFlags)
+	nextFilePointer = nextFilePointer + idataSizeAligned
+	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva as Rva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer as ByteOffset, characteristics: SectionRsrcFlags)
+
+	padTo(pe, size: headersAligned)
+
+	// === Section data ===
+	pe.append(code)
+	padTo(pe, size: headersAligned + codeSizeAligned)
+
+	if hasRdata 'writeRdata'
+		pe.append(codeResult.rdata)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned)
+	end 'writeRdata'
+
+	if hasSymdata 'writeSymdata'
+		pe.append(codeResult.symdata)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned)
+	end 'writeSymdata'
+
+	if hasData 'writeData'
+		pe.append(codeResult.dataPrelude)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned)
+	end 'writeData'
+
+	pe.append(idata.data)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned)
+
+	pe.append(rsrcData)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned)
+
+	// === COFF symbol table (appended past the last loadable section) ===
+	if codeResult.debugSymbols.count() > 0 'writeCoff'
+		let symbolTableFileOffset = pe.count()
+		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize, rsrcSize: rsrcSize)
+		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, sections: sections)
+		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
+		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount as MachineWord)
+	end 'writeCoff'
+
+	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'
+		logError(LogCategory.binary, message: function() gives "Failed to write PE file: {outputPath}")
+	end 'writeErr'
+end 'writePe'

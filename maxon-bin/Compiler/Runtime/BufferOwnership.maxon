@@ -1,0 +1,821 @@
+// Runtime/BufferOwnership.maxon — ⭐⭐ **ONE ENCODING OF "IS THIS BUFFER MINE?", READ BY BOTH RECORDS.**
+//
+// A String record and a buffer record carry the same
+// problem: each one holds a `buffer@0` that may or may not be the record's own to write and to release,
+// and every mutator and every drop path has to ask which. This file owns that question — the values
+// that answer it and the emitters that read them — so the String runtime and the managed-memory runtime
+// cannot answer it differently.
+//
+// ⚠ **THEY DID.** Array answered it with the SIGN of `capacity@16` while String answered it with
+// `parent@32 == -1`, so the SAME FIELD at the SAME OFFSET meant OPPOSITE things in the two records: for
+// an Array `parent@32` is *someone else's allocation that I owe a release to*, for a String it was *I
+// own an external buffer*. One record's "this field is set" was the other's "this field is not". On top
+// of that String carried a `capacity@16 = -2` that nothing ever tested and a `parent@32 = -3` that
+// nothing ever read. Three spellings of one question across two runtimes, at one offset.
+//
+// --- THE ENCODING, stated once ---
+//
+// **`capacity@16` answers "IS THIS BUFFER MINE TO WRITE, AND MINE TO RELEASE?"**
+//   * `>= 0` — YES. `buffer@0` is a SEPARATE allocation this record owns; it may be written in place
+//     within `capacity` elements, and the record owes it a release when it dies or detaches.
+//   * `< 0` — NO. The record must copy its bytes somewhere private before any in-place write, and must
+//     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); almost
+//     no COMPILER-SIDE reader compares against a specific one, and that is deliberate — a further
+//     non-owned-buffer kind then arrives as one more value rather than as a new test at every reader,
+//     which is exactly how the zero-copy view arrived after the rdata literal.
+//
+// ⚠⚠ **THERE ARE EXACTLY THREE EXCEPTIONS, EACH WITH ONE HOME, AND A NEW PROVENANCE MUST BE TAUGHT
+// ABOUT ALL THREE BY HAND.**
+//
+//   1. `emitRecordIsImmortal` — *"is this RECORD image data rather than an allocation?"*, asked by the
+//      three readers that must not perform a refcount read-modify-write on a READ-ONLY `.rdata` page.
+//   2. `emitBufferHostAllocation` (BATCH2 slice 1, moved here at W157) — *"which allocation must stay
+//      alive for these bytes to be READABLE?"*, which is not *"which allocation do I owe a release to?"*:
+//      the two part company for an INLINE String, whose bytes sit in its OWN payload and which therefore
+//      owes nothing while its record is very much the allocation to count. "Inline" is not derivable from
+//      the other slots (every non-owned provenance answers `NoOwedAllocation` at `parent@32`, and comparing
+//      `buffer@0` against `record + StringRecordBytes` would misread an rdata blob the linker happened to
+//      pack right after its record), so it tests the value.
+//   3. `emitRouteOnVouchedTerminatorSlot` — *"may `buffer[length]` be READ at all?"*, the byte one PAST
+//      the content, which `__mm_to_cstring` inspects to decide whether the receiver's bytes already ARE a
+//      C string. It is the only one of the three that names MORE THAN ONE provenance, and the only one
+//      whose wrong answer is an out-of-bounds READ rather than a miscount — see its own header.
+//
+// ⇒ **ADD A FIFTH `NotOwnedBufferCapacity` HERE AND NONE OF THE THREE WILL RECOGNIZE IT.** There is still
+// no COMPILE error for that. All three are written so the UNTAUGHT answer is the conservative one — not
+// immortal, hosted by nothing, and its terminator slot unreadable (so `__mm_to_cstring` copies) — which is
+// a refused optimization or a missing count rather than a fault; but a missing count is a dangling view, so
+// no residual is a substitute for teaching the value. This note is the obligation, written at the
+// declaration because that is where the next value will be added. The runtime does NOT guard it with an
+// abort arm, for this file's own stated reason: it refuses to emit a branch no input reaches (stated where
+// `emitBufferCannotHold` stood, below).
+//
+// ✅ **W157 ADDED THE FOURTH (`ImmortalRecordCapacity`) AND PAID EXACTLY THIS TOLL**, which is why this
+// note now says "fifth": the two readers that existed then were taught by hand in the same commit — and the
+// THIRD reader (`emitRouteOnVouchedTerminatorSlot`) was written knowing all four, which is the only reason
+// it could enumerate the three that vouch for their terminator slot and the one that cannot.
+// ⛔ **AND ITS REVIEW MEASURED WHAT THE SHAPE OF THE TEACHING COSTS**: `emitBufferHostAllocation` was first taught as *"immortal ⇒
+// nothing, OTHERWISE inline"*, and that residual is reached by an OWNER whose `buffer@0` is still 0 as well
+// as by an inline String — exit 101 on a slice of an empty `ByteArray`. A provenance test must name the arm
+// it is SURE of; the residual belongs to whatever the function can be wrong about safely.
+//
+// ⚠ **WHAT IS NO LONGER TRUE: "with nothing to catch it".** This note used to argue that the suite
+// STRUCTURALLY could not reach the door, because `addressableBytes` is stdlib-only and the spec runner
+// stages its fragments outside `stdlib/`. That was an argument about who may CALL it, and the callers that
+// matter are inside `stdlib/`: `URL.maxon`, `helpers/url/urlHelpers.maxon` and `FilePath.maxon` were
+// already loaded, and `File.maxon` added seven more call sites (`File.exists`, `readText`, `writeText`,
+// `delete`, `rename`, `stat`, `FileReader.open`). Every stdlib module is parsed and compiled into EVERY
+// program.
+//
+// ⭐ **MEASURED (N2), at RUN time and on both arms that exist to be told apart** — one program, an
+// interpolated path (INLINE: `capacity@16 = InlineBufferCapacity`, bytes in the record's own payload) and a
+// literal one (RDATA: the immortal blob) — `File.writeText` then `File.exists` then `File.readText` then
+// `File.delete` on each: `built=true literal=true back=hello from 4`, exit 0, no leak. So a fourth
+// provenance misclassified as inline would land as a wrong answer, a fault or a 101 on `file-io.md`,
+// `file-info.md`, `filepath.md` and `url.md` — loudly, at the gate. That is the catcher this note said did
+// not exist; it does not remove the obligation above, it says what ignoring it now costs.
+//
+// ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__managed_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
+// so a Maxon program can read one, and `arrays.md:slice-capacity-is-a-view-until-written` pins
+// `ViewBufferCapacity` at exactly `-1`. So these four are RENUMBERABLE only in the sense that the suite
+// will say
+// so: change `ViewBufferCapacity` and that spec goes red. That is the right failure (loud, at the gate),
+// but it is not "nothing observes the value".
+//
+// **`parent@32` answers "WHICH SEPARATE ALLOCATION DO I OWE A RELEASE TO?"** — the address `__mm_alloc`
+// RETURNED (so `__mm_decref` finds its header just below it), or `NoOwedAllocation` for "none". It is
+// consulted only when `capacity@16 < 0`; an owner's answer is its own `buffer@0`, and reading it out of
+// two fields rather than storing it twice is what keeps `buffer` and `parent` from being one fact in
+// two slots.
+//
+// ⭐ **THE FOUR PROVENANCES, and each is a record kind's answer to "where did these bytes come from?"**
+// A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob whose
+// record is nonetheless an ordinary heap box; an IMMORTAL RECORD is in `.rdata` along with its blob; an
+// INLINE String's bytes sit inside the record's OWN `__mm_alloc` payload, at `record + StringRecordBytes`,
+// so its own free reclaims them and there is no separate allocation to release. All four are simply
+// NEGATIVE, which is the whole of what every reader inside the compiler asks BUT ONE — see the exception
+// note above, which a further provenance must be read against — and otherwise the specific value is there
+// for whoever reads a hexdump, or a `capacity()` a program printed (see the note above).
+//
+// ⚠ **`InlineBufferCapacity` IS WHY THE ENCODING NEEDED NO EXCEPTION FOR STRING.** An inline String's
+// bytes are neither writable-in-place beyond their exact length nor separately releasable, which is
+// precisely what a negative capacity says; it therefore takes the SAME two arms every other non-owned
+// buffer takes. It briefly did not: the parser published `capacity@16 = length` (non-negative, so the
+// encoding read the record as an owner of a separate buffer) and marked inline-ness in `parent@32`
+// instead, which forced a String-only branch in front of `emitOwedAllocationBase` deriving inline-ness
+// from the layout. The branch is gone, and so is the marker — this is the fact, in the field the rest of
+// the encoding already lives in.
+//
+// ⭐⭐ **THE TYPE IS WHAT MAKES "NOT MINE ⇒ NEGATIVE" A RULE RATHER THAN A HABIT.** Every provenance below
+// is declared at this type, whose range STOPS at `-1`, so a fourth one written `= 4` — or `= 0` — does not
+// compile. That matters because a GROWER need not test the sign at all: it can test
+// `capacity < requiredLen` and rely on every non-owned capacity being below every byte count (the fused
+// test `__str_append` used until W49 wave 8 — see the note where its emitter stood). Under a
+// bare `ParsedInt` that reliance rested on three separate literals staying negative by convention, and a
+// convention that is only written in a comment is a test nobody wrote — the exact shape of every bug this
+// file exists to end. Here the compiler that builds the compiler checks it, once per provenance, at the
+// declaration.
+typealias NotOwnedBufferCapacity = int(i64.min to -1)
+
+export let ViewBufferCapacity = -1 as NotOwnedBufferCapacity
+export let RdataBufferCapacity = -2 as NotOwnedBufferCapacity
+export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
+
+// ⭐⭐ **THE FOURTH PROVENANCE (W157): THE BUFFER IS AN IMMORTAL `.rdata` BLOB *AND SO IS THE RECORD* — so
+// nothing here may be increfed, decrefed or freed.** Two values are born this way, and both have their
+// record emitted into `.rdata` beside their blob (`immortalRecordBytes`): a String LITERAL, and a READ of a
+// module-level byte-array constant. The PE writer maps that section READ-ONLY, so a refcount
+// read-modify-write on such a record does not merely double-count, it FAULTS. An INLINE `b"…"` and a stored
+// global's initializer keep `RdataBufferCapacity`: the blob is immortal but the RECORD is an ordinary
+// `__mm_alloc` box that `__managed_cow_detach` must be able to republish and `__managed_decref` must free,
+// which is exactly the distinction the two values carry.
+//
+// ⚠⚠ **IT EXISTS BECAUSE W157 MADE AN IMMORTAL RECORD REACHABLE BY THE REFCOUNT PATHS FOR THE FIRST TIME.**
+// Until then a literal's record was handed to no counting path at all — `__str_bytes_view` MINTED a heap
+// view over its bytes, and the parser promotes a `var` String at its declaration, so `__str_decref` never
+// saw one either. Now that `addressableBytes()` hands back the receiver's own record, a literal's record
+// reaches `__mm_incref` and `__managed_decref`, and "which negative value" stops being a hexdump nicety.
+// Its two readers are `StringRuntime.buildStrBytesView` (skip the incref) and
+// `ManagedMemoryRuntime.__managed_decref` (skip the whole drop).
+//
+// ⭐ **THE OBLIGATION THE HEADER ABOVE RECORDS IS DISCHARGED FOR THIS VALUE, NOT INHERITED.** Both
+// specific-provenance readers were taught it: `emitRecordIsImmortal` IS this value, and
+// `emitBufferHostAllocation` answers "nothing hosts these bytes" for it — its blob outlives the process —
+// through the residual it shares with the other two immortal-blob provenances. `__str_retain`'s
+// copy-immortal arm moved from `RdataBufferCapacity` to this value for the same reason the record test did:
+// it is the RECORD's writability that decides, not the blob's.
+let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
+
+// `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
+// String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
+// allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
+// step is null-guarded.
+let NoOwedAllocation = 0 as ParsedInt
+
+// `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
+// is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
+// holding, which is what makes an imaged empty container and an allocated one the same object to every
+// runtime entry that reads them.
+export let NoImmortalBlob = 0 as ByteOffset
+
+// --- ⭐⭐ THE BUFFER RECORD, DECLARED ONCE AND EMBEDDED WHOLE BY THE STRING RECORD ---
+//
+// **The String record and the Array record agree on ALL SIX slots, and `__mm_cow_detach` is what
+// turned that agreement from a coincidence into a rule.** Until it existed, the emitters below took a
+// `BufferRecordSlots` value that each runtime built from its own constants, and the header here said the
+// two sets "coincide today and nothing here relies on that". Something does now: ONE emitted runtime
+// function reads these offsets out of BOTH records, so a divergence would not be a second value flowing
+// through a parameter — it would be a wrong load in a function that cannot tell which record it was
+// handed. ⇒ the offsets are declared HERE, so the numbers exist once and the parameter that could only ever
+// carry one value is gone. `StringRuntime` derives its own names from them (`StringBufferOffset`, …) because
+// a String record is a DIFFERENT record and its spelling still says something; `ManagedMemoryRuntime` names
+// these constants directly, its `Arr*Offset` aliases having retired with the file's own name (ARR6).
+//
+// ⭐⭐ **THE SIXTH SLOT JOINED THE PREFIX AT W157, AND THAT IS THE RUNG'S WHOLE THESIS.** `@40` used to be
+// `singleByteGraphemes` in a String record and `element_destroy` in an Array record — genuinely different
+// facts at one offset — so the shared prefix STOPPED at `@32`, and a String's bytes could reach buffer code
+// only through a freshly minted 48-byte VIEW whose `@40` said `TrivialDestructor` where the String's said
+// 0-or-1. A String record now carries a REAL `element_destroy@40`, always `TrivialElementDestroy`, which is
+// not a placeholder but the truth — a String's elements are `Byte`s and need no per-element destructor —
+// and its flag moved to a slot of its own at `@48`. So the six offsets below describe a WHOLE
+// `__ManagedMemory`; a String record IS one, with one extra slot behind it; and `__managed_decref` and
+// `emitRecordView` read all six out of both, which is the criterion this file states for what lives here.
+export let ManagedRecordBufferOffset = 0 as ByteOffset
+export let ManagedRecordLengthOffset = 8 as ByteOffset
+export let ManagedRecordCapacityOffset = 16 as ByteOffset
+export let ManagedRecordElementSizeOffset = 24 as ByteOffset
+export let ManagedRecordParentOffset = 32 as ByteOffset
+
+// The per-element destructor a managed-element array carries (P1.7 slice 3); for a TRIVIAL element it is
+// `TrivialElementDestroy` and the drop path releases the buffer without walking. ⚠ **IT LIVED IN
+// `ManagedMemoryRuntime` UNTIL W157**, under a header calling it *"the one slot that is genuinely THIS
+// record's own"*. That stopped being true the moment a String record began carrying one and
+// `__managed_decref` began reading it out of one, so it moved to where the other five already were.
+export let ManagedRecordElementDestroyOffset = 40 as ByteOffset
+
+// A BUFFER record is six 8-byte slots. Declared here for the same reason the offsets are: `__mm_cow_detach`
+// is one function over both, and `LowerMaxonToStd` sizes the `__mm_alloc` of a literal's record from it.
+// ⚠ A STRING record is this plus one slot; `StringRuntime.StringRecordBytes` DERIVES itself from this
+// number rather than restating it, so the two cannot drift.
+export let ManagedRecordBytes = 48 as BytePos
+
+// A buffer record's slot is one machine word. Named here rather than written `8` at each producer: the six
+// offsets above are eight apart because of it, and a String record's seventh slot is the same width.
+export let ManagedRecordSlotBytes = 8 as BytePos
+
+// ⭐⭐ **THE SIX SLOTS OF A RECORD THAT *IS* IMAGE DATA, ASSEMBLED AS BYTES — one home, three producers.**
+// A String literal, a module-level constant array and a module-level EMPTY `Array with T` register the
+// identical six words and differ only in what follows: the String appends its `singleByteGraphemes` flag,
+// the two array shapes append nothing.
+//
+// ⭐ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THAT IS LOAD-BEARING FOR DEDUP.** The writer
+// OVERWRITES it with the blob's absolute VA, so the value stored here is irrelevant to what the program
+// reads — but not to `registerRdataConstant`, which dedupes BY BYTES: two payloads of equal length and
+// stride have byte-identical records except for this slot, so a placeholder of 0 would collapse them into
+// ONE record naming ONE blob. Seeding the blob's own offset makes records dedup exactly when their payloads
+// do. An EMPTY container names no blob at all and passes `NoImmortalBlob`, which is the truth about it: its
+// `length@8` is 0, so nothing ever strides off the slot.
+//
+// ⛔⛔ **`element_destroy@40` IS THE CALLER'S AND MUST BE THE TRUTH.** Every DERIVED record inherits the
+// slot (`ManagedMemoryRuntime.emitRecordView`, the packed copy, `__managed_clone`), so a 0 written where a
+// real destructor belonged silently leaks the elements of every copy — and a copy is exactly what a
+// mutable sink gets, `__managed_retain` answering an immortal record with a private clone. Two of the three
+// producers can only ever pass `TrivialElementDestroy`: a String's elements are `Byte`s, and a constant
+// array's element is inline-stored by construction (`SignatureIndex.arrayElementMayBeConstantBlob` admits
+// no managed element). An empty `Array with T` has a real element type and passes 0 only when the writer is
+// about to relocate the callee's `.text` VA into this slot.
+//
+// Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
+// runtime loads by and the offsets this writes are one set of constants that cannot drift.
+export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, elementSize ParsedInt, elementDestroy ParsedInt) returns ByteArray
+	var record = ByteArray.create()
+	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as ParsedInt)
+	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
+	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity)
+	appendRecordSlot(record, expectedOffset: ManagedRecordElementSizeOffset, value: elementSize)
+	appendRecordSlot(record, expectedOffset: ManagedRecordParentOffset, value: NoOwedAllocation)
+	appendRecordSlot(record, expectedOffset: ManagedRecordElementDestroyOffset, value: elementDestroy)
+
+	if record.count() != ManagedRecordBytes 'sizeDrift'
+		panic("immortalRecordBytes: assembled {record.count()} bytes, not {ManagedRecordBytes} — a slot's width does not match its offset spacing")
+	end 'sizeDrift'
+	return record
+end 'immortalRecordBytes'
+
+// ⭐⭐ **WHICH KIND OF RECORD AN IMMORTAL `.rdata` PAYLOAD HOLDS.** The two are distinguished because the
+// joint invariant below binds only one of them: a `__ManagedMemory`-shaped record is judged BOTH by its
+// `capacity@16` and by its header sentinel, while a user struct has no capacity slot and the header is its
+// only mark — offset 16 there is whatever field the author declared.
+export union ImmortalRecordShape
+	managedRecord
+	userStruct
+end 'ImmortalRecordShape'
+
+// ⭐⭐⭐ **THE `.rdata` PAYLOAD AN IMMORTAL RECORD IS REGISTERED AS — the synthetic allocation header it is
+// addressed through, followed by the record. ONE DOOR, and the one place the JOINT INVARIANT is enforced.**
+//
+// ⛔⛔ **A CAPACITY-BEARING IMAGE RECORD CARRIES BOTH MARKS OR IT IS REFUSED HERE.** The runtime asks
+// "is this image data?" two ways, of two populations: `emitRecordIsImmortal` reads `capacity@16` and
+// `MmRuntime.emitBoxIsImmortal` reads the header. A record answering one and not the other is skipped by
+// the readers of the mark it has and COUNTED by the readers of the mark it lacks — which is a leak or a
+// double free, exactly as this file's header says of a skip added on one side only. The pairing is
+// therefore a panic at the minting door and not a comment: it is `buildStringRecordBytes`'s offset-assert
+// discipline applied to an agreement between two mechanisms.
+//
+// The header and the record are ONE payload so that `appendRdataPayload`'s registration-order packing
+// cannot put anything between them, and the LABEL names the record rather than the header
+// (`GlobalDataTable.rdataLabelOffsets`), so a read stays a bare `lea` with no displacement to add.
+// Alignment holds by construction: `MmRuntime.HeaderBytes` and the DebugStream prefix word are both
+// multiples of `GlobalDataTable.RdataPayloadAlignment`, so the record inside the payload lands aligned too.
+function immortalRecordPayload(record ByteArray, shape ImmortalRecordShape, debugStream bool) returns ByteArray
+	let capacityBearing = match shape 'shape'
+		managedRecord gives true
+		userStruct gives false
+	end 'shape'
+
+	if capacityBearing and not recordCarriesImmortalCapacity(record) 'markSplit'
+		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")
+	end 'markSplit'
+
+	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as ParsedInt)
+	payload.append(record)
+	return payload
+end 'immortalRecordPayload'
+
+// Does `record` carry `ImmortalRecordCapacity` at `capacity@16`? Compared as the BYTES `immortalRecordBytes`
+// wrote, through the same `scalarImage`, so the check cannot disagree with the writer about encoding.
+function recordCarriesImmortalCapacity(record ByteArray) returns bool
+	if record.count() < ManagedRecordBytes 'noCapacitySlot'
+		return false
+	end 'noCapacitySlot'
+
+	let sentinel = scalarImage(ImmortalRecordCapacity as ParsedInt, byteCount: ManagedRecordSlotBytes)
+	var offset = ManagedRecordCapacityOffset
+	for expected in sentinel 'eachByte'
+		let actual = try record.get(offset) otherwise panic("recordCarriesImmortalCapacity: a {record.count()}-byte record has no byte at {offset} — the length check above admits only records long enough to hold capacity@16")
+		if actual != expected 'differs'
+			return false
+		end 'differs'
+
+		offset = offset + 1
+	end 'eachByte'
+
+	return true
+end 'recordCarriesImmortalCapacity'
+
+// ⭐ **REGISTER AN IMMORTAL RECORD UNDER A MINTED, BYTE-DEDUPED LABEL** — `registerRdataConstant` with the
+// header in front and the label aimed at the record. The door a String literal and a byte-array constant
+// come through, where two producers of identical bytes must reach ONE object.
+export function registerImmortalRecord(globalData GlobalDataTable, prefix String, record ByteArray, kind RdataPayloadKind, shape ImmortalRecordShape, debugStream bool) returns String
+	return globalData.registerRdataConstant(prefix, bytes: immortalRecordPayload(record, shape: shape, debugStream: debugStream), kind: kind, labelAt: immortalBoxHeaderSize(debugStream))
+end 'registerImmortalRecord'
+
+// ⭐ **REGISTER AN IMMORTAL RECORD UNDER AN EXACT, STRUCTURAL LABEL** — the twin above's labelled door, for
+// a record whose bytes do not distinguish it from another (an empty `Array with T`, whose
+// `element_destroy@40` is a relocation rather than payload).
+export function registerImmortalRecordLabeled(globalData GlobalDataTable, label String, record ByteArray, kind RdataPayloadKind, shape ImmortalRecordShape, debugStream bool) returns String
+	return globalData.registerRdataConstantLabeled(label, bytes: immortalRecordPayload(record, shape: shape, debugStream: debugStream), kind: kind, labelAt: immortalBoxHeaderSize(debugStream))
+end 'registerImmortalRecordLabeled'
+
+// Append one machine-word slot at `expectedOffset`, refusing to write it anywhere else. Exported because a
+// String record's seventh slot rides the same rule.
+export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value ParsedInt)
+	if record.count() != expectedOffset 'offsetDrift'
+		panic("appendRecordSlot: a record slot is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
+	end 'offsetDrift'
+
+	record.append(scalarImage(value, byteCount: ManagedRecordSlotBytes))
+end 'appendRecordSlot'
+
+// `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
+// reached by no other: `__managed_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
+// `__managed_decref` (it must not be released — it was either never allocated or is still being read by
+// someone else) and `emitOwedAllocationBase` (which of two fields names the allocation this record owes
+// a release to). Their conclusions differ and are meant to — what must never differ is the test, because
+// a record misjudged by any one of them is a fault: a write into read-only memory or into bytes another
+// array is reading, or a release of an address the allocator never handed out.
+//
+// ⚠ **IT IS ALSO THE ONE TEST THAT MAY BE ASKED BEFORE A HEADER READ IS SAFE**, and that is why it reads
+// the record's own `capacity@16` and nothing else. A view's `buffer@0` is INTERIOR, so the word at
+// `buffer - 8` is the parent's element DATA, not a refcount; anything that wants to read a buffer's
+// `__mm_alloc` header must clear this test first. `__managed_cow_detach` is exactly such a reader, and its
+// arms are ordered accordingly.
+//
+// ⚠ It is the ONLY buffer-provenance test left. `emitBufferCannotHold` below asked the same question
+// WIDER — fused with "and is it big enough?" — and retired with its one caller at W49 wave 8; the note
+// where it stood keeps the property that made the fusion sound, for a future grower to re-derive from.
+export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
+end 'emitBufferNotOwned'
+
+// ⭐⭐ **REFUSE A BUFFER THIS RECORD DOES NOT OWN BEFORE AN OS CALL FILLS IT — THE ONE HOME OF THE
+// WRITE-TARGET GUARD.** Asked by the two surfaces that hand a managed buffer to the KERNEL to be written
+// into: `ManagedFileRuntime.__mf_read` and `ManagedSocketRuntime.__ms_recv`. It emits the test into `block`
+// and routes the owned path to `fill`; `refuse` is the caller family's own throw block, because the two
+// families have different error enums and the flag is not this function's to choose.
+//
+// ⚠ **`refuse` NEED NOT BE TERMINATED YET, AND THIS LINE USED TO CLAIM IT ALREADY WAS.** It is false at
+// BOTH call sites — `__mf_read` terminates its `tooBig` block after this call, `__ms_recv` terminates its
+// `failed` block through `emitSocketTransferOutcome` after this call — and it never mattered, because only
+// `refuse.id` is read here. Stated as the requirement it actually is: an `IrBlock` this function may name
+// as a branch target, whose contents are the caller's business and may be filled in afterwards.
+//
+// ⛔⛔ **NEITHER CALLER MAY DERIVE THE REFUSAL FROM ITS SIZE BOUND, AND BOTH ONCE DID — MEASURED, TWICE.**
+// The tempting form is *"a non-owned record carries a NEGATIVE `capacity@16`, so any positive length is
+// above it and the size check refuses it for free."* It does not. Every size bound at these two sites goes
+// through `ManagedFileRuntime.emitArrayByteExtent` → `emitElementByteLen` → `emitBitsToBytes`, which ends in
+// a LOGICAL shift right — so a `capacity` of `-1` comes back as `0x1FFFFFFFFFFFFFFF`: enormous, POSITIVE,
+// and above every transfer either surface can be asked for. `__ms_send_from` accepted a 9-byte read out of
+// a 4-byte window and sent it; `__mf_read` accepted a 24-byte `ReadFile` into a 4-byte zero-copy VIEW,
+// answered `bytesRead = 24`, and rewrote the parent's four bytes plus 20 more past the end of its
+// allocation. ⇒ the question has exactly ONE decoder — `emitBufferNotOwned` above — and a byte extent
+// compared against anything is not it.
+//
+// ⚠ **WHAT IS EASY TO GET SILENTLY WRONG IS WHICH WAY ROUND THE `condBranch` GOES**, which is precisely the
+// argument `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for owning its family's other guard: swap
+// the two edges in one copy and that surface stops guarding while its twin keeps working, so nothing goes
+// red. One home, one direction.
+//
+// ⚠ **IT REFUSES RATHER THAN DETACHING, WHICH IS THE OPPOSITE OF WHAT EVERY `__managed_*` MUTATOR DOES**,
+// and the asymmetry is real rather than an omission. A mutator writes bytes it already holds, so
+// `emitCowDetach` can give the record a private copy and proceed; these two are handing a POINTER to the
+// kernel and are bounded by a capacity, and a detach asks for exactly `length` elements
+// (`buildManagedCowDetach`'s ask), so it buys the transfer no room the window did not already have and the
+// capacity test would refuse the same calls one block later — after an allocation and a copy that a refused
+// call must not pay for (`__managed_set_length`'s stated rule).
+export function emitRefuseNonOwnedFillTarget(module StdModule, block IrBlock, record ValueId, refuse IrBlock, fill IrBlock, ids ValueMinter)
+	let notWritable = emitBufferNotOwned(module, block: block, record: record, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(notWritable, thenBlockId: refuse.id, elseBlockId: fill.id))
+end 'emitRefuseNonOwnedFillTarget'
+
+// `capacity == ImmortalRecordCapacity` — ⭐ **THE ONE HOME OF THE IS-THIS-RECORD-IMAGE-DATA TEST**
+// (W157), `emitBufferNotOwned`'s twin and asked by the five places that must act on it:
+// `StringRuntime.__str_bytes_view` (do not incref what cannot be written), `__str_retain` (copy it instead
+// of co-owning it), `__str_decref` and `ManagedMemoryRuntime.__managed_decref` (do not count it and never
+// free it) and `__managed_cursor_create` (do not retain it as a cursor's source).
+// Their conclusions differ and are meant to; what must never differ is the test, because a record
+// misjudged by any one of them is a refcount read-modify-write on a READ-ONLY `.rdata` page.
+//
+// ⭐⭐ **THE LAST TWO ARE PAIRED WITH THE FIRST THREE, NOT INDEPENDENT OF THEM, AND THE PAIRING IS THE
+// REVIEW'S WHOLE POINT (W157 review).** An acquire that skips must have a release that skips: `__str_bytes_view`
+// hands an immortal record back uncounted and `__managed_decref` / `__str_decref` drop it untouched;
+// `__managed_cursor_create` declines the retain and `__managed_cursor_decref` — which releases THROUGH
+// `__managed_decref` — declines the release without a line of its own. ⛔ **A SKIP ADDED ON ONE SIDE ONLY IS
+// A LEAK OR A DOUBLE FREE**, which is why every one of these reads THIS function rather than restating
+// `== -4`, and why `__managed_cursor_decref` deliberately has no test of its own.
+//
+// ⚠ **`emitBufferHostAllocation` IS THE FOURTH READER OF THE PROVENANCE SPACE AND DELIBERATELY NOT A
+// READER OF THIS.** It asks which allocation HOSTS the bytes, and an immortal record shares its answer
+// ("none") with an rdata-blob literal, a view over one, and an owner that never allocated — so naming this
+// value there would have been a test whose true arm was one of four cases needing the same answer, and
+// whose false arm would then have had to mean "inline". It tests `InlineBufferCapacity` instead.
+//
+// ⚠ **IT IS NOT `emitBufferNotOwned` NARROWED, AND MUST NOT BE FOLDED INTO IT.** That one asks about the
+// BUFFER — an inline String, a view and a byte-string literal all answer "not mine" while sitting in an
+// ordinary `__mm_alloc` box that must be counted and freed. This asks about the RECORD, and exactly one
+// provenance answers yes.
+//
+// ⚠ **`emitRouteOnVouchedTerminatorSlot` NAMES `ImmortalRecordCapacity` TOO AND IS NOT A SIXTH READER OF
+// THIS TEST**, which is why it is a separate exception in the header rather than a line added above. It
+// asks a different question — *"may the byte AFTER the buffer be read?"* — whose yes-set is three
+// provenances, not one; it therefore has no paired release to keep in step, and it holds the capacity
+// already. What the two DO share is the comparison itself, and they share it as code: both go through
+// `emitCapacityIsSentinel` below, so "compare `capacity@16` against a named provenance" still has one
+// spelling.
+export function emitRecordIsImmortal(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
+	return emitCapacityIsSentinel(module, block: block, capacity: capacity, sentinel: ImmortalRecordCapacity, ids: ids)
+end 'emitRecordIsImmortal'
+
+// `capacity@16 == <one named provenance>` — the two-op spelling every SPECIFIC-provenance test in this file
+// is made of, taking the capacity ALREADY LOADED rather than the record. All THREE specific-provenance
+// readers go through it — `emitRecordIsImmortal` above, `emitBufferHostAllocation` below, and the
+// terminator-slot router, which alone asks it three times over one load. Written inline it would have been
+// this body spelled out SIX times, which is the one duplication this file exists to prevent, in the file
+// whose whole subject is that the provenance test has ONE spelling.
+//
+// ⚠ The parameter is `NotOwnedBufferCapacity`, so a caller cannot pass a byte count: this comparison is
+// only ever against a declared provenance, and asking it about `0` or `length` is a different question with
+// a different emitter (`emitBufferNotOwned`, or the `>` in the router).
+function emitCapacityIsSentinel(module StdModule, block IrBlock, capacity ValueId, sentinel NotOwnedBufferCapacity, ids ValueMinter) returns ValueId
+	let value = emitConst(module, block: block, value: sentinel as ParsedInt, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: value, pred: StdCmpPred.eq, ids: ids)
+end 'emitCapacityIsSentinel'
+
+// ⭐⭐ **THE THIRD EXCEPTION: "MAY `buffer[length]` BE READ AT ALL?" — the ONE HOME of the terminator-slot
+// test, and its absence was a LIVE out-of-bounds read rather than a theoretical hazard.**
+//
+// `buffer[length]` is one byte PAST the content. `__mm_to_cstring` — the whole of `String.cstr()`, which is
+// PUBLIC and which an ordinary user program reaches — inspects it to decide whether the receiver's own
+// bytes already ARE a C string and can be handed back with nothing allocated. That inspection is only
+// legitimate for a record that can vouch for the byte, and this routes on exactly that: `vouched` takes the
+// records that can, `unvouched` the records that cannot and must therefore be GROWN by one byte and
+// terminated in place instead (`StringRuntime.buildMmToCString`'s second path).
+//
+// ⭐ **THE FOUR SHAPES THAT CAN VOUCH, each for its own reason, and they are an ADMIT-LIST for the reason
+// this file's header states — an untaught FIFTH provenance must land on the copy path, not on the probe.**
+//
+//   * an OWNED buffer with a SPARE SLOT (`capacity > length`) — the slot is INSIDE the record's own
+//     allocation, which is the whole of what is claimed here. (A freshly grown buffer's `[length, capacity)`
+//     also reads zero — `buildManagedGrow`'s zeroing contract — so the probe usually SUCCEEDS as well; a
+//     buffer that has since been shortened may hold a stale non-zero byte there and simply routes to the
+//     grow. Either answer is sound, because either byte is the record's own to read.)
+//   * `RdataBufferCapacity` — a byte-string / constant-array literal's blob, in the IMMUTABLE image. Its
+//     following byte is whatever the `.rdata` packer put there (`registerByteArrayLiteralBlob` appends no
+//     NUL, unlike `stringBlobBytes`); that is a byte no allocator ever hands out and nothing can ever write,
+//     so a zero found there is a terminator that STAYS one, and a non-zero one simply routes to the grow.
+//     ⚠ **NO INPUT REACHES THIS ARM TODAY** — the corpus's one `toCString()` call is `String.cstr()`'s, so
+//     the only route to an rdata BUFFER would be an `arr.managed.toCString()` a `stdlib/` module does not
+//     write. It is written anyway, and that is not this file's "refuses to emit a branch no input reaches"
+//     rule being broken: that rule is about a defensive ABORT for a provenance nobody taught, whereas this
+//     is one clause of a rule that covers every buffer provenance. An admit-list that silently dropped a
+//     shape it knows to be safe would route it to the write for no reason.
+//   * `InlineBufferCapacity` — a fused String's bytes live in its own `__mm_alloc` payload, which
+//     `emitAllocOwnedInlineString` sizes `length + StringRecordBytes + 1` (`StringInterpOverheadBytes`)
+//     precisely so the terminator slot is the record's own; the slab's zeroing contract supplies the zero.
+//   * `ImmortalRecordCapacity` — a String LITERAL, whose blob `StringRuntime.stringBlobBytes` NUL-terminates
+//     inside `.rdata`. Same immutability argument as the rdata blob, plus a guaranteed zero.
+//     ⚠ **THE GUARANTEE IS THE STRING PRODUCER'S ALONE.** A module-level byte-array constant's record carries
+//     this same sentinel and its blob is `registerByteArrayLiteralBlob`'s, which appends no NUL — so this arm
+//     would vouch a terminator that is not there. Nothing reaches it: `toCString` is stdlib-only
+//     (`Parser.requireStdlibOnlyBufferMethod`) and no `stdlib/` module calls it on an array. A `stdlib/`
+//     caller that did would need the blob NUL-terminated, not this admit-list widened — the record is
+//     read-only, so the `unvouched` route cannot serve it either.
+//
+// ⛔⛔ **THE TWO IT REFUSES, AND WHY NEITHER IS AN EDGE CASE.**
+//
+//   * a VIEW (`ViewBufferCapacity`) — its bytes are a window into someone else's buffer, so the byte after
+//     the window is not the view's, and when the window reaches its parent's end it is not the parent's
+//     either. ⚠ `Parser.requireStdlibOnlyBufferMethod` records an exit-101 MEASURED on a view here, and it
+//     measured the OTHER defect: the copy that path used to make leaked. That copy is gone (the record is
+//     grown in place now), so the number no longer reproduces — what the view is refused for is the READ,
+//     which no exit code has ever shown.
+//   * an EXACTLY-FULL OWNED buffer (`capacity == length`) — the ORDINARY state, not a corner.
+//     `__managed_grown_cap` takes an ask that outruns doubling at face value, and a first append onto a
+//     non-owned buffer always does (`doubled` is negative), so `var s = ""` + `s.append("hello world")`
+//     leaves `capacity == length` on the very first append. The byte belongs to whatever the allocator
+//     hands out next, and nothing keeps it zero.
+//
+// ⚠ **AN UNVOUCHED RECORD IS THEREFORE ONE THAT WILL BE WRITTEN, WHICH IS A SECOND OBLIGATION ON THIS
+// ADMIT-LIST AND POINTS THE OPPOSITE WAY.** Everything in the `unvouched` set — a view, an exactly-full
+// owner, any untaught fifth provenance — is an ordinary `__mm_alloc` box whose header the COW may republish.
+// The one record in this language that is NOT writable is `ImmortalRecordCapacity`'s, which lives in
+// read-only `.rdata`; it is in the VOUCHED set, and its blob is NUL-terminated by `stringBlobBytes`, so it
+// takes the probe and the probe always says yes. ⇒ **A future provenance whose RECORD is read-only may not
+// simply be left off the admit-list**, the way the conservative default otherwise allows: leaving it off
+// routes it to the write. See `buildMmToCString`'s header, which states the same pairing from the caller's
+// side.
+//
+// ⚠ **IT IS A ROUTER RATHER THAN A `returns ValueId`, and that is the property that makes it a bounds
+// check.** The probe LOAD must sit in a block only the admitting arms reach — a materialized boolean would
+// let the load be emitted beside it in `cur`, which is the out-of-bounds read this exists to remove.
+// `emitRefuseNonOwnedFillTarget` above is the same shape for the same reason.
+//
+// ⚠ **THE `>` IS SIGNED** (`emitCmp` defaults to `StdType.i64` and `stdTypeIsUnsigned` is false for it), so
+// every negative provenance fails `capacity > length` and can only reach `vouched` through the sentinel
+// test that names it. ⛔ **DO NOT COLLAPSE THE THREE SENTINEL ARMS INTO `capacity < ViewBufferCapacity`.**
+// The three safe values happen to be contiguous below `-1` today; an ordering test over that would ADMIT a
+// fifth provenance sight unseen, which is the one direction this file's header forbids failing in.
+export function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFunction, cur IrBlock, record ValueId, length ValueId, vouched IrBlock, unvouched IrBlock, ids ValueMinter)
+	let capacity = emitLoadField(module, block: cur, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
+
+	// `cur` dominates all three, so the one `capacity` load serves every arm — the same dominance argument
+	// `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
+	var checkRdata = module.addBlock(func, label: b"vouchrdata")
+	var checkInline = module.addBlock(func, label: b"vouchinline")
+	var checkImmortal = module.addBlock(func, label: b"vouchimmortal")
+
+	let hasSpareSlot = emitCmp(module, block: cur, a: capacity, b: length, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(hasSpareSlot, thenBlockId: vouched.id, elseBlockId: checkRdata.id))
+
+	emitRouteOnCapacitySentinel(module, block: checkRdata, capacity: capacity, sentinel: RdataBufferCapacity, whenIt: vouched, otherwise: checkInline, ids: ids)
+	emitRouteOnCapacitySentinel(module, block: checkInline, capacity: capacity, sentinel: InlineBufferCapacity, whenIt: vouched, otherwise: checkImmortal, ids: ids)
+	emitRouteOnCapacitySentinel(module, block: checkImmortal, capacity: capacity, sentinel: ImmortalRecordCapacity, whenIt: vouched, otherwise: unvouched, ids: ids)
+end 'emitRouteOnVouchedTerminatorSlot'
+
+// One link of the admit chain above: terminate `block` with "is the capacity THIS provenance?", taking the
+// admitting edge or handing the question on. Written once because the three links differ in exactly one
+// value, and three copies of a three-line stanza is how a fourth link would come to be added to two of them.
+function emitRouteOnCapacitySentinel(module StdModule, block IrBlock, capacity ValueId, sentinel NotOwnedBufferCapacity, whenIt IrBlock, otherwise IrBlock, ids ValueMinter)
+	let isSentinel = emitCapacityIsSentinel(module, block: block, capacity: capacity, sentinel: sentinel, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(isSentinel, thenBlockId: whenIt.id, elseBlockId: otherwise.id))
+end 'emitRouteOnCapacitySentinel'
+
+// ⚠⚠ **`emitBufferCannotHold` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 8).** It emitted
+// `capacity@16 < requiredLen` — the ONE place a caller was allowed to FUSE "is this buffer mine?" with
+// "is it big enough?" — and its only caller was `StringRuntime.__str_append`, which retired with
+// `String.append`. A zero-caller emitter is deleted rather than kept warm: this file's own rule is that
+// vocabulary does not ship ahead of its consumer.
+//
+// ⭐ **THE PROPERTY IT RESTED ON IS NOT DELETED, BECAUSE IT IS THE TYPE'S AND NOT THE HELPER'S**, and the
+// next grower written against this encoding needs it:
+//
+//   a byte COUNT is `>= 0`; `NotOwnedBufferCapacity` STOPS at `-1`, so every non-owned capacity is `< 0`.
+//   Every negative is below every non-negative, so `capacity < requiredLen` is UNCONDITIONALLY true for
+//   an inline String, for a literal's immortal `.rdata` blob, for a view, and for any provenance added
+//   later — which cannot opt out, because it cannot be declared non-negative.
+//
+// ⇒ A future fused test may be re-derived from that sentence in one line. What it may NOT do is pair it
+// with `emitBufferNotOwned` in an `OR`: an `OR` whose left arm can never be the deciding one is a branch
+// no input reaches, and this file refuses to emit those.
+
+// ⭐ **THE SEPARATE ALLOCATION THIS RECORD OWES A RELEASE TO — `NoOwedAllocation` when it owes nothing.**
+// An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never
+// allocated one); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata`
+// blob). ⭐ THE ONE HOME OF THAT CHOICE, read by every place whose correctness depends on picking the same
+// field: `__managed_slice` (which allocation to INCREF for the new view), `__mm_cow_detach` (which one to
+// RELEASE once the record has copied its bytes out — it reads the base here and RETURNS it, and both
+// detaching callers reach this through that one function rather than each asking) and
+// `__managed_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
+// is a double-free or a leak, so it is written once.
+//
+// ⭐ **TWO ARMS COVER EVERY RECORD KIND, AND NOTHING WRAPS THIS WITH A THIRD.** An owner's buffer is
+// always a separate allocation, because the only bytes that are NOT — an inline String's — are marked by
+// a negative `capacity@16` like every other non-owned buffer, so they leave through the `parent@32` arm
+// (`NoOwedAllocation`) with no special case here and none at the caller.
+//
+// It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
+// which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
+//
+// ⚠ **IT IS DELIBERATELY NOT FUSED WITH `emitReleaseOwedBase` INTO ONE "release the base" HELPER**, even
+// though the drop paths call the two back to back. A DETACH must SPLIT them across its byte copy — the
+// base is read before the record is republished and spent only after the copy — so a fused helper would
+// serve some call sites and quietly invite the ones that must not fuse them to do so.
+export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	var viewBase = module.addBlock(func, label: b"vbase")
+	var ownBase = module.addBlock(func, label: b"obase")
+
+	let notOwned = emitBufferNotOwned(module, block: cur, record: record, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
+
+	let base = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	let parent = emitLoadField(module, block: viewBase, record: record, offset: ManagedRecordParentOffset, ids: ids)
+	module.setTerminator(viewBase, op: StdOp.branch(join.id))
+	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
+
+	let buffer = emitLoadField(module, block: ownBase, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	module.setTerminator(ownBase, op: StdOp.branch(join.id))
+	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
+
+	return base
+end 'emitOwedAllocationBase'
+
+// `if base != NoOwedAllocation then <callee>(base)` — the null-guarded refcount step every share and
+// every release of an owed allocation makes, since "this record owes nothing" is an ordinary answer from
+// `emitOwedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
+// both directions: `__managed_slice` raises the count with `__mm_incref`, the detach and drop paths lower it
+// with `__mm_decref`.
+//
+// ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP
+// RULE.** It may still be under a view, so only the LAST owner may reclaim it — which is exactly what
+// `__mm_decref` decides. It is also the safer failure mode: if some future path ever reached here with a
+// count it should not have, a decref merely keeps the buffer alive and the leak gate reports 101, where
+// a `__mm_free` would silently hand a live allocation back and become a use-after-free the day a free
+// list exists. A new non-owned-buffer kind must be taught to the drop path, not only to the write check.
+export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
+	var step = module.addBlock(func, label: b"rcstep")
+	let cont = module.addBlock(func, label: b"rccont")
+
+	let zero = emitConst(module, block: cur, value: NoOwedAllocation, ids: ids)
+	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(shares, thenBlockId: step.id, elseBlockId: cont.id))
+
+	let counted = ids.mint()
+	module.appendOp(step, op: StdOp.call(counted, callee: callee, args: argsOf(base)))
+	module.setTerminator(step, op: StdOp.branch(cont.id))
+
+	return cont
+end 'emitReleaseOwedBase'
+
+// ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS RECORD'S BUFFER TO BE READABLE — `NoOwedAllocation` when
+// none must.** A near-twin of `emitOwedAllocationBase`, and DELIBERATELY BUILT ON IT rather than beside it,
+// because the two questions differ by exactly one provenance and the rest of the answer must not be
+// restated: *"which separate allocation do I owe a release to?"* and *"where do these bytes live?"* agree
+// for an OWNER (its own `buffer@0`), for a VIEW (its `parent@32`) and for an immortal literal (nothing) —
+// and part company for an INLINE String, whose bytes sit inside its OWN `__mm_alloc` payload. That one
+// honestly owes NOTHING, which is the right answer to the first question and a dangling `buffer@0` as an
+// answer to this one.
+//
+// ⚠⚠ **IT IS THE QUESTION A VIEW MUST ASK, AND `emitRecordView` ASKED THE OTHER ONE UNTIL W157.** That was
+// invisible while no INLINE record could be sliced — an Array's elements are never inside its own record,
+// so for an Array the two answers coincide at every provenance. `String.addressableBytes()` now hands its
+// receiver's own record to the buffer surface, so `path.addressableBytes().slice(…)` slices an INLINE
+// record: the owed-base answer is `NoOwedAllocation`, and a view built on it would hold a raw interior
+// pointer into a String's payload with no count on it. Asking THIS question instead counts the record.
+//
+// ⚠ **IT LIVED IN `StringRuntime` AS `emitStringBytesAllocation`.** It was a String's question only for as
+// long as a String record was not a buffer record; it is the shared one now, and it sits beside the
+// question it is built on.
+//
+// So: ask the shared question first, and answer this one only where it says "nothing".
+//
+//   * a non-zero owed base — an OWNER's own buffer, or a VIEW's shared base. Both are the allocation the
+//     elements are in, and a view's flattens exactly as `emitRecordView`'s nesting note describes, so no
+//     chain is built or walked.
+//   * `capacity@16 == InlineBufferCapacity` — an INLINE String, whose bytes sit at
+//     `record + StringRecordBytes` inside the record's OWN `__mm_alloc` payload, so the RECORD is the
+//     allocation that must stay alive. This is the one place a specific provenance value has to be compared
+//     against, because "inline" is not derivable from the other slots: every non-owned provenance answers
+//     `NoOwedAllocation` at `parent@32`, and comparing `buffer@0` against `record + StringRecordBytes` would
+//     misread an rdata blob the linker happened to pack right after its record.
+//     ⚠ **THAT COMPARISON IS THE EXCEPTION TO THIS FILE'S STATED RULE** ("almost no compiler-side reader
+//     compares against a specific one"), so the OBLIGATION it creates is recorded at the DECLARATION of
+//     the provenances, where the next one will be added — not only here, where nobody adding one would look.
+//   * otherwise — NOTHING hosts these bytes, and the records that land here say so for three different
+//     reasons: an immortal `.rdata` blob outlives the process, a view over one windows that same blob, and an
+//     OWNER that never allocated a buffer has no bytes at all.
+//
+// ⛔⛔ **THE RESIDUAL ARM ANSWERS `NoOwedAllocation`, AND ANSWERING "THE RECORD" THERE WAS A LEAK —
+// MEASURED, exit 101, found in W157's own review.** The arm was first written as *"immortal ⇒ nothing,
+// otherwise ⇒ the record"*, and that `otherwise` is reached by an OWNER whose `buffer@0` is still 0 just as
+// much as by an inline String. So `slice(0, endIndex: 0)` of a fresh `ByteArray.create()` put a count on the
+// ARRAY's record; the array then grew a buffer, and its `__managed_decref` — no longer the last owner —
+// lowered the count and returned WITHOUT releasing that buffer, which the view's later `__mm_decref` /
+// `__mm_free` of the record structurally cannot reach. ⇒ **the arm that names the record must be the
+// POSITIVE test**, so a provenance nobody taught this function about is refused a count rather than handed
+// one it cannot honour.
+//
+// ⭐ **THE COUNT IS CORRECT IN BOTH DROP ORDERS, in every arm.** DETACHED: the view increfs `buffer@0` and
+// the record's own drop decrefs the same address on its last-owner path, so whichever dies second frees it.
+// INLINE: the view increfs the RECORD, so the record's drop finds a non-zero count, lowers it and keeps the
+// record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
+// right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
+export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	var owedJoin = module.addBlock(func, label: b"hostowed")
+	var separate = module.addBlock(func, label: b"hostsep")
+	var noSeparate = module.addBlock(func, label: b"hostnosep")
+	var inlineBytes = module.addBlock(func, label: b"hostinline")
+	var nothingHosts = module.addBlock(func, label: b"hostnone")
+
+	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
+
+	let base = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	let zero = emitConst(module, block: owedJoin, value: NoOwedAllocation, ids: ids)
+	let owesOne = emitCmp(module, block: owedJoin, a: owedBase, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(owedJoin, op: StdOp.condBranch(owesOne, thenBlockId: separate.id, elseBlockId: noSeparate.id))
+
+	module.setTerminator(separate, op: StdOp.branch(join.id))
+	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))
+
+	// The ONE positive provenance test — the header states why the residual may not answer `record`. It goes
+	// through the shared link for the reason `emitCapacityIsSentinel` states: this file's own subject is that
+	// "compare `capacity@16` against a named provenance" has ONE spelling, so it may not have three.
+	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
+	emitRouteOnCapacitySentinel(module, block: noSeparate, capacity: capacity, sentinel: InlineBufferCapacity, whenIt: inlineBytes, otherwise: nothingHosts, ids: ids)
+
+	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
+	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+
+	let nothing = emitConst(module, block: nothingHosts, value: NoOwedAllocation, ids: ids)
+	module.setTerminator(nothingHosts, op: StdOp.branch(join.id))
+	nothingHosts.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
+
+	return base
+end 'emitBufferHostAllocation'
+
+// --- ⭐⭐ `__mm_cow_detach(record, askElements) -> owedBase` — THE COPY-ON-WRITE ACTION, ONCE ---
+//
+// **Give this record a PRIVATE buffer of `askElements` elements holding its live ones, and hand back the
+// allocation it used to owe a release to.** It is the ACTION half of copy-on-write; the QUESTION half stays
+// exactly where it already was (`emitBufferNotOwned` above), and each caller goes
+// on asking its own — their conditions genuinely differ and are not this function's business.
+//
+// ⚠ **THE QUESTION WAS UNIFIED HERE LONG BEFORE THE ACTION WAS, AND THAT GAP IS WHAT THIS CLOSES.** This
+// file's header records that Array and String once answered *"is this buffer mine?"* with different fields
+// at the same offset, and that the cure was to own the question here. The ACTION stayed forked anyway:
+// `__managed_cow_detach` was Array's, and String open-coded its own detach inline inside `__str_append`. Two
+// spellings of *"copy my bytes somewhere private and republish"* — the same defect one level up, and a
+// `__str_cow_detach` beside `__managed_cow_detach` would have made it permanent.
+//
+// It is `__mm_`-prefixed because it is a MANAGED-MEMORY operation over the shared record shape rather than
+// either container's: both runtimes CALL it, neither owns it. ⭐ The prefix also earns its `usesHeap` bit
+// for free (`MmRuntime.isRuntimeCallee`). It is BUILT here rather than in `MmRuntime` because it reads five
+// record fields, and `MmRuntime` deliberately knows only the allocator HEADER's geometry — its own note
+// says that geometry "is private to this file, and stays that way". Its NAME lives with the other `__mm_*`
+// names there, where the one list of them is.
+//
+// ⭐ **THE ASK IS IN ELEMENTS, NOT BYTES, AND THAT IS WHAT LETS ONE FUNCTION SERVE BOTH RECORDS.** Every
+// byte count here goes through `emitElementByteLen` against the record's OWN `element_size@24` — so a
+// String (always 1) gets `askElements` bytes, an `Array with <a wide element>` gets `askElements · es`, and
+// a PACKED array gets `ceil(askElements · bits / 8)`. `capacity@16` is published as `askElements`, the unit
+// both records already keep it in. A detach that assumed a stride of 1 would be right for every String and
+// would under-allocate every wide-element array by exactly its stride.
+//
+// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY.** `__managed_cow_detach` — the one caller left — asks
+// for exactly `length`, because slack is `__managed_grow`/`__managed_grown_cap`'s separate business, and a detach
+// that also grew would give one record two growth policies. The ask is therefore a PARAMETER rather than a
+// rule written here.
+//
+// ⚠ **`__str_append` WAS THE SECOND CALLER AND FUSED THE TWO, ASKING `2 * requiredLen`; IT RETIRED WITH
+// `String.append` (W49 wave 8) AND ITS REASONING DID NOT.** That doubling was never a preference: exact
+// growth made `var s = ""` plus a loop of appends QUADRATIC (measured ×3.94/×4.07/×3.82/×3.88 per doubling,
+// and 5.0 s to build a 288 KB string). The corpus body appends through `managed.append(other.managed)` now,
+// so the geometric growth a String depends on is `__managed_grown_cap`'s — the same policy, reached one layer
+// out. ⇒ **A caller of this function that neither grows geometrically itself nor routes through
+// `__managed_grow` restores that quadratic**, and it restores it silently, because a detach is correct however
+// small the ask.
+//
+// ⚠⚠ **IT RETURNS THE OWED BASE INSTEAD OF RELEASING IT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.**
+// `emitOwedAllocationBase` and `emitReleaseOwedBase` are deliberately unfused (see their headers) because a
+// detach must SPLIT them across its byte copy, and the far side of that split is the CALLER's to name.
+// `__managed_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT, which is why the
+// split exists at all: `s.append(s)` aliased its `other` operand to `self`'s OLD buffer, so the release had
+// to wait until the BLIT had also finished reading, one block later. Releasing inside here would
+// reintroduce exactly the read-after-free that `string-type-2/rc-repeated-self-append` exists to guard —
+// and, per that case's own note, NO TEST COULD CATCH IT TODAY, because `__mm_free` reclaims nothing under
+// the bump allocator. The debt therefore still comes back out as a return value, and the caller pays it
+// when its own reads are done.
+//
+// ⭐ **`s.append(s)` IS STILL SAFE ON THE CORPUS ROUTE, AND BY A DIFFERENT MECHANISM — TRACED, NOT ASSUMED.**
+// `__managed_append` loads BOTH buffers *after* its `__managed_reserve`, and `__managed_grow` detaches and reallocates
+// BEFORE returning, copying the live bytes into the new allocation and releasing the old one there. So the
+// aliased read lands in the NEW buffer, which already holds the original contents, and the two ranges do
+// not overlap (`[0, n)` read into `[n, 2n)` written). `__str_append` needed the split because it blitted
+// out of the buffer the detach had just released; this route never reads the released one at all.
+//
+// The traps `buildManagedCowDetach`'s header lists are kept here rather than restated there: the old buffer is
+// loaded AFTER the owed base is read, a ZERO-LENGTH record still detaches (no early-out — `__mm_alloc(0, 0)`
+// is a legal empty box, and skipping would leave a sentinel capacity on a pointer that has no header for the
+// next reallocation to read), and the fresh buffer comes from `__mm_alloc`, which zeroes.
+export function buildMmCowDetach(module StdModule)
+	var func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var baseJoin = module.addBlock(func, label: b"basejoin")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let askElements = 1 as ValueId
+
+	// entry: read the allocation this record owes a release to BEFORE anything is republished — the answer is
+	// derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.
+	let base = emitOwedAllocationBase(module, func: func, cur: entry, join: baseJoin, record: record, ids: ids)
+
+	// baseJoin: size both the ask and the live extent through the record's own stride, allocate, copy across.
+	let length = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let liveBytes = emitElementByteLen(module, block: baseJoin, count: length, es: es, ids: ids)
+	let askBytes = emitElementByteLen(module, block: baseJoin, count: askElements, es: es, ids: ids)
+	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
+	let newBuf = ids.mint()
+	emitMmAllocCall(module, block: baseJoin, result: newBuf, size: askBytes, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
+	let oldBuf = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
+
+	// afterCopy: publish the private buffer. `parent@32` returns to `NoOwedAllocation` — a record that has
+	// just copied its bytes into an allocation of its own owes nothing to anyone else.
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordCapacityOffset, value: askElements)
+	let noParent = emitConst(module, block: afterCopy, value: NoOwedAllocation, ids: ids)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordParentOffset, value: noParent)
+	module.setTerminator(afterCopy, op: StdOp.ret(base))
+
+	module.functions.push(func)
+end 'buildMmCowDetach'

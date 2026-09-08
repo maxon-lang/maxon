@@ -1,0 +1,413 @@
+// Scope: persistent per-function symbol table, with LEXICAL BLOCK SCOPING.
+//
+// The parser builds this as it emits ops; when a function finishes parsing the
+// final `Scope` is handed to the `IrFunction` for downstream consumers (the
+// Maxon→Std lowerer and the future LSP name-resolution query).
+//
+// A block (`if` / `else` / `while` body) opens a FRAME: every declaration inside
+// it is torn down at the block's `end`, so `if c 'b' … let x = 1 … end 'b'`
+// followed by a reference to `x` is a name-resolution failure, not a live binding
+// (specs/block-scoping.md). Frames are MARKS into flat declaration stacks, not a
+// stack of per-frame arrays: pushScope pushes the current stack length — O(1),
+// and with NO heap object per frame, which matters because a block is the most
+// numerous scope in any real program — and popScope drains back to it, still
+// O(declarations-in-this-frame). An EMPTY mark stack means function scope:
+// declarations there live for the whole function and `reset` tears them down.
+//
+// SHADOWING IS LEGAL, and it is why a frame records more than names. `vars` is
+// keyed by name, so an inner `let x` OVERWRITES the outer `x`'s entry; simply
+// REMOVING the key at scope exit would delete the outer binding too, and
+// `let x = 1 / if c 'b' let x = 2 end 'b' / return x` would report `x` undefined
+// instead of returning 1. So a declaration that DISPLACES an existing binding
+// pushes the displaced `VarInfo` onto `shadowedInfos`, and popScope drains the
+// frame in REVERSE — putting each displaced binding back — which also unwinds a
+// name declared twice within one frame through its own chain.
+//
+// BINDINGS ARE MUTATED IN PLACE, NOT REPLACED. `VarInfo` is a heap `type`, so
+// `vars` stores a reference; `setValue` writes `boundValue` through it. That is
+// what lets the parser hold a DIRECT reference to a mutable binding (its loop-phi
+// list and its merge snapshots do — see Parser.mutableVars) and still address the
+// right binding when a nested block shadows its NAME. A name-keyed rebind cannot:
+// it would always resolve to the innermost binding, so a `break` out of a block
+// that shadows a loop-carried `var` would carry the SHADOW's value to the loop's
+// exit phi — a silent miscompile.
+//
+// OWNERSHIP SCAFFOLD (M1, inert): the Own tier (M6) places `own.drop`/`own.release`
+// at scope exit for every NON-trivial (owned/borrow/shared) binding a frame declared
+// — a deterministic static-drop mechanism. `popScope` is where that happens,
+// and it needs no side list to
+// do it: draining a frame ALREADY resolves each of its declarations back to the
+// `VarInfo` being torn down, and that record carries both the `ownership` kind to test
+// and the type + slot a drop has to name. A parallel "owned names" array would be a
+// strict projection of `vars` kept in lockstep by hand — state that can drift, buying
+// nothing. At M1 every binding is `trivial`, so the hook never fires.
+//
+// ⚠⚠ **THE SLOT HALF OF THIS API HAS NO CALLERS, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.**
+// Measured at P1.1a wave 3: `declare`, `declareShadowing`, `bindExistingSlot`, `installVerbatim`,
+// `lookup`, `getType`, `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this
+// file. Everything the parser actually binds goes through `declareValueBinding` (the M2
+// SSA-substitution model), its payload/parameter siblings, or `declareSelfField` (which is slotless by
+// construction).
+//
+// **The consumers, named rather than implied:** all of them are the mutable/`mem2reg` model, whose
+// rung is not scheduled and whose shape is not settled.
+//
+// ⚠ **AND THAT GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER", BECAUSE TWO RUNGS HAVE NOW
+// DISPROVED ITS SIBLINGS.** `VarInfo.fieldOffset` was scaffolded beside these at M1, for the
+// self-field alias, with a comment explaining why an offset was the right thing to carry. When the
+// consumer finally arrived — P1.1b — the right answer turned out to be the field's INDEX, and
+// the scaffold was not extended but DELETED: an offset would have forced a second emit site and
+// left the mutability check no home. **`declarePayloadBinding`/`declarePayloadBindingShadowing` went
+// the same way, and they were the ones this paragraph named a consumer for**: the rung that finally
+// wrote to a payload (`mutable-enums`) needed a VALUE binding keyed on the scrutinee's `ValueId`, not
+// a SLOT binding keyed on its name, so the scaffold was deleted rather than called and
+// `declarePayloadValueBinding` written against the model the compiler actually has. The scaffold did not save
+// either rung any work; both had to undo it first. That is the `mintPhi` trap's other face, and it is
+// direct evidence about THESE members, not an analogy — they were guessed at by the same commit, for
+// the same tier, on the same reasoning. Deleting them is real work with a real diff (it reaches
+// `VarInfo.slot`,
+// `IrFunction.varSlotCount` and the Maxon→Std lowering's comments) and is deliberately NOT smuggled
+// into a review commit; it is its own change, with the full suite as its gate. Until it lands, no
+// one should read this API as a design that has been agreed — it is a guess that is still waiting to
+// find out whether it was right, and its sibling was not.
+
+export union ScopeLookupError implements Error
+	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
+	notFound(name String)
+end 'ScopeLookupError'
+
+// Raised when the name being bound would overwrite a self-field alias registered at
+// instance-method entry (E3006). Scope is the only layer that sees both the alias and the
+// colliding declaration, so detection lives here.
+//
+// `declareBinding` is the live raiser — it is the one path a parameter, a body local and a match-arm
+// payload binding are all bound through, so it covers both shapes. (`declare`
+// carries the same guard for the slot-based model; it has no caller today — see `declareShadowing`.)
+export union ScopeError implements Error
+	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
+	shadowsSelfField(name String)
+end 'ScopeError'
+
+// A frame boundary: the height of the declaration stack when the frame was
+// opened. Wide range — declaration counts are unbounded.
+// ⚠ NOT exported: a frame mark never leaves the scope stack, and `checkUnusedExports` (E3092) is
+// what says so — the SELF-COMPILE runs that pass.
+typealias ScopeMark = int(0 to u64.max)
+typealias ScopeMarkArray = Array with ScopeMark
+
+export type Scope
+	var vars as VarInfoMap
+	// Every declaration made while a frame was open, in declaration order —
+	// innermost frame on top. Drained back to a frame's mark by popScope.
+	var declNames as ByteArrayArray
+	// Parallel to `declNames`: did this declaration DISPLACE an existing binding of
+	// the same name? A dense bool column rather than an optional `VarInfo` per
+	// declaration, so the common (non-shadowing) case costs no heap object.
+	var declShadowed as BoolArray
+	// The displaced bindings, pushed only by the declarations `declShadowed` marks.
+	// popScope pops one per marked declaration, in reverse, and re-installs it.
+	var shadowedInfos as VarInfoArray
+	// One entry per open frame: the `declNames` height at pushScope.
+	var frameMarks as ScopeMarkArray
+	export var nextSlot as VarSlot
+
+	export static function create() returns Scope
+		return Self{
+			vars: VarInfoMap.create(),
+			declNames: ByteArrayArray.create(),
+			declShadowed: BoolArray.create(),
+			shadowedInfos: VarInfoArray.create(),
+			frameMarks: ScopeMarkArray.create(),
+			nextSlot: 0
+		}
+	end 'create'
+
+	// Reset the scope for a new function parse.
+	export function reset()
+		vars = VarInfoMap.create()
+		declNames = ByteArrayArray.create()
+		declShadowed = BoolArray.create()
+		shadowedInfos = VarInfoArray.create()
+		frameMarks = ScopeMarkArray.create()
+		nextSlot = 0
+	end 'reset'
+
+	// Declare a variable and return its slot. Throws
+	// `ScopeError.shadowsSelfField` when `name` currently maps to a self-field
+	// alias (binding a local of the same name would overwrite it — E3006).
+	export function declare(name ByteArray, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
+		if self.isSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(String.from(name))
+		end 'shadow'
+		return self.declareShadowing(name, varType: varType, mutable: mutable)
+	end 'declare'
+
+	// Allocate a slot for `name` without the self-field-shadow guard — the shared slot-allocating
+	// core for `declare`.
+	//
+	// ⚠ It also called itself "the error-recovery path after a caller reported E3006" until P1.1a
+	// wave 3's review, and there is no such caller and never has been: the E3006 that exists is
+	// `declareValueBinding`'s, and the parser turns it into a `ParseError` and stops rather than
+	// recovering. Saying so mattered because that sentence was the only thing making this member
+	// look consumed. See the header — it is not.
+	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
+		return slot
+	end 'declareShadowing'
+
+	// Bind `name` to an ALREADY-ALLOCATED slot (no new slot). Aliases a user
+	// binding onto a shared compiler slot so a single scope-exit release frees
+	// it (a separate slot would double-free).
+	export function bindExistingSlot(name ByteArray, slot VarSlot, varType MaxonType, mutable bool)
+		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
+	end 'bindExistingSlot'
+
+	// Declare a self-field alias — field `fieldIndex` of the enclosing type, bound by name at
+	// instance-method entry so a bare `count` inside the method resolves to `self.count`.
+	//
+	// It allocates NO slot and returns nothing. A self-field alias is neither of the two things a
+	// slot is for: it holds no local storage (a read is a `loadIndirect` through the receiver) and
+	// aliases no SSA value (a write is a `storeIndirect`, not a rebind). It exists to occupy the
+	// NAME — so that a read resolves through it, and so that a local or a parameter trying to take
+	// the same name is caught below rather than silently displacing the field.
+	//
+	// ⭐ **IT DOES NOT GUARD, AND THE ONE GUARD IS `declareValueBinding`'s.** The aliases are
+	// declared into a freshly `reset` scope BEFORE the parameters and before any body local, so
+	// nothing can be here to displace: every name that could collide with a field arrives LATER,
+	// through `declareValueBinding`, which is the single path a parameter and a local are both
+	// bound by. Guarding from this side too would be the same rule asked twice — and the two sides
+	// would disagree about WHERE to point, because the token worth naming is always the colliding
+	// declaration's, which only the other side holds. Ordering the declarations is what makes one
+	// guard sufficient; both colliding shapes — a parameter and a body local — come out of that
+	// one site, each anchored on the token its own caller has.
+	//
+	// ⚠ Two fields of ONE name therefore overwrite here rather than reporting:
+	// `StructLayout.addField` accepts the second declaration and `indexOfField` resolves every use
+	// to the first. That gap wants its own diagnostic against the LAYOUT, not an E3006 here.
+	export function declareSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex)
+		self.install(VarInfo.createSelfField(name, varType: varType, fieldIndex: fieldIndex))
+	end 'declareSelfField'
+
+	// Declare a MATCH-ARM PAYLOAD binding. A value binding like any other — reads resolve to the SSA
+	// value the arm loaded out of the box — carrying the box coordinates a WRITE goes back through
+	// (`VarInfo.isPayloadBinding`, `Parser.writeBackPayload`). It shares `declareBinding` with the two
+	// constructors below, so the self-field shadow rule is the one rule for every name a scope installs.
+	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
+	end 'declarePayloadValueBinding'
+
+	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
+	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
+	// is allocated — value bindings need no stack storage (contrast the slot-based
+	// `declare*` paths that back the future mutable/mem2reg model).
+	//
+	// ⭐ **THE SELF-FIELD GUARD IS ON THIS PATH.** This is the path every local and every parameter
+	// is bound through, so it is the path an alias can be displaced on: `let count = 5` inside a
+	// method of a `type Counter` that declares `count`. `vars` is keyed by NAME, so that `let` would
+	// overwrite the alias and every later `count` in the method would read the LOCAL — silently, and
+	// the field's own reads and writes would simply stop happening. E3006 says so: "local 'count'
+	// shadows self field 'Counter.count' — rename the local to avoid silent type confusion at every
+	// read/write keyed on the name".
+	//
+	// Returns the `VarInfo` it installed, because a `var` binding is tracked BY
+	// REFERENCE (see the header): the parser keeps mutable bindings in its loop-phi
+	// list as the objects themselves, so a nested block that shadows the NAME cannot
+	// misdirect a phi write to the shadow.
+	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
+	end 'declareValueBinding'
+
+	// Declare a PARAMETER's value binding. Identical to `declareValueBinding` in everything the scope
+	// does with it, and different in the one bit the binding carries (`VarInfo.isParameter`), which is
+	// what tells "may this name be rebound?" from "may the container it denotes be written?".
+	export function declareParameterBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
+	end 'declareParameterBinding'
+
+	// Declare a CELL-RESIDENT binding (PBR-2): `name` denotes the 8-byte heap cell `cell`, so a read is a
+	// `loadIndirect` through it and a rebind a `storeIndirect` — see `VarInfo.isCellBinding`. A named sibling
+	// to `declarePayloadValueBinding` rather than fields set on a returned `VarInfo`, because a binding that
+	// was installed as one kind and mutated into another is a kind no single site declares, and the parser's
+	// merge snapshots and loop-phi list hold these objects BY REFERENCE.
+	//
+	// It shares `declareBinding` with the three above, so the self-field shadow rule stays the one rule for
+	// every name a scope installs.
+	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, isParameter: isParameter, brandId: brandId))
+	end 'declareCellBinding'
+
+	// The shared body of the four value-binding declarations above: refuse a name that would shadow a
+	// self-field alias, then install. One home, so a local, a parameter, a match-arm payload binding and a
+	// cell-resident binding cannot come to disagree about whether shadowing a field is legal.
+	function declareBinding(info VarInfo) returns VarInfo throws ScopeError
+		if self.isSelfField(info.name) 'shadow'
+			throw ScopeError.shadowsSelfField(String.from(info.name))
+		end 'shadow'
+		self.install(info)
+		return info
+	end 'declareBinding'
+
+	// THE single funnel for every declare* path: install the binding in `vars`, and —
+	// when a frame is open — record it for O(decls) teardown, capturing the binding it
+	// DISPLACES so popScope can put that one back.
+	//
+	// With NO frame open the declaration is at function scope: it lives for the whole
+	// function and is torn down by `reset`, so it needs no frame bookkeeping and can
+	// never be shadowed-then-restored (it IS the outermost binding of its name).
+	function install(info VarInfo)
+		if frameMarks.count() == 0 'functionScope'
+			vars.upsert(info.name, value: info)
+			return
+		end 'functionScope'
+
+		var shadowed = false
+		if let displaced = try vars.get(info.name) 'displaces'
+			shadowedInfos.push(displaced)
+			shadowed = true
+		end 'displaces'
+		declNames.push(info.name)
+		declShadowed.push(shadowed)
+		vars.upsert(info.name, value: info)
+	end 'install'
+
+	// Rebind an ALREADY-DECLARED name to a new SSA value (M4b's on-the-fly SSA): a
+	// `var` reassignment (`x = expr`). Reads (`lookupValue`) resolve to this current
+	// value, so a read after a reassignment sees the new value — `boundValue` IS the
+	// variable's current SSA version, not the initializer's. Written THROUGH the
+	// binding (a heap reference), so every holder of that `VarInfo` — the parser's
+	// loop-phi list, a merge snapshot — observes it. Panics on an unknown name: every
+	// caller has already established the binding exists (a `var` decl, or a mutability
+	// check that fetched the VarInfo).
+	//
+	// Name-keyed, so it always hits the INNERMOST binding — which is exactly right for
+	// a source-level assignment. The parser's phi machinery deliberately does NOT come
+	// through here; it writes `boundValue` on the binding it holds (see the header).
+	//
+	// ⚠ Every caller records the rebind for the debug-info sidecar first
+	// (`Parser.recordDebugRebind`), which is checked rather than assumed: the record's tail is compared
+	// against `boundValue` at the next rebind and again when the function's roster is published.
+	export function setValue(name ByteArray, value ValueId)
+		var info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
+		info.boundValue = value
+	end 'setValue'
+
+	// Resolve a value binding to the SSA value it aliases. Throws
+	// `ScopeLookupError.notFound` for an unbound name; the parser turns that into a
+	// positioned diagnostic (an undefined identifier in an expression).
+	export function lookupValue(name ByteArray) returns ValueId throws ScopeLookupError
+		let info = try self.lookupInfoOrThrow(name)
+		return info.boundValue
+	end 'lookupValue'
+
+	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
+	export function lookup(name ByteArray) returns VarSlot throws ScopeLookupError
+		let info = try self.lookupInfoOrThrow(name)
+		return info.slot
+	end 'lookup'
+
+	// The throwing VarInfo fetch shared by `lookup`/`lookupValue`: an unbound name
+	// is a name-resolution failure (ScopeLookupError.notFound) the parser turns into
+	// a positioned diagnostic. `getInfo`/`isSelfField` deliberately keep their own
+	// fetch — they recover differently (panic / false), not by throwing this arm.
+	function lookupInfoOrThrow(name ByteArray) returns VarInfo throws ScopeLookupError
+		return try vars.get(name) otherwise throw ScopeLookupError.notFound(String.from(name))
+	end 'lookupInfoOrThrow'
+
+	// Get the VarInfo for a variable, or panic if not found.
+	export function getInfo(name ByteArray) returns VarInfo
+		return try vars.get(name) otherwise panic("Scope: undefined variable '{String.from(name)}'")
+	end 'getInfo'
+
+	// Check if a variable is defined.
+	export function contains(name ByteArray) returns bool
+		return vars.contains(name)
+	end 'contains'
+
+	// Read-only iteration over the per-function symbol table. Returned map is
+	// the live backing store — callers MUST treat it as read-only.
+	export function allVars() returns VarInfoMap
+		return vars
+	end 'allVars'
+
+	// True when `name` is a self-field alias inside an instance method. Returns false for unknown
+	// names so callers can probe without checking `contains()`.
+	//
+	// ⭐ **ONE PREDICATE, TWO SIDES OF ONE RULE, AND THEY MUST NEVER DISAGREE.** It is asked by the
+	// READER — `Parser.parseVariableReference`, deciding whether a bare `count` lowers to a
+	// `loadIndirect` through the receiver — and by every WRITER, the three `declare*` paths asking
+	// whether a new binding would displace an alias (E3006). Those are the same question wearing
+	// two grammatical moods, not two questions.
+	//
+	// ⚠ It was written TWICE until this rung's review: a private `wouldShadowSelfField` with a
+	// byte-identical body sat 180 lines above, serving the writers while this one served the
+	// reader. Nothing made them agree — and had they drifted, NEITHER side would have failed to
+	// compile: a writer answering `false` lets a local silently displace the field, so every later
+	// read in the method resolves to the local and the field's reads and writes simply stop
+	// happening; a reader answering `false` sends the bare name to `lookupValue`, which hands back
+	// an alias's unset `boundValue` of 0 — the RECEIVER. Both are wrong answers with no diagnostic.
+	export function isSelfField(name ByteArray) returns bool
+		let info = try vars.get(name) otherwise return false
+		return info.isSelfField
+	end 'isSelfField'
+
+	// Get the declared MaxonType for a variable. Callers check `contains(name)`
+	// first, so a missing entry is an invariant violation.
+	export function getType(name ByteArray) returns MaxonType
+		let info = try vars.get(name) otherwise panic("Scope.getType: name '{String.from(name)}' not in scope — callers must check `contains` first")
+		return info.varType
+	end 'getType'
+
+	// Clone hook: install a VarInfo verbatim, preserving its slot id. Does NOT
+	// bump `nextSlot` — the caller sets it explicitly via `setNextSlot`.
+	export function installVerbatim(info VarInfo)
+		vars.upsert(info.name, value: info)
+	end 'installVerbatim'
+
+	// Clone hook: pin `nextSlot` to a chosen value.
+	export function setNextSlot(slot VarSlot)
+		nextSlot = slot
+	end 'setNextSlot'
+
+	// Open a fresh scope frame — O(1), one integer, no heap object.
+	export function pushScope()
+		frameMarks.push(declNames.count())
+	end 'pushScope'
+
+	// Close the current scope frame: drain its declarations out of `vars`, in REVERSE,
+	// restoring each binding they displaced (see the header — reverse order is what
+	// unwinds a name declared twice in one frame through its own shadow chain).
+	// O(declarations-in-this-frame).
+	//
+	// THE OWNERSHIP HOOK LIVES HERE (M6): each iteration already holds the `VarInfo`
+	// being torn down, so `ownedInFrame` classifies it in place and the Own tier emits
+	// its `own.drop`/`own.release` at exactly this point. At M1 every binding is
+	// `trivial`, so the classifier is always false and nothing is emitted.
+	export function popScope()
+		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
+		while declNames.count() > mark 'drain'
+			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
+			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
+
+			// Drained in reverse, so `name` still resolves to the binding THIS declaration
+			// installed — the one leaving scope, and the one a drop would be emitted for.
+			let leaving = try vars.get(name) otherwise panic("Scope.popScope: '{String.from(name)}' is in the frame's declaration list but not in `vars` — the two fell out of lockstep")
+			if not isTrivialOwnership(leaving.ownership) 'dropAtScopeExit'
+				panic("Scope.popScope: binding '{String.from(name)}' leaves scope owning a value, but the Own tier that emits its drop is not built yet (M6) — no binding is non-trivial before then")
+			end 'dropAtScopeExit'
+
+			if shadowed 'restoreOuter'
+				let outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
+				vars.upsert(name, value: outer)
+			end 'restoreOuter' else 'removeOnly'
+				_ = vars.remove(name)
+			end 'removeOnly'
+		end 'drain'
+	end 'popScope'
+end 'Scope'
+
+// A stack of `Scope`s — held by the parser as it detects closure captures (P1.5-A2a; see
+// `Parser.closureCaptureScopes`). A `Scope` is a reference type, so this stack holds pointers to the
+// live enclosing scopes a closure body is checked against, never copies of them.
+export typealias ScopeArray = Array with Scope

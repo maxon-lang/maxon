@@ -1,0 +1,20 @@
+// Test: error.a-module-type-is-unreachable-through-a-field-outside-the-subtree
+// --- file: feature/box.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Box
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+// --- file: other/main.maxon
+function main() returns ExitCode
+	let b = Box.create(42)
+	return b.v
+end 'main'
+---
+CompilerError:
+error E4006: other/<fragment>:16:11: Unknown type 'Box' in field access chain

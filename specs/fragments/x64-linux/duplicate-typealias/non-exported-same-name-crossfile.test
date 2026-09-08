@@ -1,0 +1,52 @@
+// Test: non-exported-same-name-crossfile
+// --- file: a.maxon
+typealias MyInt = int(0 to 1000)
+
+export function doubleIt(x MyInt) returns MyInt
+	return x + x
+end 'doubleIt'
+
+// --- file: b.maxon
+typealias MyInt = int(0 to 1000)
+
+export function tripleIt(x MyInt) returns MyInt
+	return x + x + x
+end 'tripleIt'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = doubleIt(5)
+	let b = tripleIt(3)
+	return a + b
+end 'main'
+---
+ExitCode: 19
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __rc_ok#7:
+    x64.movRegImm32 rax, 10
+  __rc_ok#13:
+    x64.movRegImm32 rcx, 9
+  __il_cont:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

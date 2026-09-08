@@ -1,0 +1,89 @@
+// Test: while-loops.sequential-loops-across-a-call
+function work(x Integer) returns Integer
+	return x + 1
+end 'work'
+
+function big(n Integer) returns Integer
+	var total = 0
+	var a = 1
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a = a + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a
+	var b = 1
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b = b + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 14
+---
+func @big {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rdx, 0
+  whilehdr#1:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc greaterEqual, whileexit#3
+  __il_body#8:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  __il_cont#7:
+    x64.leaRegRegReg rax, rax, rdx
+    x64.jmp whilehdr#1
+  whileexit#3:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rsi, 0
+  whilehdr#4:
+    x64.cmpRegReg rsi, rcx
+    x64.jcc greaterEqual, whileexit#6
+  __il_body#10:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  __il_cont#9:
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.jmp whilehdr#4
+  whileexit#6:
+    x64.leaRegRegReg r8, rax, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 3
+    x64.callDirect big
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at while-loops.sequential-loops-across-a-call.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,441 @@
+// QueryEngine — input registration, dependency tracking, and content-hash
+// cache validity. The mechanical layer under the typed queries in Queries.maxon.
+//
+// Validity is a direct content-hash compare: a memo stamped `keyHash` is valid
+// iff the input it summarizes still hashes to `keyHash`. No dependency graph is
+// walked, which is what makes the per-file caches trivially parallel-safe.
+//
+// **So the compiler records no dependency graph at all** — a memo's inputs are named by the one
+// function that computes its key, DERIVED rather than observed. One was recorded here
+// anyway, for a future that arrived and did not use it; see QueryDatabase.maxon's header.
+
+// --- Source input registration ---
+
+// Register or update a file's content. Computes the content hash once; if the
+// file is already present with the SAME hash, this is a no-op (an unrelated
+// file's edit never disturbs this file's TOKEN cache key — its PARSE key also
+// carries the signature index's hash, which an unrelated file's edit moves only
+// if it changed a DECLARATION; see `parseMemoKey`). A new or changed file is
+// upserted with its fresh hash — no shared revision counter is touched.
+export function fileChanged(project Project, path FilePath, content String)
+	let hash = mixBytes(Hasher.empty(), bytes: content.toByteArray())
+	if let existing = try project.db.sourceFiles.get(path) 'exists'
+		if existing.contentHash == hash 'unchanged'
+			return
+		end 'unchanged'
+	end 'exists' else 'newFile'
+		project.db.sourcePaths.push(path)
+	end 'newFile'
+
+	project.db.sourceFiles.upsert(path, value: SourceFileEntry.create(content, contentHash: hash))
+	// THE ONLY WRITER of the composite-hash memo's dirty flag, because this is the only thing that
+	// can move the composite hash: it is a fold over exactly these entries. The early return above is
+	// on the path where nothing changed, so it must NOT invalidate — an unchanged re-register is a
+	// no-op all the way down.
+	project.db.compositeHashValid = false
+end 'fileChanged'
+
+// --- The memo that outlives a `Project` ---
+//
+// ⭐⭐ **ONE STORE, HELD FOR THE LIFE OF THE PROCESS, AND THE ADMISSION TEST IS "IS THIS A PURE
+// FUNCTION OF THE FILE'S BYTES".** Since G20 a single process compiles thousands of programs —
+// `spec-test` runs every case in the worker rather than in a `build` subprocess — and every one of
+// them re-lexed the same fifty-odd `stdlib/` files from scratch. MEASURED on a seven-line fragment
+// before this store existed: `lex` 33.9 ms of a 227.8 ms compile (14.8%) and 140,684 of its 574,447
+// allocations (24.5%), essentially all of it the stdlib.
+//
+// ⚠ **THIS IS NOT A SECOND CACHE BESIDE THE QUERY SPINE'S — IT IS THE SAME MEMO WITH A LONGER
+// LIFE.** `StdlibLoader`'s header argues against storing the stdlib twice, and that argument stands
+// and is untouched: nothing here is derived a second way. What changes is the SCOPE of one memo,
+// from one compile to one process, and the per-`Project` caches remain the only thing any query
+// reads directly — a shared hit is served THROUGH them (see `Queries.queryTokens`).
+//
+// ⛔⛔ **WHAT MAY NOT GO IN HERE, AND WHY THE LINE IS EXACTLY THERE.** A `FileParseArtifact` and a
+// swept declaration are NOT pure functions of the bytes: both carry INTERNED TYPE IDS, and
+// `ParseStaging.mergeArtifact` rewrites an artifact's ids IN PLACE on its first fold and then
+// latches `typeIdsAreProjectGlobal`, an invariant that holds only while "the interner they were
+// folded into is the one still in hand". Sharing one across two `Project`s makes the second skip
+// the remap and read ids stamped for the first — so caching either needs a re-intern-on-use or a
+// clone-on-every-use, and neither is in this file.
+//
+// ⛔⛔ **AND A SWEPT DECLARATION IS BARRED FOR A SECOND, STRONGER REASON THAN ITS IDS — MEASURED 2026-08-23
+// (G20 wave 4), when caching the per-file declaration SCAN was attempted and refused.** The paragraph above
+// is about what the scan's OUTPUT carries. This is about the scan itself: `Parser.foldDeclaredSignaturesInto`
+// is not a function of the file's bytes at all.
+//
+//   • **It READS the whole-program index while it walks — and every USER file has already been folded into
+//     that index by then**, because the two fold loops sit either side of the stdlib/user shadow contest
+//     (`Queries.queryProgramSignatures`). Instrumenting every exported member of `ProgramSignatures` and
+//     recording which ones a walk touches gives a surface of **27 members**, measured over one compile of a
+//     seven-line program (52 files): `isTupleAlias` (41 of them), `structOf` and
+//     `declarationsValueIsTheManagedRecord` (21 each), `isArrayBaseName` / `isVectorBaseName` (20 each),
+//     `arrayRecordBaseNameIn` (6, and NOT keyed by a name — it is the array-literal-conformer answer, which
+//     `discoverWholeProgramTokenFacts` decides from the USER's files as much as from `stdlib/`).
+//   • **It WRITES the whole-program index while it walks.** Snapshotting the index's state either side of the
+//     walk names two files whose walk moves it: `stdlib/Map.maxon` (`typealias Entry = (Key, Value)`) and
+//     `stdlib/helpers/itertools/withIterator.maxon` (`returns (Source, Element)`). Both go through
+//     `recordTupleAlias` / `internTupleType`, and `ProgramSignatures.sweptStructTypeOf`'s header records what
+//     that write-during-the-walk was already measured to be worth: *"with the alias's file sorting first the
+//     program compiled and printed `11 22`; with the factory's file first the identical program was
+//     refused"*. A cache that skips the walk skips those writes.
+//   • **Its output records are then mutated in place by the whole-program TAIL, by more passes than the
+//     obvious two** — `remapStructLayoutFieldTypes` / `remapEnumLayoutPayloadTypes` inside `foldFile`, plus
+//     `refoldConformanceClause` (`recordConformances`, on a recorded `StructLayout` AND on a recorded
+//     `EnumLayout`), `normalizeSweptInterfaceTypes` (`retypeField`), the constant evaluator (`outcome`) and
+//     `assignDataLabels` (`dataLabel`), the last two on a recorded `TopLevelDecl`.
+//
+// ⇒ A clone on the way out of the store is necessary and **not sufficient**. Admitting a swept declaration
+// needs a DEPENDENCY key over what the walk can see, and the only complete one that is cheap — the index's
+// own `hash` as the walk begins — is fragment-specific by construction and would never hit.
+//
+// ⛔⛔ **AND IT WAS BUILT ANYWAY, IT WORKED, AND IT WAS REFUSED ON ITS COST — MEASURED 2026-08-23 (G20
+// wave 9, branch `slice/G20-wave9-b-mid-measured`). THE SOUNDNESS PROBLEM HAS AN ANSWER; THE ECONOMICS DO
+// NOT, AND THEY ARE THE HALF NOBODY PRICED.** All three bullets above were closed, and the answers are worth
+// keeping even though the code is not:
+//
+//   • the dependency key this paragraph could not find is the OTHER DIRECTION — not *"what did this walk
+//     SEE"* but *"could it have seen anything of THIS program's"*, decided once per compile by testing the
+//     names the USER half folds against every identifier TOKEN of each stdlib file (an over-approximation, so
+//     a 28th predicate cannot escape it), all-or-nothing over the stdlib half, and — wave 5's count over
+//     `specs/`'s 7,017 program blocks — true for **91.9%** of them;
+//   • the WRITES were excluded by a reading of the index taken either side of the walk with a term per FIELD,
+//     which refuses exactly the two files named above and no others;
+//   • the in-place MUTATION was answered by the compiler's own deep clone, no roster — which took finding
+//     that a SYNTHESIZED `clone` is FILE-PRIVATE — its stub is registered neither exported nor
+//     module-visible — so `x.clone()` resolves only inside the file DECLARING `x`'s type and the call
+//     has to be placed there. Anyone trying this again meets that first.
+//
+// It was CORRECT: full suite **6619 passed / 0 failed**, exit 0, and the golden-drift SET byte-identical to
+// the base. It cost **+47% on a ten-compile process, +27% on the suite's own compile-CPU tick total, and
+// five times the memory per worker**.
+//
+// ⇒ **THE REASON IS GENERAL, AND IT IS THE ONE LINE TO REMEMBER: A MEMO WHOSE VALUE MUST BE DEEP-COPIED ON
+// EVERY USE CANNOT SAVE MORE THAN (PRODUCING IT − COPYING IT), AND A PRODUCER DOMINATED BY ALLOCATING RECORDS
+// IS COPIED AT VERY NEARLY ITS OWN PRICE.** Ten compiles of a seven-line program in one process, interleaved,
+// equal-length binary paths: **2084–2159 ms** without the store, **3044–3146 ms** with it. Pricing the copy
+// directly — a second, discarded copy per serve — put it at **140 ms per compile** against a walk worth
+// **40 ms** (wave 5 measured 38.9 ms independently, so the model is calibrated against a number taken for
+// another purpose). The copy costs three and a half times the walk it replaces.
+//
+// ⇒ **THE UPSIDE IS BOUNDED AND WAS MEASURED, NOT ARGUED.** Withholding only the stdlib files whose walk
+// produced a top-level binding — 72% of the copy cost, because every `TopLevelDecl` drags its file's whole
+// token array through the copy — leaves the store the most favourable arrangement it can have, and that
+// reads **−1.9%**, six of six interleaved runs. Everything this store can win is inside two percent.
+//
+// ⇒ **AND THE MEMORY IS THE HARDER NO, BECAUSE IT IS NOT A LEAK AND SO THERE IS NOTHING TO FIX.** Sampled
+// across 603 compiles in one worker, RSS climbs in the first two seconds and then sits FLAT: **73–77 MB
+// today, 365–375 MB with the store** — bounded exactly as designed, one entry per stdlib file and not one
+// per fragment, which is why `holding == admitted` stays true and why no leak gate fires. The constant is
+// simply an order of magnitude, and the suite runs twelve workers.
+//
+// ⚠ **WAVE 7's MEASURED −9.8…−11.5% AND WAVE 7's 269 FAILURES WERE THE SAME FACT — do not read its number
+// as a reason to try again.** It ran before unions were `Cloneable`, so eight of the record types were
+// RETAINED rather than copied, and every `TopLevelDecl` carries its whole FILE's `TokenArray`, which its hand
+// copy shared as well. **Its speed was bought by the copying it was not doing**, and both of its numbers fall
+// out of one model.
+//
+// ⇒ **WHAT WOULD HAVE TO CHANGE FIRST, so this is a prerequisite and not a dead end.** The copy is expensive
+// because the compiler's deep clone duplicates the two things a swept declaration deliberately SHARES: the
+// file's `TokenArray` (whose every field is a `let` — the very argument the next paragraph makes for sharing
+// tokens across compiles) and the interner's names (*"zero-copy slices of the source"*,
+// `TypeNameInterner`). The language has no way to say *"this value is a deeply immutable view, so a clone may
+// share it"*, so a memo of a walk's output pays to duplicate the source views the memo exists to stop
+// re-deriving. Give it one and the arithmetic above is worth re-running. Without one, it is not.
+//
+// A TOKEN has neither problem. `Token`'s every field is a `let` (Lexer.maxon:276-301), no consumer
+// mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and
+// `Parser.shadowRenamedTokens` likewise), and a token carries no id of any kind. It is a VALUE, and
+// that is the whole safety argument.
+//
+// ⚠ **THE KEY IS THE CONTENT HASH AND NOT THE PATH, WHICH IS BOTH CORRECT AND THE OVERLAY FIX.**
+// `tokenize` reads the bytes and nothing else, so two files with the same bytes have the same
+// tokens whatever they are called — and a `// --- stdlib-overlay:` case, which stages a private
+// stdlib under a temp directory, therefore SHARES an entry for exactly the files it did not change
+// and gets its own for the one it did. A path key would have missed on all of them, and a path key
+// that normalized would have had to decide what "the same file" means.
+//
+// ⚠ **IT EXTENDS THE TRUST ALREADY PLACED IN THE CONTENT HASH FROM ONE FILE TO ALL OF THEM.** Every
+// per-file memo in `QueryDatabase` already treats a 64-bit FNV-1a match as "these are the same
+// bytes" — but under a PATH key, so a collision had to be between two versions of one file. Here it
+// would be between any two admitted files. The admission list is `stdlib/`'s fifty-odd files (see
+// `HashDigestSet`), which bounds the exposure to a set that is small, fixed and not chosen by user
+// input.
+//
+// ⚠⚠ **IT IS SOUND ONLY WHILE COMPILES IN A PROCESS ARE STRICTLY SERIAL** — one of the four
+// module-level latches `Diagnostics`' capture latch rosters, and that comment carries the reason two
+// compiles cannot interleave. ⛔ The reason is no longer "the scheduler is single-M"; read it there.
+// **A shared memo must not become the reason to parallelise compiles inside one process**; that would
+// invalidate all four at once, and this one would then need a lock rather than a rewrite.
+var sharedFileMemos = SharedFileMemoMap.create()
+
+// How many distinct byte-contents this process is holding. Reported beside the per-compile hit
+// counts (see `Queries.queryProgramSignatures`) because it is the one number that says the store is
+// BOUNDED: a store that grows with the corpus rather than with `stdlib/` is a worker leaking one
+// token array per spec fragment, and no hit count can see that.
+export function sharedMemoEntryCount() returns QueryCount
+	return sharedFileMemos.count()
+end 'sharedMemoEntryCount'
+
+// A `Target` as one integer. `Os` is the inner digit and its own case count is the radix, so the
+// packing stays correct when either enum gains a case — the number nobody has to remember.
+export function targetKeyOf(target Target) returns TargetKey
+	return (target.cpu.ordinal * Os.allCases.count()) + target.os.ordinal
+end 'targetKeyOf'
+
+// ⭐ **MARK THIS FILE'S BYTES AS WORTH KEEPING FOR THE WHOLE PROCESS.** Called by
+// `StdlibLoader.loadStdlibSources` for each file it registered, because that loop is the one place
+// that knows a path came out of an enumeration of `stdlib/` without paying the four String
+// allocations `isStdlibSourceFile` costs a question (see `StdlibSource`'s header).
+export function markSharedTokenSource(project Project, path FilePath) throws CompileError
+	project.db.shareableTokenHashes.insert((try sourceEntryOf(project, path: path)).contentHash)
+end 'markSharedTokenSource'
+
+// The store's entry for these bytes. The ONE place a `MapError` becomes a `SharedMemoMiss`, so the
+// five doors below cannot come to disagree about what "not held" is — and so an absent entry has one
+// meaning everywhere: nothing in this process has lexed these bytes, whether because no compile has
+// reached them yet, because no compile ADMITTED them, or because the one that did failed to lex.
+function heldMemoFor(contentHash HashDigest) returns SharedFileMemo throws SharedMemoMiss
+	return try sharedFileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
+end 'heldMemoFor'
+
+// The store's view for these bytes AND this target — `heldMemoFor` composed with `viewOf`, once,
+// because all three doors below want exactly that pair and a composition spelled three times is
+// three places for the two halves to come apart.
+function heldViewFor(contentHash HashDigest, targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+	return try (try heldMemoFor(contentHash)).viewOf(targetKey)
+end 'heldViewFor'
+
+// The tokens some earlier compile in this process already lexed from these exact bytes. Throws on a
+// miss, `TypeNameInterner.idOf`'s shape — "nothing has lexed these bytes yet" is an answer.
+//
+// It does NOT re-ask the admission list, and that is deliberate rather than an omission: admission
+// decides what is worth KEEPING, and a file whose bytes are already held is worth reading whoever
+// asks. A user fragment byte-identical to an admitted file gets the same tokens because it has the
+// same bytes, which is the only claim this store ever makes.
+export function sharedTokensOf(project Project, contentHash HashDigest) returns TokenArray throws SharedMemoMiss
+	let memo = try heldMemoFor(contentHash)
+	project.db.sharedTokenHits = project.db.sharedTokenHits + 1
+	return memo.tokens
+end 'sharedTokensOf'
+
+// ⭐⭐ **THE ONE PLACE THE ADMISSION LIST IS CONSULTED, AND THE ONLY PLACE AN ENTRY IS CREATED.**
+// Every publish below reads admission off the ENTRY instead of asking again — an absent entry means
+// the bytes were never admitted, which is the same "nothing to hang a view on" as a failed lex. One
+// fact, one reader; three copies of `contains` would be three places to forget it.
+//
+// ⚠ **THE UPSERT CANNOT OVERWRITE AN ENTRY THAT HAS ACQUIRED VIEWS, AND THAT IS A REACHABILITY
+// ARGUMENT RATHER THAN A GUARD.** `queryTokens` publishes only after asking `sharedTokensOf` and
+// being told no — so an entry already in the store returns through the hit path and never reaches
+// here. A defensive `already held?` test would be code no input can run, which is the shape this
+// project refuses; if a second publisher is ever added, it is THIS paragraph that stops holding.
+export function shareTokens(project Project, contentHash HashDigest, tokens TokenArray)
+	if not project.db.shareableTokenHashes.contains(contentHash) 'notAdmitted'
+		return
+	end 'notAdmitted'
+
+	sharedFileMemos.upsert(contentHash, value: SharedFileMemo.create(tokens))
+end 'shareTokens'
+
+// The `#if`-resolved stream for these bytes AND this target, if this process has one.
+export function sharedActiveTokensOf(project Project, contentHash HashDigest, targetKey TargetKey) returns TokenArray throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, targetKey: targetKey)
+	project.db.sharedActiveTokenHits = project.db.sharedActiveTokenHits + 1
+	return view.activeTokens
+end 'sharedActiveTokensOf'
+
+// Publish a SUCCEEDING filter's stream.
+//
+// ⛔ **ONLY A SUCCEEDING FILTER REACHES HERE, AND THE ASYMMETRY WITH THE PER-`Project` MEMO IS
+// DELIBERATE.** `queryActiveTokens` caches a FAILED filter as an empty stream on purpose — that is
+// what makes its diagnostic appear once instead of twice — and it is sound there because the
+// diagnostic is already on THAT compile's `project.diagnostics` and that build is already failing.
+// A later compile of a program that merely shares the bytes has neither, so serving it the empty
+// stream would be a file silently compiling as though it were blank.
+export function shareActiveTokens(contentHash HashDigest, targetKey TargetKey, activeTokens TokenArray)
+	// No entry means the bytes were never admitted — see `shareTokens`, which owns that decision. A
+	// view is only ever ADDED here, never replaced: `queryActiveTokens` reaches this line only after
+	// `sharedActiveTokensOf` answered no for this target.
+	var memo = try heldMemoFor(contentHash) otherwise return
+	memo.addView(SharedTargetView.create(targetKey, activeTokens: activeTokens))
+end 'shareActiveTokens'
+
+// The producer mask an earlier compile derived from this file's active stream, if any. Its own pair
+// of doors rather than a field the two above fill, because it is derived on FIRST DEMAND: only the
+// declaration sweep asks for it, and a compile that never reaches the sweep must not pay a token
+// walk for it.
+export function sharedProducerMaskOf(project Project, contentHash HashDigest, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, targetKey: targetKey)
+	if not view.producerMaskComputed 'notYetDerived'
+		throw SharedMemoMiss.notHeld
+	end 'notYetDerived'
+
+	project.db.sharedProducerMaskHits = project.db.sharedProducerMaskHits + 1
+	return view.producerMask
+end 'sharedProducerMaskOf'
+
+export function shareProducerMask(contentHash HashDigest, targetKey TargetKey, mask ProducerMask)
+	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted (no
+	// entry — see `shareTokens`), or this target has no view because the file's `#if` filter FAILED and
+	// a failure is deliberately not published (see `shareActiveTokens`). The sweep still walks the empty
+	// stream that failure produced, so it still arrives here with a mask.
+	var view = try heldViewFor(contentHash, targetKey: targetKey) otherwise return
+	view.rememberProducerMask(mask)
+end 'shareProducerMask'
+
+// --- Source entries and content-hash memo keys ---
+
+// The registered source entry for `path` — its bytes AND the hash of those bytes, which is the key
+// every per-file memo is stamped with.
+//
+// ⚠ **THE QUERIES FETCH IT ONCE AND USE IT FOR BOTH HALVES OF THE MEMO PATTERN — the validity
+// compare AND the stamp — and that is not merely a saved lookup.** A `Map with (FilePath, _)` probe
+// is not free on Windows: `FilePath.hash` CLONES AND LOWER-CASES the path (`stdlib/FilePath.maxon`
+// `canonicalForCompare`) and `FilePath.equals` clones twice more, so every probe allocates several
+// Strings — the cost `Project.maxon`'s `RangedAliasByDeclaringFile` is keyed by a plain `String` to
+// avoid. Fetching once also removes the "entry vanished between the two lookups" panic that a second
+// probe has to carry, and makes it structurally impossible to validate against one hash and stamp
+// with another.
+export function sourceEntryOf(project Project, path FilePath) returns SourceFileEntry throws CompileError
+	return try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
+end 'sourceEntryOf'
+
+// **A PARSE MEMO IS KEYED ON THREE FACTS, BECAUSE A PARSE READS THREE INPUTS.**
+//
+//   1. the file's OWN bytes — its tokens;
+//   2. the WHOLE-PROGRAM SIGNATURE INDEX — every OTHER file's declarations, which the parser
+//      needs to type a call's result (SignatureIndex.maxon);
+//   3. whether this parse BUILDS FUNCTION BODIES at all (`BuildsBodies`).
+//      Keying on (1) and (2) alone serves a round that has just discovered it needs `Math.pow`'s body the
+//      artifact built when nothing needed it, and the program then calls a function whose only op is the
+//      `retVoid` `skipUnreachedFunctionBody` left. It is the same failure as (2)'s, one tier down: the
+//      file did not change, and what the COMPILE wants from it did.
+//   4. whether this build INSTRUMENTS FOR COVERAGE (`--coverage`). A coverage point is minted by the
+//      parse, so an instrumented parse and a plain one produce different ops out of identical bytes.
+//      Without this half, toggling the flag on a warm tree serves the STALE UNINSTRUMENTED parse: exit
+//      0, an empty `.mxcov`, and no error anywhere — a measurement that silently measured nothing.
+//
+// Keying on (1) alone — which is what shipped, and was correct only while a parse read nothing
+// but its own file — SERVES A STALE PARSE the moment a signature moves: change `isReady`'s
+// return type in `a.maxon` and `b.maxon`'s bytes have not moved, so `b.maxon` is a cache HIT
+// and keeps a parse built against the OLD type. The file did not change; what the file MEANS
+// did. That is the load-bearing half of the signature index, and the easy half to get silently
+// wrong — a wrong answer served out of a cache, visible only on an incremental rebuild.
+//
+// The two halves are mixed rather than compared separately so validity stays what it has always
+// been: ONE stamped hash, ONE equality test (see this file's header). `Hasher.combined` is FNV's
+// own step, so the composite is as collision-resistant as either half.
+// The third half's two values. Arbitrary DISTINCT constants rather than 0 and 1 because
+// `Hasher.combined` is FNV's own step and feeding it 0 is feeding it nothing: two files whose other halves differ by exactly one
+// would then collide across the split.
+let BodiesBuiltKeySalt = 0x9E3779B97F4A7C15 as HashDigest
+let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as HashDigest
+
+// The fourth half's two values, distinct from each other and from the pair above for that same reason.
+let CoverageInstrumentedKeySalt = 0xD6E8FEB86659FD93 as HashDigest
+let CoveragePlainKeySalt = 0xA0761D6478BD642F as HashDigest
+
+function parseMemoKey(contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, coverage bool) returns HashDigest
+	let inputs = Hasher.combined(Hasher.combined(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
+
+	return Hasher.combined(inputs, value: CoverageInstrumentedKeySalt if coverage else CoveragePlainKeySalt)
+end 'parseMemoKey'
+
+// The key a parse memo for `path` must carry to be valid right now. `signatureHash` is
+// `ProgramSignatures.hash` — the hash of the DECLARATIONS, not of the sources they were read from,
+// which is what keeps an edit to one file's function BODY from invalidating every other file's parse
+// (see ProgramSignatures.hash).
+//
+// `queryParseOps` computes it ONCE and uses that one value to both validate its memo and stamp the
+// new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
+// another `FilePath` map probe.
+export function currentParseMemoKey(project Project, path FilePath, signatureHash HashDigest, buildsBodies bool) returns HashDigest throws CompileError
+	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage)
+end 'currentParseMemoKey'
+
+// The composite whole-program hash: every source file's content hash folded in source-path order.
+// The whole-program memos (the signature index, the merged module) key on it, so any file changing —
+// or the file SET changing — invalidates them while leaving the unchanged files' per-file memos hot.
+//
+// **MEMOIZED, AND IT HAS TO BE.** The fold is O(files), and since the signature index landed it is
+// asked ONCE PER FILE — every `queryParseOps` must validate the index before it can validate itself,
+// and that validation is this hash. Recomputing it per call made the query spine **O(files²)**: the
+// same shape as the `clearDepsFor` quadratic, discovered the same way (an alloc delta that grew x3
+// per rung on a ladder that doubles), and it is the standing hazard of putting a WHOLE-PROGRAM query
+// underneath a PER-FILE one.
+//
+// The memo has exactly one invalidator — `fileChanged` — because the hash is a fold over exactly the
+// entries `fileChanged` writes. Nothing else can move it, so nothing else may clear the flag.
+export function compositeSourceHash(project Project) returns HashDigest
+	if project.db.compositeHashValid 'memoized'
+		return project.db.compositeHash
+	end 'memoized'
+
+	var h = Hasher.empty()
+	for path in project.db.sourcePaths 'each'
+		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
+		h = Hasher.combined(h, value: entry.contentHash)
+	end 'each'
+
+	project.db.compositeHash = h
+	project.db.compositeHashValid = true
+	return h
+end 'compositeSourceHash'
+
+// True iff the signature-index memo is present and still keyed on the current composite
+// source hash. The index is read off EVERY file's tokens, so any file's edit can move it —
+// which is exactly what the composite hash tracks.
+//
+// It is keyed on the SOURCE, and it KEYS the parse on the DECLARATIONS. That asymmetry is
+// deliberate and it is what preserves incrementality: a body edit rebuilds the index (cheap: a
+// token sweep, and every unchanged file's tokens are a memo hit) and the rebuilt index hashes
+// IDENTICALLY, so not one other file re-parses.
+export function signaturesCacheValid(project Project) returns bool
+	if not project.db.signatureCache.computed 'never'
+		return false
+	end 'never'
+	return project.db.signatureCache.keyHash == compositeSourceHash(project)
+end 'signaturesCacheValid'
+
+// True iff the merged-module memo is present and still keyed on the current
+// composite source hash.
+export function allModuleCacheValid(project Project) returns bool
+	if not project.db.allModuleCache.computed 'never'
+		return false
+	end 'never'
+	return project.db.allModuleCache.keyHash == compositeSourceHash(project)
+end 'allModuleCacheValid'
+
+// ⭐⭐ **THE PIPELINE MUTATES THE MODULE THIS MEMO HANDS OUT, SO THE PIPELINE MUST DROP IT.**
+//
+// Every other memo here is valid exactly while its input's content hash is unchanged, and that test is
+// sound because nothing downstream writes to a memoized value. `queryAllModule`'s is the ONE exception:
+// `TypeResolution.resolveTypes` rewrites `maxonParamTypes`/`maxonReturnType` on the module's functions
+// IN PLACE, and `installManagedGlobalInit` appends to it. The bytes did not move, so the hash still
+// matches, so the memo still says VALID — and hands back a module the last compile edited.
+//
+// ⛔ **MEASURED, and it is not a drift — it is a WRONG ANSWER and then a CRASH.** A second
+// `compileToCodeResult` over one `Project`:
+//   • on a 3-line program invented **5 diagnostics** where the first reported none — all E3016
+//     "partial interface implementation" against `stdlib/` (`compare(other Character) returns int`
+//     against `expected compare(other Self) returns Ordering`). `checkConformance` runs BEFORE
+//     `resolveTypes` precisely so it can print the source spellings resolution erases; on a re-check
+//     it reads the ERASED ones and reports a mismatch that does not exist.
+//   • on `maxon-dev-mcp/mcp` **panicked** — `dispatchedRequirementSlots: blockRef 5618 not in
+//     module.blocks`.
+// `verify-recheck` is the gate; `VerifyRecheck.maxon` holds the argument.
+//
+// ⚠ **WHY INVALIDATE RATHER THAN CLONE, OR STOP MUTATING.** Cloning on every serve was BUILT, MEASURED
+// and REFUSED — this file's own store header records +47% on a ten-compile process and 5× the memory,
+// under the rule that a memo needing a deep copy per use cannot save more than producing it costs.
+// Making resolution non-destructive is the structurally cleaner answer and touches every reader of
+// those two fields; it stays available and this does not block it. Dropping the memo costs ONE re-fold
+// — `foldEveryFileIntoAModule`, measured at ~63 ms of a ~704 ms frontend on a 71-file project — and
+// every file's TOKENS and PARSE stay hits, because those memos are untouched by any of this.
+// ⇒ **The expensive caches survive; only the fold that assembles them re-runs.**
+//
+// Called by `compileToCodeResult` as it takes the module, not after it finishes: a compile that throws
+// half way through has mutated just as much as one that completes, and the memo must not survive
+// either. ⚖ User ruling, 2026-09-01.
+export function invalidateAllModuleCache(project Project)
+	project.db.allModuleCache = ModuleMemo.empty()
+end 'invalidateAllModuleCache'

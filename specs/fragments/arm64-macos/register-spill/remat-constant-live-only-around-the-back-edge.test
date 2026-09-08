@@ -1,0 +1,94 @@
+// Test: remat-constant-live-only-around-the-back-edge
+function leaf(x Integer) returns Integer
+	return x + 1
+end 'leaf'
+
+function loopDivisor(p Integer) returns Integer
+	let c = 7
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var a5 = p + 5
+	var a6 = p + 6
+	var i = 0
+	while i mod c < 3 'loop'
+		a1 = a1 + leaf(i)
+		a2 = a2 + a1
+		a3 = a3 + a2
+		a4 = a4 + a3
+		a5 = a5 + a4
+		a6 = a6 + a5
+		i = i + 1
+	end 'loop'
+	return a1 + a2 + a3 + a4 + a5 + a6
+end 'loopDivisor'
+
+function main() returns ExitCode
+	let r = loopDivisor(1)
+	if r == 494 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @loopDivisor {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
+    arm64.add x5, x0, 5
+    arm64.add x0, x0, 6
+    arm64.movImm x6, 0
+  whilehdr:
+    arm64.movImm x7, 5270498306774157605
+    arm64.smulh x7, x7, x6
+    arm64.asr x7, x7, 1
+    arm64.lsr x8, x7, 63
+    arm64.add x7, x7, x8
+    arm64.movImm x16, 7
+    arm64.mul x7, x7, x16
+    arm64.sub x7, x6, x7
+    arm64.cmp x7, 3
+    arm64.b.ge whileexit
+  __il_body:
+    arm64.add x6, x6, 1
+  __il_cont:
+    arm64.add x1, x1, x6
+    arm64.add x2, x2, x1
+    arm64.add x3, x3, x2
+    arm64.add x4, x4, x3
+    arm64.add x5, x5, x4
+    arm64.add x0, x0, x5
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl loopDivisor
+    arm64.cmp x0, 494
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

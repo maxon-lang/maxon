@@ -1,0 +1,22 @@
+// Test: error.struct-backing-boxed-union-field
+typealias Num = int(0 to 99)
+
+union Shape
+	circle(r Num)
+	blank
+end 'Shape'
+
+type Meta
+	export let s as Shape
+end 'Meta'
+
+enum Kind
+	only = Meta{s: Shape.blank}
+end 'Kind'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:2: Unsupported: field 's' of the `Meta` backing is declared `Shape`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of

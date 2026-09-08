@@ -1,0 +1,192 @@
+// Test: for-in.nested
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function innerSum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'inner'
+		total = total + v
+	end 'inner'
+	return total
+end 'innerSum'
+
+function main() returns ExitCode
+	let m = [1: 1, 2: 2, 3: 3]
+	var outerTotal = 0
+	for (_, v) in m 'outer'
+		outerTotal = outerTotal + v + innerSum(m)
+	end 'outer'
+	// Each outer iteration: v + innerSum = v + 6
+	// (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @innerSum {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Map.createIterator
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, forempty
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  inner:
+    x64.leaRegRdata rdx, [rip + __layout_MapIterator_Integer_Integer]
+    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.current
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_MapIterator_Integer_Integer
+    x64.movRegReg r8, rbx
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg r8, rbx
+  forjoin:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 1
+    x64.leaRegRdata rcx, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 2
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 3
+    x64.leaRegRdata r9, [rip + __layout_Map_int_int]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.createIterator
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, forempty
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  outer:
+    x64.leaRegRdata rdx, [rip + __layout_MapIterator_int_int]
+    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.current
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegReg rcx, r13
+    x64.callDirect innerSum
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect MapIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_MapIterator_int_int
+    x64.movRegReg rax, rbx
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg rax, rbx
+  forjoin:
+    x64.cmpRegImm32 rax, 24
+    x64.jcc notEqual, ifcont
+  check:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_int_int
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_int_int
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

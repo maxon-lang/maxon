@@ -1,0 +1,22 @@
+// Test: error.a-loop-variable-carries-the-element-alias
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+typealias NarrowCol = Array with Narrow
+
+function takesWide(w Wide) returns Wide
+	return w
+end 'takesWide'
+
+function main() returns ExitCode
+	var col = NarrowCol.create()
+	col.push(4)
+	var acc = 0
+	for x in col 'each'
+		acc = acc + takesWide(x)
+	end 'each'
+	print("{acc}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:15:15: argument type mismatch for 'w': expected 'Wide', got 'Narrow'

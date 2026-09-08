@@ -1,0 +1,40 @@
+// Test: where-clauses.error.ambiguous-operator-witness
+typealias Code = int(0 to u32.max)
+
+interface AlsoEquatable
+	function equals(other Self) returns bool
+end 'AlsoEquatable'
+
+type Widget implements Equatable, AlsoEquatable
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function equals(other Self) returns bool
+		return self.seed == other.seed
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is Equatable and AlsoEquatable
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function same() returns bool
+		return self.a == self.b
+	end 'same'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3114: <fragment>:29:17: 'equals' taking 1 argument(s) is provided by both Equatable.equals(other Self) returns bool and AlsoEquatable.equals(other Self) returns bool through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints

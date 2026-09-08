@@ -1,0 +1,20 @@
+// Test: var-redeclare-after-scope
+function main() returns ExitCode
+	if true 'check'
+		let x = 10
+	end 'check'
+	let x = 42
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

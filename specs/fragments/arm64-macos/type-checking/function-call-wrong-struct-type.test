@@ -1,0 +1,30 @@
+// Test: function-call-wrong-struct-type
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+end 'Point'
+
+type Size
+	export var w as Integer
+	export var h as Integer
+
+	static function create(w Integer, h Integer) returns Self
+		return Self{w: w, h: h}
+	end 'create'
+end 'Size'
+
+function takePoint(p Point) returns Integer
+	return p.x
+end 'takePoint'
+
+function main() returns ExitCode
+	let s = Size.create(5, h: 10)
+	takePoint(s)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:2: argument type mismatch for 'p': expected 'Point', got 'Size'

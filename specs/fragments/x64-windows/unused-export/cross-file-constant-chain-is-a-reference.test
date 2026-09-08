@@ -1,0 +1,24 @@
+// Test: cross-file-constant-chain-is-a-reference
+// --- file: app/main.maxon
+let FINAL = MIDDLE + 2
+
+function main() returns ExitCode
+	return FINAL
+end 'main'
+
+// --- file: api/middle.maxon
+export let MIDDLE = ROOT * 4
+
+// --- file: api/root.maxon
+export let ROOT = 10
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

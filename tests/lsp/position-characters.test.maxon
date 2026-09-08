@@ -1,0 +1,74 @@
+// position-characters.test.maxon — what an LSP `character` COUNTS, asked as real requests, in the FORWARD
+// direction: an editor names a position and the server must land on the right token.
+//
+// The marks, their widths and the document they sit in are `position-probe.test.maxon`'s, which also says
+// which of the three separates which pair of counting schemes. The reverse direction — a range the server
+// hands BACK — is `diagnostics-ranges.test.maxon`'s, and it is the only one in which counting codepoints
+// instead of code units is visible.
+//
+// ⚠ **A TAB IS ONE CHARACTER**, however wide an editor draws it, so it is the same question asked without
+// leaving ASCII: a server that expanded one to a tab stop would report a column no client asked about.
+//
+// ⭐ **THE ANSWER'S RANGE IS PINNED, NOT ONLY ITS LINE.** Every wrong way to count a character lands on
+// the right LINE and names the wrong column, so the line alone cannot tell them apart — and pinning the
+// END as well is what says the span was measured in units rather than in bytes.
+//
+// The session, the release discipline and `expectDefinitionRangeAt` are `definition-probe.test.maxon`'s.
+
+// The name every request below resolves to: `chosen`, declared on line 7 at character 8, six long.
+let DeclaredName = "chosen"
+let ChosenDeclLine = 7 as LspCoordinate
+let ChosenDeclStart = 8 as LspCoordinate
+let ChosenDeclEnd = 14 as LspCoordinate
+
+// ⚠ **THE TABLE'S OWN PREMISE, AND IT NEEDS NO SERVER.** The marks are non-ASCII in a UTF-8 source
+// file, and a re-encoded one would leave every position below counted against a string it does not name
+// while still reading green. This is the one assertion here that is not a request, because there is no
+// request that can ask it: the claim is about the FIXTURE. `position-probe.test.maxon` owns the
+// measurement, and its header owns why it cannot be made from this file.
+test 'the marks are the widths every position in this file is counted against'
+	try expectMarkEncodings()
+end 'the marks are the widths every position in this file is counted against'
+
+test 'a position after a 2-byte character is read as code units, not bytes'
+	// The mark is 2 bytes and 1 unit, so `chosen` opens at character 33 and at BYTE 34. A server counting
+	// bytes lands on the `:` of `value:` and finds nothing to jump to.
+	let document = markedDocument(TwoByteChar, name: DeclaredName)
+	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 2-byte character did not resolve to `chosen`.")
+end 'a position after a 2-byte character is read as code units, not bytes'
+
+test 'a position after a 3-byte character is read as code units, not bytes'
+	// 3 bytes, 1 unit: `chosen` opens at character 33 and at BYTE 35, so a byte-counting server lands
+	// inside the argument LABEL `value` and jumps to the parameter instead.
+	let document = markedDocument(ThreeByteChar, name: DeclaredName)
+	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 3-byte character did not resolve to `chosen`.")
+end 'a position after a 3-byte character is read as code units, not bytes'
+
+test 'a supplementary character costs TWO code units on the way in'
+	// 4 bytes, 1 codepoint, 2 units: `chosen` opens at character 34 and at BYTE 36.
+	let document = markedDocument(FourByteChar, name: DeclaredName)
+	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterTwoUnits, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past `😀` did not resolve to `chosen`.")
+end 'a supplementary character costs TWO code units on the way in'
+
+// A tab-indented document. `alpha` is declared on line 3 behind ONE tab, so it opens at character 5; the
+// use on line 4 sits behind TWO. A server that expanded a tab to a four-column stop would answer 8.
+function tabIndentedDocument() returns String
+	return String.from(b"typealias TabProbeCount = int(0 to 100)
+
+function main() returns ExitCode
+\tlet alpha = 7 as TabProbeCount
+\t\tlet beta = alpha
+\treturn beta as ExitCode
+end 'main'")
+end 'tabIndentedDocument'
+
+let TabbedUseLine = 4 as LspCoordinate
+let TabbedUseCharacter = 13 as LspCoordinate
+let TabbedDeclLine = 3 as LspCoordinate
+let TabbedDeclStart = 5 as LspCoordinate
+let TabbedDeclEnd = 10 as LspCoordinate
+
+test 'a tab counts as ONE character, whatever an editor draws it as'
+	let document = tabIndentedDocument()
+	try expectDefinitionRangeAt(document, line: TabbedUseLine, character: TabbedUseCharacter, startLine: TabbedDeclLine, startCharacter: TabbedDeclStart, endCharacter: TabbedDeclEnd, note: "a position on a tab-indented line did not resolve to the tab-indented declaration.")
+end 'a tab counts as ONE character, whatever an editor draws it as'

@@ -1,0 +1,222 @@
+// Test: dispatch.negative-biased-dense
+function classify(x Integer) returns Integer
+	return match x 'm'
+		-3 gives 1
+		-2 gives 2
+		-1 gives 3
+		0 gives 4
+		1 gives 5
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// A dense span that CROSSES ZERO (min -3, span 5): the bias subtract is `x - (-3)` = `x + 3`, and the
+	// UNSIGNED bounds check routes a below-min value (which wraps to a huge unsigned index) to the default.
+	var n = 0 as ExitCode
+	if classify(-3) == 1 'a'
+		n = n + 1
+	end 'a'
+	if classify(-1) == 3 'b'
+		n = n + 1
+	end 'b'
+	if classify(0) == 4 'c'
+		n = n + 1
+	end 'c'
+	if classify(1) == 5 'd'
+		n = n + 1
+	end 'd'
+	if classify(-4) == 0 'e'
+		n = n + 1
+	end 'e'
+	if classify(2) == 0 'f'
+		n = n + 1
+	end 'f'
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __il_body#20:
+    arm64.movImm x1, 0
+    arm64.jumpTable x1, default=matchdefault#26 [[0]=matcharm#21, [1]=matcharm#22, [2]=matcharm#23, [3]=matcharm#24, [4]=matcharm#25] @__jumptable_1
+  matchdefault#26:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#19
+  matcharm#21:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#19
+  matcharm#22:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#19
+  matcharm#23:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#19
+  matcharm#24:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#19
+  matcharm#25:
+    arm64.movImm x1, 5
+  __il_cont#19:
+    arm64.cmp x1, 1
+    arm64.b.ne __il_body#29
+  a:
+    arm64.movImm x0, 1
+  __il_body#29:
+    arm64.movImm x1, 2
+    arm64.jumpTable x1, default=matchdefault#35 [[0]=matcharm#30, [1]=matcharm#31, [2]=matcharm#32, [3]=matcharm#33, [4]=matcharm#34] @__jumptable_2
+  matchdefault#35:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#28
+  matcharm#30:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#28
+  matcharm#31:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#28
+  matcharm#32:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#28
+  matcharm#33:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#28
+  matcharm#34:
+    arm64.movImm x1, 5
+  __il_cont#28:
+    arm64.cmp x1, 3
+    arm64.b.ne __il_body#38
+  b:
+    arm64.add x0, x0, 1
+  __il_body#38:
+    arm64.movImm x1, 3
+    arm64.jumpTable x1, default=matchdefault#44 [[0]=matcharm#39, [1]=matcharm#40, [2]=matcharm#41, [3]=matcharm#42, [4]=matcharm#43] @__jumptable_3
+  matchdefault#44:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#37
+  matcharm#39:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#37
+  matcharm#40:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#37
+  matcharm#41:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#37
+  matcharm#42:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#37
+  matcharm#43:
+    arm64.movImm x1, 5
+  __il_cont#37:
+    arm64.cmp x1, 4
+    arm64.b.ne __il_body#47
+  c:
+    arm64.add x0, x0, 1
+  __il_body#47:
+    arm64.movImm x1, 4
+    arm64.jumpTable x1, default=matchdefault#53 [[0]=matcharm#48, [1]=matcharm#49, [2]=matcharm#50, [3]=matcharm#51, [4]=matcharm#52] @__jumptable_4
+  matchdefault#53:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#46
+  matcharm#48:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#46
+  matcharm#49:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#46
+  matcharm#50:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#46
+  matcharm#51:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#46
+  matcharm#52:
+    arm64.movImm x1, 5
+  __il_cont#46:
+    arm64.cmp x1, 5
+    arm64.b.ne __il_body#56
+  d:
+    arm64.add x0, x0, 1
+  __il_body#56:
+    arm64.movImm x1, 18446744073709551615
+    arm64.jumpTable x1, default=matchdefault#62 [[0]=matcharm#57, [1]=matcharm#58, [2]=matcharm#59, [3]=matcharm#60, [4]=matcharm#61] @__jumptable_5
+  matchdefault#62:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#55
+  matcharm#57:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#55
+  matcharm#58:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#55
+  matcharm#59:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#55
+  matcharm#60:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#55
+  matcharm#61:
+    arm64.movImm x1, 5
+  __il_cont#55:
+    arm64.cmp x1, 0
+    arm64.b.ne __il_body#65
+  e:
+    arm64.add x0, x0, 1
+  __il_body#65:
+    arm64.movImm x1, 5
+    arm64.jumpTable x1, default=matchdefault#71 [[0]=matcharm#66, [1]=matcharm#67, [2]=matcharm#68, [3]=matcharm#69, [4]=matcharm#70] @__jumptable_6
+  matchdefault#71:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#64
+  matcharm#66:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#64
+  matcharm#67:
+    arm64.movImm x1, 2
+    arm64.b __il_cont#64
+  matcharm#68:
+    arm64.movImm x1, 3
+    arm64.b __il_cont#64
+  matcharm#69:
+    arm64.movImm x1, 4
+    arm64.b __il_cont#64
+  matcharm#70:
+    arm64.movImm x1, 5
+  __il_cont#64:
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  f:
+    arm64.add x0, x0, 1
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#14
+  __rc_chk#15:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#13
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.negative-biased-dense.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#13:
+    arm64.cbnz x1, __rc_panic#17
+  __rc_chk#18:
+    arm64.cbz x2, __rc_ok#16
+  __rc_panic#17:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.negative-biased-dense.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#16:
+    arm64.epilogue 16
+    arm64.ret
+}

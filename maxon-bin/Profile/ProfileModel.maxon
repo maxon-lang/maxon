@@ -1,0 +1,657 @@
+// Profile/ProfileModel.maxon — what a sampling run MEASURED, and the three faces that render it.
+//
+// ⭐⭐ **ONE MODEL, THREE RENDERINGS.** The printed summary, the collapsed-stack `--folded` format and the
+// JSON all read the SAME `ProfileReport` and the same aggregation. A second accumulation for a second face
+// is how three copies of one rule come to disagree about what was sampled.
+//
+// ⭐⭐ **EVERY AGGREGATION IS A FLAT MAP KEYED BY A PATH, NEVER A MUTABLE TREE.** A container element reached
+// through `get` is a BORROW and cannot be written (E3070), so a node whose sample count is incremented in
+// place is not expressible here — and the shape the coverage join already pays for is the right one anyway:
+// gather a flat table, sort it ONCE, and read the nesting back out of the keys.
+//
+// ⛔ **THE KEY SEPARATOR IS `\x01`, NOT THE `;` THE FOLDED FORMAT PRINTS**, and that is what makes a
+// parent's subtree a CONTIGUOUS RUN of the ordinally-sorted keys — which the tree walk relies on. A
+// separator above a space would not: two sibling frames where one name is a prefix of the other followed by
+// a space (`[unnamed .text]`'s shape) would sort BETWEEN a node and its own children.
+//
+// ⭐ **SORT EVERY LIST BY COUNT DESCENDING THEN NAME ASCENDING.** A tie between two equally hot rows then
+// resolves the same way on every run, which is most of what a profile is for: a report whose row order
+// flipped between runs could not be diffed.
+//
+// ⛔ **THE WHOLE FILE IS GATED, AND BOTH CONJUNCTS ARE LOAD-BEARING.** `os(Windows) and arch(x64)` is
+// `TargetFacilities.processSampling`'s row, and a lane off that row has nothing to build a report out of:
+// the symbols below are all `module`-tier, so ungated they would be module symbols with no reader outside
+// their own file on every other lane — E3094 at the self-compile, which is the only gate that runs
+// `checkUnusedExports` at all.
+#if os(Windows) and arch(x64)
+
+	// How many samples something was given, and how many ticks the loop took.
+	module typealias ProfileTally = int(0 to i64.max)
+
+	// A share of the run, as the reporting floor and as a rendered percentage.
+	module typealias ProfileShare = float(0.0 to f64.max)
+
+	// Samples per second — asked for, and achieved.
+	module typealias ProfileRate = float(0.0 to f64.max)
+
+	// A measured duration in seconds.
+	module typealias ProfileSeconds = float(0.0 to f64.max)
+
+	// How deep a call-tree node sits. A POSITION in one of the report's tables is stdlib's own
+	// `ElementIndex` instead, because that is the type every `get` on those tables takes and a purpose-named
+	// alias of the same range would be a cast at each of them.
+	typealias ProfileDepth = int(0 to i64.max)
+
+	// The Win32 allocation base that identifies a stack. Wide and signed: it is a machine address this tool
+	// passes through as an identity rather than a number it constrains.
+	module typealias ProfileStackBase = int(i64.min to i64.max)
+
+	module typealias ProfileStringArray = Array with String
+	module typealias ProfileFunctionArray = Array with ProfileFunctionRow
+	module typealias ProfileNodeArray = Array with ProfileNode
+	module typealias ProfileStackArray = Array with ProfileStackRow
+	typealias ProfileTallyMap = Map with (String, ProfileTally)
+	typealias ElementIndexArray = Array with ElementIndex
+
+	// ⭐ **THE ONE CONVENTION FOR A FRAME THE PROFILE COULD NOT NAME: IT IS WRITTEN IN BRACKETS.** No function
+	// a programmer can write is, because a Maxon identifier cannot begin with `[`, so ONE test tells "we could
+	// not name this" from "this is what it is called" — and it cannot fall out of date as placeholders are
+	// added, which a closed list of them did the moment a named foreign module became a fourth kind.
+	let ProfileSyntheticFramePrefix = "["
+
+	// The frame a sample gets when its leaf is not in this binary's code and no loaded module claims it.
+	module let ProfileOutsideTextFrame = "[outside .text]"
+
+	// An address that IS in `.text` but that no function record covers — a runtime helper the sidecar does not
+	// name. Distinct from the frame above because the two send a reader somewhere different: this one is our
+	// code, that one is not.
+	module let ProfileUnnamedTextFrame = "[unnamed .text]"
+
+	// A stack that could not be read at all, so not even a leaf survives.
+	module let ProfileUnreadableStackFrame = "[unreadable stack]"
+
+	// ⭐ **BELOW THIS, A BREAKDOWN IS ARITHMETIC RATHER THAN MEASUREMENT.** At forty samples a row shown as
+	// "5.0%" is two readings and one more would have made it 7.5%, so the report says so instead of presenting
+	// a confident table built on nothing.
+	let ProfileMinimumTrustworthySamples = 100 as ProfileTally
+
+	// The internal key separator — see this file's header for why it is not the `;` the folded face prints.
+	let ProfilePathSeparator = "\x01"
+
+	// What the collapsed-stack format joins two frames with, and what separates a path from its count.
+	let ProfileFoldedSeparator = ";"
+	let ProfileFoldedCountSeparator = " "
+
+	// The rule a report draws between its sections. ⚠ Deliberately NOT `---`: a committed transcript's
+	// expected block ends at the first line starting with `--- `, so a report ruled that way is silently
+	// truncated at its first section wherever one is stored.
+	let ProfileSectionRule = "==="
+
+	// The columns a measured row lays out: a right-aligned share, a right-aligned count, then the name — in
+	// that order so the indentation carrying the tree's SHAPE is never disturbed by a wider count.
+	let ProfilePercentColumnWidth = 6 as ColumnWidth
+	let ProfileCountColumnWidth = 7 as ColumnWidth
+	let ProfileColumnGap = "  "
+	let ProfileTreeIndentUnit = "  "
+
+	let ProfileLineFeed = "\n"
+
+	// The scale a share is computed on, and what a percentage of nothing reads as.
+	let ProfilePercentScale = 100.0
+	let ProfileZeroPercent = "0.0%"
+
+	// ⭐ A rate is rounded to WHOLE hertz. Unlike every other number here it is a RATIO of two measurements,
+	// so its full expansion is a dozen digits of noise around a figure whose last honest digit is the first.
+	let ProfileHalf = 0.5
+
+	let FunctionsNoun = "functions"
+	let NodesNoun = "nodes"
+	let StacksNoun = "stacks"
+
+	// ========================================================================================
+	// THE MODEL
+	// ========================================================================================
+
+	// One function's share. `selfSamples` is samples caught EXECUTING it; `totalSamples` is samples anywhere
+	// beneath it, counted once per STACK so recursion cannot multiply a function by its own depth.
+	type ProfileFunctionRow
+		export var name as String
+		export var selfSamples as ProfileTally
+		export var totalSamples as ProfileTally
+
+		export static function create(name String, selfSamples ProfileTally, totalSamples ProfileTally) returns ProfileFunctionRow
+			return Self{name: name, selfSamples: selfSamples, totalSamples: totalSamples}
+		end 'create'
+	end 'ProfileFunctionRow'
+
+	// One node of the call tree, carried FLAT: `path` is the whole chain from the root and `depth` is how
+	// many separators precede it. Its subtree is the run of nodes after it at a greater depth — see this
+	// file's header for why the ordinal sort makes that run contiguous.
+	type ProfileNode
+		export var path as String
+		export var name as String
+		export var depth as ProfileDepth
+		export var samples as ProfileTally
+		export var selfSamples as ProfileTally
+
+		export static function create(path String, name String, depth ProfileDepth, samples ProfileTally, selfSamples ProfileTally) returns ProfileNode
+			return Self{path: path, name: name, depth: depth, samples: samples, selfSamples: selfSamples}
+		end 'create'
+	end 'ProfileNode'
+
+	// One STACK's share — an OS thread's or a green thread's, which out of process are the same kind of
+	// thing. Named by its outermost NAMED frame; the allocation base that IDENTIFIES it is deliberately not
+	// reported, being a machine address that would make every transcript host-specific.
+	//
+	// Two rows may share a name, and that is information rather than a defect: two separate stacks were
+	// running the same entry function.
+	type ProfileStackRow
+		export var rootFunction as String
+		export var samples as ProfileTally
+
+		export static function create(rootFunction String, samples ProfileTally) returns ProfileStackRow
+			return Self{rootFunction: rootFunction, samples: samples}
+		end 'create'
+	end 'ProfileStackRow'
+
+	// The status the measured program returned, or the absence of one. ABSENT — not zero — for a run that was
+	// still going when sampling stopped: printing a 0 there would be this tool inventing a status nobody saw.
+	module union ProfileTargetStatus
+		notObserved
+		exited(code ProfileTargetExitCode)
+	end 'ProfileTargetStatus'
+
+	module typealias ProfileTargetExitCode = int(i64.min to i64.max)
+
+	// What a sampling run measured — the ONE model all three faces render.
+	//
+	// ⭐ The honesty fields are not decoration. `samples` beside `achievedRateHz` and `durationSeconds` is the
+	// difference between 3 readings and 30,000, which look identical once divided; `samplesUnsymbolized` says
+	// how much of the profile landed in code this binary's sidecar cannot name, and therefore how much of the
+	// rest to trust; `stacksTruncated` matters more than its size suggests, because a walk runs leaf-to-ROOT
+	// and a truncated stack has lost its outermost frames.
+	module type ProfileReport
+		export var exePath as String
+		export var targetStatus as ProfileTargetStatus
+		export var runCompleted as bool
+		export var requestedRateHz as ProfileRate
+		export var ticks as ProfileTally
+		export var durationSeconds as ProfileSeconds
+		export var samples as ProfileTally
+		export var samplesUnsymbolized as ProfileTally
+		export var stacksUnreadable as ProfileTally
+		export var stacksTruncated as ProfileTally
+		export var minPercent as ProfileShare
+		export var functions as ProfileFunctionArray
+		export var nodes as ProfileNodeArray
+		export var stacks as ProfileStackArray
+
+		export static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
+			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, samplesUnsymbolized: samplesUnsymbolized, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
+		end 'create'
+
+		// A handful of readings can be ranked in any order at all, so the report says so rather than
+		// presenting confident shares over them.
+		export function sparse() returns bool
+			return self.samples < ProfileMinimumTrustworthySamples
+		end 'sparse'
+
+		// ⭐ **THE RATE THE SAMPLER ACTUALLY TICKED AT, WHICH IS WHAT THE REPORT MEANS.** A sampling
+		// profiler's rate is the denominator every percentage was computed against, so printing one the run
+		// did not achieve states a wrong answer about every row at once.
+		//
+		// ⚠ Derived from TICKS rather than from samples on purpose. One tick samples every thread that has
+		// RUN since the last one, so samples-per-second drifts from the tick rate in BOTH directions by a
+		// program-dependent amount — up when threads run concurrently, down when none has. Both are real
+		// quantities; only this one answers the question `--rate` asks.
+		export function achievedRateHz() returns ProfileRate
+			if self.durationSeconds <= 0.0 'noWindow'
+				return 0.0
+			end 'noWindow'
+
+			return try ((self.ticks as ProfileRate) / self.durationSeconds) otherwise panic("ProfileReport.achievedRateHz: a window of zero seconds returned above")
+		end 'achievedRateHz'
+	end 'ProfileReport'
+
+	// ========================================================================================
+	// THE ACCUMULATOR
+	// ========================================================================================
+
+	// Turns captured stacks into the tables above, one call per sample from the tick loop.
+	module type ProfileAccumulator
+		var selfByName as ProfileTallyMap
+		var totalByName as ProfileTallyMap
+		var pathTotal as ProfileTallyMap
+		var pathSelf as ProfileTallyMap
+		var stackTotal as ProfileTallyMap
+		var samples as ProfileTally
+		var unsymbolized as ProfileTally
+		var unreadable as ProfileTally
+		var truncated as ProfileTally
+
+		export static function create() returns ProfileAccumulator
+			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, unsymbolized: 0, unreadable: 0, truncated: 0}
+		end 'create'
+
+		// ⭐ Accept ONE captured stack. `frames` is LEAF-FIRST, as the walk produced it, and every
+		// aggregation below is derived from that one list — so the hot-function table, the tree and the stack
+		// list cannot disagree about what was sampled.
+		export function accept(frames ProfileStringArray, allocationBase ProfileStackBase, lostItsRoot bool, hadNoChain bool)
+			self.samples = self.samples + 1
+			self.truncated = self.truncated + (1 if lostItsRoot else 0)
+			self.unreadable = self.unreadable + (1 if hadNoChain else 0)
+
+			// The LEAF is what decides whether this sample was symbolized: it is the code that was actually
+			// executing, and the only frame the profile attributes SELF time to.
+			let leaf = try frames.get(0) otherwise ProfileUnreadableStackFrame
+			if profileFrameIsSynthetic(leaf) 'couldNotName'
+				self.unsymbolized = self.unsymbolized + 1
+			end 'couldNotName'
+
+			bumpProfileTally(self.selfByName, key: leaf)
+
+			// Counted once per STACK: a recursive function appears many times in one chain, and adding it
+			// each time would report a function as sampled more often than the profiler sampled at all.
+			var seen = ProfileTallyMap.create()
+			for frame in frames 'eachFrame'
+				if not seen.contains(frame) 'firstSighting'
+					seen.upsert(frame, value: 1)
+					bumpProfileTally(self.totalByName, key: frame)
+				end 'firstSighting'
+			end 'eachFrame'
+
+			// The tree, as one key per PREFIX. Walked root-first, which is the reverse of the walk's order.
+			var path = ""
+			var remaining = frames.count()
+			while remaining > 0 'eachPrefix'
+				remaining = remaining - 1
+				let frame = try frames.get(remaining) otherwise panic("ProfileAccumulator.accept: index {remaining} came from this very list of {frames.count()} frames")
+				path = frame if path.isEmpty() else "{path}{ProfilePathSeparator}{frame}"
+				bumpProfileTally(self.pathTotal, key: path)
+			end 'eachPrefix'
+
+			bumpProfileTally(self.pathSelf, key: path)
+			bumpProfileTally(self.stackTotal, key: "{allocationBase}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}")
+		end 'accept'
+
+		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
+			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, samplesUnsymbolized: self.unsymbolized, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
+		end 'finish'
+	end 'ProfileAccumulator'
+
+	// A frame this profile could not name — see `ProfileSyntheticFramePrefix`.
+	function profileFrameIsSynthetic(frame String) returns bool
+		return frame.startsWith(ProfileSyntheticFramePrefix)
+	end 'profileFrameIsSynthetic'
+
+	// ⭐⭐ **THE NAME A STACK IS KNOWN BY: ITS OUTERMOST *NAMED* FRAME.**
+	//
+	// Deliberately not simply its outermost frame, and the difference is the whole usefulness of the stack
+	// table. A stack in a Maxon program can bottom out in runtime code the sidecar's function table does not
+	// name — it records the functions a PROGRAMMER wrote — so naming stacks by their true root would label
+	// several of them `[unnamed .text]` and distinguish nothing.
+	function profileOutermostNamedFrame(frames ProfileStringArray) returns String
+		var remaining = frames.count()
+		while remaining > 0 'fromTheRoot'
+			remaining = remaining - 1
+			let frame = try frames.get(remaining) otherwise panic("profileOutermostNamedFrame: index {remaining} came from this very list of {frames.count()} frames")
+			if not profileFrameIsSynthetic(frame) 'named'
+				return frame
+			end 'named'
+		end 'fromTheRoot'
+
+		return try frames.get(0) otherwise ProfileUnreadableStackFrame
+	end 'profileOutermostNamedFrame'
+
+	function bumpProfileTally(tally ProfileTallyMap, key String)
+		tally.upsert(key, value: (try tally.get(key) otherwise 0) + 1)
+	end 'bumpProfileTally'
+
+	// ========================================================================================
+	// FREEZING THE TABLES
+	// ========================================================================================
+
+	function rankedProfileFunctions(selfByName ProfileTallyMap, totals ProfileTallyMap) returns ProfileFunctionArray
+		var rows = ProfileFunctionArray.create()
+		for (name, total) in totals 'eachNamedFrame'
+			rows.push(ProfileFunctionRow.create(name, selfSamples: try selfByName.get(name) otherwise 0, totalSamples: total))
+		end 'eachNamedFrame'
+
+		// A frame with self time is on some stack and so already in `totals` — except for a walk that lost
+		// its chain, which leaves a leaf with no path at all. The union is what keeps that row.
+		for (leaf, selfSamples) in selfByName 'eachLeaf'
+			if not totals.contains(leaf) 'notOnAnyStack'
+				rows.push(ProfileFunctionRow.create(leaf, selfSamples: selfSamples, totalSamples: 0))
+			end 'notOnAnyStack'
+		end 'eachLeaf'
+
+		rows.sort(function(left ProfileFunctionRow, right ProfileFunctionRow) gives profileRankOrder(left.selfSamples, rightSamples: right.selfSamples, leftName: left.name, rightName: right.name))
+
+		return rows
+	end 'rankedProfileFunctions'
+
+	function rankedProfileStacks(stackTotal ProfileTallyMap) returns ProfileStackArray
+		var rows = ProfileStackArray.create()
+		for (key, samples) in stackTotal 'eachStack'
+			rows.push(ProfileStackRow.create(profileKeyTail(key), samples: samples))
+		end 'eachStack'
+
+		rows.sort(function(left ProfileStackRow, right ProfileStackRow) gives profileRankOrder(left.samples, rightSamples: right.samples, leftName: left.rootFunction, rightName: right.rootFunction))
+
+		return rows
+	end 'rankedProfileStacks'
+
+	// The call tree, FLAT and ordinally sorted by path — which is what makes each node's subtree the
+	// contiguous run of nodes after it at a greater depth (see this file's header).
+	function rankedProfileNodes(pathTotal ProfileTallyMap, leaves ProfileTallyMap) returns ProfileNodeArray
+		var paths = ProfileStringArray.create()
+		for (path, _) in pathTotal 'eachPath'
+			paths.push(path)
+		end 'eachPath'
+
+		paths.sort(function(left String, right String) gives compareBytesOrdinally(left.toByteArray(), right: right.toByteArray()))
+
+		var nodes = ProfileNodeArray.create()
+		for path in paths 'eachNode'
+			let segments = path.split(ProfilePathSeparator)
+			nodes.push(ProfileNode.create(path, name: profileKeyTail(path), depth: (segments.count() - 1) as ProfileDepth, samples: try pathTotal.get(path) otherwise 0, selfSamples: try leaves.get(path) otherwise 0))
+		end 'eachNode'
+
+		return nodes
+	end 'rankedProfileNodes'
+
+	// The last segment of a separated key — a node's own name, or the frame half of a stack's identity.
+	function profileKeyTail(key String) returns String
+		let segments = key.split(ProfilePathSeparator)
+
+		return try segments.get(segments.count() - 1) otherwise key
+	end 'profileKeyTail'
+
+	// ⭐ Count DESCENDING, then name ASCENDING — one statement of it, because three lists resolve their ties
+	// this way and a report whose row order flipped between runs could not be diffed.
+	function profileRankOrder(leftSamples ProfileTally, rightSamples ProfileTally, leftName String, rightName String) returns Ordering
+		let byCount = rightSamples.compare(leftSamples)
+
+		return byCount if byCount != Ordering.equalTo else compareBytesOrdinally(leftName.toByteArray(), right: rightName.toByteArray())
+	end 'profileRankOrder'
+
+	// ========================================================================================
+	// THE TEXT FACE
+	// ========================================================================================
+
+	module function renderProfileText(report ProfileReport) returns String
+		var out = "profile: {report.exePath}{ProfileLineFeed}"
+		out.append(profileTargetStatusLine(report.targetStatus))
+
+		// ⭐ THE ACHIEVED RATE IS THE HEADLINE AND THE REQUESTED ONE IS THE PARENTHETICAL, because the
+		// achieved rate is what every percentage below was computed against while the requested rate is only
+		// what somebody typed. Both are ALWAYS printed: whether they agree is itself a measured quantity, so
+		// a report whose shape depended on it would change shape run to run.
+		out.append("samples: {report.samples} at {profileRateText(report.achievedRateHz())} Hz over {reportWholeNumberText(report.durationSeconds as ReportNumber)}s (requested {reportWholeNumberText(report.requestedRateHz as ReportNumber)} Hz){ProfileLineFeed}")
+
+		if not report.runCompleted 'stoppedEarly'
+			out.append("PARTIAL: the program was still running when sampling stopped — this profile describes the part that ran{ProfileLineFeed}")
+		end 'stoppedEarly'
+
+		if report.sparse() 'tooFew'
+			out.append("TOO FEW SAMPLES: under {ProfileMinimumTrustworthySamples}, so the shares below are arithmetic on a handful of readings rather than a measurement. Profile a longer run, or raise the rate{ProfileLineFeed}")
+		end 'tooFew'
+
+		// ⭐ ALWAYS STATED, INCLUDING AS ZERO. "How much of this could not be named" is the number that says
+		// whether to trust the rest, and a line that appears only when it is bad teaches a reader that its
+		// absence means something else.
+		out.append("unsymbolized: {report.samplesUnsymbolized} samples ({profilePercentText(report.samplesUnsymbolized, total: report.samples)}){ProfileLineFeed}")
+		out.append("stacks: {report.stacksTruncated} truncated, {report.stacksUnreadable} unreadable{ProfileLineFeed}")
+
+		out.append(renderProfileFunctions(report))
+		out.append(renderProfileTree(report))
+		out.append(renderProfileStacks(report))
+
+		return out
+	end 'renderProfileText'
+
+	// The measured program's own status. ABSENT — not zero — for a run that was still going when sampling
+	// stopped, because then nobody here watched it exit.
+	function profileTargetStatusLine(status ProfileTargetStatus) returns String
+		return match status 'observed'
+			notObserved gives ""
+			exited(code) gives "target exit code: {code}{ProfileLineFeed}"
+		end 'observed'
+	end 'profileTargetStatusLine'
+
+	function renderProfileFunctions(report ProfileReport) returns String
+		var out = "{ProfileLineFeed}{ProfileSectionRule} hot functions (self time) {ProfileSectionRule}{ProfileLineFeed}"
+
+		var hidden = 0 as ProfileTally
+		for row in report.functions 'eachFunction'
+			if profileClearsFloor(row.selfSamples, report: report) 'worthListing'
+				out.append(profileRowText(row.selfSamples, total: report.samples, depth: 0, name: row.name))
+			end 'worthListing' else 'summarized'
+				hidden = hidden + 1
+			end 'summarized'
+		end 'eachFunction'
+
+		return "{out}{profileHiddenLine(hidden, noun: FunctionsNoun, minPercent: report.minPercent)}"
+	end 'renderProfileFunctions'
+
+	function renderProfileTree(report ProfileReport) returns String
+		let walked = renderProfileTreeRange(report, first: 0, last: report.nodes.count() as ElementIndex, depth: 0)
+
+		return "{ProfileLineFeed}{ProfileSectionRule} call tree {ProfileSectionRule}{ProfileLineFeed}{walked.text}{profileHiddenLine(walked.hidden, noun: NodesNoun, minPercent: report.minPercent)}"
+	end 'renderProfileTree'
+
+	// One level of the tree and everything under it, with the rows it summarized away counted beside them. A
+	// record rather than a mutating argument: a tally handed back through one is the number a reader cannot
+	// see accumulating.
+	type ProfileTreeRender
+		export var text as String
+		export var hidden as ProfileTally
+
+		static function create(text String, hidden ProfileTally) returns ProfileTreeRender
+			return Self{text: text, hidden: hidden}
+		end 'create'
+	end 'ProfileTreeRender'
+
+	// ⭐ One level of the tree, walked in RANK order over a contiguous run of the ordinal table. A hidden node
+	// takes its whole subtree with it, because a child listed under a parent nobody printed is an orphan row.
+	function renderProfileTreeRange(report ProfileReport, first ElementIndex, last ElementIndex, depth ProfileDepth) returns ProfileTreeRender
+		var children = ElementIndexArray.create()
+		for candidate in first upto last 'eachNode'
+			if profileNodeDepth(report, slot: candidate as ElementIndex) == depth 'aChild'
+				children.push(candidate as ElementIndex)
+			end 'aChild'
+		end 'eachNode'
+
+		children.sort(function(left ElementIndex, right ElementIndex) gives profileRankOrder(profileNodeSamples(report, slot: left), rightSamples: profileNodeSamples(report, slot: right), leftName: profileNodeName(report, slot: left), rightName: profileNodeName(report, slot: right)))
+
+		var out = ""
+		var hidden = 0 as ProfileTally
+		for slot in children 'eachChild'
+			let subtreeEnd = profileSubtreeEnd(report, slot: slot, last: last)
+			if not profileClearsFloor(profileNodeSamples(report, slot: slot), report: report) 'summarized'
+				hidden = hidden + (subtreeEnd - slot) as ProfileTally
+				continue
+			end 'summarized'
+
+			out.append(profileRowText(profileNodeSamples(report, slot: slot), total: report.samples, depth: depth, name: profileNodeName(report, slot: slot)))
+			let below = renderProfileTreeRange(report, first: slot + 1, last: subtreeEnd, depth: depth + 1)
+			out.append(below.text)
+			hidden = hidden + below.hidden
+		end 'eachChild'
+
+		return ProfileTreeRender.create(out, hidden: hidden)
+	end 'renderProfileTreeRange'
+
+	// Where a node's subtree ends: the first later node no deeper than it, or the end of the enclosing range.
+	function profileSubtreeEnd(report ProfileReport, slot ElementIndex, last ElementIndex) returns ElementIndex
+		let depth = profileNodeDepth(report, slot: slot)
+		for candidate in slot + 1 upto last 'eachLater'
+			if profileNodeDepth(report, slot: candidate as ElementIndex) <= depth 'aSibling'
+				return candidate as ElementIndex
+			end 'aSibling'
+		end 'eachLater'
+
+		return last
+	end 'profileSubtreeEnd'
+
+	// The three scalar reads the tree walk makes of one node. Each ends its borrow inside itself, so a caller
+	// never holds one across a call that could touch the table.
+	function profileNodeDepth(report ProfileReport, slot ElementIndex) returns ProfileDepth
+		return (try report.nodes.get(slot) otherwise panic("profileNodeDepth: slot {slot} is past the {report.nodes.count()} nodes it was taken from")).depth
+	end 'profileNodeDepth'
+
+	function profileNodeSamples(report ProfileReport, slot ElementIndex) returns ProfileTally
+		return (try report.nodes.get(slot) otherwise panic("profileNodeSamples: slot {slot} is past the {report.nodes.count()} nodes it was taken from")).samples
+	end 'profileNodeSamples'
+
+	function profileNodeName(report ProfileReport, slot ElementIndex) returns String
+		return (try report.nodes.get(slot) otherwise panic("profileNodeName: slot {slot} is past the {report.nodes.count()} nodes it was taken from")).name
+	end 'profileNodeName'
+
+	function renderProfileStacks(report ProfileReport) returns String
+		var out = "{ProfileLineFeed}{ProfileSectionRule} stacks {ProfileSectionRule}{ProfileLineFeed}"
+		out.append("  one row per stack that ran — an OS thread's or a green thread's — named by its outermost frame{ProfileLineFeed}")
+
+		var hidden = 0 as ProfileTally
+		for row in report.stacks 'eachStack'
+			if profileClearsFloor(row.samples, report: report) 'worthListing'
+				out.append(profileRowText(row.samples, total: report.samples, depth: 0, name: row.rootFunction))
+			end 'worthListing' else 'summarized'
+				hidden = hidden + 1
+			end 'summarized'
+		end 'eachStack'
+
+		return "{out}{profileHiddenLine(hidden, noun: StacksNoun, minPercent: report.minPercent)}"
+	end 'renderProfileStacks'
+
+	function profileRowText(samples ProfileTally, total ProfileTally, depth ProfileDepth, name String) returns String
+		var indent = ""
+		for _ in 0 upto depth 'eachLevel'
+			indent.append(ProfileTreeIndentUnit)
+		end 'eachLevel'
+
+		return "{padLeft(profilePercentText(samples, total: total), width: ProfilePercentColumnWidth)}{ProfileColumnGap}{padLeft("{samples}", width: ProfileCountColumnWidth)}{ProfileColumnGap}{indent}{name}{ProfileLineFeed}"
+	end 'profileRowText'
+
+	// ⭐ How much of a section was summarized away — ALWAYS stated, including as zero, for the unsymbolized
+	// line's reason and for one more: a single stray sample in a foreign module adds one hidden row, and a
+	// conditional line would make an otherwise identical report grow a line at random.
+	function profileHiddenLine(hidden ProfileTally, noun String, minPercent ProfileShare) returns String
+		return "  ({hidden} {noun} below {reportWholeNumberText(minPercent as ReportNumber)}% not shown){ProfileLineFeed}"
+	end 'profileHiddenLine'
+
+	// Whether a row clears the reporting floor, compared as a PRODUCT rather than by dividing — so a
+	// zero-sample profile cannot divide by zero on its way to hiding everything anyway.
+	function profileClearsFloor(samples ProfileTally, report ProfileReport) returns bool
+		return (samples as ProfileShare) * ProfilePercentScale >= report.minPercent * (report.samples as ProfileShare)
+	end 'profileClearsFloor'
+
+	function profilePercentText(samples ProfileTally, total ProfileTally) returns String
+		if total == 0 'nothingMeasured'
+			return ProfileZeroPercent
+		end 'nothingMeasured'
+
+		let share = try (ProfilePercentScale * (samples as ProfileShare) / (total as ProfileShare)) otherwise panic("profilePercentText: a total of zero returned above")
+
+		return "{share:.1}%"
+	end 'profilePercentText'
+
+	// A MEASURED rate, to whole hertz — see `ProfileHalf`.
+	function profileRateText(rate ProfileRate) returns String
+		return "{trunc(rate + ProfileHalf)}"
+	end 'profileRateText'
+
+	// ========================================================================================
+	// THE COLLAPSED-STACK FACE
+	// ========================================================================================
+
+	// ⭐⭐ **`root;child;leaf <samples>`, ONE LINE PER PATH THAT RAN, AND NOTHING IS FILTERED BY THE REPORTING
+	// FLOOR.** That floor exists to keep a HUMAN's table stable; a flamegraph tool does its own thresholding
+	// and would rather be given everything. Sorted ordinally so two runs of one program produce diffable
+	// output.
+	module function renderProfileFolded(report ProfileReport) returns String
+		var lines = ProfileStringArray.create()
+		for node in report.nodes 'eachNode'
+			if node.selfSamples > 0 'aPathSamplesLandedIn'
+				lines.push("{node.path.replace(ProfilePathSeparator, with: ProfileFoldedSeparator)}{ProfileFoldedCountSeparator}{node.selfSamples}")
+			end 'aPathSamplesLandedIn'
+		end 'eachNode'
+
+		lines.sort(function(left String, right String) gives compareBytesOrdinally(left.toByteArray(), right: right.toByteArray()))
+
+		var out = ""
+		for line in lines 'eachLine'
+			out.append("{line}{ProfileLineFeed}")
+		end 'eachLine'
+
+		return out
+	end 'renderProfileFolded'
+
+	// ========================================================================================
+	// THE JSON FACE
+	// ========================================================================================
+
+	// ⭐ The FULL tables travel to an agent, unfiltered by the reporting floor: that floor keeps a printed
+	// table stable for a human, and truncating a machine-readable answer to a display setting would make this
+	// face a worse instrument than the text one.
+	module function renderProfileJson(report ProfileReport) returns String
+		var out = "\{\"exe\":{profileJsonText(report.exePath)},"
+		out.append(profileJsonTargetStatus(report.targetStatus))
+		out.append("\"runCompleted\":{report.runCompleted},")
+		out.append("\"achievedRateHz\":{reportWholeNumberText(report.achievedRateHz() as ReportNumber)},\"requestedRateHz\":{reportWholeNumberText(report.requestedRateHz as ReportNumber)},")
+		out.append("\"ticks\":{report.ticks},\"durationSeconds\":{reportWholeNumberText(report.durationSeconds as ReportNumber)},")
+		out.append("\"samples\":{report.samples},\"samplesUnsymbolized\":{report.samplesUnsymbolized},")
+		out.append("\"stacksUnreadable\":{report.stacksUnreadable},\"stacksTruncated\":{report.stacksTruncated},")
+
+		// Written only where it is TRUE, so it states a fact rather than being a field that reads false on
+		// every healthy profile.
+		if report.sparse() 'tooFew'
+			out.append("\"sparse\":true,")
+		end 'tooFew'
+
+		out.append("\"functions\":[")
+		for (iter, row) in report.functions.withIterator() 'eachFunction'
+			out.append(profileJsonComma(iter.index()))
+			out.append("\{\"name\":{profileJsonText(row.name)},\"selfSamples\":{row.selfSamples},\"totalSamples\":{row.totalSamples}\}")
+		end 'eachFunction'
+
+		out.append("],\"tree\":[")
+		for (iter, node) in report.nodes.withIterator() 'eachNode'
+			out.append(profileJsonComma(iter.index()))
+			out.append("\{\"path\":{profileJsonText(node.path.replace(ProfilePathSeparator, with: ProfileFoldedSeparator))},\"function\":{profileJsonText(node.name)},\"samples\":{node.samples},\"selfSamples\":{node.selfSamples}\}")
+		end 'eachNode'
+
+		out.append("],\"stacks\":[")
+		for (iter, row) in report.stacks.withIterator() 'eachStack'
+			out.append(profileJsonComma(iter.index()))
+			out.append("\{\"root\":{profileJsonText(row.rootFunction)},\"samples\":{row.samples}\}")
+		end 'eachStack'
+
+		out.append("]\}")
+
+		return out
+	end 'renderProfileJson'
+
+	function profileJsonTargetStatus(status ProfileTargetStatus) returns String
+		return match status 'observed'
+			notObserved gives ""
+			exited(code) gives "\"targetExitCode\":{code},"
+		end 'observed'
+	end 'profileJsonTargetStatus'
+
+	function profileJsonComma(index ElementIndex) returns String
+		return JsonElementSeparator if index > 0 else ""
+	end 'profileJsonComma'
+
+	// One JSON string. Only the two characters JSON forbids unescaped can occur in a frame name or a path
+	// this tool prints — every other byte is an identifier character, a bracket or a path separator.
+	function profileJsonText(text String) returns String
+		return "\"{text.replace(JsonBackslash, with: JsonEscapedBackslash).replace(JsonQuote, with: JsonEscapedQuote)}\""
+	end 'profileJsonText'
+
+	let JsonElementSeparator = ","
+	let JsonBackslash = "\\"
+	let JsonEscapedBackslash = "\\\\"
+	let JsonQuote = "\""
+	let JsonEscapedQuote = "\\\""
+#endif

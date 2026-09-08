@@ -1,0 +1,168 @@
+// Test: dispatch.sparse-hits-misses
+typealias N = int(i64.min to i64.max)
+
+function sparse(x N) returns N
+	return match x 'c'
+		10 gives 1
+		20 gives 2
+		30 gives 3
+		40 gives 4
+		50 gives 5
+		default gives 9
+	end 'c'
+end 'sparse'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if sparse(10) == 1 'h1'
+		n = n + 1
+	end 'h1'
+	if sparse(30) == 3 'h3'
+		n = n + 1
+	end 'h3'
+	if sparse(50) == 5 'h5'
+		n = n + 1
+	end 'h5'
+	if sparse(25) == 9 'm1'
+		n = n + 1
+	end 'm1'
+	if sparse(35) == 9 'm2'
+		n = n + 1
+	end 'm2'
+	if sparse(9) == 9 'o1'
+		n = n + 1
+	end 'o1'
+	if sparse(11) == 9 'o2'
+		n = n + 1
+	end 'o2'
+	if sparse(51) == 9 'o3'
+		n = n + 1
+	end 'o3'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+func @sparse {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 30
+    arm64.b.ge matchhi
+  matchlo:
+    arm64.cmp x0, 10
+    arm64.b.ne matchnext#9
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext#9:
+    arm64.cmp x0, 20
+    arm64.b.ne matchdefault
+  matcharm#2:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchhi:
+    arm64.cmp x0, 30
+    arm64.b.ne matchnext#10
+  matcharm#3:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matchnext#10:
+    arm64.cmp x0, 40
+    arm64.b.ne matchnext#11
+  matcharm#4:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matchnext#11:
+    arm64.cmp x0, 50
+    arm64.b.ne matchdefault
+  matcharm#5:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matchdefault:
+    arm64.movImm x0, 9
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 10
+    arm64.bl sparse
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#2
+  h1:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 30
+    arm64.bl sparse
+    arm64.cmp x0, 3
+    arm64.b.ne ifcont#4
+  h3:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 50
+    arm64.bl sparse
+    arm64.cmp x0, 5
+    arm64.b.ne ifcont#6
+  h5:
+    arm64.add x19, x19, 1
+  ifcont#6:
+    arm64.movImm x0, 25
+    arm64.bl sparse
+    arm64.cmp x0, 9
+    arm64.b.ne ifcont#8
+  m1:
+    arm64.add x19, x19, 1
+  ifcont#8:
+    arm64.movImm x0, 35
+    arm64.bl sparse
+    arm64.cmp x0, 9
+    arm64.b.ne ifcont#10
+  m2:
+    arm64.add x19, x19, 1
+  ifcont#10:
+    arm64.movImm x0, 9
+    arm64.bl sparse
+    arm64.cmp x0, 9
+    arm64.b.ne ifcont#12
+  o1:
+    arm64.add x19, x19, 1
+  ifcont#12:
+    arm64.movImm x0, 11
+    arm64.bl sparse
+    arm64.cmp x0, 9
+    arm64.b.ne ifcont#14
+  o2:
+    arm64.add x19, x19, 1
+  ifcont#14:
+    arm64.movImm x0, 51
+    arm64.bl sparse
+    arm64.cmp x0, 9
+    arm64.b.ne critsplit
+  o3:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#16
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#16:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.sparse-hits-misses.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

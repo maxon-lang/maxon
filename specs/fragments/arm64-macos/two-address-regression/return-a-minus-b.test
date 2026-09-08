@@ -1,0 +1,42 @@
+// Test: return-a-minus-b
+function diff(a Integer, b Integer) returns Integer
+	return a - b
+end 'diff'
+
+function chainDiff(a Integer, b Integer, c Integer) returns Integer
+	return a - b - c
+end 'chainDiff'
+
+function main() returns ExitCode
+	let r = diff(200, b: 137) * 1000 + chainDiff(90, b: 20, c: 5)
+	if r == 63065 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 63
+  __il_cont#4:
+    arm64.movImm x16, 1000
+    arm64.mul x0, x0, x16
+  __il_cont#3:
+    arm64.add x0, x0, 65
+    arm64.movImm x16, 63065
+    arm64.cmp x0, x16
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

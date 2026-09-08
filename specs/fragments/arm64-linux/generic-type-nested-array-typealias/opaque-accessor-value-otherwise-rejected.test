@@ -1,0 +1,34 @@
+// Test: opaque-accessor-value-otherwise-rejected
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function firstOrPopped()
+		let owned = try self.items.pop() otherwise return
+		let x = try self.items.get(0) otherwise owned
+	end 'firstOrPopped'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("first string long enough to force a heap allocation")
+	sc.push("second string long enough to force a heap allocation")
+	sc.firstOrPopped()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs a descriptor-gated incref/copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another), a distinct future slice. Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way (P1.7 slice 3b-vi-a).

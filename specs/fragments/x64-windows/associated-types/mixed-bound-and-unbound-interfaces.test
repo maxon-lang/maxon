@@ -1,0 +1,81 @@
+// Test: mixed-bound-and-unbound-interfaces
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Alpha uses A
+	function one() returns A
+end 'Alpha'
+
+interface Beta uses B
+	function two() returns B
+end 'Beta'
+
+interface Plain
+	function three() returns Integer
+end 'Plain'
+
+type Multi implements Alpha with Integer, Beta with Float, Plain
+	let n as Integer
+
+	function one() returns Integer
+		return n
+	end 'one'
+
+	function two() returns Float
+		return 1.0
+	end 'two'
+
+	function three() returns Integer
+		return 42
+	end 'three'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Multi'
+
+function main() returns ExitCode
+	let m = Multi.create(7)
+	return m.one() + m.three()
+end 'main'
+---
+ExitCode: 49
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 42
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at mixed-bound-and-unbound-interfaces.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

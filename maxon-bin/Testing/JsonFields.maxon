@@ -1,0 +1,28 @@
+// JsonFields — the ONE place a key and its value are appended to a `JsonDoc` object under
+// construction.
+//
+// ⭐⭐ **`keys` AND `children` ARE PARALLEL ARRAYS THAT `JsonNode.objectNode` ZIPS**, so a push to one
+// without the other silently shifts every field after it — a document whose values belong to the wrong
+// names, valid JSON, and wrong. One call appends to both, which is what makes that impossible.
+//
+// ⛔ **IT LIVES HERE BECAUSE TWO DOCUMENTS ARE BUILT THIS WAY AND THERE MUST NOT BE TWO COPIES.**
+// `ScaleResultJson` (`scale-test --result-json`) and `TestRender` (`maxon test --json`) both hand a
+// machine reader a document assembled field by field; the trio was written out in the first and was
+// about to be written out again in the second. One scalar per function, one function per JSON scalar
+// kind, and nothing here decides anything about a document's SHAPE — that stays with the file that
+// owns the document.
+
+export function pushJsonNumber(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value JsonFloat)
+	keys.push(key)
+	children.push(doc.add(JsonNode.numberNode(value)))
+end 'pushJsonNumber'
+
+export function pushJsonString(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value String)
+	keys.push(key)
+	children.push(doc.add(JsonNode.stringNode(value)))
+end 'pushJsonString'
+
+export function pushJsonBool(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value bool)
+	keys.push(key)
+	children.push(doc.add(JsonNode.boolNode(value)))
+end 'pushJsonBool'

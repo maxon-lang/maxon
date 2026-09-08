@@ -1,0 +1,937 @@
+// IrFunction: a named function shared across all IR phases (Maxon, Std,
+// Target). Carries both Maxon-phase types (populated by the parser) and
+// Std-phase types (populated by LowerMaxonToStd); phase-specific backend fields
+// (varSlotCount, stackSize, …) are zero-initialized and filled by the relevant
+// pass. Ownership lives on values, bindings and signatures plus explicit `own.*`
+// ops (see OwnershipKind in MaxonDialect.maxon), never in per-function
+// side-tables.
+
+// ⭐ **WHERE A FUNCTION'S NAME WAS WRITTEN — or the explicit statement that nobody wrote it.** The three
+// fields travel together because they are ONE fact, and `IrFunction.create` takes it as one argument so a
+// caller cannot supply a path and forget the line (which would position a diagnostic at `file:0:0`) or,
+// worse, forget the path and have a PARSED function read as compiler-synthesized. See `create`'s header for
+// the two readers that decide behaviour on the empty/non-empty split, and why neither can rest on a
+// convention.
+export type SourcePosition
+	export let filePath as FilePath
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	// A function the PARSER built, positioned at the token the author has to change to move it.
+	export static function declaredAt(filePath FilePath, nameTok Token) returns SourcePosition
+		return Self{filePath: filePath, line: nameTok.line, column: nameTok.column}
+	end 'declaredAt'
+
+	// A function the COMPILER built. The empty path is the discriminator the two readers above turn on, so
+	// this is a positive statement of provenance and not a default that fell through: a caller reaches it by
+	// naming it, and a reader grepping `synthesized` finds every site that claims it.
+	// ⚠ **`FilePath.empty()` AND NOT `FilePath from ""`, AND THE REASON IS REACHABILITY.** The full
+	// constructor resolves a file URL, which asks a `CharacterSet` — a `Set`, dispatching `hash` through a
+	// witness slot. This door is on the register allocator's POOL WORKER path (`createFromStd` builds the
+	// function a `RegAllocUnit` is rebuilt into), and a message that dispatches somewhere the compiler
+	// cannot name makes every address-taken function in the program message-reachable (E3143's widening) —
+	// which refused the whole pool over a module `var` in the query engine that no allocator code goes
+	// near. The two constructions answer the identical value; see `FilePath.empty`.
+	export static function synthesized() returns SourcePosition
+		return Self{filePath: FilePath.empty(), line: 0, column: 0}
+	end 'synthesized'
+end 'SourcePosition'
+
+// Sum-typed encoding of an optional `throws E` clause. `none` = non-throwing;
+// `throwing(name)` carries the bare error-enum name. Replaces a `""`-sentinel
+// String field so the absent state is structurally distinct.
+export union ThrowsClause
+	none
+	throwing(name String)
+end 'ThrowsClause'
+
+// Raised by `throwsClauseName` when the clause is `none`.
+export enum ThrowsClauseNameError implements Error
+	noThrowsClause
+end 'ThrowsClauseNameError'
+
+// Extract the throws-type name; throws for `none` so callers that only need the
+// name avoid repeating the match/break boilerplate.
+export function throwsClauseName(clause ThrowsClause) returns String throws ThrowsClauseNameError
+	match clause 'k'
+		none then throw ThrowsClauseNameError.noThrowsClause
+		throwing(name) then return name
+	end 'k'
+end 'throwsClauseName'
+
+// True when the clause carries an error type. One shared classifier for the
+// throws/non-throws decision across the semantic + lowering layers.
+export function throwsClauseIsThrowing(clause ThrowsClause) returns bool
+	return match clause 'k'
+		none gives false
+		throwing gives true
+	end 'k'
+end 'throwsClauseIsThrowing'
+
+export typealias ThrowsClauseArray = Array with ThrowsClause
+
+// ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE HELD AT AN INTERFACE TO THE `Base with Args` INSTANCE ITS
+// DECLARED TYPE NAMED (W57)** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
+// to `interfaceRef(Base)`, kept BESIDE the type rather than on it.
+//
+// ⭐ **WHY BESIDE AND NOT ON IT.** That door's header states the design and it still holds: an interface this
+// program DISPATCHES through has ONE binding per associated position *where no site says otherwise*, the
+// conformances state it, and a copy riding on the type would be one fact written twice. What that argument
+// does not cover is a SHARED GENERIC BODY, where the binding is the enclosing type's own PARAMETER —
+// `stdlib/Array.maxon`'s `Iterable with (Element, ElementIterator)` inside `type Array uses Element` — which
+// no conformance states and which differs per instantiation while the body compiles once. There the site IS
+// the only authority, so the site's answer is carried per VALUE (never per interface name, which would
+// collide with every other site's) and read only where a dispatch on THAT value needs it.
+//
+// A value with NO entry — a bare `interface`-typed parameter, a field load, a merge phi — resolves an
+// associated type exactly as it did before this column existed: from the whole-program fold, which
+// `ConformanceCheck` keeps unambiguous for exactly those positions (E3119, W59).
+//
+// It is homed in the IR tier rather than in the parser because THREE tiers read it — see
+// `IrFunction.valueExistentialInstances`.
+export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
+
+// ⛔⛔ **THE PARSER'S COLUMN IS A `ValueExistentialInstanceColumn` AND IT STOPS AT THIS BOUNDARY — an
+// `IrFunction` holds the MAP.** Two reasons, either sufficient. `createFromStd` builds one function per
+// register-allocator pool message on whichever OS thread the scheduler picked, so a placeholder shared
+// between two of them is a refcount lost update on a process-lifetime record — exit 101 on some runs and
+// not others (`Testing/IrFunctionSelfTest`). And a payload-free union case IS such a shared box. The gate
+// that catches exactly that cannot be pointed at a union either: `is` requires a struct reference (E3068),
+// so carrying the state across would delete the check that guards the hazard carrying it introduces.
+//
+// ⇒ `Parser.publishExistentialInstances` unwraps the state and hands over the map, or hands over nothing.
+
+// ⭐ **THE VALUES OF ONE FUNCTION THAT MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — see
+// `IrFunction.immutableGlobalAliasValues`. A SET rather than a list for the reason the parser's own mark is
+// one: both populations grow with the function, and a linear scan over one of them at every call argument is
+// the quadratic `Parser.immutableGlobalReads`' header records in full.
+//
+// ⚠ It is the SAME underlying `Set with ValueId` the parser calls a `ValueMarkSet`, and the hand-off at
+// `Parser.publishExistentialInstances` is an assignment rather than a copy. Two names because the two tiers
+// own different questions — the parser's alias covers four of its own mark columns and is not exported —
+// and none of the LOGIC is written twice: nothing here decides what is marked.
+export typealias GlobalAliasValueSet = Set with ValueId
+
+// The initial column for every function, and the answer for one that marks nothing. It is the parser's own
+// shared-empty set that actually rides across for a function it parsed (the parser's marks are copy-on-write
+// off their own anchor), so this exists for the functions the parser never touches — a synthesized body, a
+// Std-phase entry — which must still answer "marks nothing" rather than hold an uninitialized field.
+// Never mutated.
+let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
+
+// ⭐ The `paramGuards` column of a function `InsertRangeChecks` emitted no parameter cascade for — which is
+// every function in the module bar the handful declaring a narrowed parameter. Shared for
+// `sharedEmptyGlobalAliasValues`' reason and with its invariant: it is never mutated, because the one
+// operation that would write to it (`recordParamGuard`) REPLACES the field first.
+// ⛔ **A `var`, AND THE KEYWORD IS WHAT KEEPS THIS ANCHOR FREE.** A `let` holding an empty container is
+// IMAGE DATA (⚖ user ruling), and an immortal record cannot be co-owned: every field seeded from it — at
+// `create` and at each reset — is handed a private CLONE (`Parser.coOwnConcreteRecordForSink`). That is
+// correct but it is an allocation exactly where this anchor exists to avoid one, and it leaves the
+// copy-on-write test below unable to fire at all.
+var sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
+
+// ⭐⭐ **ONE SOURCE NAME A DEBUGGER CAN BE ASKED ABOUT, AND EVERY SSA VALUE IT EVER OWNED.**
+//
+// A name owns a SEQUENCE of values, not one: `mergeAtContinuation` mints a fresh `ValueId` where control
+// flow rejoins and a loop header mints a phi, so a `var` written in both arms of an `if` and read after it
+// is three values under one name. A channel keyed one value to one name attaches the name to the value the
+// DECLARATION produced — which is dead by the time the read happens.
+//
+// The TYPE is captured with the name because the Std tier erases it: every store below the Maxon boundary
+// carries a width and no source type at all.
+export type DebugLocalDecl
+	export var name as ByteArray
+	export var declaredType as MaxonType
+	export var valueIds as ValueIdArray
+	// ⭐ **THE NAME DENOTES A CELL ADDRESS, NOT THE VALUE** — a `var` another frame may write, or a
+	// by-reference parameter. Its values locate the CELL, so a register or a slot stated for one of them
+	// would be the address rendered as the contents; the format has no indirect kind, and the honest
+	// answer for such a binding is `optimizedOut`.
+	export var heldInACell as bool
+
+	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, heldInACell bool) returns DebugLocalDecl
+		var valueIds = ValueIdArray.create()
+		valueIds.push(firstValue)
+
+		return Self{name: name, declaredType: declaredType, valueIds: valueIds, heldInACell: heldInACell}
+	end 'create'
+end 'DebugLocalDecl'
+
+export typealias DebugLocalDeclArray = Array with DebugLocalDecl
+
+// ⭐⭐ **WHERE ONE NAMED VALUE ENDED UP, AS THE REGISTER ALLOCATOR ANSWERS IT.** Those are the only three
+// answers a location has, and `nowhere` is a real one: a value the colouring never placed is `optimizedOut`
+// in the sidecar, never a guessed slot number.
+//
+// ⚠ **`number` IS A SPILL-SLOT INDEX, NOT A DISPLACEMENT.** Turning a slot into a frame-pointer-relative
+// byte offset needs the function's frame, which is an ISA fact the allocator does not hold — so the
+// conversion happens where the sidecar is written and the two targets differ there and nowhere else.
+export typealias DebugValueLocationKind = int(0 to 2)
+
+export let DebugValueNowhere = 0 as DebugValueLocationKind
+export let DebugValueInRegister = 1 as DebugValueLocationKind
+export let DebugValueInSpillSlot = 2 as DebugValueLocationKind
+
+export typealias DebugValueNumber = int(0 to u64.max)
+
+export type DebugValueLocation
+	export var kind as DebugValueLocationKind
+	export var number as DebugValueNumber
+
+	export static function create(kind DebugValueLocationKind, number DebugValueNumber) returns DebugValueLocation
+		return Self{kind: kind, number: number}
+	end 'create'
+end 'DebugValueLocation'
+
+export typealias DebugValueLocationArray = Array with DebugValueLocation
+
+// The roster of a function nothing recorded a binding for, and the locations of one the allocator was
+// asked for none of. Shared for `sharedEmptyGlobalAliasValues`' reason and with its invariant: never
+// mutated, because the parser and the splice each REPLACE the field before anything is recorded.
+//
+// ⛔ **`createFromStd` MAY NOT REACH FOR EITHER, AND NEITHER MAY ANY PLACEHOLDER ADDED BESIDE THEM** —
+// that door is on the register allocator's pool-worker path, where storing a module-level record into a
+// fresh function retains it on whichever OS thread the scheduler picked. See its header for the full
+// argument; this is the half of it written where the next singleton will be reached for.
+let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
+let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
+
+// The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
+// no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
+// the ranged-type convention rather than pinned to a false ceiling.
+export typealias ClosureSubIndex = int(0 to u64.max)
+
+// ⭐ **A SET OF PARAMETER POSITIONS — one bit per position, 0 for the overwhelming majority that name
+// none.** It carries three facts of one shape, and the vocabulary is deliberately neutral because a
+// name that said "mutated" would be wrong at two of the three: `IrFunction.writtenParamMask` (which
+// parameters a body WRITES, the E3019 seed), `IrFunction.storageWrittenParamMask` (the E3070 seed), and
+// `SemanticCheck.buildEscapeSummary`'s masks (which parameters a body lets ESCAPE, the E3099 seed).
+// All three close over the SAME call graph through the SAME fixpoint — see
+// `SemanticCheck.propagateParamMasks` — so a second mask vocabulary would be one concept with two
+// spellings free to disagree about which bit is which.
+//
+// A BITMASK and not a `BoolArray`, for the reason `ArgFloatMask` is one: two of these are fields on
+// EVERY `IrFunction` in the program, and a per-function array would be one live heap object each for a
+// fact that is a single machine word — with `0` (no parameter is named) being both the common case and
+// the literal truth rather than a sentinel. Its width is `MaxAbiArgs`, the same ceiling `ArgFloatMask`
+// states and `Parser.requireAbiParamCount` diagnoses, so `1 shl param` always lands inside the word.
+export typealias ParamPositionMask = bits(64)
+
+// One mask per function of the module, indexed by function INDEX — the working state of a per-parameter
+// fixpoint (`SemanticCheck.buildParamMutationSummary`, `SemanticCheck.buildEscapeSummary`), before it is
+// published as the name-keyed summary a call site reads.
+export typealias ParamPositionMaskArray = Array with ParamPositionMask
+
+// Is parameter `param` in `mask`? The ONE reader of the bit order — the parser sets bits and
+// SemanticCheck's fixpoint both propagates and tests them, and a second spelling of the shift is a
+// second chance for the two ends to disagree about which bit is which.
+export function maskHasParam(mask ParamPositionMask, param ParamCount) returns bool
+	return ((mask shr param) and 1) != 0
+end 'maskHasParam'
+
+// `mask` with parameter `param`'s bit set — the ONE writer, paired with the reader above.
+export function maskWithParam(mask ParamPositionMask, param ParamCount) returns ParamPositionMask
+	return mask or (1 shl param)
+end 'maskWithParam'
+
+export type IrFunction
+	// --- Common fields (all phases) ---
+	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
+	// the way to the COFF symbol table, which writes it as bytes anyway.
+	export var name as ByteArray
+	// ⛔ **AN `IrFunction` CARRIES NO NAMESPACE, AND MUST NOT GROW ONE.** A `dir.fn()` reference is resolved
+	// at PARSE time, against `ProgramSignatures.namespaceQualifiedFunctions`, and it resolves to the BARE
+	// declared name — so by the time an `IrFunction` exists there is no namespace left to consult, and the
+	// emitted symbol is the one a bare call already produced. The authoritative copy of a file's directory
+	// is `ProgramSignatures.fileModuleDirectories`, keyed by the path every asker already holds, and unlike
+	// a per-function mirror it is the INVERTIBLE `/`-joined form a visibility question may actually be
+	// asked of.
+	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ, since N1a, by the call door**
+	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at
+	// none for the whole of P1: any file could call any other file's non-exported function.
+	export var visibility as Visibility
+	// Absolute / virtual path of the declaring file — the visibility anchor for
+	// cross-file callers. Empty for synthesized functions.
+	export var sourceFilePath as FilePath
+	export var paramCount as ParamCount
+	export var blockRefs as BlockRefArray
+	export var nextBlockId as BlockId
+	export var returnLine as LineNumber
+	// Line and column of the function-name token; zero for synthesized functions.
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
+	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
+	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
+	// false for the runtime's own scaffolding, `__module_init` and `__maxon_global_cleanup` among it: both run
+	// outside `main`, where there is no green thread to overflow. TRUE for the per-type CASCADES —
+	// `__destruct_<T>`, `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element
+	// thunks — which recurse once per LEVEL of the user's data graph. Their frame count is a property of the
+	// program's types and nothing in the runtime bounds it.
+	//
+	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS AND ONE FIELD WAS
+	// ANSWERING BOTH.** `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band)
+	// withholds the green-thread stack guard, on the stated premise that *"the scheduler core must never
+	// trigger the grower, and their kernel calls are already shimmed onto the system stack"*. That premise
+	// holds for `__module_init` / `__maxon_global_cleanup`, which run OUTSIDE `main` where no green thread
+	// exists. The CASCADES do not satisfy it: they run INSIDE `main`, on a green thread, with real frames —
+	// which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
+	// chain deep-moved to a service and released by `ServiceLoop.dropUnconsumedPayloads` SIGSEGVs 8/8 through
+	// 128 unguarded `__destruct_` frames on a 2 KB green-thread stack.
+	//
+	// ⚠ **IT IS NOT EVERY `__`-BAND FRAME A GREEN THREAD RUNS, and the flat container walkers
+	// (`__managed_*`, `__list_*`, `__drop_existential`) DELIBERATELY stay exempt.** They are not recursive:
+	// at most a couple of them sit between one cascade level's checkpoint and the next, which is exactly the
+	// free-ride `GtStackGuardMargin` is sized to cover (see `gtStackGuardMargin`, whose second term names
+	// them). The families above are the ones the margin cannot cover, because their count grows with the
+	// program's data.
+	//
+	// ⚠ It is a FIELD and not a name test, for the reason `declaredAt`'s header gives one door up: the
+	// `__`-prefix test once handed this same exemption to a user function declared in `stdlib/Builtins.maxon`
+	// and SEGFAULTED a green thread. A synthesizing caller says this out loud; nothing infers it.
+	export var needsGreenThreadStackGuard as bool
+
+	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
+	export var maxonReturnType as MaxonReturnType
+	export var maxonParamTypes as MaxonTypeArray
+	// THE MAXON TIER'S PER-VALUE TYPE ORACLE: the source-level type of every SSA value this
+	// function's ops define, DENSE by ValueId (parameter `i` owns id `i`, so `valueTags[i]` is
+	// parameter `i`'s declared type from the very first lookup).
+	//
+	// The parser builds it — it MUST, because the word operators are type-directed and a bool
+	// `and` is control flow, so the type decision cannot be deferred (see Parser.valueTags) —
+	// and it is PUBLISHED here rather than dropped at the end of the parse, because one type
+	// rule genuinely cannot run in the parser: a call ARGUMENT must agree with its parameter,
+	// and the callee may be in another file. SemanticCheck is the pass with the whole-program
+	// signatures, and this is what gives it the other half of the question. Without it,
+	// SemanticCheck would have to RE-DERIVE every value's type by walking the ops — a second
+	// type oracle, free to disagree with the parser's, which is the exact duplication
+	// TypeRules.maxon exists to prevent.
+	//
+	// TAGS, not `MaxonType`s: a Maxon union value is a heap object, so a `MaxonTypeArray` here
+	// would put one live allocation on every SSA value in the program (MaxonDialect's
+	// ValueTypeTag header has the measurement).
+	//
+	// Empty on a Std-phase function (`createFromStd`) — the tier that reads it is upstream of
+	// those.
+	export var valueTags as ValueTypeTagArray
+	// THE PARALLEL NAME COLUMN: the interned `TypeNameId` behind each SSA value's type, DENSE by
+	// ValueId in lockstep with `valueTags` (a scalar's slot holds the `UnnamedTypeId` filler). A
+	// `named`/`structRef` value carries a real id here; every other tag's is filler and is never
+	// read (the tag gates it — see MaxonDialect's `typeNameIdOf`).
+	//
+	// It IS published, for the reason `valueTags` is: the ONE call-argument identity rule that cannot
+	// live in the parser (the callee may be in another file) now needs an argument's aggregate NAME,
+	// not just its class. Two DIFFERENT structs share the `structRef` tag, so `checkArgTypes` cannot
+	// tell a `BoxA` argument from a `BoxB` one off `valueTags` alone — a wrong-struct argument would
+	// pass and, at a consuming position, be dropped under the parameter's destructor: a wild free
+	// (OPEN #54 Slice B). SemanticCheck reads THIS column, resolved against `project.typeNames`
+	// (`mergeArtifact` remaps it project-global), to reject the mismatch.
+	//
+	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
+	export var valueNameIds as TypeNameIdArray
+	// ⭐ **THE PER-VALUE BRAND COLUMN, DENSE in the same lockstep.** The generic-instance `typealias` a value
+	// was declared, built or read under (`Xs` for an `Array with Integer` an `Xs.create()` produced), or
+	// `UnnamedTypeId` for a value no alias names. An instance id is one type under several brands, and a
+	// brand is compared only once two instance ids agree (`ProgramSignatures.aggregatesConflict`). Interner
+	// ids, remapped at merge exactly as `valueNameIds` is.
+	export var valueBrandIds as TypeNameIdArray
+	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN (P1.5-A2b-2), DENSE by ValueId in lockstep with
+	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
+	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
+	// never id 0, the first parameter), so a stored 0 unambiguously means "no environment". PUBLISHED here
+	// (like `valueTags`/`valueNameIds`), and for the same reason a call-argument rule cannot live wholly in the
+	// parser: threading a function-value ARGUMENT's environment to a callee is done at LOWERING
+	// (`LowerMaxonToStd.appendCalleeEnvArgs`), the first tier that holds the callee's ALIAS-RESOLVED parameter
+	// types (a function-typed parameter may be declared in another file). The parser cannot know there which
+	// arguments land at function-typed parameters, so it publishes each value's environment here and the
+	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
+	export var valueClosureEnv as ValueIdArray
+	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK (P1.5-A2b-2), DENSE by ValueId in lockstep with `valueTags`.**
+	// True iff a value is a capturing closure LITERAL born in this function (its env is this frame's — see
+	// `Parser.markCapturingClosure`). PUBLISHED (like `valueClosureEnv`) because the INTERPROCEDURAL escape
+	// check runs at SemanticCheck (`buildEscapeSummary`/`checkArgTypes`), the first whole-program point that
+	// holds every callee's body: a capturing closure passed to a callee that PERSISTS the parameter (stores or
+	// returns it) would keep only the fn-ptr, so its captured env dangles once the frame dies — refused there.
+	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
+	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
+	export var valueIsCapturingClosure as BoolArray
+	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId.** For a
+	// value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER half — the
+	// `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the second half of
+	// the fat pointer: The compiler has no aggregate here and no slot to spill one into, so an existential is two SSA
+	// values and this is what says WHICH two.
+	//
+	// A real witness is always a minted id or a hidden parameter past the first (`>= 1`), so a stored 0
+	// unambiguously means "not an existential", exactly as `valueClosureEnv`'s does — and it is read only on
+	// the `interfaceRef` arm, where a 0 is a compiler invariant break rather than an answer.
+	//
+	// ⚠ **UNLIKE ITS SIBLINGS IT IS NOT IN LOCKSTEP WITH `valueTags`: it is GROWN ON DEMAND and stops at its
+	// HIGHEST PAIRED VALUE**, so it is normally EMPTY and never longer than it has to be. A ValueId past its
+	// end reads exactly as a 0 within it — unpaired — which is why the shortfall needs no separate answer.
+	// See `Parser.valueWitnessIds` for the ladder measurement that made it lazy.
+	//
+	// PUBLISHED here for `valueClosureEnv`'s reason, one mechanism over: threading an existential ARGUMENT's
+	// witness to a callee is done at LOWERING (`LowerMaxonToStd.appendExistentialWitnessArgs`), the first tier
+	// holding the callee's resolved parameter types — the parser cannot know there which arguments land at
+	// interface-typed parameters, so it publishes each value's witness here and the lowering reads it.
+	// Empty on a Std-phase function (`createFromStd`).
+	export var valueWitnessIds as ValueIdArray
+	// ⭐⭐ **THE PER-VALUE EXISTENTIAL-INSTANCE COLUMN (W57), SPARSE by ValueId** — see
+	// `ValueExistentialInstanceMap` above for what a `Base with Args` instance is doing beside a value whose
+	// type says only `interfaceRef(Base)`.
+	//
+	// PUBLISHED for `valueWitnessIds`' reason, one fact over (W59). W57 built it as a PARSE-TIME column
+	// because the only reader was the parser's own associated-RESULT typing. The associated FORMAL of that
+	// same dispatch is decided at LOWERING (`LowerMaxonToStd.witnessFormalType`) and the refusal that used to
+	// make the formal decidable whole-program is decided at `ConformanceCheck` — two later tiers asking the
+	// SAME question about the SAME receiver, and neither can re-derive the answer: the `with` arguments live
+	// on no type and in no signature the callee's own body can reach. So the parser hands the column on
+	// instead of dropping it, exactly as it hands on the witness pairing.
+	//
+	// ⚠⚠ **IT IS THE ONE VALUE COLUMN `create` DOES NOT TAKE, BECAUSE IT CANNOT BE HANDED OVER BY REFERENCE.**
+	// Its siblings are ARRAYS the parser grows in place, so a function created before its body is parsed sees
+	// every later write through the reference it was built with. This one is a MAP with a copy-on-write
+	// anchor: `Parser.recordValueExistentialInstance` REPLACES the field with a fresh map on the first write
+	// (the shared empty is never mutated), so the reference `create` was handed is the EMPTY one for exactly
+	// the functions that have something to say. `Parser.publishExistentialInstances` fills it once the body is
+	// complete instead. MEASURED before that existed: `stdlib/Array.maxon`'s `from` published nothing, so
+	// every reader below fell back to the whole-program fold and E3119 still refused the corpus.
+	//
+	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
+	// existential, which is very nearly all of them.
+	export var valueExistentialInstances as ValueExistentialInstanceMap
+	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
+	export var throwsTypeName as ThrowsClause
+	// Persistent per-function symbol table, handed off by the parser. Std-phase
+	// functions leave this empty.
+	export var scope as Scope
+
+	// --- Std/Target-phase types (populated by LowerMaxonToStd) ---
+	export var returnType as StdReturnType
+	export var paramTypes as StdTypeArray
+
+	// --- Backend frame-size scalars (zero until the relevant pass runs) ---
+	// Total number of slot-addressed variables used by ISel; spill slots sit
+	// below the variable area.
+	export var varSlotCount as VarSlot
+	// Running tally of bytes the function needs on the stack (locals + spills +
+	// callee-save area); the cold-spill splitter sets it to its spill-slot bytes,
+	// and the prologue/epilogue pass aligns and emits `sub rsp, N`.
+	export var stackSize as StackSize
+	// Bytes reserved at the bottom of the frame for outgoing call args that
+	// overflow the register file.
+	export var outgoingArgSize as StackSize
+
+	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER (P1.5-A2a).** The k-th non-capturing closure literal in this
+	// function's body lifts to a top-level function named `<name>$closure_<k>`; `parseClosureExpression`
+	// reads this value for `k` and post-increments it. Source-deterministic — the same source mints the
+	// same closure names regardless of how many sibling functions parsed before it. Zero for a function
+	// with no closures. A closure body threads its OWN lifted `IrFunction` as the enclosing function, so a
+	// closure nested inside a closure uses THAT function's counter (`<outer>$closure_0$closure_0`).
+	export var closureSubCounter as ClosureSubIndex
+
+	// ⭐⭐ **TWO MASKS OVER THE SAME BIT SPACE ASK TWO DIFFERENT QUESTIONS, AND the compiler ANSWERS THEM
+	// DIFFERENTLY. READ BOTH HEADERS BEFORE TOUCHING EITHER.**
+	//
+	// | question | mask |
+	// |---|---|
+	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	//
+	// ⚠ **NEITHER MASK CONTAINS THE OTHER. THEY DIVERGE IN FOUR PLACES, IN BOTH DIRECTIONS** — this list is
+	// exhaustive, and it is exhaustive on purpose, because "a superset" is the plausible summary and it is
+	// FALSE (measured: `function tagIt(s String) s.append("!") end` raises E3019 on a `let` argument while
+	// its storage bit is deliberately clear):
+	//
+	// | the write | `writtenParamMask` | `storageWrittenParamMask` | why |
+	// |---|---|---|---|
+	// | self-field alias (`items.clear()`) or self-field store (`items = …`) | no | **yes** | the ruling below |
+	// | field-chain container whose base is a parameter (`bag.items.clear()`) | no | **yes** | E3019 records no field write, by the same ruling |
+	// | `String` receiver that is a parameter | **yes** | no | a String is not a container and hands out no borrow |
+	// | `Set` receiver that is a parameter | **yes** | no | likewise |
+	// | `__ManagedList` INSERTION (`ml.insertLast(x)`) | **yes** | no | it writes the record but frees no node |
+	//
+	// The last three are E3070's SCOPE and not an omission: every borrow it tracks is a reference INTO a
+	// container — an element, a chain node handle, a cursor — so recording a `String`/`Set` write would refuse
+	// `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`, and recording an
+	// insertion would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a`
+	// (`/specs/managed-list.md:core.insert-first-multiple`). ⚠ **Do not "simplify" E3019's call-site check to
+	// read the storage column** — it would silently stop diagnosing those rows, with no compile error anywhere.
+	//
+	// ⛔⛔ **AND THE THIRD ROW IS WHY THE STORAGE COLUMN IS NO LONGER SEEDED WHERE E3019's IS.** Both used to
+	// be set by `Parser.noteReceiverWrite` off ONE flag — *"does this method write its receiver"* — so a
+	// surface whose two answers differ got E3019's answer for E3070 as well. `__ManagedList` is that surface,
+	// and the gap was a measured 0xC0000005 across a call. The storage column is now seeded by
+	// `Parser.noteBorrowSubjectWrite`, which is E3070's OWN door and already takes E3070's own answer, so the
+	// same-body half and the cross-function half cannot come apart again.
+	//
+	// ⭐⭐ **THE FIRST ROW HAS AN EXCEPTION AS OF W49 WAVE 8, AND IT IS THE ONE SELF-FIELD THAT IS NOT A
+	// FIELD OF ANYTHING**: the inline `managed` of a fused builtin wrapper (`String`, `Character`, `Array`,
+	// `Vector`) is the receiver's record EMBEDDED WHOLE at offset 0, so `managed.append(…)` inside
+	// `String.append` writes the caller's own record and answers **yes / yes**. It is keyed on
+	// `StructLayout.conformsToBuiltinManagedWrapper`, NOT on the field being managed — `Bag.items` is
+	// managed too and must keep answering **no / yes**, which
+	// `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` pins. `Parser.receiverOwnerMask`
+	// carries the argument; this table carries the shape.
+	//
+	// They look alike and are not, and the divergence is a RULING the corpus pins. E3070 needs the opposite
+	// answer about the very same call, because `b.wipe()` clearing `self.items` frees an element a caller
+	// borrowed out of `b.items` (measured: the oracle prints 44, the compiler read freed memory and printed
+	// 4557430888798830399).
+	//
+	// ⚠ **ONE MASK CANNOT CARRY BOTH, AND EACH OF THE TWO DOORS HAS ITS OWN PINNED GUARD — SEEN RED, not
+	// assumed.** Feeding E3019's column from either door turns a committed case red, and they are DIFFERENT
+	// cases, because the two doors reach E3019 by different routes:
+	//
+	//   • the SELF-FIELD STORE (`Parser.emitCheckedSelfFieldStore`, `total = total + v`) is guarded by
+	//     `specs/self-keyword.md:self-with-params` — `let acc = Accumulator.create(0)` then
+	//     `acc.add(10)` must compile and return **42**. Sabotaged: three E3019s at `acc.add`/`acc.addTwice`.
+	//   • the SELF-FIELD ALIAS receiver (`Parser.receiverOwnerMask`, `items.clear()`) is guarded by
+	//     `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` and
+	//     `for-iterated-self-field:self-field-writable-after-the-loop`. Sabotaged: E3019 on both, and
+	//     `self-with-params` stays GREEN — it does not cover this door.
+	//
+	// So there are two columns, each named for its question, each pointing here.
+	//
+	// ⭐ **THE PARAMETERS THIS BODY ITSELF WRITES (E3019, the call-site half)** — bit `i` set iff a
+	// receiver-writing container method was called on parameter `i`'s record, or a field of `self` was
+	// assigned. Seeded by the PARSER, at the one site that already decides whether a receiver may be
+	// written (`Parser.noteReceiverWrite`) and at the one self-field store, so "which methods write their
+	// receiver" is answered exactly once in the program and never re-derived from lowered runtime callee
+	// names. SemanticCheck then closes it under the call graph (`buildParamMutationSummary`) — a callee
+	// that writes what it was handed makes its caller write what IT was handed — and the closure is what
+	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
+	export var writtenParamMask as ParamPositionMask
+
+	// ⭐ **THE PARAMETERS WHOSE BORROWABLE STORAGE THIS BODY FREES (E3070's cross-function half)** — bit `i`
+	// set iff the body performs a write reachable through parameter `i` that can invalidate a borrow, a field
+	// of its own receiver included. It is NOT a superset of `writtenParamMask` above and not a subset either;
+	// the table there enumerates every divergence and why each one is the answer it is.
+	//
+	// ⚠ **"ARRAY STORAGE" IS WHAT THIS SENTENCE SAID, AND THE WORD WAS A USE-AFTER-FREE THREE TIMES OVER
+	// (W-BORROW).** Two of the compiler's write doors gated themselves on the field or receiver being an `Array`
+	// INSTANCE, which was true of the language only while the `Array` was the sole surface handing out
+	// borrows. It is not: a `List` and a `Vector` mint element borrows through the same
+	// `emitContainerElementAccessor`, a `__ManagedList` mints a node handle, a buffer mints a cursor — and a
+	// STORE does not free an element at all, it drops the whole RECORD and cascades into everything that
+	// record owns, so a nested struct field's store frees the array inside it.
+	//
+	// Seeded by the PARSER at three doors, each asking the question at its own honest width:
+	//   • `Parser.noteBorrowSubjectWrite` — a write THROUGH a container, gated on the per-surface answer to
+	//     *"does this method invalidate an outstanding borrow"* (`managedListMethodFreesANode` and its three
+	//     siblings). E3070's same-body half is recorded by the same call, off the same flag.
+	//   • `Parser.emitCheckedSelfFieldStore` and `Parser.parseFieldAssignment` — a store that REPLACES a
+	//     field, gated on the field type being MANAGED, because the drop cascades.
+	// Closed under the call graph by the least fixpoint (`buildParamMutationSummary`), so `wipe()` calling a
+	// `reset()` that clears the field inherits the bit. Read only by `BorrowCheck.mutationSiteWrites`, to
+	// answer "does handing this borrowed container — as an argument or as a RECEIVER — reach a write of it?".
+	// Zero for a Std-phase function.
+	//
+	// ⚠⚠ **IT IS CLOSED OVER A WIDER EDGE SET THAN THE MASK ABOVE, AND THIS COMMENT SAID "THE SAME EDGES"
+	// UNTIL ARR4 MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** The two doors above are the roster's;
+	// a member served from `stdlib/Array.maxon` reaches neither, and `SemanticCheck.collectCallParamEdges`
+	// records an edge only for an argument that IS a parameter — which `self.items` is not. `wipe()` whose
+	// body is `items.truncate(0)` was therefore summarised as writing nothing. `BorrowCheck.StorageReachEdge`
+	// is the third route the parser records and the fourth row of the table above in edge form; every member
+	// the `Array` retirement chain strikes moves onto it.
+	export var storageWrittenParamMask as ParamPositionMask
+
+	// ⭐⭐ **THE PARAMETERS THIS BODY WRITES THROUGH BY *ANY* MEANS (W117) — A FOURTH QUESTION OVER THE SAME
+	// TERRITORY, AND ITS OWN COLUMN FOR THE REASON THE THIRD ONE IS.**
+	//
+	// | question | column |
+	// |---|---|
+	// | "does passing an immutable BINDING here make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body FREE borrowable storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
+	// | **"does this body write the record this parameter denotes, at all?"** | **this** (W117) |
+	//
+	// ⛔⛔ **IT EXISTS BECAUSE THE FIRST COLUMN CANNOT BE WIDENED TO ANSWER IT.** `function bump(b Box) b.n =
+	// 99 end` called as `bump(a)` on a `let a` compiles and prints `n 99` — a direct field store through a
+	// parameter is legal for an immutable BINDING — so adding it to E3019's column would refuse a legal
+	// program. It is NOT legal through a `let`-declared GLOBAL, where `let G = Box.make()` + `bump(G)`
+	// silently mutates a global the program declared immutable. Same shape, different subject, different
+	// answer — which is exactly what a separate column is for.
+	//
+	// Seeded by the PARSER at every door that writes through a binding — the receiver door
+	// (`Parser.noteReceiverWrite`), the field-store door (`Parser.parseFieldAssignment`) and the self-field
+	// store — and closed under the call graph by the SAME least fixpoint as the two above
+	// (`buildParamMutationSummary`), so `bump` forwarding to a `poke` that writes inherits the bit. Read only
+	// by E3019's call-site check, and only for an argument that ALIASES AN IMMUTABLE GLOBAL: an ordinary
+	// immutable binding is still judged by `writtenParamMask` alone, which is what keeps that diagnostic's
+	// scope byte-identical. Zero for a Std-phase function.
+	export var writesThroughParamMask as ParamPositionMask
+
+	// ⭐⭐ **WHICH OF THIS FUNCTION'S SSA VALUES MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — the
+	// parser's per-value mark, published so the call-site half of the rule can read it. The PARSER decides it
+	// (a global load, an owned promotion of one, a merge that joined one, and the result of a call to a
+	// function the sweep published as returning one); the CALL-SITE check is SemanticCheck's, because only it
+	// holds the whole-program summary of what a callee writes. Exactly the split E3019 already has, one column
+	// over: the receiver half is the parser's and the argument half cannot be.
+	//
+	// ⚡ It is the parser's own set handed over whole (`Parser.publishExistentialInstances`), which is that
+	// side's shared-empty for every function that marked nothing — so the column costs one shared object per
+	// compile rather than one set per function.
+	export var immutableGlobalAliasValues as GlobalAliasValueSet
+
+	// ⭐⭐ **DOES THIS BODY ASSIGN INTO AN AGGREGATE THAT ALREADY EXISTED? — the effect summary's OWN seed, and
+	// a THIRD question over the same territory as the two masks above, which is exactly why it is its own
+	// column and not a reading of theirs.**
+	//
+	// | question | column |
+	// |---|---|
+	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	// | "does this body write a field of a box it did not just build?" | **this** (E3064) |
+	//
+	// ⛔⛔ **IT EXISTS BECAUSE READING E3070's COLUMN INSTEAD WAS A MEASURED FALSE REJECTION.** The effect
+	// summary first seeded off the two masks above; both decline a field store that frees nothing (see the
+	// divergence table), so `self.n = self.n + 1` on an INT field set neither, a method doing exactly that was
+	// classified effect-free, and `(_, _) = c.bump()` — a legal program — was refused
+	// E3064. That is a fact recorded for one consumer reused as the floor for another, where the first one's
+	// deliberate narrowing is the second one's hole.
+	//
+	// ⛔ **AND WIDENING E3070's COLUMN WOULD HAVE BEEN THE WRONG CURE**: its narrowing is its SCOPE (every
+	// borrow it tracks is a reference into a container), and a `String`/`Set` row added to it refuses
+	// `b.wipe()` while `b.items` is borrowed — a legal program, one pass over. Three questions, three columns.
+	//
+	// ⚠ **IT IS SET AT `Parser.emitFieldWrite` AND `Parser.writeBackPayload`, the two ASSIGNMENT emitters, and
+	// deliberately NOT at `emitFieldStore`** — the raw store, which is also how a FRESH box is filled
+	// (`Self{…}`, a tuple literal). Setting it there would mark every function that builds a value, including
+	// the `makePair` the acceptance case turns on, and the summary would be vacuous rather than conservative.
+	// It over-approximates in the safe direction instead: a write into a box this frame allocated (`var p =
+	// Point.create(1)` then `p.x = 5`) sets it too, costing a missed diagnostic and never a refusal.
+	export var assignsIntoAnExistingAggregate as bool
+
+	// ⭐ **IT ASSIGNS MODULE-LEVEL STORAGE — the effect summary's "modifies global state" seed (E3064).**
+	// Set at `Parser.emitCheckedGlobalStore`, the one door every `g = …` on a module `let`/`var` passes
+	// through, and read by `SemanticCheck.functionShowsAnEffect`.
+	//
+	// ⚠ **IT IS A FIELD BECAUSE THE OP CANNOT ANSWER IT.** A global's read and its write both open with the
+	// same `globalAddr` (`Parser.emitGlobalAddr` is the one door to either), so an op walk that counts
+	// `globalAddr` counts every READ as a write — which made a function that merely consults a module
+	// constant effectful, and no stdlib member effect-free. The distinction exists only at the emitter, so
+	// that is where it is recorded; `assignsIntoAnExistingAggregate` above carries the identical argument one
+	// storage kind over.
+	export var writesModuleStorage as bool
+
+	// ⛔⛔ **THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be concluded from its ops,
+	// and an analysis that reads them is reading an empty function that is not what the source says.**
+	// `Parser.skipUnreachedFunctionBody` leaves ONE block holding a bare `retVoid` and no ops at all, which is
+	// indistinguishable from a body that genuinely does nothing.
+	//
+	// ⛔ MEASURED: read as ops, `Map.remove` — which sets a slot state and decrements a count — classifies
+	// EFFECT-FREE whenever the walk has not demanded its body, which refuses `stdlib/Subprocess.maxon`'s own
+	// `_ = pending.remove(name)` with E3064. The verdict would then turn on nothing but whether some other
+	// call site happened to make the body reachable, which is exactly the kind of answer an analysis must not
+	// give.
+	export var bodyWasSkippedAsUnreached as bool
+
+	// ⭐⭐ **THIS FUNCTION HANDS ITS TUPLE BACK IN THE TWO RETURN REGISTERS** — the THIRD writer of the
+	// secondary return slot, beside a throwing function's error flag and an interface-returning one's
+	// witness half (`functionUsesSecondaryReturnSlot`).
+	//
+	// ⚠ **IT IS A FIELD BECAUSE THE DECLARATION CANNOT ANSWER IT.** The other two disjuncts are pure
+	// functions of the return type and the `throws` clause; this one is a WHOLE-MODULE verdict — it depends
+	// on the body's return shapes, on every call site, and on whether anything takes the address. So it is
+	// decided once, by `applyValueTupleReturn`, and recorded here for the readers below the Std tier: wasm's
+	// `funcSignatureResultValTypes`, whose functype must declare the second result the body writes or the
+	// module does not validate.
+	export var usesValueTupleReturn as bool
+
+	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
+	// masks on this record that is not a diagnostic's seed.**
+	//
+	// Bit `i` set iff parameter `i` arrives as the address of an 8-byte cell rather than as a value: the
+	// callee's reads of it are `loadIndirect`s and its `x = 99` a `storeIndirect`, so the write lands in the
+	// caller's frame. Every caller of this function must agree, which is why — unlike the two masks above —
+	// it is NOT closed over the call graph here and NOT derived from this body's ops at all.
+	//
+	// ⚠ **IT IS COPIED DOWN FROM `ProgramSignatures.paramIsByRef`, WHICH IS THE AUTHORITY, AND THAT IS THE
+	// WHOLE POINT.** The ABI has to be settled before ANY body is parsed — a caller in another file emits its
+	// argument long before this function's own body is read — so the fact is decided by the whole-program
+	// declaration sweep and merely RECORDED here, by `Parser.bindParameters`, for the tiers below the parser
+	// that cannot reach the sweep. `LowerMaxonToStd` is the reader that needs it: a by-reference `float`
+	// parameter carries an ADDRESS, so its machine type is the integer word and not `f64`, and nothing in the
+	// declared type says so.
+	//
+	// ⚠ **DO NOT FEED IT INTO THE E3019 FIXPOINT, AND DO NOT DERIVE IT FROM ONE.** Whether a `let` argument
+	// is refused is `writtenParamMask`'s question and is deliberately WIDER (it is closed over the call graph
+	// from a body's own writes); this is narrower and is not a closure of anything. The two agree on most
+	// functions and are different facts, exactly as the two masks above are.
+	//
+	// Zero for a Std-phase function and for the overwhelming majority of Maxon ones — on a program that
+	// reassigns no parameter it is zero everywhere, which is what makes the feature free.
+	export var reassignedParamMask as ParamPositionMask
+
+	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an
+	// element out of, which binding took each borrow, and every write it saw go through one. It rides
+	// here for the reason `writtenParamMask` above does, and it is the SAME reason: the fact is the
+	// PARSER's (a binding exists nowhere else in the compiler — `let` mints no op), while the pass that must
+	// read it needs the whole program (the free-call half asks `ParamMutationSummary` whether the
+	// callee writes the parameter the array filled).
+	//
+	// ⚠ Points at `sharedEmptyBorrowFacts` until the body takes its first borrow, so a function that
+	// borrows nothing — which is nearly every function — costs one shared reference and no allocation.
+	// `Parser.borrowFactsOf` is the copy-on-write. Empty for a Std-phase function: the tier that reads
+	// it is upstream.
+	export var borrowFacts as BorrowFacts
+	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS (EC7)** —
+	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
+	// narrowed parameter; it therefore survives `shallowCopy`/`relocateFunction` as the shared empty by
+	// construction, since every relocation happens at or before the lowering and this column is filled after
+	// it. Read by `InlineLeaves`, which is the only pass that can prove a cascade dead from OUTSIDE the
+	// function it stands in.
+	export var paramGuards as RangeCheckParamGuardArray
+	// ⭐ **THE SOURCE BINDINGS OF THIS FUNCTION, PUBLISHED BY THE PARSER FOR THE DEBUG-INFO SIDECAR** (see
+	// `DebugLocalDecl`). Empty unless the build is writing one — no pass reads it and nothing branches on
+	// it, which is what keeps the emitted image byte-identical either way.
+	//
+	// ⚠ The ValueIds in it are the PARSER's, and they stay meaningful all the way to the register allocator
+	// because the same `IrFunction` object is carried through Maxon → Std → Target and ids pass through
+	// verbatim (`LowerMaxonToStd`'s header).
+	export var debugLocals as DebugLocalDeclArray
+	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
+	// record in its `valueIds` order, spliced home by the register allocator (`spliceRegAllocResult`). Kept
+	// beside the roster it answers rather than inside it, because the two are filled by tiers a worker-pool
+	// boundary apart and only their ORDER can cross it.
+	export var debugLocalLocations as DebugValueLocationArray
+
+	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
+	// populated; Std-phase fields default. Visibility defaults to `file` so the
+	// parser must positively widen it — synthesized functions stay file-private.
+	//
+	// `valueTags` and `valueNameIds` are taken, not created: the parser has already seeded both with
+	// the parameter types before it gets here, and it goes on pushing into them — BY REFERENCE, in
+	// lockstep — as the body's values are minted. Constructing empty ones here and having the parser
+	// overwrite them at the end of the body would leave dead arrays per function on the heap
+	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
+	//
+	// ⭐⭐ **`declaredAt` IS REQUIRED, AND THAT IS WHAT MAKES PROVENANCE A CONSTRUCTED FACT RATHER THAN A
+	// CONVENTION.** FOUR readers decide behaviour on whether `sourceFilePath` is empty:
+	//
+	//   * `TargetPrinter.isRuntimeFunction` withholds the green-thread stack guard from the runtime's own
+	//     scaffolding.
+	//   * `FunctionNameIndex.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
+	//     an installer that ran twice (a panic).
+	//   * `DeadFunctionElimination.markCompilerOwnedRoot` tells those same two apart (A1w) for a name the
+	//     compiler ROOTS rather than emits — the half of that rule with no pair to count.
+	//   * `SplitLiveRanges.relievePressure` relieves a full-pool register overflow here instead of REFUSING
+	//     it (E5001), because that refusal is an instruction to an author and this function has none — and
+	//     the diagnostic cannot even be built for one, every route it chases ending in a parser table.
+	//     ⚠ It is the ONE reader that wants the WIDE set rather than `isRuntimeFunction`'s conjunction: a
+	//     synthesized builtin body wearing no `__` prefix has no author either.
+	//
+	// None of the three can be satisfied by a caller's good intentions: this used to hardcode an empty path
+	// and leave every caller to overwrite it a few lines later, so a caller that forgot would have made a
+	// PARSED function read as synthesized at ALL THREE — silently, as a wrong answer rather than a compile
+	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
+	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
+	// caller says so out loud.
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+		return Self{
+			name: name,
+			visibility: Visibility.file,
+			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			sourceFilePath: declaredAt.filePath,
+			paramCount: paramCount,
+			blockRefs: BlockRefArray.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			nameLine: declaredAt.line,
+			nameColumn: declaredAt.column,
+			maxonReturnType: maxonReturnType,
+			maxonParamTypes: maxonParamTypes,
+			valueTags: valueTags,
+			valueNameIds: valueNameIds,
+			valueBrandIds: valueBrandIds,
+			valueClosureEnv: valueClosureEnv,
+			valueIsCapturingClosure: valueIsCapturingClosure,
+			valueWitnessIds: valueWitnessIds,
+			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			throwsTypeName: throwsTypeName,
+			scope: Scope.create(),
+			returnType: StdReturnType.void,
+			paramTypes: StdTypeArray.create(),
+			varSlotCount: 0,
+			stackSize: 0,
+			outgoingArgSize: 0,
+			closureSubCounter: 0,
+			writtenParamMask: 0,
+			reassignedParamMask: 0,
+			storageWrittenParamMask: 0,
+			writesThroughParamMask: 0,
+			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
+			assignsIntoAnExistingAggregate: false,
+			writesModuleStorage: false,
+			bodyWasSkippedAsUnreached: false,
+			usesValueTupleReturn: false,
+			borrowFacts: sharedEmptyBorrowFacts,
+			paramGuards: sharedEmptyParamGuards,
+			debugLocals: sharedEmptyDebugLocals,
+			debugLocalLocations: sharedEmptyDebugValueLocations
+		}
+	end 'create'
+
+	// Create an IrFunction at the Std phase or later. Std-phase type fields are
+	// populated; Maxon-phase fields default. Used by the runtime installers and the entry stubs — every
+	// caller synthesizes a helper and wants it callable from anywhere, so visibility defaults to `global`.
+	//
+	// ⚠ **NO PARSED FUNCTION COMES THROUGH THIS DOOR, and that is load-bearing rather than incidental**:
+	// the position is `SourcePosition.synthesized()`, and `FunctionNameIndex.refuseDuplicateFunctionName` reads exactly
+	// that to tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
+	// isRuntimeFunction` reads it for the GT stack-guard exemption). Unlike `create`, this door takes no
+	// position argument, because there is no caller it could come from: every one of them synthesizes.
+	//
+	// `needsGreenThreadStackGuard` defaults to false because most callers here install a runtime primitive
+	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
+	// do not — see the field.
+	//
+	// ⛔⛔ **ITS SIX MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
+	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the register allocator's POOL WORKER path:
+	// `RegAllocUnit` rebuilds one function per message, on whichever green thread the scheduler picked.
+	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
+	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
+	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make
+	// impossible. Six small empties per call, on a door the parser never takes (`create` is the parser's,
+	// and it keeps the singletons for its thousands of functions).
+	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+		let declaredAt = SourcePosition.synthesized()
+		return Self{
+			name: name,
+			visibility: Visibility.global,
+			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			sourceFilePath: declaredAt.filePath,
+			paramCount: paramCount,
+			blockRefs: BlockRefArray.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			nameLine: declaredAt.line,
+			nameColumn: declaredAt.column,
+			maxonReturnType: MaxonReturnType.void,
+			maxonParamTypes: MaxonTypeArray.create(),
+			valueTags: ValueTypeTagArray.create(),
+			valueNameIds: TypeNameIdArray.create(),
+			valueBrandIds: TypeNameIdArray.create(),
+			valueClosureEnv: ValueIdArray.create(),
+			valueIsCapturingClosure: BoolArray.create(),
+			valueWitnessIds: ValueIdArray.create(),
+			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			throwsTypeName: throwsTypeName,
+			scope: Scope.create(),
+			returnType: returnType,
+			paramTypes: paramTypes,
+			varSlotCount: 0,
+			stackSize: 0,
+			outgoingArgSize: 0,
+			closureSubCounter: 0,
+			writtenParamMask: 0,
+			reassignedParamMask: 0,
+			storageWrittenParamMask: 0,
+			writesThroughParamMask: 0,
+			immutableGlobalAliasValues: GlobalAliasValueSet.create(),
+			assignsIntoAnExistingAggregate: false,
+			writesModuleStorage: false,
+			bodyWasSkippedAsUnreached: false,
+			usesValueTupleReturn: false,
+			borrowFacts: BorrowFacts.create(),
+			paramGuards: RangeCheckParamGuardArray.create(),
+			debugLocals: DebugLocalDeclArray.create(),
+			debugLocalLocations: DebugValueLocationArray.create()
+		}
+	end 'createFromStd'
+
+	// A SHALLOW copy of the signature + type info, with a fresh-empty `blockRefs`.
+	// Deliberately NOT a clone: `maxonParamTypes`, `paramTypes` and `scope` are
+	// SHARED with `src` by reference, because no consumer mutates them in place.
+	// Only `blockRefs` is fresh — callers that need the source's block references
+	// must carry them over explicitly, and that empty-list contract is what
+	// `relocateFunction` (and the backends that rebuild `blockRefs` themselves)
+	// rely on. See `relocateFunction` for the variant that preserves them, shifted
+	// by a block offset.
+	export static function shallowCopy(src IrFunction) returns IrFunction
+		return Self{
+			name: src.name,
+			visibility: src.visibility,
+			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
+			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
+			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
+			sourceFilePath: src.sourceFilePath,
+			paramCount: src.paramCount,
+			blockRefs: BlockRefArray.create(),
+			nextBlockId: src.nextBlockId,
+			returnLine: src.returnLine,
+			nameLine: src.nameLine,
+			nameColumn: src.nameColumn,
+			maxonReturnType: src.maxonReturnType,
+			maxonParamTypes: src.maxonParamTypes,
+			valueTags: src.valueTags,
+			debugLocals: src.debugLocals,
+			debugLocalLocations: src.debugLocalLocations,
+			valueNameIds: src.valueNameIds,
+			valueBrandIds: src.valueBrandIds,
+			valueClosureEnv: src.valueClosureEnv,
+			valueIsCapturingClosure: src.valueIsCapturingClosure,
+			valueWitnessIds: src.valueWitnessIds,
+			valueExistentialInstances: src.valueExistentialInstances,
+			throwsTypeName: src.throwsTypeName,
+			scope: src.scope,
+			returnType: src.returnType,
+			paramTypes: src.paramTypes,
+			varSlotCount: src.varSlotCount,
+			stackSize: src.stackSize,
+			outgoingArgSize: src.outgoingArgSize,
+			closureSubCounter: src.closureSubCounter,
+			writtenParamMask: src.writtenParamMask,
+			reassignedParamMask: src.reassignedParamMask,
+			storageWrittenParamMask: src.storageWrittenParamMask,
+			writesThroughParamMask: src.writesThroughParamMask,
+			immutableGlobalAliasValues: src.immutableGlobalAliasValues,
+			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
+			writesModuleStorage: src.writesModuleStorage,
+			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
+			usesValueTupleReturn: src.usesValueTupleReturn,
+			borrowFacts: src.borrowFacts,
+			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
+			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
+			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
+			// BLOCK IDS into a function whose blocks the copy has yet to be given.
+			paramGuards: sharedEmptyParamGuards
+		}
+	end 'shallowCopy'
+
+	// RELOCATION, not copying: a shallow copy that also carries the source's
+	// `blockRefs` across, shifting each by `blockOffset` (0 = verbatim). The shift is
+	// the whole point — `IrModule.merge` appends a source module's blocks after the
+	// destination's, so every ref into them moves by the destination's prior block
+	// count. Offset 0 serves a backend that needs the function to keep pointing at the
+	// source's body blocks in place.
+	export static function relocateFunction(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
+		var relocated = IrFunction.shallowCopy(src)
+		for blockRef in src.blockRefs 'eachBlock'
+			relocated.blockRefs.push(blockRef + blockOffset)
+		end 'eachBlock'
+		return relocated
+	end 'relocateFunction'
+
+	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
+	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting
+	// it frees the internal `vars` map + frame stacks while leaving a valid
+	// (empty) Scope in place.
+	// Record one emitted parameter cascade. COPY-ON-WRITE off the shared empty, exactly as the parser's
+	// value columns are and for their reason: the overwhelming majority of functions declare no narrowed
+	// parameter and must not pay an allocation to say so.
+	export function recordParamGuard(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray)
+		if self.paramGuards is sharedEmptyParamGuards 'stillShared'
+			self.paramGuards = RangeCheckParamGuardArray.create()
+		end 'stillShared'
+		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
+	end 'recordParamGuard'
+
+	export function releaseScope()
+		self.scope.reset()
+	end 'releaseScope'
+end 'IrFunction'
+
+export typealias IrFunctionArray = Array with IrFunction

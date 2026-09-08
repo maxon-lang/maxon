@@ -1,0 +1,608 @@
+// Shared types for code emission results, used across all backends.
+//
+// This file's reason to exist is the `CodeResult` struct — the format-neutral
+// backend↔writer boundary (backend emits it, the PE/ELF/Mach-O writers consume
+// it). It and the per-function `FunctionCodeChunk` are defined at the bottom of
+// this file; the reusable, Target-independent relocation / symbol /
+// label-classification value types they are built from live above.
+//
+// `FunctionCodeChunk.funcAdrpRelocs` and `CodeResult.arm64FuncAdrpRelocs` carry a
+// `leaFuncAddr`'s address pair from the encoder through concat to both arm64
+// writers.
+
+export typealias RelocSlotIndex = int(0 to u64.max)
+
+// A relocation records a code location that needs patching after section layout.
+// Used for IAT entries (Windows PE) and GOT entries (Linux ELF).
+export type Relocation
+	export var codeOffset as CodeOffset
+	export var slotIndex as RelocSlotIndex
+
+	export static function create(codeOffset CodeOffset, slotIndex RelocSlotIndex) returns Relocation
+		return Self{codeOffset: codeOffset, slotIndex: slotIndex}
+	end 'create'
+end 'Relocation'
+
+export typealias RelocationArray = Array with Relocation
+
+// An intra-module call fixup: a code offset that needs patching to the final
+// placement of `targetName`'s `.text` chunk. The offset's space (whole-module
+// vs chunk-local) depends on the array it lives in; consumers must know which.
+export type CallFixup
+	export var codeOffset as CodeOffset
+	export var targetName as ByteArray
+
+	export static function create(codeOffset CodeOffset, targetName ByteArray) returns CallFixup
+		return Self{codeOffset: codeOffset, targetName: targetName}
+	end 'create'
+end 'CallFixup'
+
+export typealias CallFixupArray = Array with CallFixup
+
+// A DebugSymbol pairs a function name with its byte offset in `.text`.
+// Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
+export type DebugSymbol
+	export var name as ByteArray
+	export var codeOffset as CodeOffset
+
+	export static function create(name ByteArray, codeOffset CodeOffset) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset}
+	end 'create'
+end 'DebugSymbol'
+
+export typealias DebugSymbolArray = Array with DebugSymbol
+export typealias DebugSymbolIndexMap = Map with (ByteArray, CodeOffset)
+
+// Relocation kind for code-to-rdata references — every arm patches a slot inside CODE with a reference into
+// rdata/symdata/data. The `.rdata`-INTERNAL patch (a witness-table method slot or a layout descriptor's
+// function slot, filled with a `.text` function's absolute VA) is NOT one of these: it patches the rdata IMAGE, not the `.text`
+// bytes, so it rides the data table's `GlobalDataTable.pendingRdataRelocs` (see PendingRdataReloc), not this
+// code-relocation channel.
+export union RdataRelocKind
+	ripRelDisp32
+	symdataRipRelDisp32
+	dataSectionRipRelDisp32
+	arm64Adr
+	arm64LdrLiteral
+	symdataArm64Adr
+	dataSectionArm64Adr
+	arm64Adrp
+	arm64PageOff
+	dataSectionArm64Adrp
+	dataSectionArm64PageOff
+end 'RdataRelocKind'
+
+// A relocation from code to a data section (.rdata / .symtab / .data).
+// `rdataLabel` names the global data entry.
+export type RdataRelocation
+	export var codeOffset as CodeOffset
+	export var rdataLabel as String
+	// ⭐ **TWO MEANINGS, ONE FIELD, DECIDED BY WHERE THE RELOCATION IS.** On a CHUNK-LOCAL relocation it is
+	// the ADDEND — a byte offset INSIDE the named object, which only the encoder knows (the slot a coverage
+	// counter takes inside the reserved `.data` run). On the rebased one concat mints it is the offset of the
+	// target within its SECTION, which is that addend plus the object's own placement. Concat is the single
+	// writer of the second form and folds the first into it, so a writer sees one number and adds only the
+	// section RVA.
+	export var rdataOffset as ByteOffset
+	export var kind as RdataRelocKind
+
+	export static function create(codeOffset CodeOffset, rdataLabel String, kind RdataRelocKind, addend ByteOffset = 0) returns RdataRelocation
+		return Self{codeOffset: codeOffset, rdataLabel: rdataLabel, rdataOffset: addend, kind: kind}
+	end 'create'
+end 'RdataRelocation'
+
+export typealias RdataRelocationArray = Array with RdataRelocation
+
+// Build a `funcName → .text offset` index from the debug symbols the concat pass filed (one per function
+// chunk). It is the data-table twin of concat's own `labelOffsets` — which is discarded once intra-module
+// calls are resolved — recovered from the symbols that DO survive onto the CodeResult, and it is what a
+// managed-opaque descriptor's `funcAbs64InRdata` relocation resolves its element destructor's address through.
+export function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
+	var index = DebugSymbolIndexMap.create()
+	for sym in debugSymbols 'each'
+		index.upsert(sym.name, value: sym.codeOffset)
+	end 'each'
+	return index
+end 'buildDebugSymbolIndex'
+
+// ⭐ **BAKE EVERY `.rdata` SLOT THAT HOLDS A `.text` ADDRESS** — the DATA→TEXT sibling of the writers'
+// String-buffer bake. For each `funcAbs64InRdata` relocation, write the target function's ABSOLUTE `.text` VA
+// (`textBaseVa + funcOffset`) into the `.rdata` IMAGE at `rdataOffsetOf(rdataLabel) + offsetInLabel`.
+// `textBaseVa` is the writer's `.text` base — `ImageBase + textRva` (PE, fixed-base) or `textVAddr` (ELF) — so
+// the SAME loop serves both x64 writers over an absolute VA, exactly as `patchRdataAbsRelocs`/
+// `bakeElfRdataAbsRelocs` share their shape.
+//
+// ⚠ **THREE MECHANISMS RIDE THIS ONE CHANNEL, AND THE MESSAGES BELOW MUST NAME ALL THREE.** A
+// managed-opaque-`T` `Array` descriptor's `destroyFunc@40` (P1.7 slice 3b-ii) and its `copyFunc@32` (slice
+// 3b-vi-b-β) are two of them; the third — and the one a cross-target program is FAR likelier to hit, because
+// it needs no generics at all beyond a `where` clause — is a WITNESS-TABLE METHOD SLOT
+// (`LowerMaxonToStd.ensureWitnessTable`), where every interface method of every conformance is stamped this
+// way. A diagnostic that names only the descriptor sends a reader hunting for a managed opaque array in a
+// program that has none.
+//
+// ⭐ **THIS FUNCTION IS THE FIXED-BASE BAKE** (PE + ELF): it writes an absolute `.text` VA, so it is correct
+// exactly when the image LOADS WHERE IT SAYS IT DOES. That is a property of the FORMAT, not of the CPU — a PE
+// with a fixed `ImageBase` and a static `ET_EXEC` ELF both qualify on either CPU, which is why this is
+// CPU-invariant and both x64 and arm64 route through it unchanged. (It read `target.cpu != x64` until P1.7a
+// slice 2b-iv-C, which was over-broad in the one direction that costs a target: arm64-LINUX writes the same
+// static ELF x64-linux does and had always been able to take this bake.)
+//
+// The two backends that are NOT fixed-base bake the same slots with a different VALUE, since the blob layout
+// is target-agnostic: wasm writes the callee's funcref-TABLE INDEX (`StdToWasm.bakeFuncTableIndexRelocs`,
+// slice 2b-iv-B), and Mach-O — always PIE on Apple Silicon — writes a dyld CHAINED-FIXUP REBASE holding the
+// target's image-base-relative offset (`MachOWriter.writeMachoRdataRebases`, slice 2b-iv-C). Neither reaches
+// here. A `funcName` in no debug symbol is a DCE-root gap — the target function was not installed — which
+// panics LOUD rather than baking a stale VA into freed code.
+export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, textBaseVa MachineWord)
+	if globalData.pendingRdataRelocs.count() == 0 'none'
+		return
+	end 'none'
+
+	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
+	for reloc in globalData.pendingRdataRelocs 'each'
+		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("bakeFuncAbs64Relocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
+		patchQword(rdata, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: textBaseVa + (funcOffset as MachineWord))
+	end 'each'
+end 'bakeFuncAbs64Relocs'
+
+// ⭐ **WHERE a `funcAbs64InRdata` relocation's 8 bytes LIVE in the `.rdata` image — ONE fact, read by ALL
+// THREE FILLERS.** The thesis of the filler split (P1.7a slices 2b-iv-B and 2b-iv-C) is that only the VALUE
+// in the slot is format-specific: `bakeFuncAbs64Relocs` writes an absolute `.text` VA (fixed-base PE/ELF),
+// `StdToWasm.bakeFuncTableIndexRelocs` a funcref-table index, and `MachOWriter.writeMachoRdataRebases` a
+// dyld chained-fixup rebase holding an image-base-relative offset. The DESTINATION is not, so spelling it
+// three times is the one way they could still drift — and the drift would be a wrong byte offset on ONE
+// target only, corrupting a witness blob or a layout descriptor with no diagnostic anywhere, because a slot
+// is 8 opaque bytes to every reader.
+export function rdataFuncSlotOffset(globalData GlobalDataTable, reloc PendingRdataReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel
+end 'rdataFuncSlotOffset'
+
+// ⭐ **WHERE a `PendingRdataAbsReloc`'s 8 bytes LIVE, and where its TARGET lives** — the data→data twin of
+// the two lines above, read by all FOUR fillers for their reason: only the VALUE written is format-specific
+// (an `ImageBase`-relative VA on PE, an absolute VA on ELF, a chained rebase on Mach-O, a linear-memory
+// address on wasm), and spelling the destination four times is the one way they could still drift.
+export function rdataAbsSlotOffset(globalData GlobalDataTable, reloc PendingRdataAbsReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel
+end 'rdataAbsSlotOffset'
+
+// The `.rdata` offset a `PendingRdataAbsReloc` points AT — the number each writer turns into its own
+// format's address. Named beside the slot it fills so the two halves of one fixup read alike.
+export function rdataAbsTargetOffset(globalData GlobalDataTable, reloc PendingRdataAbsReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.targetLabel)
+end 'rdataAbsTargetOffset'
+
+// An arm64 function-address ADRP+ADD relocation — the `.text`-function twin of the
+// `.rdata`/`.data` `RdataRelocation` channel. `arm64EmitLeaFuncAddr` emits the
+// address-materialisation pair `ADRP Rd, page(func)` + `ADD Rd, Rd, #pageoff(func)`
+// with placeholder immediates and files ONE of these AT THE ADRP (`codeOffset`); the
+// paired ADD is always at `codeOffset + 4`. `funcName` names the target function; the
+// concat pass resolves it to `textOffset` — the target's offset within `.text` — via
+// the function-label map, exactly as `RdataRelocation.rdataOffset` is resolved from
+// `rdataLabel` (a writer knows section VMADDRs, not per-function offsets). Both writers
+// then patch the pair against `textVmAddr + textOffset` (page into the ADRP, page
+// offset into the ADD). ADRP+ADD is fully PC-relative, so a PIE slide moves the
+// instruction and its target together — no dyld rebase entry is needed.
+export type Arm64FuncAdrpReloc
+	export var codeOffset as CodeOffset
+	export var funcName as ByteArray
+	export var textOffset as CodeOffset
+
+	export static function create(codeOffset CodeOffset, funcName ByteArray) returns Arm64FuncAdrpReloc
+		return Self{codeOffset: codeOffset, funcName: funcName, textOffset: 0}
+	end 'create'
+end 'Arm64FuncAdrpReloc'
+
+export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
+
+// The byte width of ONE jump-table slot — a signed 32-bit table-base-relative code offset. Named once
+// here because it is a THREE-party fact: the backend reserves `slots * JumpTableSlotBytes` bytes of `.rdata`
+// (`GlobalDataTable.registerJumpTable`), the encoders index the table with a *4 scale (`movsxd`/`ldrsw`),
+// and `patchJumpTables` writes each slot as a 4-byte little-endian i32. Widen it in one place and all three
+// move together; three literal `4`s would drift.
+export let JumpTableSlotBytes = 4 as BytePos
+
+// ⭐ **THE BLOCK-ADDRESS RELOCATION** — the one genuinely new link-time mechanism this slice adds. A dense
+// `match` emits an `.rdata` jump table of N i32 slots, each holding `targetBlockVA − tableBaseVA` (a
+// table-base-relative signed offset — position-independent, needing NO runtime rebase on any target, where
+// an 8-byte absolute rdata pointer would need a dyld rebase on Mach-O). The offsets cannot be known until
+// section layout: `tableBase` is in `.rdata`, the target blocks in `.text`, so both section addresses must
+// be fixed first. So the encoder leaves the slots zero and files ONE of these per switch; the WRITER patches
+// them into the `.rdata` IMAGE once it knows both sections' addresses (`patchJumpTables`).
+//
+// It rides a DEDICATED array (the `Arm64FuncAdrpReloc` pattern — a cross-section reference resolved at concat
+// and patched at write) rather than the code→section `RdataRelocation` stream: this patches a slot INSIDE
+// `.rdata` (not a disp32 in code) against a `.text` BLOCK (not a section offset), which `RdataRelocation`'s
+// (codeOffset, rdataLabel→rdataOffset) shape does not fit. Target-NEUTRAL — the i32 entry format is identical
+// on x64 and arm64, so both backends file these and one `patchJumpTables` serves every writer.
+//
+// `tableLabel` names the `.rdata` blob (`GlobalDataTable.rdataOffsetOf` gives its base). `targetTextOffsets[i]`
+// is slot `i`'s target block's `.text` offset — CHUNK-LOCAL when the chunk emits it, rebased to a whole-`.text`
+// offset by the concat pass (`+ funcStart`, exactly as `Arm64FuncAdrpReloc.textOffset` is resolved). One
+// record per switch (not per slot), so the whole N-slot table is patched from a single walk.
+type JumpTableReloc
+	export var tableLabel as String
+	export var targetTextOffsets as CodeOffsetArray
+
+	export static function create(tableLabel String, targetTextOffsets CodeOffsetArray) returns JumpTableReloc
+		return Self{tableLabel: tableLabel, targetTextOffsets: targetTextOffsets}
+	end 'create'
+end 'JumpTableReloc'
+
+export typealias JumpTableRelocArray = Array with JumpTableReloc
+
+// A jump-table op awaiting its per-slot block-address relocations: recorded as the op is ENCODED (when
+// forward block offsets are not yet known) and expanded into a `JumpTableReloc` after the block loop, when
+// the chunk's block→offset map is complete. Shared by both backends (the format is target-neutral).
+export type JumpTablePending
+	export var tableLabel as String
+	export var caseTargets as BlockIdArray
+
+	export static function create(tableLabel String, caseTargets BlockIdArray) returns JumpTablePending
+		return Self{tableLabel: tableLabel, caseTargets: caseTargets}
+	end 'create'
+end 'JumpTablePending'
+
+export typealias JumpTablePendingArray = Array with JumpTablePending
+
+// ⭐ Expand each encoded jump table into a `JumpTableReloc` whose `targetTextOffsets[i]` is slot `i`'s
+// target block's CHUNK-LOCAL offset — every block's offset is known once its chunk's block loop has run, and
+// the concat pass rebases these to whole-`.text` offsets. This IS the block→text-offset map the coordinator's
+// crux note asked to expose to concat: the chunk's own `BlockOffsetTable`, read per slot. Shared by the x64 and
+// arm64 chunk emitters.
+export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockOffsetTable) returns JumpTableRelocArray
+	var out = JumpTableRelocArray.create()
+	for pending in jumpTables 'eachTable'
+		var targetOffsets = CodeOffsetArray.create()
+		for target in pending.caseTargets 'eachSlot'
+			targetOffsets.push(try blockOffsets.get(target) otherwise panic("resolveJumpTableRelocs: jump-table slot targets block {target}, which was never laid out in this chunk — every case target is a block in this function"))
+		end 'eachSlot'
+		out.push(JumpTableReloc.create(pending.tableLabel, targetTextOffsets: targetOffsets))
+	end 'eachTable'
+	return out
+end 'resolveJumpTableRelocs'
+
+// One jump-table reloc with its per-slot target offsets shifted from chunk-local to whole-`.text` by the
+// chunk's start. Shared by the x64 and arm64 concat passes (the reloc format is target-neutral).
+export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset) returns JumpTableReloc
+	var rebased = CodeOffsetArray.create()
+	for off in reloc.targetTextOffsets 'each'
+		rebased.push(funcStart + off)
+	end 'each'
+	return JumpTableReloc.create(reloc.tableLabel, targetTextOffsets: rebased)
+end 'rebaseJumpTableReloc'
+
+// ⭐ **ONE CHUNK'S DEBUG INFO, FOLDED INTO THE WHOLE-MODULE TABLES.** Both native concat passes call
+// it at the spot they push a `DebugSymbol`, which is the one place holding a chunk and its `.text`
+// start. `codeEnd` is `funcStart + chunk.code.count()` — exact and O(1), where a search of the symbol
+// table for the next function would be neither.
+export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount))
+	for row in chunk.lineRows 'eachRow'
+		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId))
+	end 'eachRow'
+	// The coverage channel rides the same rebase, in the same call, so a point's `.text` address and its
+	// function's range cannot be folded from two different placements of one chunk.
+	for point in chunk.covPointOffsets 'eachPoint'
+		covPointOffsets.push(CovPointOffset.create(funcStart + point.codeOffset, pointId: point.pointId))
+	end 'eachPoint'
+end 'foldChunkDebugInfo'
+
+// ⭐ **PATCH EVERY JUMP-TABLE SLOT into the `.rdata` IMAGE**, shared by all three writers. `rdata` is the
+// section image about to be written; `textAddr`/`rdataAddr` are the two sections' resolved addresses (an RVA
+// for the fixed-base PE, a VA for the PIE ELF/Mach-O — the arithmetic is identical because each slot is a
+// DIFFERENCE of the two, so the image base cancels). Each slot `i` gets `targetBlockAddr − tableBaseAddr`
+// written as a signed 32-bit little-endian value at `tableBase + i * JumpTableSlotBytes`, exactly the value
+// the runtime `tableBase + entry` reconstructs into the target block's address. Runs on the image BEFORE it
+// is written (like `patchRdataAbsRelocs`), so the patched bytes reach the file.
+export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, globalData GlobalDataTable, textAddr MachineWord, rdataAddr MachineWord)
+	for reloc in relocs 'eachTable'
+		let tableBase = globalData.rdataOffsetOf(reloc.tableLabel)
+		let tableBaseAddr = rdataAddr + (tableBase as MachineWord)
+		for (iter, targetTextOffset) in reloc.targetTextOffsets.withIterator() 'eachSlot'
+			let slotIndex = iter.index()
+			let targetAddr = textAddr + targetTextOffset
+			let entry = jumpTableEntry(targetAddr, tableBaseAddr: tableBaseAddr, tableLabel: reloc.tableLabel, slotIndex: slotIndex)
+			// The blob already holds `JumpTableSlotBytes` zero placeholder bytes here (reserved by
+			// `registerJumpTable`), so this overwrites the slot in place via the shared little-endian dword
+			// patcher rather than growing the image.
+			patchDword(rdata, offset: tableBase + (slotIndex as ByteOffset) * JumpTableSlotBytes, value: entry)
+		end 'eachSlot'
+	end 'eachTable'
+end 'patchJumpTables'
+
+// The signed 32-bit table-base-relative offset for one slot: `targetAddr − tableBaseAddr`, returned as its
+// 32-bit two's-complement bit pattern (`patchDword` writes the low four bytes). Both blocks and the table
+// sit in the SAME image, so the true delta fits i32 for any program the backend can produce (a `.text` far
+// larger than 2 GiB is not reachable at this rung) — but a delta that did NOT fit would silently truncate
+// to a wrong jump, so it is checked and a violation is a loud link error, not a corrupt table.
+function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementIndex) returns MachineWord
+	let delta = (targetAddr as ParsedInt) - (tableBaseAddr as ParsedInt)
+	if delta < I32MinValue or delta > I32MaxValue 'outOfReach'
+		panic("patchJumpTables: slot {slotIndex} of '{tableLabel}' resolves to offset {delta}, outside the signed 32-bit reach of a jump-table entry — the code section has grown beyond 2 GiB from its jump tables")
+	end 'outOfReach'
+	return (delta and 0xFFFFFFFF) as MachineWord
+end 'jumpTableEntry'
+
+// The i32 reach a jump-table entry (a table-base-relative signed offset) must stay within.
+let I32MinValue = -0x80000000 as ParsedInt
+let I32MaxValue = 0x7FFFFFFF as ParsedInt
+
+// ONE ROW OF THE EMITTED LINE TABLE: at `codeOffset`, execution is at the source position `spanId`
+// names. Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat exactly
+// as a jump-table reloc is.
+export type DebugLineRow
+	export var codeOffset as CodeOffset
+	export var spanId as SpanId
+
+	export static function create(codeOffset CodeOffset, spanId SpanId) returns DebugLineRow
+		return Self{codeOffset: codeOffset, spanId: spanId}
+	end 'create'
+end 'DebugLineRow'
+
+export typealias DebugLineRowArray = Array with DebugLineRow
+
+// ⭐⭐ **WHERE ONE COVERAGE POINT'S INCREMENT LANDED IN `.text`.** A point whose id never appears here got
+// no code at all — the optimizer deleted what it anchored — and the sidecar reports that as ELIMINATED,
+// which is a different fact from a zero counter (real code that never ran) and from no point at all.
+// Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat exactly as a line
+// row is.
+export type CovPointOffset
+	export var codeOffset as CodeOffset
+	export var pointId as CovPointId
+
+	export static function create(codeOffset CodeOffset, pointId CovPointId) returns CovPointOffset
+		return Self{codeOffset: codeOffset, pointId: pointId}
+	end 'create'
+end 'CovPointOffset'
+
+export typealias CovPointOffsetArray = Array with CovPointOffset
+
+// ⭐⭐ **STATEMENT GRANULARITY IS A PROPERTY OF THIS TABLE, NOT OF THE CARRIER.** Every op carries a
+// span; a row is written only where the span CHANGES, and every row written is a statement boundary.
+// That is what makes a step land on statements without one mark being placed anywhere upstream — the
+// parser needs no statement marking at all.
+//
+// A positionless op does NOT close the run: a spill in the middle of a statement is still that
+// statement's code, so the row that opened it still describes the offset.
+export type DebugLineRowBuilder
+	export var rows as DebugLineRowArray
+	var last as SpanId
+	var armed as bool
+
+	export static function create(armed bool) returns DebugLineRowBuilder
+		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, armed: armed}
+	end 'create'
+
+	export function note(spanId SpanId, codeOffset CodeOffset)
+		if not self.armed or spanId == NoSpanId or spanId == self.last 'noRowHere'
+			return
+		end 'noRowHere'
+
+		self.rows.push(DebugLineRow.create(codeOffset, spanId: spanId))
+		self.last = spanId
+	end 'note'
+end 'DebugLineRowBuilder'
+
+// One function as the debug-info sidecar names it: where its code sits in `.text`, how much frame it
+// reserves, and how many parameters it takes. Filled at the concat, which is the one place that holds
+// both a chunk and its whole-`.text` start.
+export type DebugFunctionRange
+	export var name as ByteArray
+	export var codeStart as CodeOffset
+	export var codeEnd as CodeOffset
+	export var frameSize as StackSize
+	export var paramCount as ParamCount
+
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount) returns DebugFunctionRange
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount}
+	end 'create'
+end 'DebugFunctionRange'
+
+export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
+
+// Per-function code chunk. B2's incremental backend emits one chunk per
+// function, then a module-level fixup pass concatenates them into the final
+// `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
+// always 0 — kept as a field for clarity and future flexibility); the concat
+// pass shifts every fixup by the chunk's start offset before writing the final
+// CodeResult.
+//
+// `code` holds the raw machine bytes for one function (prologue + body +
+// epilogue). `callFixups` records intra-module call sites to patch once every
+// chunk's placement is known. `rdataRelocs` records code→rdata references
+// (chunk-local `codeOffset`, shifted at concat time). `iatRelocs` mirrors that
+// for Windows IAT entries. `rdataConstants` captures the rdata constants this
+// chunk's code registered lazily during emission (float/mask constants), so a
+// cache HIT that skips op emission still re-registers them; empty for the
+// `return 42` slice. `funcAdrpRelocs` records this chunk's arm64 `leaFuncAddr`
+// address pairs (chunk-local `codeOffset`, rebased at concat like `callFixups`);
+// empty for every x64 chunk and for any arm64 chunk that takes no function value.
+export type FunctionCodeChunk
+	export var funcName as ByteArray
+	export var code as ByteArray
+	export var entryOffset as CodeOffset
+	export var callFixups as CallFixupArray
+	export var rdataRelocs as RdataRelocationArray
+	export var iatRelocs as RelocationArray
+	export var rdataConstants as GlobalDataTable
+	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
+	// This chunk's jump-table block-address relocations (chunk-local `targetTextOffsets`, rebased at concat
+	// exactly like `funcAdrpRelocs`). Resolved after the block loop, when every block's chunk-local offset is
+	// known; empty for any function with no dense `match`.
+	export var jumpTableRelocs as JumpTableRelocArray
+	// This chunk's line rows, at CHUNK-LOCAL code offsets (rebased at concat like `jumpTableRelocs`).
+	// Empty on every build that did not ask for debug info, and on every hand-assembled runtime chunk.
+	export var lineRows as DebugLineRowArray
+	// Where each coverage counter this chunk emitted landed, at CHUNK-LOCAL code offsets (rebased at concat
+	// like `lineRows`). Empty on every build that did not ask for `--coverage`.
+	export var covPointOffsets as CovPointOffsetArray
+	// The frame this chunk's prologue reserves and the arity its function was declared with — the two
+	// facts a sidecar's function record carries that the code bytes do not. Both 0 for a hand-assembled
+	// chunk, which has no `IrFunction` behind it.
+	export var frameSize as StackSize
+	export var paramCount as ParamCount
+
+	export static function create(funcName ByteArray) returns FunctionCodeChunk
+		return Self{
+			funcName: funcName,
+			code: ByteArray.create(),
+			entryOffset: 0,
+			callFixups: CallFixupArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rdataConstants: GlobalDataTable.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			lineRows: DebugLineRowArray.create(),
+			covPointOffsets: CovPointOffsetArray.create(),
+			frameSize: 0,
+			paramCount: 0
+		}
+	end 'create'
+
+	// Assemble a chunk from an emitter's accumulated buffers in one shot. The
+	// per-op emitter mutates local `var` buffers (`code`/`callFixups`/…) then hands
+	// them here, keeping the chunk itself an immutable `let` at the call site.
+	// `funcAdrpRelocs` starts empty and is assigned by the arm64 encoder after the
+	// fact (only its chunks carry any), so this signature — shared by both x64
+	// runtimes — stays unchanged.
+	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
+		return Self{
+			funcName: funcName,
+			code: code,
+			entryOffset: 0,
+			callFixups: callFixups,
+			rdataRelocs: rdataRelocs,
+			iatRelocs: iatRelocs,
+			rdataConstants: rdataConstants,
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			lineRows: DebugLineRowArray.create(),
+			covPointOffsets: CovPointOffsetArray.create(),
+			frameSize: 0,
+			paramCount: 0
+		}
+	end 'createWith'
+end 'FunctionCodeChunk'
+
+export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
+
+// CodeResult bundles the emitted machine code with the data needed to finish
+// writing an executable and the IR module(s) that produced it. This is the
+// format-neutral seam the PE/ELF/Mach-O writers consume unchanged.
+//
+// `targetModule` holds the final TargetModule used by the IR printer /
+// diagnostics consumer. `stdModule` carries the mid-level module the backend
+// lowered FROM: Std IS the machine-level IR (see StdDialect), and the wasm
+// backend consumes it directly instead of going through a target dialect, so it
+// reads this field. x64/PE ignore it. `dataPrelude`
+// holds the initial `.data` bytes for top-level / static globals (empty for
+// `return 42`). `debugSymbols` pairs function names with `.text` offsets for symbol-table
+// emission.
+//
+// `wasmCoreModule` is the wasm backend's ONE output: a complete WASI-Preview2
+// CORE module as a byte blob (magic + sections), not a `.text` image. The wasm
+// path fills it and leaves every machine-code field empty, because it consumes
+// the StdModule directly with no register allocation and no Target dialect (see
+// StdToWasm); `writeWasm` reads it and wraps it into a component. Empty for every
+// other backend.
+//
+// `arm64FuncAdrpRelocs` carries the arm64 `leaFuncAddr` address pairs the concat
+// pass rebased and resolved; both arm64 writers patch them against `.text`'s
+// VMADDR (`patchArm64FuncAdrpRelocs`). Empty for the x64/PE and wasm paths.
+export type CodeResult
+	export var code as ByteArray
+	export var mainCallFixupOffset as CodeOffset
+	export var relocations as RelocationArray
+	export var globalData as GlobalDataTable
+	export var targetModule as TargetModule
+	export var stdModule as StdModule
+	export var rdata as ByteArray
+	export var rdataRelocations as RdataRelocationArray
+	export var symdata as ByteArray
+	export var dataPrelude as ByteArray
+	export var debugSymbols as DebugSymbolArray
+	export var wasmCoreModule as ByteArray
+	export var arm64FuncAdrpRelocs as Arm64FuncAdrpRelocArray
+	// The whole module's jump-table block-address relocations, rebased to whole-`.text` offsets by the
+	// concat pass; each writer patches them into the `.rdata` image with `patchJumpTables`. Empty for the
+	// wasm path (its `br_table` needs no relocation) and for any program with no dense `match`.
+	export var jumpTableRelocs as JumpTableRelocArray
+	// ⭐ **THE CHUNKS THIS BACKEND ASSEMBLED, RETAINED FOR THE ONE READER THAT HAS NO OTHER ROUTE TO
+	// THEM.** A HAND-ASSEMBLED chunk — the panic runtime, the green-thread pieces, arm64's entry stub —
+	// is raw bytes rather than `TargetOp`s, so it never enters `targetModule.functions` and
+	// `printTargetModule` cannot render it as IR. It is addressable by NAME all the same
+	// (`FunctionCodeChunk.funcName`), and a ```RequiredRuntime block naming one renders these bytes.
+	//
+	// ⚠ **IT IS THE CHUNK'S OWN BYTES, NOT A SLICE OF `code`, AND THAT IS THE WHOLE POINT.** `code` is
+	// the CONCATENATED `.text` with every intra-module call resolved to a rel32 and (once the writer
+	// runs) every IAT reference patched to an RVA — values that move when anything ELSE in the program
+	// changes size. A golden cut from it would go red on an unrelated edit to the test's own `main`. A
+	// chunk's own buffer is fixed at assembly time and depends on nothing outside the chunk, exactly as
+	// a printed IR body's branch targets are labels rather than displacements.
+	//
+	// Retaining the array is a LIFETIME, not a copy: these are the same chunk objects the concat pass
+	// walked, so nothing is allocated for it. Empty for the wasm path, which builds no chunks at all.
+	export var codeChunks as FunctionCodeChunkArray
+	// ⭐ **WHAT THE `.mxdbg` SIDECAR IS BUILT FROM, AND THE ONLY THING ANY OF IT IS READ BY.** No pass
+	// reads either table and nothing branches on one, which is what makes the emitted image identical
+	// whether or not they were filled. Both empty on a build that did not ask for debug info.
+	export var debugFunctions as DebugFunctionRangeArray
+	// Every function's line rows, concatenated in `.text` order and rebased to whole-`.text` offsets, so
+	// the table is ascending by construction and the writer asserts that rather than sorting.
+	export var debugLineRows as DebugLineRowArray
+	// ⭐ Where every coverage counter landed in `.text`, whole-module and rebased. EMPTY unless the build
+	// asked for `--coverage`; a point the sidecar cannot find here is ELIMINATED.
+	export var covPointOffsets as CovPointOffsetArray
+
+	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
+		return Self{
+			code: code,
+			mainCallFixupOffset: mainCallFixupOffset,
+			relocations: relocations,
+			globalData: globalData,
+			targetModule: targetModule,
+			stdModule: stdModule,
+			rdata: rdata,
+			rdataRelocations: rdataRelocations,
+			symdata: symdata,
+			dataPrelude: ByteArray.create(),
+			debugSymbols: DebugSymbolArray.create(),
+			wasmCoreModule: ByteArray.create(),
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			codeChunks: FunctionCodeChunkArray.create(),
+			debugFunctions: DebugFunctionRangeArray.create(),
+			debugLineRows: DebugLineRowArray.create(),
+			covPointOffsets: CovPointOffsetArray.create()
+		}
+	end 'create'
+
+	// The wasm backend's CodeResult: it emits a whole CORE module as a byte blob rather than a
+	// `.text` image + relocations, so every machine-code field is empty and `wasmCoreModule` carries
+	// the output. `targetModule` is an empty module — the wasm path never builds a Target dialect —
+	// and `stdModule` is retained for the IR printer / diagnostics, exactly as the x64/arm64 path
+	// retains it. `writeWasm` reads `wasmCoreModule` and wraps it into a Preview2 component.
+	export static function forWasm(stdModule StdModule, wasmCoreModule ByteArray) returns CodeResult
+		return Self{
+			code: ByteArray.create(),
+			mainCallFixupOffset: 0,
+			relocations: RelocationArray.create(),
+			globalData: GlobalDataTable.create(),
+			targetModule: TargetModule.create(),
+			stdModule: stdModule,
+			rdata: ByteArray.create(),
+			rdataRelocations: RdataRelocationArray.create(),
+			symdata: ByteArray.create(),
+			dataPrelude: ByteArray.create(),
+			debugSymbols: DebugSymbolArray.create(),
+			wasmCoreModule: wasmCoreModule,
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create(),
+			codeChunks: FunctionCodeChunkArray.create(),
+			debugFunctions: DebugFunctionRangeArray.create(),
+			debugLineRows: DebugLineRowArray.create(),
+			covPointOffsets: CovPointOffsetArray.create()
+		}
+	end 'forWasm'
+end 'CodeResult'

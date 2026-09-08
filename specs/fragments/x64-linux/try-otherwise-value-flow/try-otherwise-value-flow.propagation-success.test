@@ -1,0 +1,97 @@
+// Test: try-otherwise-value-flow.propagation-success
+enum E
+	bad
+end 'E'
+
+function double(x ExitCode) returns ExitCode throws E
+	return x * 2
+end 'double'
+
+function wrap() returns ExitCode throws E
+	let v = try double(5)
+	return v
+end 'wrap'
+
+function main() returns ExitCode
+	let v = try wrap() otherwise 99
+	return v
+end 'main'
+---
+ExitCode: 10
+---
+func @double {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-otherwise-value-flow.propagation-success.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-otherwise-value-flow.propagation-success.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @wrap {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect double
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect wrap
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 r8, 99
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

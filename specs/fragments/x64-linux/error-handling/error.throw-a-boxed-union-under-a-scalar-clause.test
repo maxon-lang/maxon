@@ -1,0 +1,24 @@
+// Test: error.throw-a-boxed-union-under-a-scalar-clause
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+enum ScalarError implements Error
+	plain
+end 'ScalarError'
+
+function f(x Code) returns Code throws ScalarError
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:14:3: type mismatch: 'throw of 'BoxedError' but the enclosing function throws 'ScalarError' — the caller decodes the error flag against 'ScalarError', so one enum's ordinals would be read as another's tags, and a payload-carrying union arriving where a scalar is expected leaks its box; throw a 'ScalarError' case, or declare 'throws BoxedError''

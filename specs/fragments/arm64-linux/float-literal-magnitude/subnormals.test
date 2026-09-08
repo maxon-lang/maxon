@@ -1,0 +1,42 @@
+// Test: subnormals
+function main() returns ExitCode
+	var r = 0
+	if 1.0e-310 > 0.0 'e310IsPositive'
+		r = r + 1
+	end 'e310IsPositive'
+	if 1.0e-320 > 0.0 'e320IsPositive'
+		r = r + 2
+	end 'e320IsPositive'
+	if 1.0e-310 > 1.0e-320 'ordered'
+		r = r + 4
+	end 'ordered'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  e310IsPositive:
+    arm64.movImm x0, 1
+  e320IsPositive:
+    arm64.add x0, x0, 2
+  ordered:
+    arm64.add x0, x0, 4
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at subnormals.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

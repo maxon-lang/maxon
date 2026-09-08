@@ -1,0 +1,85 @@
+// Test: hot-loop-across-call
+function sink(x Integer) returns Integer
+	return x
+end 'sink'
+
+function hotCall(_ Integer) returns Integer
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var i = 0
+	while i < 5 'loop'
+		let r = sink(i)
+		s1 = s1 + r
+		s2 = s2 + r
+		s3 = s3 + r
+		s4 = s4 + r
+		s5 = s5 + r
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5
+end 'hotCall'
+
+function main() returns ExitCode
+	return hotCall(0)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 65
+---
+func @hotCall {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rsi, 4
+    x64.movRegImm32 rdi, 5
+    x64.movRegImm32 r8, 0
+  whilehdr:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc greaterEqual, whileexit
+  __il_cont:
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rdx, rdx, r8
+    x64.leaRegRegReg rsi, rsi, r8
+    x64.leaRegRegReg rdi, rdi, r8
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg r8, rax, rdi
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect hotCall
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at hot-loop-across-call.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

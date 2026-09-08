@@ -1,0 +1,155 @@
+// Test: dispatch.fallthrough-to-default-tree
+typealias N = int(0 to 1000)
+
+function ftd(x N) returns N
+	var r = 0 as N
+	match x 'c'
+		1 then r = r + 1 and fallthrough
+		2 then r = r + 2 and fallthrough
+		3 then r = r + 4 and fallthrough
+		4 then r = r + 8 and fallthrough
+		default then r = r + 100
+	end 'c'
+	return r
+end 'ftd'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if ftd(1) == 115 'a'
+		n = n + 1
+	end 'a'
+	if ftd(3) == 112 'b'
+		n = n + 1
+	end 'b'
+	if ftd(4) == 108 'c'
+		n = n + 1
+	end 'c'
+	if ftd(9) == 100 'd'
+		n = n + 1
+	end 'd'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @ftd {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.fallthrough-to-default-tree.test:4: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#7:
+    arm64.movImm x1, 0
+    arm64.sub x0, x0, 1
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm#1, [1]=critsplit#14, [2]=critsplit#15, [3]=critsplit#16] @__jumptable_3
+  matcharm#1:
+    arm64.add x0, x1, 1
+    arm64.b matcharm#2
+  critsplit#14:
+    arm64.movRegReg x0, x1
+  matcharm#2:
+    arm64.add x0, x0, 2
+    arm64.b matcharm#3
+  critsplit#15:
+    arm64.movRegReg x0, x1
+  matcharm#3:
+    arm64.add x0, x0, 4
+    arm64.b matcharm#4
+  critsplit#16:
+    arm64.movRegReg x0, x1
+  matcharm#4:
+    arm64.add x0, x0, 8
+    arm64.movRegReg x1, x0
+  matchdefault:
+    arm64.add x0, x1, 100
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#11
+  __rc_chk#12:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.fallthrough-to-default-tree.test:13: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#10:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 1
+    arm64.bl ftd
+    arm64.cmp x0, 115
+    arm64.b.ne ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 3
+    arm64.bl ftd
+    arm64.cmp x0, 112
+    arm64.b.ne ifcont#4
+  b:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 4
+    arm64.bl ftd
+    arm64.cmp x0, 108
+    arm64.b.ne ifcont#6
+  c:
+    arm64.add x19, x19, 1
+  ifcont#6:
+    arm64.movImm x0, 9
+    arm64.bl ftd
+    arm64.cmp x0, 100
+    arm64.b.ne critsplit
+  d:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#8
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#8:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#10
+  __rc_chk#11:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#9
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.fallthrough-to-default-tree.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#9:
+    arm64.cbnz x1, __rc_panic#13
+  __rc_chk#14:
+    arm64.cbz x2, __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.fallthrough-to-default-tree.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#12:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

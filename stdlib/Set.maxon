@@ -1,0 +1,403 @@
+/// Hash set with open addressing for storing unique elements.
+/// @category Collections
+// Occupied slots. A member needs a slot, so this is bounded by the table's capacity and carries the
+// capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
+// from 16 can mint.
+typealias MemberCount = int(0 to 4611686018427387904)
+
+// The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map` (W93). This file used to
+// declare its own `SetSlotState`, byte-identical to that module's `SlotState`, and its own
+// `findNextOccupiedSet`, byte-identical to that module's `findNextOccupied` — two spellings of one
+// three-state space, whose failure mode was a state added to ONE of them: a compile error there and
+// SILENCE here, i.e. a wrong iteration answer from a container that still compiles.
+
+public type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
+	typealias ElementArray = Array with Element
+	typealias StateArray = Array with SlotState
+	typealias HashSlotArray = Array with HashValue
+	typealias SetIter = SetIterator with Element
+
+	var elements as ElementArray = ElementArray.create()  // Element storage
+	var states as StateArray = StateArray.create()  // Slot states
+	var hashes as HashSlotArray = HashSlotArray.create()  // Cached element hashes, parallel to elements
+	var count = 0  // Number of occupied entries
+	var capacity = 0  // Total slots
+
+	/// Create an empty set
+	public static function create() returns Self
+		return Self{}
+	end 'create'
+
+	// InitableFromArrayLiteral conformance - initialize Set from array literal
+	// Called by the compiler for `Set from [1, 2, 3]` syntax
+	static function init(arr ElementArray) returns Self
+		// Get number of elements in the array
+		let numElements = arr.count()
+
+		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
+		var cap = 16
+		while cap < numElements * 2 'calc_cap'
+			cap = cap * 2
+		end 'calc_cap'
+
+		// Allocate internal arrays with preallocated capacity
+		var elems = ElementArray{}
+		elems.resize(cap)
+		var sts = StateArray{}
+		sts.resize(cap)
+		var hs = HashSlotArray{}
+		hs.resize(cap)
+
+		// Create the set with preallocated capacity (count defaults to 0)
+		var result = Self{elements: elems, states: sts, hashes: hs, capacity: cap}
+
+		// Insert each element from the array
+		for elem in arr 'insert_loop'
+			result.insert(elem)
+		end 'insert_loop'
+
+		return result
+	end 'init'
+
+	// Internal: publish `element` into `slotIndex`, whose three parallel columns are written together
+	// or not at all. `hash` is the element's precomputed hash, cached beside it so a later probe can
+	// skip the full `equals()` when the hashes differ.
+	//
+	// The panics name "the probe" rather than a single caller because BOTH of `insert`'s write paths
+	// reach here — the empty slot it landed on, and the first tombstone on the probe path — and both
+	// masked their index with `capacity - 1`, so both hand over an index in [0, capacity).
+	// `Map.insertAtSlot` is the same helper over the same table for the same reason.
+	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue)
+		try elements.set(slotIndex, value: element) otherwise panic("Set.insertAtSlot: elements.set OOB — slot from the probe is always in-bounds")
+		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Set.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
+		try hashes.set(slotIndex, value: hash) otherwise panic("Set.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
+		count = count + 1
+	end 'insertAtSlot'
+
+	/// Insert an element into the set
+	/// If the element already exists, this is a no-op
+	/// Automatically resizes the set when load factor exceeds 75%
+	public function insert(element Element)
+		// Initialize if empty struct was created with zero capacity
+		if capacity == 0 'init_empty'
+			var newElements = ElementArray{}
+			newElements.resize(16)
+			var newStates = StateArray{}
+			newStates.resize(16)
+			var newHashes = HashSlotArray{}
+			newHashes.resize(16)
+			elements = newElements
+			states = newStates
+			hashes = newHashes
+			capacity = 16
+		end 'init_empty'
+
+		// Check load factor and grow if needed (75% threshold)
+		let loadLimit = trunc((capacity * 3) / 4)
+		if count >= loadLimit 'grow'
+			grow()
+		end 'grow'
+
+		let hash = element.hash()
+		// capacity is always a power of two (starts at 16, only ever doubled), so
+		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
+		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
+		// never the raw one: see `spreadHash` for the measured quadratic that costs.
+		let mask = capacity - 1
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
+
+		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
+		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
+		// SIGNED. Annotating it `TableSlotIndex` is now a COMPILE ERROR rather than a latent hazard:
+		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
+		// Every use of it below sits inside a `>= 0` test, so the value that reaches an `elements`/
+		// `states`/`hashes` slot is always a real one. `Map.findSlot` carries the identical local for
+		// the identical reason.
+		var firstDeleted = -1
+		var probes = 0
+
+		while probes < capacity 'probe'
+			let state = try states.get(index) otherwise SlotState.Empty
+
+			let isEmpty = match state 'se1'
+				Empty gives true
+				Occupied gives false
+				Deleted gives false
+			end 'se1'
+			if isEmpty 'empty'
+				// Empty slot - insert here or at first deleted
+				var insertIndex = index
+				if firstDeleted >= 0 'use_deleted'
+					insertIndex = firstDeleted
+				end 'use_deleted'
+
+				insertAtSlot(insertIndex, element: element, hash: hash)
+				return
+			end 'empty'
+
+			let isDeleted = match state 'sd1'
+				Deleted gives true
+				Empty gives false
+				Occupied gives false
+			end 'sd1'
+			if isDeleted and firstDeleted < 0 'mark_deleted'
+				firstDeleted = index
+			end 'mark_deleted'
+
+			let isOccupied = match state 'so1'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so1'
+			if isOccupied 'check_exists'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'exists'
+							// Element already exists - no-op for sets
+							return
+						end 'exists'
+					end 'get_existing'
+				end 'hash_match'
+			end 'check_exists'
+
+			// Linear probing
+			index = (index + 1) and mask
+			probes = probes + 1
+		end 'probe'
+
+		// Every slot probed without finding the element or an empty one. A tombstone is still a
+		// vacancy an insert can take, so it is a perfectly good answer.
+		if firstDeleted >= 0 'fallback'
+			insertAtSlot(firstDeleted, element: element, hash: hash)
+			return
+		end 'fallback'
+
+		// ⛔ **FALLING THROUGH MEANS EVERY SLOT IS Occupied — `count == capacity` — WHICH THE 75%
+		// LOAD-FACTOR GROW ABOVE FORBIDS.** This used to be a bare `end 'fallback'` that simply
+		// returned: `insert` reported success, `count` did not move and the element was silently
+		// DROPPED, so the very next `contains` answered false about a value the caller had just
+		// added. That is a broken invariant rather than a runtime condition a caller could handle,
+		// so it panics — the same call `Map.findSlot` makes at the identical point of the identical
+		// probe.
+		panic("Set.insert: probed every slot and found neither the element nor a vacancy — the 75% load-factor invariant is broken")
+	end 'insert'
+
+	/// Check if element exists in the set
+	public function contains(element Element) returns bool
+		// Empty set contains nothing
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
+		let hash = element.hash()
+		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
+		let mask = capacity - 1
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
+
+		var probes = 0
+		while probes < capacity 'probe'
+			let state = try states.get(index) otherwise SlotState.Empty
+
+			let isEmpty = match state 'se1'
+				Empty gives true
+				Occupied gives false
+				Deleted gives false
+			end 'se1'
+			if isEmpty 'empty'
+				return false
+			end 'empty'
+
+			let isOccupied = match state 'so1'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so1'
+			if isOccupied 'check_found'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'found'
+							return true
+						end 'found'
+					end 'get_existing'
+				end 'hash_match'
+			end 'check_found'
+
+			index = (index + 1) and mask
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'contains'
+
+	/// Remove element from set, returns true if element was present
+	public function remove(element Element) returns bool
+		// Empty set has nothing to remove
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
+		let hash = element.hash()
+		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
+		let mask = capacity - 1
+		var index = (spreadHash(hash) and mask) as TableSlotIndex
+
+		var probes = 0
+		while probes < capacity 'probe'
+			let state = try states.get(index) otherwise SlotState.Empty
+
+			let isEmpty = match state 'se1'
+				Empty gives true
+				Occupied gives false
+				Deleted gives false
+			end 'se1'
+			if isEmpty 'empty'
+				return false
+			end 'empty'
+
+			let isOccupied = match state 'so1'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so1'
+			if isOccupied 'check_found'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'found'
+							// Only the Deleted state marks the slot as removed. The cached
+							// hash is left as-is: the hash-guard only runs inside the
+							// Occupied branch, so a tombstone can never cause a false match.
+							try states.set(index, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
+							count = count - 1
+							return true
+						end 'found'
+					end 'get_existing'
+				end 'hash_match'
+			end 'check_found'
+
+			index = (index + 1) and mask
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'remove'
+
+	/// Get number of elements in the set
+	public function count() returns MemberCount
+		return count
+	end 'count'
+
+	/// Create a fresh iterator positioned at the first occupied slot.
+	/// Throws IterationError.exhausted if the set is empty.
+	public function createIterator() returns SetIter throws IterationError
+		return try SetIter.create(elements, states: states, capacity: capacity)
+	end 'createIterator'
+
+	/// Get current capacity (total number of slots)
+	public function getCapacity() returns TableCapacity
+		return capacity
+	end 'getCapacity'
+
+	// Internal: grow the table when load factor exceeds threshold
+	function grow()
+		let oldCapacity = capacity
+		var newCapacity = oldCapacity * 2
+		if newCapacity == 0 'handle_zero'
+			newCapacity = 16
+		end 'handle_zero'
+
+		// Allocate new arrays with preallocated capacity
+		var newElements = ElementArray{}
+		newElements.resize(newCapacity)
+		var newStates = StateArray{}
+		newStates.resize(newCapacity)
+		var newHashes = HashSlotArray{}
+		newHashes.resize(newCapacity)
+
+		// Save old arrays for rehashing, then replace with new ones
+		let oldElements = elements
+		let oldStates = states
+		let oldHashes = hashes
+		elements = newElements
+		states = newStates
+		hashes = newHashes
+		capacity = newCapacity
+		count = 0
+
+		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
+		let mask = newCapacity - 1
+
+		// Rehash all occupied entries from old arrays, reusing the cached hash
+		// instead of re-calling element.hash().
+		for i in 0 upto oldCapacity 'rehash'
+			let state = try oldStates.get(i) otherwise SlotState.Empty
+
+			let isOccupied = match state 'so1'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so1'
+			if isOccupied 'occupied'
+				// Re-insert into new arrays using insert logic
+				if let element = try oldElements.get(i) 'get_elem'
+					let hash = try oldHashes.get(i) otherwise element.hash()
+					var index = (spreadHash(hash) and mask) as TableSlotIndex
+
+					// Find empty slot (no deleted slots in fresh array)
+					var currentState = try states.get(index) otherwise SlotState.Empty
+					var isNotEmpty = match currentState 'se1'
+						Empty gives false
+						Occupied gives true
+						Deleted gives true
+					end 'se1'
+					while isNotEmpty 'find_slot'
+						index = (index + 1) and mask
+						currentState = try states.get(index) otherwise SlotState.Empty
+						isNotEmpty = match currentState 'se2'
+							Empty gives false
+							Occupied gives true
+							Deleted gives true
+						end 'se2'
+					end 'find_slot'
+
+					try elements.set(index, value: element) otherwise panic("Set.grow: elements.set OOB — rehash slot is in-bounds")
+					try states.set(index, value: SlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
+					try hashes.set(index, value: hash) otherwise panic("Set.grow: hashes.set OOB — rehash slot is in-bounds")
+					count = count + 1
+				end 'get_elem'
+			end 'occupied'
+		end 'rehash'
+	end 'grow'
+end 'Set'
+
+/// Iterator for Set — scans hash table slots for occupied entries.
+/// Positioning invariant: iterIndex always points at an occupied slot.
+public type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
+	typealias IterElementArray = Array with Element
+	typealias IterStateArray = Array with SlotState
+	var elements as IterElementArray
+	var states as IterStateArray
+	var capacity as TableCapacity
+	var iterIndex as TableSlotIndex
+
+	public static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
+		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
+	end 'create'
+
+	public function current() returns Element
+		return try elements.get(iterIndex) otherwise panic("SetIterator.current: invariant violated — slot not populated")
+	end 'current'
+
+	public function advance() throws IterationError
+		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+	end 'advance'
+end 'SetIterator'

@@ -1,0 +1,69 @@
+// Test: implied-throws-accepts-bare-try
+// --- file: assertions.maxon
+export function assertTrue(ok bool) throws TestFailure
+	if not ok 'bad'
+		throw TestFailure.assertion
+	end 'bad'
+end 'assertTrue'
+
+// --- file: example.test.maxon
+test 'a bare try needs no otherwise'
+	try assertTrue(true)
+end 'a bare try needs no otherwise'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @assertTrue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  bad:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__test_a_bare_try_needs_no_otherwise {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect assertTrue
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

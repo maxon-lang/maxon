@@ -1,0 +1,75 @@
+// Test: a-float-division-by-a-constant-zero-is-not-folded
+typealias Real = float(f64.min to f64.max)
+
+function pickF(a Real) returns Real
+	return a
+end 'pickF'
+
+function main() returns ExitCode
+	let one = pickF(1.0)
+	if (try (one / pickF(0.0)) otherwise -77.0) != -77.0 'positiveZeroStillThrows'
+		return 1
+	end 'positiveZeroStillThrows'
+	if (try (one / pickF(-0.0)) otherwise -78.0) != -78.0 'negativeZeroStillThrows'
+		return 2
+	end 'negativeZeroStillThrows'
+	if (try (one / pickF(4.0)) otherwise -79.0) != 0.25 'anOrdinaryDivisionStillFolds'
+		return 3
+	end 'anOrdinaryDivisionStillFolds'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+  __il_cont#17:
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+  __il_cont#16:
+    arm64.fpLoadRdata d2, [rdata + __fconst_0]
+    arm64.fcmp d1, d2
+    arm64.cset x0, eq
+    arm64.fdiv d1, d0, d1
+    arm64.cmp x0, 0
+    arm64.b.eq trycont#3
+  tryerr#2:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-77]
+  trycont#3:
+    arm64.fpLoadRdata d2, [rdata + __fconst_-77]
+    arm64.fcmp d1, d2
+    arm64.b.eq ifcont#5
+  positiveZeroStillThrows:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#5:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-0]
+  __il_cont#20:
+    arm64.fdiv d0, d0, d1
+  tryerr#7:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-78]
+  trycont#8:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-78]
+    arm64.fcmp d0, d1
+    arm64.b.eq __il_cont#22
+  negativeZeroStillThrows:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  __il_cont#22:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0.25]
+  trycont#13:
+    arm64.fpLoadRdata d1, [rdata + __fconst_0.25]
+    arm64.fcmp d0, d1
+    arm64.b.eq ifcont#15
+  anOrdinaryDivisionStillFolds:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#15:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

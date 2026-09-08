@@ -1,0 +1,42 @@
+// Test: error.a-cross-file-extension-inner-alias-is-per-instance
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Wrapper uses T
+	export var value as T
+	export var tag as Integer
+
+	export static function create(value T, tag Integer) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+end 'Wrapper'
+
+extension Wrapper
+	typealias Idx = int(0 to 100)
+
+	export function getTag() returns Idx
+		return 1
+	end 'getTag'
+end 'Wrapper'
+
+// --- file: b.maxon
+extension Wrapper
+	export function useTag(t Idx) returns Integer
+		return t
+	end 'useTag'
+end 'Wrapper'
+
+// --- file: main.maxon
+typealias Num = int(0 to 200)
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Num
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 1)
+	let b = WB.create(2, tag: 2)
+	let fromA = a.getTag()
+	return b.useTag(fromA) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:38:11: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'

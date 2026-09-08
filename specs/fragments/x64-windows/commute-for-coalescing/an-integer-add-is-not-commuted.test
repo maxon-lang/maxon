@@ -1,0 +1,55 @@
+// Test: an-integer-add-is-not-commuted
+typealias Word = int(i64.min to i64.max)
+
+function accumulate(total Word, step Word) returns Word
+	let scaled = step * 5
+	let next = total + scaled
+	return next + total
+end 'accumulate'
+
+function main() returns ExitCode
+	var seen = 0
+	for i in 0 upto 4 'feed'
+		seen = seen + accumulate(i * 3, step: i)
+	end 'feed'
+	// total = 0,3,6,9; scaled = 0,5,10,15; next = 0,8,16,24; next+total = 0,11,22,33 -> 66
+	if seen != 66 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.imulRegRegImm32 rdx, rcx, 3
+  __il_body:
+    x64.imulRegRegImm32 rsi, rcx, 5
+    x64.leaRegRegReg rsi, rdx, rsi
+    x64.leaRegRegReg rdx, rsi, rdx
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rdx
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, 66
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

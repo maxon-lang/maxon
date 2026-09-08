@@ -1,0 +1,24 @@
+// Test: union-payload.error.wrong-enum
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+union Paint
+	tint(c Color)
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.tint(Shade.light)
+	match p 'go'
+		tint(c) then return c.ordinal
+	end 'go'
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:32: type mismatch: 'expected Color, got Shade'

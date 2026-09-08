@@ -1,0 +1,30 @@
+// Test: error.match-gives-two-structs
+typealias Count = int(i64.min to i64.max)
+
+type Box
+	export var v as Count
+
+	export static function make() returns Box
+		return Box{v: 1}
+	end 'make'
+end 'Box'
+
+type Cup
+	export var w as Count
+
+	export static function make() returns Cup
+		return Cup{w: 2}
+	end 'make'
+end 'Cup'
+
+function main() returns ExitCode
+	let c = 1
+	let r = match c 'pick'
+		0 gives Box.make()
+		default gives Cup.make()
+	end 'pick'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:10: match arms give incompatible types: 'Cup' vs 'Box'

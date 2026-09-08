@@ -1,0 +1,38 @@
+// Test: negative-range-cast-guard-fires-before-the-remainder
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let bad = ident(-1)
+	let d = bad as BelowMinusOne
+	let r = i64.min mod d
+	print("r={r}\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at negative-range-cast-guard-fires-before-the-remainder.test:11: Range check failed: value outside typealias 'BelowMinusOne'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

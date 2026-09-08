@@ -1,0 +1,114 @@
+// Test: var-global-key-is-not-linted
+typealias StrMap = Map with (String, String)
+
+var key = "a"
+
+function probe(t StrMap) returns ExitCode
+	if t.contains(key) 'has'
+		print(try t.get(key) otherwise "?")
+	end 'has'
+	return 0
+end 'probe'
+
+function main() returns ExitCode
+	let m = StrMap.create()
+	return probe(m)
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_key@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @probe {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __data_key
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __layout_Map_String_String]
+    x64.leaRegRdata r9, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Map.contains
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont
+  has:
+    x64.leaRegGlobal rax, __data_key
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __layout_Map_String_String]
+    x64.leaRegRdata r9, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "?"
+    x64.callDirect __str_retain
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect probe
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Map_String_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

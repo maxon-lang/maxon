@@ -1,0 +1,246 @@
+// DeadGlobalElimination — WHICH TOP-LEVEL GLOBALS THE PROGRAM CAN STILL NAME (P1.7 slice 3).
+//
+// A top-level binding with storage costs three separate things, and a binding nothing reads or writes
+// pays all three for nothing: an 8-byte `.data` slot, the ops in `__module_init` that build its record
+// and store it, and the drop in `__maxon_global_cleanup` that releases it. MEASURED on the base of this
+// slice: `var UNUSED = [1, 2, 3]` in a program that never mentions it emitted **3,676 bytes** of code
+// against **1,512** for the same program with no global at all — the managed-memory runtime, the two synthesized
+// functions and the entry stub's two calls, all of it reachable by nothing.
+//
+// ⭐ **IT DECIDES WHAT TO BUILD. IT DOES NOT REMOVE WHAT WAS BUILT — and that is why it is a MAXON-tier
+// derivation rather than a pass beside `DeadFunctionElimination` at the Std tier**, which is where both
+// references do the equivalent job. In the compiler all three pieces are produced BEFORE the pipeline runs:
+// `ProgramSignatures.declaredGlobals` reserves the slots and `ModuleInit.installManagedGlobalInit`
+// synthesizes the two functions, both from the SAME arena, both in `Compiler.compileToCodeResult`. So a
+// filter applied to that arena drops all three atomically **by construction** — there is no init run to
+// splice out of a lowered body, no `.data` table to re-lay-out, and no ordering between three edits to
+// get right. The references have to remove because their `.data` layout is already fixed by the time
+// they know; The compiler knows first.
+//
+// ⭐⭐ **THE EVIDENCE IS THE EMITTED `globalAddr` LABEL — NOT A PREDICATE OVER NAMES.** A use of a global
+// resolves local → capture → top-level, and that order has now produced a silent wrong answer in three
+// consecutive slices every time something re-derived it. So nothing here re-derives it: liveness is read
+// off the ops the resolution ALREADY PRODUCED. `Parser.emitGlobalAddr` is the only emitter of a
+// `globalAddr` in user code, and it is reached only from `emitGlobalLoad`/`emitGlobalStore` — so the set
+// below is built from the very ops that would reference the slot, and the dangerous direction ("an op
+// names a slot the layout dropped") is not merely unlikely, it is unrepresentable. A binding that is
+// resolved but never emitted merely fails to keep a slot nothing asks for.
+//
+// ⭐ **AND IF THIS FILE IS EVER WRONG ANYWAY, IT FAILS LOUD — ON EVERY TARGET.** The argument above is an
+// argument; this is the mechanism behind it. All three backends resolve a `globalAddr`'s label through the
+// ONE lookup `GlobalDataTable.dataSectionOffsetOf`, which PANICS by name on a label the layout does not
+// hold (x64 `X64Backend:1804`, arm64 `Arm64Backend:1344-1345`, wasm `StdToWasm:1697`). So an under-walk
+// here — a block source this loop cannot see, a `globalAddr` emitted by something new after it runs — is a
+// COMPILE-TIME abort naming the global, never a miscompile. MEASURED (P1.7 slice 3 review) by forcing the
+// walk to answer "nothing is live" and compiling a program that reads one global: all three targets died
+// with `no .data slot is labelled '__data_G'`. That is what makes this pass safe to extend.
+//
+// ⭐ **BIDIRECTIONALITY IS FREE HERE, AND IT IS THE THREE-OP SPLIT THAT MAKES IT SO.** The spec requires
+// that a var only ever STORED to survives — "stores are observable through `globalLoad` or a debugger"
+// (`specs/dead-top-level-var-elim.md:32`) — and states liveness as "a `globalLoad` OR a `globalStore`
+// … keeps the var alive". The compiler has neither fused op: a read is `globalAddr` + `loadIndirect` and a write
+// is `globalAddr` + `storeIndirect`, so both open with the SAME op and there is no second question to
+// ask. A rule that had to name both forms could be half-written; this one cannot.
+//
+// ⚠ **NO NAMING HEURISTIC DECIDES WHETHER AN INITIALIZER'S SIDE EFFECTS MAY BE REMOVED.** Keying that
+// on a callee's suffix (`.create`, `.from`) means `let UNUSED = Counter.build()` keeps its `print` when
+// dead while the IDENTICAL body renamed `Counter.create()` silently loses it — both compiling clean,
+// with no warning. **Renaming a method must not change whether its side effects run.** The conservative
+// behaviour is what the spec asks for: "the call still runs even when the slot is dead … keeps the call
+// but drops the slot" (:31).
+//
+// Today the compiler cannot even reach that case — a top-level initializer is a CONSTANT (a call in one is
+// E2045), so every op `__module_init` emits for a global is compiler-synthesized allocation with no
+// user-visible effect, and dropping the whole run is exactly dropping the slot. The obligation lands the
+// day an initializer may call: the call belongs to `ModuleInit.initialRecordOf`, which is where "what
+// does this global's record cost to build?" is answered, and it must keep emitting the call while this
+// file goes on dropping the slot.
+//
+// ⭐⭐ **ONE REACHABILITY TERM, AND IT IS SCOPED TO STDLIB SOURCE FOR THE SAME REASON EVERY OTHER
+// PRE-ELIMINATION PASS SCOPES IT THERE (S2h).** The spec says "never read or written by any REACHABLE
+// function". A USER function is still credited whether or not anything calls it — that keeps strictly MORE
+// globals and is only ever a missed prune — but a stdlib function `StdlibFacts.unreachable` names is
+// skipped, and that is not an approximation of anything: `lowerMaxonToStd` lowers NO BODY for it
+// (`LowerMaxonToStd:741`), so the `globalAddr` this walk would have read reaches no back end at all. A
+// slot kept for it is a slot kept for code that provably is not in the output.
+//
+// ⚠ **IT IS THE SAME DECIDER AT ONE MORE CONSUMER, NEVER A SECOND ONE.** That distinction is what the
+// paragraph this replaces was protecting, and it is worth keeping stated. The set is derived ONCE, by
+// `StdlibSource.deriveStdlibFacts`, and already gates `lowerMaxonToStd`, `InsertRangeChecks:202`,
+// `scanRuntimeUsage` and `DeadFunctionElimination:130` — where
+// `requireUnreachableStdlibStayedDead` PANICS BY NAME if it ever disagrees with the Std-tier walk that
+// actually prunes. What may still NOT be done is widening that walk to decide a USER function's slot: it
+// models `call`/`tryCall`/`functionRef`/`asyncCall` edges only, so a function reached through a witness
+// table or an `.rdata` slot looks unreachable to it, and its own header records that it is exact "at this
+// rung" for stdlib source and not in general.
+//
+// ⭐ MEASURED, and it is the whole reason the term exists: with `stdlib/Log.maxon` listed — the module
+// whose `var capturing` / `var captured` this pass's own spec was written for — `function main() returns
+// ExitCode / return 7` emitted **2,978 bytes of code against 1,592** without the entry, an **+87%** tax on
+// a program that never mentions `Log`. Its globals are read only by `Log.trace`/`startCapture`/
+// `stopCapture`, every one of them unreachable, so the slots, the `__module_init` chain that builds the
+// array and the `__maxon_global_cleanup` drop were all built for nobody. With the term the two numbers are
+// equal. ⚠ The header paragraph this replaces predicted the case BY NAME and called it unreachable "in any
+// case", on two premises that both expired: a top-level initializer may CALL today, and listing the module
+// is a live board row. A stale reason left in place is how this survived.
+
+// The `.data` labels live code can still name. Keyed by `ByteArray` because that is what both sides
+// already hold — the `globalAddr` op's `label` and `TopLevelDecl.dataLabel` are the same bytes, minted
+// once by `assignDataLabels` — so asking the question renders nothing and allocates nothing.
+export typealias LiveGlobalLabelSet = Set with ByteArray
+
+// ⭐ **EVERY `.data` LABEL SOME FUNCTION THE PROGRAM CARRIES NAMES.** Called once per compile, on the merged
+// Maxon module, BEFORE `installManagedGlobalInit` — and that position is load-bearing twice over. It is
+// what lets the answer decide whether the two synthesized functions are built at all, and it is what
+// keeps them OUT of the walk: `__module_init` opens every managed global with a `globalAddr` of its own
+// slot, so a scan run afterwards would find every global keeping itself alive. Both reference compilers
+// meet the same shape in their init store and answer it with a runtime `func.Name == "__module_init"`
+// compare; here the fact is expressed by WHICH CODE HAS RUN, which is the same argument `ModuleInit`'s
+// header makes about the store's missing decref.
+//
+// COST: ONE O(ops) walk, allocation-free but for the labels it keeps.
+//
+// ⚠⚠ **THE `storedGlobals == 0` GUARD BELOW NO LONGER FIRES FOR ANY PROGRAM, AND IT STOPPED IN THE SAME
+// COMMIT AS THE REACHABILITY TERM (S2g).** It used to skip this walk entirely for a program declaring no
+// stored global — *"the whole existing corpus and the entire scale ladder"* — on the argument that an
+// unconditional second full-module walk is a per-compile TIME cost that allocates nothing, and a cost that
+// allocates nothing is one `scale-test` is structurally blind to. That argument is unchanged and still the
+// reason the guard is written; what changed is that it can no longer be TAKEN. `storedGlobalCount` is a
+// count over the WHOLE arena, stdlib included (`assignDataLabels`), and `stdlib/Log.maxon` — listed by
+// S2g — declares `var capturing` and `var captured`. So every compile now has a stored global whether the
+// user wrote one or not, and the guard is kept as the statement of the empty case rather than as a path
+// anything takes. **The next listed module with top-level state does not make this worse; the FIRST one
+// already spent it.**
+//
+// ⭐ What bounds the walk in its place is the reachability skip in the loop: for a program that touches no
+// stdlib, every stdlib function is in `unreachableStdlib` and the walk visits the user's own bodies alone —
+// so `return 7` pays a scan of `main` and nothing else. That is the term to watch if a listed module's
+// globals ever stop being prunable, and it is CPU-only, which is the column to read it in.
+export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalCount, unreachableStdlib FunctionNameSet) returns LiveGlobalLabelSet
+	var live = LiveGlobalLabelSet.create()
+
+	// Not a shortcut past the answer — it IS the answer. With no slot in the program no `globalAddr` can
+	// name one, so the walk could only ever build this same empty set.
+	if storedGlobals == 0 'noStoredGlobals'
+		return live
+	end 'noStoredGlobals'
+
+	for func in module.functions 'eachFunc'
+		// ⭐ STDLIB SOURCE THIS PROGRAM CANNOT REACH DECIDES NOTHING ABOUT IT — the header's reachability
+		// paragraph. `lowerMaxonToStd` lowers no body for one of these, so its `globalAddr`s are ops no back
+		// end will ever resolve, and a slot they keep alive is built for code that is not in the output.
+		if unreachableStdlib.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		// Walk `block.opRefs` DIRECTLY rather than `IrModule.liveOpIndices`, which allocates a fresh
+		// op-index array per function: this runs at the Maxon tier BEFORE any block-rebuilding pass, so
+		// `opRefs` holds no orphan ops — the same reason `StdlibSource.markMaxonCallees` and
+		// `scanRuntimeUsage` walk it this way. A TERMINATOR can never carry a label (`globalAddr` defines
+		// a value and terminators are the returns and branches), so the body ops are the whole of it.
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("liveGlobalLabels: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("liveGlobalLabels: opRef {opIdx} not in module.ops")
+				noteGlobalLabel(op, live: live)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return live
+end 'liveGlobalLabels'
+
+// ⭐ **DOES THIS `MaxonOp` NAME A `.data` LABEL — ONE TABLE, THREE READERS.** ONE variant carries a label —
+// `globalAddr` — and it carries it for a read and a write alike, which is the whole of this pass's
+// bidirectionality. `StdlibSource`'s `markCorpusSlotInitCallees` and `opReadsACorpusSlotRootedInStdlib` are
+// two more readers (a `globalAddr` on a corpus slot is what keeps that slot, and so what runs its
+// initializer), and `GlobalInitOrder.noteSlotNamed` is the fourth. They read this rather than re-matching
+// the op for `markMaxonCalleeEdge`'s stated reason: an under-approximation at a second site is not a compile
+// error, it is a body that is never lowered and then reached.
+//
+// ⭐⭐ **A SCALAR PREDICATE PLUS A NAME GETTER, NOT A UNION — AND THAT IS `maxonOpCalleeKind`'S MEASURED
+// CORRECTION APPLIED A SECOND TIME (W115 optimizer pass).** W115 wrote this as
+// `union MaxonOpGlobalLabel{none, label(ByteArray)}`, whose header claimed *"payload-free `none` keeps the
+// common answer a scalar"*. It does not: a union with ANY payload variant is boxed, so every ask allocated
+// one box — the identical defect `MaxonDialect.maxonOpCalleeKind`'s header records BATCH2 slice 3 measuring
+// and removing, in the identical shape (op classifier, `ByteArray` payload, asked per op). It cost more here
+// because there are three ask sites and two of them are inside walks `queryAllModule`'s stdlib body-demand
+// fixpoint repeats once per round. MEASURED A/B on one tree at one path, allocations exact:
+// `phase:deriveRuntimeNeeds` read **72,145 / 119,171 / 213,225 / 401,334 / 777,543 / 1,529,902** across the
+// six rungs with the union — x1.96 per doubling, DEAD LINEAR IN THE USER'S PROGRAM — and
+// **19,764 / 21,523 / 25,040 / 32,072 / 46,118 / 74,166** with this pair, which is back to the merge base's
+// 72,854 at rung 5. The demand fixpoint's own copy of the cost is not billed to any phase at all (it runs
+// BETWEEN `foldEveryFileIntoAModule` calls, outside the `merge` probe) and was 2.76x larger again:
+// -4,023,436 unbracketed allocations at rung 5 beside this table's -1,455,736.
+//
+// The arms NAME every variant of `MaxonOp`, so a variant added later FAILS TO COMPILE here rather than
+// being classified by omission — exactly as `StdlibSource.markMaxonCalleeEdge` and
+// `DeadFunctionElimination.markCalleeOf` rely on. A new variant that names a `.data` label must be added
+// as its own arm.
+export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool
+	match op 'op'
+		// `call` … `branch`: calls, literals, arithmetic, comparisons, branches and returns.
+		call or
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch then return false
+		globalAddr then return true
+		// `loadIndirect` … `witnessTryDispatch`: the load and the store that FOLLOW a `globalAddr` take the
+		// address as a VALUE — the label is on the op above and nowhere else — and no later variant names
+		// a data label at all.
+		loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			tryCall or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch then return false
+		// A rendered panic's message is a VALUE, not a data label — it is `panicAbort` that names one, and
+		// that is an `.rdata` blob the Std tier interns, never a `.data` global.
+		panicAbortValue then return false
+		// The error-flag encode's operand is a VALUE and its result is one; it names no data label at all.
+		errorFlagEncode then return false
+		// The mailbox is per-STRUCT and lives in the heap, deliberately — a `.data` word for it would need a
+		// `MultiMSharing` class and would re-mint every golden's `data {` table. A reply cell is a slab-cut GT
+		// struct for the same reason. So no service op names a label (`MailboxRuntime`'s header carries the
+		// argument).
+		serviceSpawn or
+			serviceSend or
+			serviceReplyCell then return false
+		immortalStructRecord or
+			immortalStringTable or
+			covPoint then return false
+	end 'op'
+end 'maxonOpNamesAGlobalLabel'
+
+// The `.data` label an op names — asked only of an op `maxonOpNamesAGlobalLabel` answered TRUE for, so every
+// other variant panics rather than returning an empty name. An empty `ByteArray` would be a sentinel, and a
+// caller that forgot the gate would silently keep alive "the global named by the empty string". The same
+// shape, and the same floor, as `MaxonDialect.maxonOpCalleeName`.
+export function maxonOpGlobalLabelName(op MaxonOp) returns ByteArray
+	return match op 'op'
+		globalAddr(_, label) gives label
+		default panic("maxonOpGlobalLabelName: asked of an op that names no `.data` label — `maxonOpNamesAGlobalLabel` answers false for it, and every caller gates on that")
+	end 'op'
+end 'maxonOpGlobalLabelName'
+
+function noteGlobalLabel(op MaxonOp, live LiveGlobalLabelSet)
+	if maxonOpNamesAGlobalLabel(op) 'namesOne'
+		live.insert(maxonOpGlobalLabelName(op))
+	end 'namesOne'
+end 'noteGlobalLabel'

@@ -1,0 +1,40 @@
+// Test: enum-ordinal.from-function
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
+typealias OrdinalValue = int(0 to 100)
+
+function getOrdinal(p Priority) returns OrdinalValue
+	return p.ordinal
+end 'getOrdinal'
+
+function main() returns ExitCode
+	let p = Priority.high
+	if getOrdinal(p) == 2 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 2
+  __il_cont:
+    arm64.cmp x0, 2
+    arm64.b.ne ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

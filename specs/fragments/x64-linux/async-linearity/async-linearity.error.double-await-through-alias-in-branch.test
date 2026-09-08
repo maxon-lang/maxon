@@ -1,0 +1,24 @@
+// Test: async-linearity.error.double-await-through-alias-in-branch
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function cond() returns bool
+	return true
+end 'cond'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	if cond() 'branch'
+		let q = p
+		let a = await p
+		let b = await q
+		return (a + b) as ExitCode
+	end 'branch'
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3142: <fragment>:16:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again

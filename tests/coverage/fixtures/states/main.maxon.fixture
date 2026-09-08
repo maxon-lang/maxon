@@ -1,0 +1,59 @@
+// The coverage corpus's subject program: all FOUR line states and both branch shapes in one file.
+//
+// Deterministic by construction — pure integer arithmetic, no stdlib calls, no green threads — so the
+// same statements execute on every run and on every host, and a count that moves is the instrument
+// moving rather than the program.
+//
+// ⭐ EVERY LINE A CASE ASKS ABOUT CARRIES AN ANCHOR COMMENT, and a case finds it by ANCHOR rather than
+// by a line number. A number written into a case goes stale the moment this file grows a line, and it
+// goes stale SILENTLY — it still names a line, just not the one the case is about.
+
+typealias ExitCode = int(0 to 255)
+typealias Small = int(0 to 1000000)
+
+enum Size
+	small
+	medium
+	large
+end 'Size'
+
+// anchor: nocode
+
+function neverCalled(n Small) returns Small
+	return n + n // anchor: eliminated
+end 'neverCalled'
+
+function classify(n Small) returns Small
+	if n > 1 'big' // anchor: implicitElse
+		return 10
+	end 'big'
+
+	return 1
+end 'classify'
+
+function weigh(s Size) returns Small
+	return match s 'weigh' // anchor: dispatch
+		small gives 1 // anchor: takenArm
+		medium gives 4
+		large gives 9 // anchor: untakenArm
+	end 'weigh'
+end 'weigh'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+
+	while i < 3 'loop' // anchor: loopHeader
+		total = total + classify(i) // anchor: hot
+		i = i + 1
+	end 'loop'
+
+	total = total + weigh(Size.small)
+	total = total + weigh(Size.medium)
+
+	if total > 1000 'never'
+		total = 0 // anchor: never
+	end 'never'
+
+	return total
+end 'main'

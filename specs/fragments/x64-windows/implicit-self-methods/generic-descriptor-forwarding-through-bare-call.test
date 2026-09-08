@@ -1,0 +1,75 @@
+// Test: generic-descriptor-forwarding-through-bare-call
+
+typealias Integer = int(i64.min to i64.max)
+
+type Sizer uses T
+	export var dummy as T
+
+	export static function create(dummy T) returns Self
+		return Self{dummy: dummy}
+	end 'create'
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+
+	export function indirectSize() returns Integer
+		return typeSize()
+	end 'indirectSize'
+end 'Sizer'
+
+typealias BoolSizer = Sizer with bool
+
+function main() returns ExitCode
+	let s = BoolSizer.create(false)
+	return s.indirectSize()
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Sizer.indirectSize {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rdx + 56]
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 0
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegRdata rdx, [rip + __layout_Sizer_bool]
+    x64.callDirect Sizer.indirectSize
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at generic-descriptor-forwarding-through-bare-call.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

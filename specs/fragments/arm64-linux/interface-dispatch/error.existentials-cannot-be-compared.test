@@ -1,0 +1,31 @@
+// Test: error.existentials-cannot-be-compared
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapped implements Comparable
+	let v as Integer
+
+	export function compare(other Wrapped) returns Ordering
+		if self.v > other.v 'gt'
+			return Ordering.greaterThan
+		end 'gt'
+		if self.v < other.v 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		return Ordering.equalTo
+	end 'compare'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Wrapped'
+
+function existEq(c Comparable, other Comparable) returns bool
+	return c == other
+end 'existEq'
+
+function main() returns ExitCode
+	return 0 if existEq(Wrapped.create(7), other: Wrapped.create(7)) else 1
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:23:11: cannot compare values held at an interface type using '==': two values held at one interface may have different dynamic types, and nothing here can prove they match, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares

@@ -1,0 +1,46 @@
+// Test: div-result-crosses-a-call
+function twice(x Integer) returns Integer
+	return x + x
+end 'twice'
+
+function main() returns ExitCode
+	let n = 1000
+	let d = 7
+	let q = n / d
+	let t = twice(q)
+	let r = q + t
+	if r == 426 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rcx, 1000
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+  __il_body:
+    x64.leaRegRegReg rcx, rax, rax
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 426
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+}

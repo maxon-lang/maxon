@@ -1,0 +1,157 @@
+// Test: bytearray-slice-roundtrip
+function main() returns ExitCode
+	let src = "Environment.inherit"
+	let bytes = src.toByteArray()
+	var out = ByteArray.create()
+	var i = 12
+	while i < bytes.count() 'copy'
+		let b = try bytes.get(i) otherwise 0
+		out.push(b)
+		i = i + 1
+	end 'copy'
+	let sliced = String.from(out)
+	return 0 if sliced == "inherit" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "Environment.inherit"
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 12
+  whilehdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc greaterEqual, whileexit
+  copy:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok#10
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at bytearray-slice-roundtrip.test:8: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#10:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#21:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, rax, r13
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, __im_cont
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rdx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rdx, rax
+  trycont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect String.from
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "inherit"
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r14, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r14, 1
+  matchcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#13
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r14, rax
+    x64.jcc lessEqual, __rc_ok#12
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at bytearray-slice-roundtrip.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#12:
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

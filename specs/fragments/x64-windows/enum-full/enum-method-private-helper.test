@@ -1,0 +1,76 @@
+// Test: enum-method-private-helper
+enum Signal
+	red
+	green
+	yellow
+
+	function isStop() returns bool
+		return match self 'check'
+			red gives true
+			green gives false
+			yellow gives false
+		end 'check'
+	end 'isStop'
+
+	export function action() returns bool
+		return self.isStop()
+	end 'action'
+end 'Signal'
+
+function main() returns ExitCode
+	let s = Signal.red
+	if s.action() 'isRed'
+		return 1
+	end 'isRed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @Signal.action {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext#7
+  matcharm#3:
+    x64.movRegImm32 r8, 1
+    x64.jmp __il_cont
+  matchnext#7:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchnext#8
+  matcharm#4:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  matchnext#8:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.movRegImm32 r8, 0
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Signal.action
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  isRed:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

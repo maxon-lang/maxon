@@ -1,0 +1,35 @@
+// Test: type-qualified-u64-max
+typealias BigId = int(0 to u64.max)
+
+function getValue() returns BigId
+	return u64.max
+end 'getValue'
+
+function main() returns ExitCode
+	let v = getValue()
+	if v == u64.max 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc notEqual, ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

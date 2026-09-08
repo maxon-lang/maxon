@@ -1,0 +1,194 @@
+// Test: the-var-spelling-was-always-correct
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder
+	var items as IntArray
+
+	export static function create() returns Self
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function swapAndRead() returns Integer
+		items.push(3)
+		items.push(4)
+		var old = items
+		items = IntArray.create()
+
+		var sum = 0
+		for i in 0 upto old.count() 'walk'
+			sum = sum + (try old.get(i) otherwise 0)
+		end 'walk'
+		return sum
+	end 'swapAndRead'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	return h.swapAndRead() as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.swapAndRead {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 4
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r13, 0
+    x64.loadRegBaseDisp.word64 r14, [r12 + 8]
+  forhdr:
+    x64.cmpRegReg r13, r14
+    x64.jcc greaterEqual, forexit
+  walk:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-var-spelling-was-always-correct.test:20: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, critsplit#14
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#15
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#15:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.leaRegRegReg rbx, rbx, rax
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.swapAndRead
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-var-spelling-was-always-correct.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

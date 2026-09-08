@@ -1,0 +1,155 @@
+// Test: pdq-dispatch-large
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7] 'fill'
+		a.push(v)
+	end 'fill'
+	Log.startCapture()
+	a.sortUnstable(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "pdq.partition") 'p'
+		print("partition ")
+	end 'p'
+	if Log.fired(keys, key: "pdq.medianOf3") 'm3'
+		print("medianOf3 ")
+	end 'm3'
+	if not Log.fired(keys, key: "pdq.heapsortFallback") 'nf'
+		print("no-heap-fallback")
+	end 'nf'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegImm32 rax, 40
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegImm32 r13, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc greaterEqual, forexit
+  fill:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rdx, [rax + r13*8 + 0]
+  __im_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.callDirect Log.startCapture
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.sortUnstable#Array.SortComparator
+    x64.callDirect Log.stopCapture
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "pdq.partition"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#6
+  p:
+    x64.leaRegRdata rcx, [rip + __str_rec_15]  ; "partition "
+    x64.callDirect print
+  ifcont#6:
+    x64.leaRegRdata rdx, [rip + __str_rec_16]  ; "pdq.medianOf3"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#8
+  m3:
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "medianOf3 "
+    x64.callDirect print
+  ifcont#8:
+    x64.leaRegRdata rdx, [rip + __str_rec_18]  ; "pdq.heapsortFallback"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#10
+  nf:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "no-heap-fallback"
+    x64.callDirect print
+  ifcont#10:
+    x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "\x0a"
+    x64.callDirect print
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

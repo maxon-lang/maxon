@@ -1,0 +1,51 @@
+// Test: generic-field-write
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	var b = IntBox.create(7)
+	b.value = 99
+	if b.value == 99 'chk'
+		return 0
+	end 'chk'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 16
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 99
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 99
+    x64.jcc notEqual, ifcont
+  chk:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+}

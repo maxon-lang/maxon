@@ -1,0 +1,818 @@
+// X64PrologueEpilogue — inserts frame setup/teardown ops after register
+// allocation. EVERY function gets a REAL FRAME POINTER: the prologue opens with
+// `push rbp` / `mov rbp, rsp`, then pushes the callee-saved GPRs the coloring
+// used, reserves the frame with `sub rsp, N`, and finally stores the callee-saved
+// XMMs it used into frame slots; the epilogue mirrors all four before each `ret`.
+// This pass owns ALL of it: the return lowering emits only the R8 move + `ret`.
+//
+// ⭐ TWO FILES, TWO MECHANISMS, AND THE SPLIT IS FORCED BY THE ISA. A callee-saved GPR is
+// preserved with `push`/`pop`; a callee-saved XMM cannot be, because **there is no `push xmm`
+// in x86-64**. So xmm6–15 (Wave 2) get their own ordered list (`calleeSavedXmmOrder`) and a
+// dedicated frame SLOT each, saved and restored with the SAME `storeSlotReg`/`loadRegSlot` ops
+// the spiller already uses for float values — which is exactly how arm64 preserves d8–d15
+// (`Arm64PrologueEpilogue`, "THE CALLEE-SAVED REGISTERS ARE SPILLED TO FRAME SLOTS"). Reusing
+// the slot ops rather than minting a 16-byte save op keeps the `TargetOp` contract frozen and
+// makes the two targets ONE mechanism rather than two.
+//
+// ⚠⚠ EIGHT BYTES PER XMM IS SUFFICIENT, AND THAT IS A LIVE PRECONDITION RATHER THAN A SHORTCUT.
+// Win64 nominally obliges a callee to preserve all 128 bits of xmm6–15, and a slot store of an XMM
+// emits `movsd`, which saves only the low 64. The compiler also has no type wider than 64 bits and never
+// reads bits 64–127 of an XMM, so the low half IS the value. This is the same latitude AAPCS64 gives
+// arm64 for d8–d15, which is why its 8-byte slots are correct there too.
+//
+// The 128-bit obligation is owed to an EXTERNAL caller of a compiler function, and the enumeration of
+// those is the live precondition — so it is stated exactly rather than as a slogan. The compiler exports no
+// DLL entry and its only OUTBOUND boundary is `iatCall` into kernel32, where the compiler is the CALLER and
+// the callee preserves the compiler's registers. It does hand the OS **three inbound entry points** of its
+// own, and each is safe for a stated reason rather than by assumption:
+//   • `__io_completion_loop` — a `CreateThread` **ThreadProc** (Runtime/GtRuntime, lowered by
+//     StdToX64Conversion). It is a genuine Win64 callee, so it owes its OS caller all 128 bits of
+//     xmm6–15 — and it pays: it is hand-assembled, touches NO XMM at all, and the one the compiler function
+//     it calls (`__gt_enqueue`) is pure pointer work with no float in it. Nothing there can be
+//     coloured into an XMM, so there is nothing to preserve.
+//   • `mrt_fault_thunk` — a **Vectored Exception Handler** (X64Runtime), and its Linux SIGFPE twin.
+//     Both run only on the way to `mrt_panic` and terminate the process; neither returns to the OS,
+//     so no register state is owed back.
+// ⇒ **IF the compiler EVER GAINS A VECTOR TYPE WIDER THAN 64 BITS, OR EVER HANDS THE OS A CALLBACK THAT
+// RETURNS AND MAY TOUCH AN XMM, THIS MUST WIDEN TO 16 BYTES** (a `movups` pair and a 16-byte slot
+// stride). There is exactly one number to change — `XmmSaveSlotBytes` below — and every frame that
+// preserves an XMM reads it, so widening it and forgetting the GT half is a compile-time panic
+// (`assertGtFrameConsistent`, X64GtRuntime) rather than the upper 64 bits of xmm6–15 quietly dying
+// across every `await`.
+//
+// ⭐ WHY A FRAME POINTER, AND WHY ON EVERY FUNCTION INCLUDING LEAVES
+//
+// The frame pointer's job is not addressing — every local and spill slot here is
+// addressed off `rsp` (see `spillSlotBaseDisp`), and that does not change. Its job is
+// the SAVED-RBP CHAIN: `[rbp]` is the caller's rbp and `[rbp+8]` is the return address,
+// so the frames of a live thread form a linked list that can be WALKED. Two things need
+// exactly that list, and neither can be served by anything cheaper:
+//
+//   1. The PANIC BACKTRACE (P1.0d.3, here). `mrt_panic_walk_frames` follows the chain to
+//      symbolize the callers of a fault or a panic. Frame 0 comes from the faulting RIP,
+//      but every frame above it comes from the chain.
+//   2. GROWABLE GREEN-THREAD STACKS. A Go-style `morestack` allocates a larger stack,
+//      COPIES the old one onto it, and must then find and fix every interior frame
+//      pointer — which have all just moved. The chain is HOW it finds them:
+//      `__gt_morestack` walks it and adds the relocation offset to each saved rbp. A
+//      relocating stack without a frame-pointer chain has no way to enumerate the
+//      pointers it just invalidated.
+//
+// So the chain is needed whether or not stack traces are.
+//
+// LEAVES ARE INCLUDED, and that is the point rather than an oversight: a frameless leaf
+// cannot be unwound OUT of, so it terminates any walk that reaches it — and the faulting
+// `main` of `specs/safety.md` IS a frameless leaf. A chain with a hole in it is not a
+// chain. There is therefore no `needsFrame` test any more: the frame POINTER is
+// unconditional, while the frame RESERVATION (`sub rsp, N`) is still elided when there is
+// nothing to reserve.
+//
+// It costs NO register. `allocatablePool` already excludes rsp/rbp ("the frame") and
+// always has, so the compiler was paying a frame pointer's full price — 14 allocatable GPRs, not
+// 15 — while leaving rbp holding whatever the loader put there. The pool is unchanged;
+// this is the same 14 registers, now with the benefit collected.
+//
+// (This REPLACES the frame-pointer-omitted design this file used to describe. That choice
+// predated the morestack requirement above; see ARCHITECTURE.md's backend section.)
+//
+// The runtime entry stub `mrt_start` builds its own frame directly in
+// `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it — it
+// sets up the same `push rbp` / `mov rbp, rsp` by hand, because the chain has to start
+// somewhere and a trace that cannot name `mrt_start` stops one frame short.
+//
+// ⭐ THE FRAME-POINTER-FIRST ORDERING ALSO FIXES WHERE INCOMING STACK ARGUMENTS ARE. `mov rbp, rsp`
+// runs BEFORE any callee-saved push, so `[rbp + 16]` is the caller's rsp-at-the-call whatever this
+// function's frame size or push count turns out to be — which is what lets the ISEL compute an
+// incoming stack argument's displacement (`win64IncomingArgDisp`) long before the allocator decides
+// either. Push the callee-saved registers ahead of the frame pointer and every one of those
+// displacements silently gains `8 * pushCount`. And because EVERY function is framed, no guard for
+// a frameless leaf with stack parameters is needed — there is no such leaf.
+
+// `push rbp` is a push like any other, and the frame arithmetic is the one place that has
+// to know it: it moves rsp by 8 exactly as a callee-saved push does, so it counts toward
+// the parity that decides how much `sub rsp` must reserve to land 16-aligned AT the call.
+// Named rather than folded into a `+ 1`, because a bare 1 in that expression is exactly
+// the magic value that makes an alignment bug invisible.
+let FramePointerPushCount = 1 as RegCount
+
+// Win64 requires a caller to reserve 32 bytes of SHADOW SPACE below its outgoing args
+// — scratch the callee may use for its first four register parameters. Every function
+// that makes a call reserves it, `mrt_start`'s hand-built 0x20 frame included.
+export let ShadowSpaceBytes = 32 as StackSize
+
+// The custom-ABI callee-saved GPRs, in PUSH order (popped in reverse). The register
+// allocator may color values into any of these; the prologue pushes exactly the ones a
+// function's coloring used, and the epilogue pops them. rbx + r12–r15 mirror
+// RegisterAllocator.calleeSavedMask (kept in one order here so push/pop stay paired).
+// EXPORTED so the GT context switch (X64GtRuntime) saves EXACTLY the set the prologue
+// pushes — one ordered list, not a second copy free to drift into register corruption
+// across a switch.
+export let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+
+// The custom-ABI callee-saved XMMs (Wave 2), in SAVE order. Unlike the GPRs these are not a stack —
+// each takes its own frame slot — so the restore order is the same, not the reverse. xmm6–15 mirror
+// `RegisterAllocator.calleeSavedMask`'s XMM half, held to it by `assertCalleeSavedListsMatchMasks`.
+//
+// EXPORTED for the same reason `calleeSavedOrder` is: the GT context switch (X64GtRuntime) must save
+// EXACTLY the set the prologue preserves, because a `call __gt_context_switch` is an ordinary call
+// from the suspending function's view — and it runs another green thread's arbitrary code before
+// returning. Two shared lists, not second copies free to drift into register corruption.
+export let calleeSavedXmmOrder = [X64Register.xmm6, X64Register.xmm7, X64Register.xmm8, X64Register.xmm9, X64Register.xmm10, X64Register.xmm11, X64Register.xmm12, X64Register.xmm13, X64Register.xmm14, X64Register.xmm15]
+
+// The frame bytes ONE preserved XMM occupies — **the single home of the "8 bytes per XMM" decision
+// this file's header argues for**, read by every frame that preserves one: the prologue's
+// callee-saved slots below, the GT context switch's hand-built save area, and `__gt_morestack`'s
+// FP-argument save area (both X64GtRuntime).
+//
+// It IS `SpillSlotBytes` and says so rather than repeating an 8, because a preserved XMM is exactly a
+// SPILLED f64: the prologue preserves one with the spiller's own `storeSlotReg`/`loadRegSlot` ops, so
+// its slot rides the spiller's grid and its width cannot be anything else.
+//
+// ⚠ IT USED TO BE TWO NUMBERS — `SpillSlotBytes` in the prologue's reservation and `GtArgSlotBytes`
+// (the ASYNC ARGUMENT-BUFFER stride, a different fact that happens to be 8) in the GT half — under a
+// comment promising that `assertGtFrameConsistent` made forgetting one a compile-time panic. It could
+// not: it read only the GT spelling. Now both halves read this, so widening it to 16 moves
+// `assertGtFrameConsistent`'s derived frame off `GtInitialFrameBytes` and the next async compile
+// panics, which is what that comment always claimed.
+export let XmmSaveSlotBytes = SpillSlotBytes
+
+typealias X64RegisterArray = Array with X64Register
+
+// Insert prologue/epilogue ops for every function in the module.
+export function insertPrologueEpilogue(module TargetModule, target Target)
+	logDebug(LogCategory.codegen, message: function() gives "Prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		insertFrameForFunction(module, func: try module.functions.get(fnIndex) otherwise panic("insertPrologueEpilogue: fnIndex {fnIndex} is below module.functions.count()"))
+	end 'eachFunc'
+end 'insertPrologueEpilogue'
+
+// Insert a function's frame: establish the frame pointer, push the callee-saved registers
+// its coloring used, reserve its frame (`sub rsp`), and mirror all three on every return.
+//
+// EVERY function is framed, leaves included — the saved-RBP chain is only a chain if it has
+// no holes (see this file's header). The frame RESERVATION is still conditional: a leaf that
+// reserves nothing emits no `sub rsp`, since `computeFrameBytes` returns 0 and both
+// `encodePrologue` and `encodeEpilogue` skip a zero-size frame.
+//
+// `usedCalleeSavedRegs` is read BEFORE anything is inserted, so it reports what the COLORING
+// used and never sees this pass's own `push rbp`.
+function insertFrameForFunction(module TargetModule, func IrFunction)
+	let coloured = colouredPhysicalRegs(module, func: func)
+	let usedCallee = usedRegsFrom(calleeSavedOrder, coloured: coloured)
+	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
+	let makesCall = functionMakesCall(module, func: func)
+
+	// The SAME `computeFrameBytes` the GT stack guard reaches through `computeGuardFrameBytes` — one formula, two
+	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
+	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
+	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
+	let xmmBaseSlot = func.stackSize / SpillSlotBytes
+
+	var isFirstBlock = true
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
+
+		if isFirstBlock 'entry'
+			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
+		end 'entry'
+		isFirstBlock = false
+
+		if blockEndsWithReturn(module, block: block) 'returnBlock'
+			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
+		end 'returnBlock'
+	end 'eachBlock'
+end 'insertFrameForFunction'
+
+// The frame this function's prologue reserves with `sub rsp, N` — the SINGLE source of that number, so the
+// prologue pass and the GT stack guard (X64Backend's `emitFunctionChunk`, which projects rsp by exactly this
+// much) cannot derive two different frame sizes for one function. It is the `computeFrameBytes` expression
+// `insertFrameForFunction` used inline, lifted here and exported because the guard needs the same answer.
+export function computeGuardFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let makesCall = functionMakesCall(module, func: func)
+	let coloured = colouredPhysicalRegs(module, func: func)
+	let pushCount = usedRegsFrom(calleeSavedOrder, coloured: coloured).count()
+	let xmmSaveCount = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured).count()
+	return computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: xmmSaveCount)
+end 'computeGuardFrameBytes'
+
+// The bytes to reserve with `sub rsp, N`.
+//   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16) — the
+//     `call` that reached us pushed the return address. Every push then moves it by 8, and
+//     the `sub` must land it on ≡ 0. The pushes are `push rbp` PLUS the `pushCount`
+//     callee-saved ones, which is the whole reason the frame pointer appears in this
+//     arithmetic: it is one more push, so it INVERTS the parity the reservation must
+//     correct for. It must also cover shadow space + locals + this function's OUTGOING
+//     stack arguments (`func.outgoingArgSize`, the max over its call sites — 0 for a function
+//     whose every call fits the six register slots of each file).
+//     `mrt_start`'s hand-built frame IS this formula with pushCount 0, stackSize 0.
+//   • A LEAF has no call, so alignment is irrelevant; it reserves just its (16-rounded)
+//     locals — 0 for the leaves that have none. push/pop alone balance rsp.
+//
+// ⚠ `xmmSaveCount` FOLDS INTO THE RESERVATION, NOT INTO `pushCount`. The callee-saved XMMs live in
+// frame SLOTS, not on the push stack (there is no `push xmm`), so they do not move rsp's residue and
+// must not be counted in the parity term — `pushCount` stays the GPR push count. Counting them there
+// would flip the reservation's residue for every function saving an odd number of XMMs and misalign
+// rsp at its calls, which is not a compile error but a fault inside kernel32's SSE.
+//
+// ⚠ A LEAF SAVES CALLEE-SAVED XMMs TOO, and its branch must reserve them: "leaf" means "makes no
+// call", not "is not a callee". Since Wave 2, `preferredVolatilityMask` puts a float into xmm6–15
+// under plain register pressure in a function that calls nothing, and that register still belongs to
+// this function's caller.
+function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
+	let xmmSaveBytes = (xmmSaveCount as StackSize) * XmmSaveSlotBytes
+	if not makesCall 'leaf'
+		return alignUpStack(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
+	end 'leaf'
+	let base = func.stackSize + xmmSaveBytes + func.outgoingArgSize + ShadowSpaceBytes
+	let targetMod = frameAlignTarget(pushCount + FramePointerPushCount)
+	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
+end 'computeFrameBytes'
+
+// The rsp offset of a function's spill-slot AREA — the base the x64 encoder adds to
+// `slot * SpillSlotBytes` for every spill/reload. The frame the prologue reserves is laid
+// out, from rsp upward: [shadow space + outgoing args] [spill slots] [callee-saved XMM slots]
+// [alignment padding]. The XMM slots ride the SAME grid as the spiller's, which is why they need no
+// base of their own — the layout is decided here once, for both.
+// So spill slots must sit ABOVE the shadow space on a CALLER: at a `call`, the callee may
+// clobber the caller's 32-byte shadow space (`[rsp .. rsp+32)`), which would corrupt a
+// value spilled across a loop whose body makes a call. Placing the slot area at
+// `ShadowSpaceBytes + outgoingArgSize` keeps every slot out of that clobber zone. A LEAF
+// (no call) reserves no shadow space, so its slots start at rsp (base 0) — the simplest
+// form, matching the design's "slot disp = slotIndex*8 from rsp". This is the SINGLE place
+// the shadow-space-vs-slot ordering is decided; `computeFrameBytes` reserves exactly enough
+// (`stackSize + outgoingArgSize + ShadowSpaceBytes`) for a caller to hold both.
+export function spillSlotBaseDisp(module TargetModule, func IrFunction) returns StackSize
+	if functionMakesCall(module, func: func) 'caller'
+		return ShadowSpaceBytes + func.outgoingArgSize
+	end 'caller'
+	return 0
+end 'spillSlotBaseDisp'
+
+// The `sub rsp` size's required residue mod 16 for a caller with `pushCount` TOTAL pushes
+// (the frame pointer's own included — see `computeFrameBytes`): 8 when even (entry rsp ≡ 8
+// stays ≡ 8 after an even number of pushes, so an 8 (mod 16) sub reaches ≡ 0), 0 when odd.
+function frameAlignTarget(pushCount RegCount) returns StackSize
+	if pushCount mod 2 == 0 'even'
+		return 8
+	end 'even'
+	return 0
+end 'frameAlignTarget'
+
+// The smallest value >= `base` congruent to `targetMod` modulo `modulus` — `base` plus
+// the least non-negative delta that lands its residue on `targetMod`.
+function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) returns StackSize
+	// `modulus` is a power-of-two stack alignment, never zero; `otherwise panic` is the project's form
+	// for a `try` that must not fail (integer `mod` throws for a possibly-zero divisor).
+	let residue = try (base mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
+	let delta = try (((targetMod - residue) + modulus) mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
+	return base + delta
+end 'roundUpToMod'
+
+// Every physical register a function's colored body references, as a mask — the ONE scan both
+// callee-saved questions are asked against (which GPRs to push, which XMMs to slot-save), so a
+// function's ops are walked once however many register files the ABI preserves.
+function colouredPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
+	var mask = 0 as RegMask
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("colouredPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			mask = mask or opPhysicalRegs(try module.ops.get(opIdx) otherwise panic("colouredPhysicalRegs: opIdx {opIdx} not in module.ops"))
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			mask = mask or opPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("colouredPhysicalRegs: terminator not in module.ops"))
+		end 'hasTerm'
+	end 'eachBlock'
+	return mask
+end 'colouredPhysicalRegs'
+
+// The registers of `order` that the coloring used, in `order`'s order. The allocator colors values
+// into the callee-saved registers of EITHER file for values live across a call (or under pressure);
+// each such register must be preserved — a GPR by push/pop, an XMM by a frame slot.
+function usedRegsFrom(order X64RegisterArray, coloured RegMask) returns X64RegisterArray
+	var used = X64RegisterArray.create()
+	for reg in order 'eachCallee'
+		if regMaskContains(coloured, regNum: reg.rawValue) 'isUsed'
+			used.push(reg)
+		end 'isUsed'
+	end 'eachCallee'
+	return used
+end 'usedRegsFrom'
+
+// Every physical GPR a colored TargetOp names, as a mask. Runs on the fully-colored
+// program (post-regalloc, post-SSA-destruction — `xchgRegReg` may be present, so this
+// does NOT route through `targetOpOperands`, which rejects that post-coloring op). Ops
+// with no register operands contribute nothing. EXHAUSTIVE over TargetOp — a new op
+// fails to compile here until its registers are declared.
+function opPhysicalRegs(op TargetOp) returns RegMask
+	return match op 'p'
+		prologue or
+			epilogue or
+			ret or
+			jmp or
+			jcc gives 0
+		movRegImm(dest, _) gives physRegBit(dest)
+		movRegImm32(dest, _) gives physRegBit(dest)
+		movRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		movReg32Reg32(d, s) gives physRegBit(d) or physRegBit(s)
+		subRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		imulRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		negReg(d, s) gives physRegBit(d) or physRegBit(s)
+		cmpRegReg(l, r) gives physRegBit(l) or physRegBit(r)
+		leaRegRegReg(d, b, i) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		leaRegRegImm32(d, b, _) gives physRegBit(d) or physRegBit(b)
+		imulRegRegImm32(d, s, _) gives physRegBit(d) or physRegBit(s)
+		cmpRegImm32(reg, _) gives physRegBit(reg)
+		xchgRegReg(a, b) gives physRegBit(a) or physRegBit(b)
+		callDirect or
+			iatCall or
+			cqo gives 0
+		divideReg(divisor, _) gives physRegBit(divisor)
+		pushReg(reg) gives regMaskOf(reg)
+		popReg(reg) gives regMaskOf(reg)
+		storeSlotReg(_, srcReg) gives physRegBit(srcReg)
+		loadRegSlot(destReg, _) gives physRegBit(destReg)
+		andRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		orRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		xorRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		notReg(d, s) gives physRegBit(d) or physRegBit(s)
+		andRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		orRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		xorRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		shlRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+		sarRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+		shrRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+		// RCX is NOT reported here. This function answers "which registers did the COLORING
+		// use?", so the prologue knows which callee-saved ones to preserve — and RCX is
+		// caller-saved, so it needs no preservation regardless. The shift's use of CL is an
+		// IMPLICIT one (a `TargetOpMeta.implicitUses` mask), not a coloring outcome.
+		shlRegCl(d, l) gives physRegBit(d) or physRegBit(l)
+		sarRegCl(d, l) gives physRegBit(d) or physRegBit(l)
+		shrRegCl(d, l) gives physRegBit(d) or physRegBit(l)
+		setccReg(d, _) gives physRegBit(d)
+		// ⚠ The data-section band MUST be counted here, and this is the arm where a miss is a real
+		// miscompile rather than a missed optimization: this mask is what decides which CALLEE-SAVED
+		// registers the prologue pushes. A global's address, or the value loaded out of one, can be
+		// colored into rbx or r12-r15 like any other value — and if that register is not in this mask,
+		// the prologue never saves it and the function silently clobbers its CALLER's register.
+		leaRegGlobal(d, _) gives physRegBit(d)
+		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
+		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
+		// ⚠ The SSE band MUST be counted, and since Wave 2 this is a REAL-MISCOMPILE arm exactly like
+		// the data-section one above: xmm6-15 are callee-saved, so a float coloured into one and missing
+		// from this mask is never saved by the prologue and the function silently clobbers its CALLER's
+		// register. Wave 1 answered honestly here while the intersection with the callee-saved set was
+		// still empty, which is why Wave 2 needed no hunt for places that had short-circuited on
+		// "floats never need saving" — there were none.
+		addsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		subsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		mulsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		divsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		ucomisdRegReg(l, r) gives physRegBit(l) or physRegBit(r)
+		movsdRegRip(d, _) gives physRegBit(d)
+		cvtsi2sdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		cvttsd2siRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		// The MATH INTRINSICS — reported like every other SSE op, for the reason the band comment
+		// above gives.
+		sqrtsdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		roundsdRegReg(d, s, _) gives physRegBit(d) or physRegBit(s)
+		absF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		// The sign-bit FLIP — its two XMM operands are counted like `absF64RegReg`'s. Its scratch xmm5
+		// (the op's `implicitDefs`) is caller-saved under both ABIs and never pushed, so it contributes
+		// nothing here, exactly as the jump table's r10/r11 do not.
+		negF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		// The BIT REINTERPRETATION. Its GPR DEST can be colored into a callee-saved register
+		// (rbx/r12–r15), so a miss here is the real-miscompile trap `leaRegRdata` documents below,
+		// not a missed optimization: the prologue would never save that register and the function
+		// would silently clobber its CALLER's.
+		movqGprXmm(d, s) gives physRegBit(d) or physRegBit(s)
+		// Its INVERSE. Here it is the SOURCE that is the GPR (and the dest an XMM), so the callee-saved
+		// register at risk is a different one — but both operands are counted either way, which is why
+		// the direction changes nothing about this arm and everything about why it must exist.
+		movqXmmGpr(d, s) gives physRegBit(d) or physRegBit(s)
+		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
+		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
+		leaRegRdata(d, _) gives physRegBit(d)
+		// `minsd`/`maxsd` — both operands are XMMs, and xmm6–xmm15 are CALLEE-SAVED under the Windows x64 ABI,
+		// so this is the same real-miscompile trap the two arms above name rather than a missed
+		// optimization. `rhs` is counted as well as `dest`/`lhs`: it is a genuine second source
+		// register, unlike `absF64RegReg`'s ignored `src`, which coloring has already merged into
+		// `dest`.
+		minMaxSdRegReg(d, l, r, _) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		// arm64 does not run the x64 prologue pass (its frame is `Arm64PrologueEpilogue`, wave 1), so
+		// no arm64 op reaches here — an empty mask is unreachable AND correct (none of these arms names
+		// a register the x64 prologue counts). `gives` cannot host a `panic`; the band-append
+		// invariant forced this arm.
+		arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel gives 0
+		// ⚠ The P1.5-A1 function-value band MUST be counted, and this is another arm where a miss is a
+		// real miscompile, not a missed optimization: BOTH name a GPR the coloring can place in a
+		// callee-saved register (rbx/r12-r15) — `leaRegFunc`'s dest and `callReg`'s callee-address use —
+		// so if either is absent from this mask the prologue never saves that register and the function
+		// silently clobbers its CALLER's. The same trap the `leaRegGlobal`/`leaRegRdata` arms document.
+		leaRegFunc(d, _) gives physRegBit(d)
+		callReg(r) gives physRegBit(r)
+		// The Linux `syscall` names no explicit register operand (its number is an immediate, its args
+		// are separate `mov`s, and rax/rcx/r11 are caller-saved and never pushed) — 0, like `callDirect`/
+		// `iatCall` above.
+		x64Syscall gives 0
+		// The x64 jump table's biased index USE can be colored into a callee-saved register, so it MUST be
+		// counted (the same real-miscompile trap `callReg` documents). The scratch r10/r11 (its implicitDefs)
+		// are caller-saved and never pushed, so they contribute nothing. `arm64JumpTable` never runs the x64
+		// prologue pass, so 0 (its own prologue counts it) — but the arm keeps the match exhaustive.
+		x64JumpTable(indexReg, _, _, _) gives physRegBit(indexReg)
+		arm64JumpTable gives 0
+		// The witness call's base-register USE can be colored into a callee-saved register, so it MUST be
+		// counted — the same trap `callReg` documents.
+		callMem(baseReg, _) gives physRegBit(baseReg)
+		// arm64-only ops (its own prologue pass counts them); they never reach an x64 program, and an empty
+		// mask is both unreachable and correct. `gives` cannot host a `panic`.
+		arm64StoreOutgoingArg or
+			arm64LoadIncomingArg gives 0
+		// The arm64 bit reinterpretations — arm64-only, so 0 for the reason the arm above gives.
+		arm64FmovGprFp or
+			arm64FmovFpGpr gives 0
+		// ⚠ Its GPR dest can be coloured into a callee-saved register (rbx/r12-r15), so a miss here is the
+		// real-miscompile trap `leaRegGlobal`/`leaRegRdata` document: the prologue would never save that
+		// register and the function would silently clobber its CALLER's.
+		leaRegSlot(d, _) gives physRegBit(d)
+		// F1b: a fill ladder names no virtual register, and its four fixed ones (rax/rcx/rdx/rdi) are all
+		// CALLER-saved, so the prologue owes them nothing — an empty mask is the right answer, not a gap.
+		x64MemFill or
+			arm64MemFill gives 0
+		// F2: every x64 atomic operand is an ORDINARY coloured register that CAN land in a callee-saved one, so
+		// each must be counted — the same real-miscompile trap `leaRegSlot` documents one line up. The CAS's
+		// implicit RAX is deliberately absent: rax is caller-saved, so the prologue owes it nothing.
+		x64LockCmpxchg(a, s) gives physRegBit(a) or physRegBit(s)
+		x64LockXadd(d, s, a) gives physRegBit(d) or physRegBit(s) or physRegBit(a)
+		x64LockAdd(a, s) gives physRegBit(a) or physRegBit(s)
+		x64TebSelfPointer(d) gives physRegBit(d)
+		x64GsLoadRegBase(d, b) gives physRegBit(d) or physRegBit(b)
+		// arm64-only ops, 0 for the reason the arm64 arms above give. Their x16/x17 scratch is outside every
+		// allocatable pool and callee-saved of nothing, so there is nothing to count there either.
+		arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer gives 0
+		// ⚠ EC16's scaled-index band MUST be counted, and this is a REAL-MISCOMPILE arm for the reason the
+		// `loadRegBaseDisp`/`storeBaseDispReg` arms above give: every operand here is an ordinary coloured
+		// register that can land in rbx/r12-r15, and a register missing from this mask is one the prologue
+		// never pushes and the function silently clobbers for its CALLER.
+		leaRegBaseIndexScale(d, b, i, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		loadRegBaseIndexScale(d, b, i, _, _, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		storeBaseIndexScaleReg(b, i, _, _, s, _) gives physRegBit(b) or physRegBit(i) or physRegBit(s)
+		// arm64-only, 0 for the reason every other arm64 arm above gives.
+		arm64AddLsl gives 0
+		// ⚠ EC18 — `divideReg`'s arm, and it counts the SAME ONE operand for the same reason: RAX and RDX
+		// are caller-saved and are not part of this scan (which is about callee-saved registers the
+		// coloring used), while `src` is an ordinary coloured register that can land in rbx/r12-r15.
+		imulHighReg(src) gives physRegBit(src)
+		// arm64-only, 0 for the reason every other arm64 arm above gives.
+		arm64Fneg gives 0
+		// G3: arm64-only, 0 for the reason every other arm64 arm above gives.
+		arm64LoadAcquire or
+			arm64StoreRelease gives 0
+		// EC18's arm64 high multiply: arm64-only, 0 for the same reason.
+		arm64Smulh gives 0
+		// A coverage counter names no register on either lane: `lock inc [rip+d32]` on x64, and arm64's
+		// reserved x16/x17 pair plus a stack-borrowed word it gives straight back.
+		covInc gives 0
+	end 'p'
+end 'opPhysicalRegs'
+
+// The single-register mask of a colored operand. Every operand is physical at this
+// point (register allocation rewrote virtuals), so a virtual here is an allocator bug.
+function physRegBit(vreg TargetVReg) returns RegMask
+	match vreg 'v'
+		physical(reg) then return regMaskAdd(0, regNum: reg)
+		virtual(id) then panic("opPhysicalRegs: unresolved virtual register v{id} reached the prologue pass — register allocation must color every operand first")
+	end 'v'
+end 'physRegBit'
+
+// Prepend the frame-pointer setup, then the callee-saved GPR pushes, then the frame `sub`, then the
+// callee-saved XMM slot stores, to the entry block, so at runtime they run in that order. Built by
+// inserting at index 0 in REVERSE (the XMM stores first, then the `sub` before them, then each push,
+// then the frame pointer before them all), so the final order is:
+// push rbp, mov rbp/rsp, push₀ … pushₙ, sub, storeSlotReg₀ … storeSlotRegₘ.
+//
+// The frame pointer is established FIRST, before any callee-saved push, and that ordering
+// is what makes the chain well-formed: at `mov rbp, rsp` the only things below the return
+// address are the caller's saved rbp, so `[rbp]` is the caller's frame pointer and
+// `[rbp+8]` is the return address — the two loads `mrt_panic_walk_frames` does. Pushing a
+// callee-saved register first would bury the return address one slot deeper per push, and
+// the walker has no way to know how many.
+function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X64RegisterArray, usedXmm X64RegisterArray, xmmBaseSlot SpillSlot, frameBytes StackSize)
+	// The XMM stores are prepended FIRST, so they end up LAST — after the `sub rsp` that reserves the
+	// slots they write into. They address rsp, so running one before the reservation would store above
+	// the stack pointer, into memory a signal or interrupt frame may overwrite.
+	for xi in 0 upto usedXmm.count() 'eachXmmSaveRev'
+		let slotIndex = usedXmm.count() - 1 - xi
+		let reg = try usedXmm.get(slotIndex) otherwise panic("insertPrologueAtEntry: usedXmm.get OOB")
+		prependOp(module, block: block, op: TargetOp.storeSlotReg(xmmBaseSlot + slotIndex, srcReg: x64PhysReg(reg)))
+	end 'eachXmmSaveRev'
+	if frameBytes > 0 'reserve'
+		prependOp(module, block: block, op: TargetOp.prologue(frameBytes))
+	end 'reserve'
+	for ri in 0 upto usedCallee.count() 'eachPushRev'
+		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("insertPrologueAtEntry: usedCallee.get OOB")
+		prependOp(module, block: block, op: TargetOp.pushReg(reg))
+	end 'eachPushRev'
+	prependOp(module, block: block, op: framePointerSetupOp())
+	prependOp(module, block: block, op: TargetOp.pushReg(X64Register.rbp))
+end 'insertPrologueAtEntry'
+
+// Append the frame teardown before the `ret` terminator, mirroring the prologue exactly in
+// reverse: reload the callee-saved XMMs (still inside the frame that holds their slots), release
+// the frame (`add rsp`), pop the callee-saved GPRs in REVERSE push order (LIFO), then restore the
+// caller's frame pointer. Appended to the body, which runs before the `ret` terminator.
+//
+// The XMM reloads are NOT reversed, and need not be: each register has its OWN slot rather than a
+// stack position, so save and restore order are independent. Only the pushes are LIFO, a stack being
+// the one thing here that is one.
+//
+// `pop rbp` is reached with rsp back at the value `mov rbp, rsp` captured, because the
+// `add rsp` and the pops undo the `sub` and the pushes one for one. Spelling the epilogue
+// `mov rsp, rbp; pop rbp` would restore rsp from the frame pointer rather than by balanced
+// arithmetic, but that form CANNOT also restore the callee-saved registers, which sit below rbp and
+// would be skipped over: they are pushed after the frame pointer, so they are unwound explicitly
+// and the balance is what carries rsp home.
+function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, usedXmm X64RegisterArray, xmmBaseSlot SpillSlot, frameBytes StackSize)
+	for xi in 0 upto usedXmm.count() 'eachXmmRestore'
+		let reg = try usedXmm.get(xi) otherwise panic("appendEpilogueBeforeReturn: usedXmm.get OOB")
+		module.appendOp(block, op: TargetOp.loadRegSlot(x64PhysReg(reg), slot: xmmBaseSlot + xi))
+	end 'eachXmmRestore'
+	if frameBytes > 0 'release'
+		module.appendOp(block, op: TargetOp.epilogue(frameBytes))
+	end 'release'
+	for ri in 0 upto usedCallee.count() 'eachPopRev'
+		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("appendEpilogueBeforeReturn: usedCallee.get OOB")
+		module.appendOp(block, op: TargetOp.popReg(reg))
+	end 'eachPopRev'
+	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
+end 'appendEpilogueBeforeReturn'
+
+// `mov rbp, rsp` — the instruction that makes rbp name this frame. Reuses the existing
+// 64-bit reg-reg move rather than minting a TargetOp variant for it: the bytes are an
+// ordinary `mov r/m64, r64`, and a new variant would have to be band-appended for no
+// encoding it does not already have. Shared by this pass and `mrt_start`'s hand-built
+// frame, so the two cannot spell the frame's defining instruction differently.
+export function framePointerSetupOp() returns TargetOp
+	return TargetOp.movRegReg(x64PhysReg(X64Register.rbp), srcReg: x64PhysReg(X64Register.rsp))
+end 'framePointerSetupOp'
+
+// Insert `op` at the front of `block`'s op list (a fresh `module.ops` slot). The shared
+// "prepend a new op" helper the prologue's pushes and `sub` both use.
+function prependOp(module TargetModule, block IrBlock, op TargetOp)
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	// Frame setup is the ABI's, not the author's — it precedes the function's first statement.
+	module.spans.pushNone(opIdx)
+	insertOpRef(block, at: 0, opIdx: opIdx)
+end 'prependOp'
+
+// True when the function makes a call — the frame trigger that forces 16-byte alignment
+// + shadow space even for a leaf-caller with no locals. `isCall` is read straight off
+// each op's TargetOpMeta backing.
+function functionMakesCall(module TargetModule, func IrFunction) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionMakesCall: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			if opAtIsCall(module, opIdx: opIdx) 'call'
+				return true
+			end 'call'
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			if opAtIsCall(module, opIdx: block.terminatorIndex()) 'callTerm'
+				return true
+			end 'callTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return false
+end 'functionMakesCall'
+
+function opAtIsCall(module TargetModule, opIdx OpIndex) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("functionMakesCall: opIdx {opIdx} not in module.ops")
+	return op.rawValue.isCall
+end 'opAtIsCall'
+
+// True when the block's terminator is a `ret` — the site an `epilogue` precedes.
+function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithReturn: terminator not in module.ops")
+	return match op 'check'
+		prologue or
+			epilogue gives false
+		ret gives true
+		jmp or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			subRegReg or
+			imulRegReg or
+			negReg or
+			cmpRegReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			cmpRegImm32 or
+			xchgRegReg or
+			callDirect or
+			iatCall or
+			cqo or
+			divideReg gives false
+		pushReg or
+			popReg gives false
+		storeSlotReg or
+			loadRegSlot gives false
+		andRegReg or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			andRegImm32 or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			leaRegRdata or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg gives false
+		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
+		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
+		arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel gives false
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are body ops, never a `ret`.
+		leaRegFunc or
+			callReg or
+			x64Syscall gives false
+		// The jump tables are branch terminators, not a `ret`.
+		x64JumpTable or
+			arm64JumpTable gives false
+		// The witness call is a body op, never a `ret`.
+		callMem gives false
+		// Both stack-argument ops are body ops, never a `ret`.
+		arm64StoreOutgoingArg or
+			arm64LoadIncomingArg gives false
+		// Both arm64 bit reinterpretations are body ops, never a `ret`.
+		arm64FmovGprFp or
+			arm64FmovFpGpr gives false
+		// A frame address is a body op, never a `ret`.
+		leaRegSlot gives false
+		// F1b: a fill ladder is a body op, never a `ret` — its branches are internal to its own encoding.
+		x64MemFill or
+			arm64MemFill gives false
+		// F2: every atomic is a body op, never a `ret`.
+		x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer gives false
+		// EC16: every scaled-index form is a body op, never a `ret`.
+		leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			arm64AddLsl gives false
+		// EC18: the high multiply is a body op, never a `ret`.
+		imulHighReg gives false
+		// arm64 `fneg` is a body op, never a `ret`.
+		arm64Fneg gives false
+		// G3: an ordered access is a body op, never a `ret`.
+		arm64LoadAcquire or
+			arm64StoreRelease gives false
+		// EC18: the arm64 high multiply is a body op, never a `ret`.
+		arm64Smulh gives false
+		// A coverage counter is a body op, never a `ret`.
+		covInc gives false
+	end 'check'
+end 'blockEndsWithReturn'

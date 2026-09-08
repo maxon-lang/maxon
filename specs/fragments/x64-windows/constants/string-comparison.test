@@ -1,0 +1,40 @@
+// Test: string-comparison
+enum ContentType
+	json = "application/json"
+	html = "text/html"
+end 'ContentType'
+
+function main() returns ExitCode
+	let ct = "application/json"
+	if ct == ContentType.json 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "application/json"
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "application/json"
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "text/html"
+    x64.imulRegRegImm32 rdx, rdx, 0
+    x64.leaRegRegReg rdx, rax, rdx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,52 @@
+// In-place insertion sort over a half-open range `arr[lo:hi)` using a
+// caller-supplied comparator. Called from `smallSortRange` (in smallSort.maxon)
+// as the fallback for sizes outside the sorting-network cutoffs (3, 5, 6, 7,
+// 9..32) and as the bottom of every recursive sort's recursion.
+//
+// Lives in a stand-alone extension so the algorithm body stays out of the
+// already-large Array.maxon. Also declares the shared `SortIndex` and
+// `SortComparator` aliases used by every sort helper file.
+//
+// Emits `insertionSort.run` via Log so dispatch tests can confirm the
+// insertion path engaged for a given input.
+
+public extension Array
+	// An array coordinate — a genuine INDEX, so a quantity and not a pattern. `nodePowerBetween`'s
+	// scale arithmetic is the one thing here that needs the top bit, and it has its own
+	// `NodePowerWord` rather than widening every index in the sort to pay for it.
+	typealias SortIndex = int(0 to u64.max)
+	typealias SortComparator = function(Element, Element) returns Ordering
+
+	// In-place insertion sort over the closed-open range [lo, hi).
+	// Stable: equal elements keep relative order because the bubble loop
+	// stops as soon as the predecessor is not strictly greater than the
+	// pending element (cmp returning `equalTo` does not trigger a swap).
+	//
+	// The pending element bubbles down via raw SWAPS rather than the textbook
+	// hold-and-shift form: holding `pending` while `set` shifts its slot would
+	// decref the held occupant out from under the borrow
+	// (`__managed_mem_set`'s overwrite semantics free the displaced element —
+	// the sort-of-managed-elements UAF). A swap moves ownership between slots
+	// with refcounts unchanged, so managed elements survive the relocation.
+	public function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+		Log.trace("insertionSort.run")
+		if hi <= lo + 1 'trivial'
+			return
+		end 'trivial'
+		var i = lo + 1
+		while i < hi 'outer'
+			var j = i
+			while j > lo 'inner'
+				let prev = try managed.get(j - 1) otherwise panic("internalInsertionSortRange: prev get OOB; invariant j > lo >= 0")
+				let pending = try managed.get(j) otherwise panic("internalInsertionSortRange: pending get OOB; invariant j <= i < hi <= managed.length()")
+				let ord = cmp(prev, pending)
+				if ord != Ordering.greaterThan 'placed'
+					break
+				end 'placed'
+				self.swap(j - 1, j: j)
+				j = j - 1
+			end 'inner'
+			i = i + 1
+		end 'outer'
+	end 'internalInsertionSortRange'
+end 'Array'

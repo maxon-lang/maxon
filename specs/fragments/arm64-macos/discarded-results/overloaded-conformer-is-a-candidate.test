@@ -1,0 +1,235 @@
+// Test: overloaded-conformer-is-a-candidate
+typealias Code = int(0 to u32.max)
+
+var noise = 0 as Code
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Quiet implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Quiet'
+
+type Loud implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest(salt Code) returns Code
+		return self.x + salt
+	end 'digest'
+
+	export function digest() returns Code
+		noise = noise + 1
+		return self.x
+	end 'digest'
+end 'Loud'
+
+type Box uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias LoudBox = Box with Loud
+typealias QuietBox = Box with Quiet
+
+function main() returns ExitCode
+	let loud = LoudBox.create(Loud.create(3))
+	_ = loud.itemDigest()
+	let quiet = QuietBox.create(Quiet.create(3))
+	return quiet.itemDigest() + noise - 4
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_noise@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Quiet.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x19, x0
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at overloaded-conformer-is-a-candidate.test:13: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Quiet.digest {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Loud.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x19, x0
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at overloaded-conformer-is-a-candidate.test:25: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Loud.digest# {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x1, __data_noise
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x1, x1, 1
+    arm64.leaGlobal x2, __data_noise
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.itemDigest {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.bl Loud.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Loud.Digest
+    arm64.movRegReg x0, x19
+    arm64.bl Box.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_Loud.Digest
+    arm64.movRegReg x0, x20
+    arm64.bl Box.itemDigest
+    arm64.movImm x0, 3
+    arm64.bl Quiet.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Quiet.Digest
+    arm64.movRegReg x0, x19
+    arm64.bl Box.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_Quiet.Digest
+    arm64.movRegReg x0, x21
+    arm64.bl Box.itemDigest
+    arm64.leaGlobal x1, __data_noise
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.sub x19, x0, 4
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Box_Quiet
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_Loud
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at overloaded-conformer-is-a-candidate.test:58: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

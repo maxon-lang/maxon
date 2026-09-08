@@ -1,0 +1,29 @@
+// Test: error.user-method-void-try-in-value-position
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'bump'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	let x = try g.bump(1) otherwise return 8
+	return x
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:24:10: type mismatch: ''Gate.bump' does not return a value'

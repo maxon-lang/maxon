@@ -1,0 +1,18 @@
+// Test: error.two-aliases-over-different-ranges-are-still-two-types
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+typealias WideColumn = Array with Wide
+typealias NarrowColumn = Array with Narrow
+
+function takesNarrow(c NarrowColumn) returns Wide
+	return c.count()
+end 'takesNarrow'
+
+function main() returns ExitCode
+	var w = WideColumn.create()
+	w.push(7)
+	return takesNarrow(w) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:9: argument type mismatch for 'c': expected 'NarrowColumn', got 'WideColumn'

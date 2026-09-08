@@ -1,0 +1,34 @@
+// Test: float-comparison
+enum Threshold
+	low = 0.1
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let val = 0.5
+	if val > Threshold.low and val < Threshold.high 'inRange'
+		return 1
+	end 'inRange'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  andrhs:
+    x64.movRegImm32 rax, 1
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  inRange:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

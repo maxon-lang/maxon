@@ -1,0 +1,103 @@
+// Compilation target: CPU architecture and operating system.
+
+export enum CpuArch
+	x64
+	arm64
+	wasm32
+end 'CpuArch'
+
+export enum Os
+	windows
+	linux
+	macos
+	wasi
+end 'Os'
+
+export type Target
+	export let cpu as CpuArch
+	export let os as Os
+
+	export static function create(cpu CpuArch, os Os) returns Target
+		return Self{cpu: cpu, os: os}
+	end 'create'
+end 'Target'
+
+// Declared beside `Target` rather than beside the one function that returns such a list (`Main
+// .supportedTargets`), because the top-level namespace is FLAT: a typealias is a global declaration
+// wherever it is written, and the file that owns the element type is the one place a reader looks for
+// it. See `SpecTestRunner`'s note on `FilePathArray` for what a second copy costs.
+export typealias TargetArray = Array with Target
+
+export function detectHostTarget() returns Target
+	#if os(Windows)
+		let hostOs = Os.windows
+	#else
+		#if os(Macos)
+			let hostOs = Os.macos
+		#else
+			let hostOs = Os.linux
+		#endif
+	#endif
+
+	#if arch(x64)
+		let hostCpu = CpuArch.x64
+	#else
+		let hostCpu = CpuArch.arm64
+	#endif
+
+	return Target.create(hostCpu, os: hostOs)
+end 'detectHostTarget'
+
+// ⭐ **THE CANONICAL SPELLING OF A CPU / AN OS, WRITTEN DOWN ONCE — because it has TWO readers that
+// must never disagree.** The `--target=` triple goes through `targetToString` (which `Main`'s
+// `parseTargetSpec` matches a spec against, rather than keeping its own table), and `#if arch(...)`
+// / `#if os(...)` go through `ConditionalCompilation.satisfyingArgument`. A second list would be the
+// same fact twice, and its failure mode is SILENT: adding a `CpuArch` case forces an arm here (the
+// match is exhaustive) but would leave `#if arch(<newName>)` quietly answering FALSE on the very
+// target it names, with no diagnostic anywhere.
+//
+// Bytes rather than `String` because the directive evaluator compares them against a `Token.value`,
+// which is a zero-copy slice of the source buffer; `targetToString` is the side that pays for a
+// `String`, and it is the side that was already building one.
+export function cpuCanonicalName(cpu CpuArch) returns ByteArray
+	return match cpu 'cpu'
+		x64 gives b"x64"
+		arm64 gives b"arm64"
+		wasm32 gives b"wasm32"
+	end 'cpu'
+end 'cpuCanonicalName'
+
+export function osCanonicalName(os Os) returns ByteArray
+	return match os 'os'
+		windows gives b"windows"
+		linux gives b"linux"
+		macos gives b"macos"
+		wasi gives b"wasi"
+	end 'os'
+end 'osCanonicalName'
+
+export function targetToString(t Target) returns String
+	return "{String.from(cpuCanonicalName(t.cpu))}-{String.from(osCanonicalName(t.os))}"
+end 'targetToString'
+
+export function executableExtension(t Target) returns String
+	return match t.os 'os'
+		windows gives ".exe"
+		linux gives ""
+		macos gives ""
+		wasi gives ".wasm"
+	end 'os'
+end 'executableExtension'
+
+// ⭐ **THE SUFFIX OF A BINARY THIS PROCESS CAN SPAWN — the HOST's, not a target's**, spelled once for
+// the whole tree. `SpecTestRunner` asks `executableExtension(effectiveTarget)` instead, the TARGET's
+// extension, which is a different question and the reason a cross-target build's exe is named
+// correctly.
+//
+// ⚠ **THE DISTINCTION IS THE WHOLE POINT, so the name says HOST out loud.** `executableExtension(t)`
+// answers "what will a build for `t` produce?"; this answers "what can I `runProcess`?". A harness
+// that cross-compiles reaches for the first and spawns through the second, and the day the two are
+// confused is the day a `x64-windows` cross-build on a POSIX host is looked for without its `.exe`.
+export function hostExecutableExtension() returns String
+	return executableExtension(detectHostTarget())
+end 'hostExecutableExtension'

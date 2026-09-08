@@ -1,0 +1,43 @@
+// Test: parsable.byte-user-type-outranks-primitive
+type byte
+	export let n as Integer
+
+	export static function fromString(_ String) returns Integer
+		return 7
+	end 'fromString'
+end 'byte'
+
+function main() returns ExitCode
+	return byte.fromString("41")
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "41"
+  __il_body:
+    x64.movRegImm32 r8, 7
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegImm32 rax, 7
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at parsable.byte-user-type-outranks-primitive.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

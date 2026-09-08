@@ -1,0 +1,32 @@
+// Test: error.a-different-struct-returned-where-a-struct-is-declared
+typealias Coord = int(0 to 1000)
+
+type Point
+	export var x as Coord
+
+	static function create(x Coord) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Span
+	export var len as Coord
+
+	static function create(len Coord) returns Self
+		return Self{len: len}
+	end 'create'
+end 'Span'
+
+function makeSpan() returns Span
+	let p = Point.create(4)
+	return p
+end 'makeSpan'
+
+function main() returns ExitCode
+	let s = makeSpan()
+	print("{s.len}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:2: Cannot return 'Point' from function declared to return 'Span'

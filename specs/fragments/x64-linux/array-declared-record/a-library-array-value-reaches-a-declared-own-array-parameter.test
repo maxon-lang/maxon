@@ -1,0 +1,70 @@
+// Test: a-library-array-value-reaches-a-declared-own-array-parameter
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias MyStrings = Array with String
+
+function takesMine(parts MyStrings) returns Integer
+	return parts.count()
+end 'takesMine'
+
+function main() returns ExitCode
+	let s = "a,b,c"
+	return takesMine(s.split(",")) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "a,b,c"
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; ","
+    x64.callDirect String.split
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-library-array-value-reaches-a-declared-own-array-parameter.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,57 @@
+// Test: isEmpty-method
+function main() returns ExitCode
+	let empty = ""
+	let nonempty = "hello"
+	if empty.isEmpty() 'check1'
+		print("1\n")
+	end 'check1'
+	if nonempty.isEmpty() 'check2'
+		print("0\n")
+	end 'check2' else 'not_empty'
+		print("2\n")
+	end 'not_empty'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; ""
+    x64.leaRegRdata rbx, [rip + __str_rec_6]  ; "hello"
+    x64.callDirect String.isEmpty
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#2
+  check1:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "1\x0a"
+    x64.callDirect print
+  ifcont#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.isEmpty
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifelse
+  check2:
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "0\x0a"
+    x64.callDirect print
+    x64.jmp ifcont#5
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "2\x0a"
+    x64.callDirect print
+  ifcont#5:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

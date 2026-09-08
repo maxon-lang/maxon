@@ -1,0 +1,20 @@
+// Test: match-gives-carries-the-borrow
+enum Mode
+	first
+	other
+end 'Mode'
+
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let m = Mode.first
+	let s = match m 'pick'
+		first gives try arr.get(0) otherwise ""
+		other gives "a fallback string long enough for the heap here"
+	end 'pick'
+	arr.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:14:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 11)

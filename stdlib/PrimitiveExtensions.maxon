@@ -1,0 +1,101 @@
+/// Extension methods for primitive types implementing core interfaces.
+extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable
+	public function hash() returns HashValue
+		return self and 0xFFFFFFFF
+	end 'hash'
+
+	public function equals(other Self) returns bool
+		return self == other
+	end 'equals'
+
+	public function compare(other Self) returns Ordering
+		if self < other 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		if self > other 'gt'
+			return Ordering.greaterThan
+		end 'gt'
+		return Ordering.equalTo
+	end 'compare'
+
+	public function toString() returns String
+		return "{self}"
+	end 'toString'
+
+	public function clone() returns Self
+		return self
+	end 'clone'
+end 'int'
+
+extension float implements Hashable, Equatable, Comparable, Stringable, Cloneable
+	public function hash() returns HashValue
+		let bits = __Builtins.floatToBits(self)
+		if bits == -9223372036854775807 - 1 'negzero'
+			return 0
+		end 'negzero'
+		return bits and 0xFFFFFFFF
+	end 'hash'
+
+	public function equals(other Self) returns bool
+		return self == other
+	end 'equals'
+
+	// Total-ordering compare: NaN compares equal to NaN and less than any
+	// non-NaN value (matches the spec-test "NaN-is-bottom" semantics).
+	// `x != x` is the canonical IEEE 754 NaN test — it's true only when
+	// the operand is unordered with itself, i.e. NaN.
+	public function compare(other Self) returns Ordering
+		if self != self 'self_nan'
+			if other != other 'both_nan'
+				return Ordering.equalTo
+			end 'both_nan'
+			return Ordering.lessThan
+		end 'self_nan'
+		if other != other 'other_nan'
+			return Ordering.greaterThan
+		end 'other_nan'
+		if self < other 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		if self > other 'gt'
+			return Ordering.greaterThan
+		end 'gt'
+		return Ordering.equalTo
+	end 'compare'
+
+	public function toString() returns String
+		return "{self}"
+	end 'toString'
+
+	public function clone() returns Self
+		return self
+	end 'clone'
+end 'float'
+
+extension bool implements Comparable, Stringable, Cloneable
+	public function compare(other Self) returns Ordering
+		var a = 0
+		var b = 0
+		if self 's'
+			a = 1
+		end 's'
+		if other 'o'
+			b = 1
+		end 'o'
+		if a < b 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		if a > b 'gt'
+			return Ordering.greaterThan
+		end 'gt'
+		return Ordering.equalTo
+	end 'compare'
+
+	public function toString() returns String
+		return "{self}"
+	end 'toString'
+
+	public function clone() returns Self
+		return self
+	end 'clone'
+end 'bool'

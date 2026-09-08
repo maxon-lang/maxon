@@ -1,0 +1,225 @@
+// Test: async-filesystem.try-await-parallel-throws
+typealias Integer = int(i64.min to i64.max)
+
+enum MathError implements Error
+		divByZero
+end 'MathError'
+
+function checkedDiv(a Integer, b Integer) returns Integer throws MathError
+		_ = File.exists(FilePath from "noyield.txt")
+		if b == 0 'z'
+				throw MathError.divByZero
+		end 'z'
+		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable,
+		// so it panics rather than fold a wrong answer.
+		return try (a / b) otherwise panic("safeDivide: b was 0 past the zero guard")
+end 'checkedDiv'
+
+function main() returns ExitCode
+		let p1 = async checkedDiv(50, b: 2)
+		let p2 = async checkedDiv(10, b: 0)
+		let p3 = async checkedDiv(30, b: 3)
+		let r1 = try await p1 otherwise 0
+		let r2 = try await p2 otherwise 0
+		let r3 = try await p3 otherwise 0
+		return r1 + r2 + r3
+end 'main'
+---
+ExitCode: 35
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @checkedDiv {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "noyield.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect File.exists
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 r12, 0
+    x64.setccReg equal, rcx
+    x64.jcc notEqual, ifcont
+  z:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.orRegReg r12, r12, rcx
+    x64.movRegReg rax, rbx
+    x64.cqo
+    x64.idivReg r12
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at async-filesystem.try-await-parallel-throws.test:16: safeDivide: b was 0 past the zero guard\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rax
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 50
+    x64.movRegImm32 r12, 2
+    x64.leaRegFunc rcx, [rip + checkedDiv]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.storeBaseDispReg.word64 [r13 + 208], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegImm32 rbx, 10
+    x64.movRegImm32 r12, 0
+    x64.leaRegFunc rcx, [rip + checkedDiv]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 200], rbx
+    x64.storeBaseDispReg.word64 [r14 + 208], r12
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.movRegImm32 rbx, 30
+    x64.movRegImm32 r12, 3
+    x64.leaRegFunc rcx, [rip + checkedDiv]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 200], rbx
+    x64.storeBaseDispReg.word64 [r15 + 208], r12
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rbx, r8
+  trycont#3:
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg r12, r8
+  trycont#6:
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#9
+  tryok#7:
+    x64.movRegReg rax, r8
+  trycont#9:
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_87]  ; "panic at async-filesystem.try-await-parallel-throws.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

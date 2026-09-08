@@ -1,0 +1,2224 @@
+// Arm64DarwinRuntime — the arm64-macOS HOST SURFACE, hand-assembled into `.text`: the libSystem
+// sequences that stand behind the `os*` Std ops whose only implementation used to be x64-windows's.
+//
+// ⭐⭐ **WHY CHUNKS AND NOT INLINE ISEL CODE — THE REASON IS A REGISTER LIFETIME, AND IT IS STRUCTURAL.**
+// Several of these ops are OUT-PARAM shaped: `osReadWallClock(ftPtr)` means *"write the host's calendar
+// through this pointer"*. On Windows that is one import and nothing more, because `GetSystemTimeAsFileTime`
+// writes the memory ITSELF — the pointer is an ARGUMENT and is dead the instant the call is made. Darwin
+// answers the same question with a VALUE (`clock_gettime_nsec_np` returns nanoseconds in x0), so the
+// pointer must survive the call and be stored through AFTERWARDS.
+//
+// An isel cannot hold a value across a call. The register allocator colours an operand that dies at its op
+// into the caller-saved half — correctly, because for every other OS lowering in this backend the operand
+// IS dead at the call — and x16/x17 are no refuge either: x16 is the import-call trampoline's own scratch
+// (`adrp/ldr/blr x16`) and both are AAPCS64 intra-procedure-call temporaries a callee may clobber at will.
+// A REAL FUNCTION has the one thing the isel does not: a frame. It spills the pointer to a local, calls,
+// and stores through the reloaded pointer — which is what every chunk below does, and why the whole Darwin
+// surface is shaped this way rather than only the ops that happen to need it today.
+//
+// ⭐ **AND IT IS THE ONLY SHAPE THE HARD FAMILIES COULD TAKE ANYWAY.** A `FindFirstFileA` emulated over
+// `opendir`/`readdir`/`stat` is a loop with three calls and a 320-byte record to fill; there is no inline
+// isel expansion of that, on any backend. Paying for a frame at the clock buys the vehicle for the rest.
+//
+// ⚠ **EVERY CHUNK HERE IS macOS-ONLY AND IS APPENDED ONLY FOR `Os.macos`** (`appendArm64DarwinRuntimeChunks`,
+// called from `buildArm64Backend`). arm64-LINUX reaches the OS by raw `svc #0` with no import table at all
+// (`arm64OsCallKind`), so its own chunks are written against its own syscall numbers in `Arm64LinuxRuntime` —
+// it does not inherit these, and must not, because the ARGUMENTS differ as well as the route (Darwin's
+// `clock_gettime_nsec_np` has no Linux counterpart at all).
+//
+// ⭐⭐ **ONLY THE CALLS DIFFER.** The Win32-shaped facts behind them do not — the symbol names the isel
+// branches to and the POSIX constants are `Targets/Shared/PosixRuntime`, and the errno→Win32 mapping, the
+// `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and the two string walkers
+// `FindFirstFileA`'s glob split is built out of are `Arm64PosixRuntime`, one body for both arm64 lanes once
+// `struct stat`'s layout is a parameter. The filesystem chunks below therefore build under the SHARED `mrt_host_*`
+// names, and this file's remaining private symbols (`mrt_darwin_dir_prefix`, `mrt_darwin_dup_cstring`) are
+// the two that `malloc`, which is the thing a static Linux image cannot do from a chunk.
+//
+// ⚠ **THE CHUNKS ARE GATED ON `RuntimeUsage`, NOT INSTALLED UNCONDITIONALLY** — the opposite of the panic
+// runtime beside them, and for a reason that runtime does not have: a panic is reachable from any program
+// and costs a few hundred bytes, while these come one family at a time and each drags its own libSystem
+// imports into the GOT. A program that reads no clock emits no clock chunk. The bits are the SAME ones the
+// Std-tier installers read (`installClockRuntime` builds `__clock_now_unix_s` under `usesWallClock`), so a
+// chunk can never be absent for a body that calls it: one bit, two tiers.
+
+// ==========================================================================
+// Darwin ABI constants
+// ==========================================================================
+
+// ⭐ **THE `clockid_t` VALUES ARE DARWIN'S OWN AND ARE NOT POSIX-PORTABLE NUMBERS** — measured against this
+// host's SDK (`<time.h>`) rather than transcribed from a POSIX table, because Linux numbers the same names
+// differently (`CLOCK_MONOTONIC` is 1 there, 6 here) and a wrong number does not fail: it reads a DIFFERENT
+// CLOCK and answers a plausible wrong time.
+//
+// `clock_gettime_nsec_np(clockid)` returns `uint64_t` NANOSECONDS in x0 — one call, no `timespec`, no
+// second read. That is why it is preferred here over `clock_gettime`: a `timespec` would need a 16-byte
+// local and two loads to say what one register already says.
+let DarwinClockRealtime = 0
+let DarwinClockUptimeRaw = 8
+let DarwinClockThreadCpuTime = 16
+
+// The monotonic clock's `freq` out-param. `__gt_now_ns` computes `ticks/freq` seconds plus a scaled
+// remainder, so reporting the reading in nanoseconds and the frequency as 1e9 makes that arithmetic the
+// IDENTITY on this lane — exact, with no rounding of its own, which is the strongest form the split
+// identity can take. (Windows reports a 10 MHz QPC and does the same arithmetic non-trivially.)
+let DarwinMonotonicTicksPerSecond = 1000000000
+
+// `nanosleep(const struct timespec *req, struct timespec *rem)`. Darwin's `timespec` is two 64-bit words —
+// `tv_sec` then `tv_nsec` — which is exactly two of this assembler's 8-byte frame slots, side by side and
+// in that order, so `&slot0` IS a `struct timespec *`.
+let DarwinTimespecSecSlot = 0 as StackSize
+let DarwinTimespecNsecSlot = 1 as StackSize
+
+// `char* realpath(const char* path, char* resolved)` — a NULL `resolved` makes it `malloc` a buffer of
+// exactly the right size, which is the ONLY safe spelling here: the alternative writes up to POSIX's
+// `PATH_MAX` (1024) and the caller's first buffer is `ManagedDirectoryRuntime.MaxPathBytes` (260, Win32's
+// `MAX_PATH`), so passing the caller's buffer would be a 764-byte overrun waiting for a long path.
+let RealpathAllocatesResult = 0
+
+// The `SlotFreeMe` value that means "there is nothing to release". It is the same zero one line up and a
+// DIFFERENT fact: `free(NULL)` is a documented no-op, which is what lets every exit of the chunk below share
+// one closing sequence instead of guarding three.
+let NothingToFree = 0
+
+// ==========================================================================
+// The chunk symbol names
+// ==========================================================================
+
+// ⭐ The `mrt_` band, exactly like `mrt_panic` and `mrt_write_cstr_stderr`: these are RUNTIME symbols the
+// backend emits and the isel branches to, not Std functions and not user names. The `_darwin_` infix says
+// which lane owns the body — a Linux lane adding its own must not be able to collide with one of these by
+// picking the same verb.
+//
+// ⚠ **EVERY NAME WITH MORE THAN ONE BODY IS `Targets/Shared/PosixRuntime`'s, UNDER THE SHARED `mrt_host_`
+// PREFIX** — the two clocks and the executable path, the whole green-thread floor (the monotonic clock, the
+// OS-thread park, the wait object's four verbs, the lock's initialiser, the environment read and the
+// per-thread slot) and the whole child-process substrate. What remains in this file is BODIES; its only
+// lane-private symbol is `mrt_darwin_dup_cstring`, a `malloc` no other lane has a counterpart for.
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// `bl` a libSystem import through its GOT slot. macOS ONLY, and unconditionally so — this whole file is
+// reached only for `Os.macos`, so unlike `Arm64PanicRuntime.arm64EmitOsPrimitive` there is no route to
+// choose between and no syscall number to carry.
+export function arm64DarwinCallImport(asm Arm64RuntimeAsm, slot OsImportSlot)
+	arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: osImportSlotIndex(slot))
+end 'arm64DarwinCallImport'
+
+// `x0 = clock_gettime_nsec_np(clockId)` — the one call three of the four chunks below open with.
+function arm64DarwinReadClockNanos(asm Arm64RuntimeAsm, clockId MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: clockId)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.clockGettimeNsecNp)
+end 'arm64DarwinReadClockNanos'
+
+// ==========================================================================
+// mrt_host_wall_clock(x0 = ftPtr)
+// ==========================================================================
+
+// Write the host's CALENDAR through `ftPtr`, as a Win32 FILETIME — 100-nanosecond ticks since 1601.
+//
+// ⭐⭐ **THE FILETIME ENCODING IS NOT A WINDOWS DETAIL LEAKING INTO A POSIX LANE — IT IS THE OP's CONTRACT,
+// AND KEEPING IT IS WHAT LEAVES THE Std TIER TARGET-NEUTRAL.** `osReadWallClock`'s consumer
+// (`ClockRuntime.buildWallClockNowUnixSeconds`) subtracts the 1601 epoch and divides by 10⁷ — arithmetic
+// built ONCE for every target. A lane that wrote raw Unix nanoseconds here would have to make that graph
+// ask which target it is compiling for, which is precisely the shape the rewrite does not have: the ops are
+// neutral and the BACKENDS hold every OS fact. So the conversion belongs on this side of the boundary.
+//
+// Darwin's reading is nanoseconds since 1970; the FILETIME is `nanos / 100 + 116444736000000000`. The
+// division is a real `udiv` (AArch64 has hardware integer divide, so no magic-multiply reciprocal is
+// needed), and it is UNSIGNED because the reading is a `uint64_t` — a signed divide would answer garbage
+// for any calendar past 2262, which is exactly the kind of "works today" the range types in this compiler
+// exist to refuse.
+function buildArm64DarwinWallClockChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockRealtime)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixNanosPerFileTimeTick())
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: FileTimeTicksFrom1601To1970)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(HostWallClockName)
+end 'buildArm64DarwinWallClockChunk'
+
+// ==========================================================================
+// mrt_host_monotonic_clock(x0 = ticksPtr, x1 = freqPtr)
+// ==========================================================================
+
+// Write the MONOTONIC counter and its frequency — the pair `osReadClock` names, Windows's
+// QueryPerformanceCounter/QueryPerformanceFrequency.
+//
+// ⭐ **`CLOCK_UPTIME_RAW`, NOT `CLOCK_MONOTONIC`**, and the difference is observable: Darwin's
+// `CLOCK_MONOTONIC` advances across system sleep, `CLOCK_UPTIME_RAW` does not. The scheduler's deadlines
+// are the consumer, and a machine that slept for an hour must not wake with every timer already expired —
+// which is the same property QPC has and the reason the op exists separately from the wall clock.
+//
+// The frequency is a CONSTANT 1e9 because the reading is already nanoseconds; see
+// `DarwinMonotonicTicksPerSecond` for why that makes `__gt_now_ns`'s scaling exact.
+function buildArm64DarwinMonotonicClockChunk() returns FunctionCodeChunk
+	let SlotTicksPtr = 0 as StackSize
+	let SlotFreqPtr = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTicksPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFreqPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockUptimeRaw)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTicksPtr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinMonotonicTicksPerSecond)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFreqPtr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(HostMonotonicClockName)
+end 'buildArm64DarwinMonotonicClockChunk'
+
+// ==========================================================================
+// mrt_host_thread_cpu(x0 = outPtr)
+// ==========================================================================
+
+// Write THIS THREAD's consumed CPU time through `outPtr`, in the host's own unit.
+//
+// ⚠ **THE UNIT IS NANOSECONDS HERE AND TSC TICKS ON WINDOWS, AND NOTHING CONVERTS BETWEEN THEM** — which is
+// `ClockRuntime`'s stated contract rather than an omission of this chunk's: the two platforms answer in
+// units with no honest conversion, so `__thread_cpu_ticks` promises only that two readings may be
+// SUBTRACTED. Scaling here to look like Windows would be a guess wearing a unit's name.
+function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockThreadCpuTime)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(HostThreadCpuName)
+end 'buildArm64DarwinThreadCpuChunk'
+
+// ==========================================================================
+// mrt_host_sleep_ms(x0 = milliseconds)
+// ==========================================================================
+
+// Suspend the calling OS THREAD for `ms` milliseconds — Windows's `Sleep(ms)`.
+//
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD
+// on the scheduler's timer heap and only bottoms out here when there is nothing else to run
+// (`GtRuntime.buildGtSleep`), so this chunk being present says nothing about whether that scheduler exists
+// on this lane — see `TargetFacilities.targetProvidesFacility`, where `sleep` and `greenThreads` are
+// separate rows for exactly this reason.
+//
+// `nanosleep` rather than `usleep`: `usleep` takes a 32-bit `useconds_t`, so a sleep of more than ~71
+// minutes would silently wrap into a short one. The `timespec` is two adjacent frame slots — see
+// `DarwinTimespecSecSlot` — so the request is `&slot0` with no packing step.
+//
+// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT.** That matches Windows's
+// `Sleep`, which is likewise not a guarantee of a minimum elapsed time in the presence of an APC, and it
+// matches what the one consumer needs: the scheduler re-checks its deadline after every park rather than
+// trusting the sleep to have slept (`emitGtParkOnDeadline`). A restart loop here would be a second, weaker
+// copy of a check that already exists one tier up.
+function buildArm64DarwinSleepMsChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x0, secSlot: DarwinTimespecSecSlot, nsecSlot: DarwinTimespecNsecSlot)
+
+	// &ts — the frame slots are `[x29 + slotOffset]`, and the SECONDS slot's offset is the base of the pair.
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: DarwinTimespecSecSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.nanosleep)
+
+	return asm.finishFunction(HostSleepMsName)
+end 'buildArm64DarwinSleepMsChunk'
+
+// ==========================================================================
+// mrt_darwin_exe_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
+// ==========================================================================
+
+// Fill the caller's buffer with the running image's CANONICAL absolute path and answer the byte count,
+// NOT counting the NUL — `GetModuleFileNameA`'s convention, which is `StdOp.osExecutablePath`'s contract
+// and which `ProcessRuntime.buildProcessExecutablePath` classifies through
+// `ManagedDirectoryRuntime.emitFilledBufferVerdict`: `0` is unavailable, `< capacity` fits, anything else
+// is truncation and the Std loop doubles. So this chunk answers `strlen` on success and `bufLen` on
+// too-small, and the retry loop above it is untouched.
+//
+// ⭐⭐ **IT IS TWO CALLS WHERE WINDOWS IS ONE, AND THE SECOND IS `realpath`. THAT IS MEASURED, NOT
+// DEFENSIVE.** Darwin's SDK says it outright (`mach-o/dyld.h`): *"`_NSGetExecutablePath` will return 'a
+// path' to the executable not a 'real path' … the path may be a symbolic link and not the real file"*. It
+// answers whatever path the image was EXEC'd through. MEASURED on this host with a C probe, four launches
+// of one binary:
+//
+//   | launched as                               | `_NSGetExecutablePath` answers | `realpath` answers      |
+//   |-------------------------------------------|--------------------------------|-------------------------|
+//   | `/private/tmp/d/probe` (absolute)          | `/private/tmp/d/probe`         | `/private/tmp/d/probe`  |
+//   | `./probe` (relative, cwd `/private/tmp/d`) | `/private/tmp/d/probe`         | `/private/tmp/d/probe`  |
+//   | `probe` (through `PATH`)                   | `/private/tmp/d/probe`         | `/private/tmp/d/probe`  |
+//   | `/tmp/d/probe` (`/tmp` IS a symlink)       | `/tmp/d/probe`                 | `/private/tmp/d/probe`  |
+//
+// ⇒ the ABSOLUTE half needs no help — the kernel resolves a relative `argv[0]` against the cwd before it
+// stores the path — but the SYMLINK half is real and reproduces on the fourth row, on a host whose `/tmp`
+// is a symlink. Windows's `GetModuleFileNameA` answers the resolved path, so canonicalizing here is what
+// makes the two lanes answer the same KIND of string rather than two.
+//
+// ⛔ **`realpath(path, buf)` INTO THE CALLER'S BUFFER IS A BUFFER OVERRUN AND IS NOT AVAILABLE.** That form
+// writes up to POSIX `PATH_MAX` (1024) with no length to bound it, while the Std loop's first buffer is 260
+// bytes. `RealpathAllocatesResult` above carries the arithmetic; the consequence here is `malloc`'d memory
+// this chunk must release, which is why `free` is one of the six imports MAC2 added.
+//
+// ⚠ **`free(NULL)` IS A NO-OP, AND EVERY EXIT USES THAT.** `SlotFreeMe` is zeroed before the first call and
+// holds `realpath`'s answer afterwards, so the one closing sequence — free, then load the answer — serves
+// the too-small exit, the canonicalization-failed exit and the ordinary one alike. A per-exit free would be
+// the same release written down three times, and the third one is the one that gets forgotten.
+//
+// ⚠ **`*bufsize` IS LEFT UNCHANGED ON SUCCESS** — contrary to a common misreading, it reports the
+// REQUIRED size only on the `-1` path, which is why the length comes from a `strlen` walk and never
+// from `SlotSize`.
+//
+// ⚠ **THE RETURN IS A C `int`, SO ITS UPPER HALF IS UNSPECIFIED** and a bare `cbnz x0` could read a stale
+// high word as "failed". `lsl #32` discards that half and leaves the low 32 bits where the following branch
+// tests them — see `Arm64NarrowResultShift`.
+function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	let SlotSize = 2 as StackSize
+	let SlotSrc = 3 as StackSize
+	let SlotFreeMe = 4 as StackSize
+	let SlotWritten = 5 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(6)
+
+	let measure = asm.newLabel()
+	let copyLoop = asm.newLabel()
+	let finish = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+	// `bufLen` twice more: once as the `uint32_t` in-out `bufsize` (this is a little-endian machine, so the
+	// low half of the word IS the u32 the callee reads), and once as the DEFAULT answer — `bufLen` means
+	// "too small, double and come back", which is the right verdict for every way the walk below can fail
+	// to produce a path that fits.
+	//
+	// ⚠ A `bufLen` past 2^32 would be TRUNCATED by that u32 view, and the doubling loop above cannot reach
+	// one: it starts at 260 and stops the first time the path fits, and Darwin cannot exec an image whose
+	// stored path exceeds `MAXPATHLEN` (1024), so the walk terminates at 1040 at the latest.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotSize)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotWritten)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: NothingToFree)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotFreeMe)
+
+	// _NSGetExecutablePath(bufPtr, &bufsize)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotSize)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.nsGetExecutablePath)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: Arm64NarrowResultShift as ShiftCount)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: finish)
+
+	// The buffer now holds the exec path, NUL-terminated. Canonicalize it.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: RealpathAllocatesResult)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.realpath)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFreeMe)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSrc)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: measure)
+
+	// ⚠ `realpath` FAILING IS NOT "UNAVAILABLE": the raw path is already in the buffer and already names the
+	// image. Answering the empty string here would turn a live path into `pathUnavailable` because a symlink
+	// could not be followed, which is strictly worse than answering the un-canonicalized truth.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSrc)
+
+	// len = strlen(src) — a C string carries no length and `*bufsize` did not answer one. The walk is
+	// `arm64EmitCStringLength`, shared with `mrt_host_env_read` and MAC4's two users since it was
+	// written out twice here (MAC4 would have made it four).
+	asm.placeLabel(measure)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSrc)
+	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x2)
+
+	// `len >= bufLen` leaves the default `bufLen` answer standing, so the Std loop doubles and asks again.
+	// STRICTLY less, because the NUL needs the last byte — and because `written < capacity` is exactly the
+	// test `emitFilledBufferVerdict` reads to call it a fit.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotBufLen)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: finish)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotWritten)
+
+	// Copy src into the caller's buffer, the NUL included. When `realpath` failed the two pointers are the
+	// same buffer and this copies each byte onto itself — a no-op that costs a pass rather than a branch.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSrc)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotBufPtr)
+
+	asm.placeLabel(copyLoop)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x5, base: Arm64Register.x1)
+	arm64EmitStoreByte(asm, src: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x5, label: finish)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: 1)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: 1)
+	arm64EmitBranchTo(asm, label: copyLoop)
+
+	asm.placeLabel(finish)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFreeMe)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotWritten)
+
+	return asm.finishFunction(HostExePathName)
+end 'buildArm64DarwinExePathChunk'
+
+// ==========================================================================
+// MAC3 — the green-thread floor's HOST OBJECTS: `DarwinWaitObject`
+// ==========================================================================
+
+// ⭐⭐⭐ **ONE HEAP OBJECT SERVES BOTH THINGS WIN32 CALLS A "HANDLE" IN THIS SCHEDULER, AND IT HAS TO,
+// BECAUSE `StdOp.osWaitHandle` CANNOT TELL THEM APART.** The Std tier waits on a handle at two sites and
+// they are two different kinds of object: `__sched_park_worker` blocks on the P's WAKE EVENT, and
+// `__sched_stop_workers` blocks on a worker M's THREAD. On Windows both are `HANDLE`s and one
+// `WaitForSingleObject` serves both; POSIX has `pthread_cond_wait` for the first and `pthread_join` for the
+// second, with no type in common. So the object carries its own KIND and the wait dispatches on it — which
+// is what keeps the target-neutral op honest instead of forking it per platform.
+//
+// ⭐⭐ **THE EVENT IS A COUNTING CONDITION VARIABLE, GO's `semasleep`/`semawakeup` SHAPE**: a mutex, a
+// condvar and a signal word, with `while (!signalled) cond_wait`. ⛔ **NOT `dispatch_semaphore`.** That is
+// Mach-port-backed, is not async-signal-safe, and wedges processes into macOS's unkillable `UE` state
+// on a kill — this project has its own scar from the same primitive (the arm64-macOS wedge fix
+// replaced a `dispatch_semaphore` with exactly this pair).
+//
+// ⚠ **THE SIGNAL WORD IS SET TO 1, NOT INCREMENTED, AND THAT IS AUTO-RESET SEMANTICS RATHER THAN
+// SLOPPINESS.** `osEventCreate` is `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET event, which is
+// SIGNALLED or NOT and has no count: two `SetEvent`s release exactly one waiter, and a `SetEvent` on an
+// already-signalled event is a no-op. A counting semaphore would release two, which is a worker M woken for
+// work that another M has already taken. The wait CLEARS the word, which is the "auto" in auto-reset.
+//
+// ⚠ **MEASURED SIZES, ON THIS HOST**: `pthread_mutex_t` 64 bytes, `pthread_cond_t` 48, `pthread_t` 8. They
+// are opaque to the program, so an under-sized region is not a compile error — it is `pthread_mutex_init`
+// writing past the object into whatever `malloc` put next.
+// ⭐⭐ **THE SIX SCALAR WORDS ARE `Arm64PosixRuntime`'s AND ONLY THE TWO OPAQUE PRIMITIVES ABOVE THEM ARE
+// THIS LANE'S.** `PosixWaitOffKind`, `PosixWaitOffSignal`, `PosixWaitOffThread` and the three child fields
+// sit at the same offsets on both POSIX lanes, which is what lets the reap, the await, the exit-code read
+// and the multi-wait be ONE body each. The `pthread_t` at `PosixWaitOffThread` was this file's own until the
+// arm64-linux `clone` put a join word of its own at the same offset for the same purpose — see that
+// constant. Only the mutex and the condvar are still Darwin's, because an event on the other lane is a
+// futex word and needs neither. The offsets above them and the object's total size are DERIVED from the
+// measured sizes below rather than written out, so a platform that widens either moves one number and not
+// four.
+let DarwinWaitOffMutex = 0x30 as MachineWord
+let DarwinWaitOffCond = DarwinWaitOffMutex + DarwinPthreadMutexBytes
+let DarwinWaitObjectBytes = DarwinWaitOffCond + DarwinPthreadCondBytes
+
+// The three kinds. None is 0, so a `malloc`d object whose kind field was never written could not be
+// mistaken for any of them — the object is fully initialised by `mrt_host_wait_new` before any wait sees
+// it, and this is the belt that says so.
+//
+// ⭐⭐ **`process` JOINED THEM AT MAC8 AND IS `Arm64PosixRuntime.PosixWaitKindProcess` SINCE L5, BECAUSE
+// BOTH LANES MINT ONE. IT IS THE SAME ARGUMENT ONE FAMILY FURTHER ON.** A child process
+// handle reaches `StdOp.osWaitHandle` and `StdOp.osCloseHandle` exactly as a wake event and a worker thread
+// do, and POSIX answers it with a THIRD primitive again — `waitpid` — that has nothing in common with a
+// condvar or a join. So it becomes a third kind of the one object the wait dispatches on rather than a
+// second scheme beside it.
+//
+// ⚠ **THE `signal` WORD MEANS THE SAME THING FOR ALL THREE AND IS RESET DIFFERENTLY FOR ONE.** It is "this
+// handle is signalled". An EVENT is auto-reset, so the wait CLEARS it on take (`SetEvent`'s own contract);
+// a PROCESS that has exited is signalled FOR EVER, so its arm never clears it — which is Win32's own
+// distinction between the two handle types, not a liberty taken here.
+//
+// ⭐ **`thread` LEFT THIS FILE THE DAY THE OTHER LANE COULD MINT ONE**, exactly as `process` did at L5: it is
+// `Arm64PosixRuntime.PosixWaitKindThread` now, and that constant carries the move.
+
+// Darwin's opaque sizes, MEASURED on this host and stated here because the layout above is derived from
+// them — a reader checking the offsets should not have to rediscover why the mutex is 0x40 wide.
+let DarwinPthreadMutexBytes = 64
+let DarwinPthreadCondBytes = 48
+
+// A NULL `pthread_attr_t*` / `pthread_condattr_t*` / `pthread_mutexattr_t*` — "the default attributes", which
+// is what every one of these calls wants. Named because a bare 0 in an argument position says nothing.
+let DarwinDefaultAttributes = 0
+
+// `pthread_join(thread, NULL)` — a NULL `void**` discards the thread's exit value, which this scheduler
+// never reads: a worker M's return is the loop ending, not a result.
+let DarwinDiscardThreadResult = 0
+
+// ⭐ **THE LOCK REGION THE Std TIER ALLOCATES MUST HOLD A DARWIN MUTEX.** `osLockInit`'s caller slab-allocates
+// `OsLockBytes` and hands the pointer over; `pthread_mutex_init` writes its struct into whatever it is given.
+// The Std constant is sized for the widest lock across the targets this compiler serves and says so, but a
+// COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that would be
+// corrupted.
+function assertDarwinLockFits()
+	if OsLockBytes < DarwinPthreadMutexBytes 'tooSmall'
+		panic("Arm64DarwinRuntime: `OsLockBytes` is {OsLockBytes} but a Darwin `pthread_mutex_t` is {DarwinPthreadMutexBytes} bytes — `osLockInit` would initialise a mutex into a region {DarwinPthreadMutexBytes - OsLockBytes} bytes too small and corrupt whatever the allocator placed after it, with no diagnostic anywhere")
+	end 'tooSmall'
+end 'assertDarwinLockFits'
+
+// `add Xd, Xn, #<field offset>` — the address of a sub-struct inside a wait object, which every pthread call
+// below takes rather than the object itself. Spelled once because the mutex and the condvar are addressed
+// from four chunks between them and a mistyped offset is a call on the wrong primitive.
+function arm64DarwinFieldAddr(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitAddRuntimeImm(asm, dest: dest, base: base, imm: byteOffset as Imm32)
+end 'arm64DarwinFieldAddr'
+
+// `pthread_mutex_lock(&obj->mutex)` / `pthread_mutex_unlock(&obj->mutex)` for an object in a frame slot.
+// Reloading the object rather than holding it in a register is deliberate: every one of these calls destroys
+// the caller-saved file, and a chunk with a frame has a cheaper place to keep a pointer than a callee-saved
+// register it would then owe a save for.
+function arm64DarwinLockObject(asm Arm64RuntimeAsm, objSlot StackSize, importSlot OsImportSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: objSlot)
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffMutex)
+	arm64DarwinCallImport(asm, slot: importSlot)
+end 'arm64DarwinLockObject'
+
+// ==========================================================================
+// mrt_host_wait_new(x0 = kind) -> x0 = object
+// ==========================================================================
+
+// Allocate and initialise one `DarwinWaitObject`. Shared by `osEventCreate` and `osThreadCreate`, because
+// both mint a waitable handle and only the kind (and, for a thread, one extra call) differs.
+//
+// ⚠ **`malloc` RATHER THAN `__slab_alloc`.** The slab is Std-tier and reachable only through a `bl` the
+// Std-tier reachability walk cannot see, so a chunk calling it would be relying on some OTHER function
+// keeping `__slab_alloc` alive through the dead-function prune. A libSystem allocation has no such coupling —
+// and these objects are process-lifetime anyway, exactly as the P structs and the run-queue lock are.
+//
+// ⚠ **`malloc` DOES NOT ZERO**, unlike the slab and unlike `MEM_COMMIT`, so the two scalar fields are written
+// explicitly. A signal word left as heap garbage is a worker M that wakes immediately and forever.
+//
+// ⚠ **A NULL RESULT IS A PANIC, NOT A SILENT NULL DEREFERENCE.** Scheduler bring-up cannot continue without
+// its wake events, and the alternative is a store through 0 several instructions later with nothing to
+// attribute it to.
+function buildArm64DarwinWaitNewChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotKind = 0 as StackSize
+	let SlotObj = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let allocated = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotKind)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinWaitObjectBytes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: allocated)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinWaitAllocFailedMessage)
+
+	asm.placeLabel(allocated)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotKind)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffKind)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixWaitNotSignalled)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
+	// MAC8's three: a process object's pid, the status it will report, and whether a kill already chose that
+	// status. Written for EVERY kind, because `malloc` does not zero and a garbage `childKilled` would make an
+	// ordinary child report whatever the heap held.
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildStatus)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildKilled)
+
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffMutex)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDefaultAttributes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadMutexInit)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffCond)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDefaultAttributes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondInit)
+
+	// The HANDLE is the pointer plus its kind tag (MAC8) — minted here, at the one place an object handle
+	// comes into existence, so nothing downstream has to remember to tag one.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64PosixTagObject(asm, reg: Arm64Register.x0, scratch: Arm64Register.x1)
+	return asm.finishFunction(HostWaitNewName)
+end 'buildArm64DarwinWaitNewChunk'
+
+let DarwinWaitAllocFailedMessage = b"panic: the green-thread scheduler could not allocate a wait object (malloc returned NULL)\n"
+
+// ==========================================================================
+// mrt_host_event_set(x0 = object)
+// ==========================================================================
+
+// `SetEvent` — mark the auto-reset event signalled and wake one waiter.
+//
+// ⚠ **THE SIGNAL IS PUBLISHED UNDER THE MUTEX AND THE WAKE HAPPENS WHILE IT IS STILL HELD.** That is what
+// makes the wake un-losable: a waiter that has just tested the word and is about to `cond_wait` holds the
+// same mutex, so it cannot be between the test and the wait when this runs. Publishing outside the lock
+// would reopen exactly the lost-wakeup window `SchedRuntime`'s park is written to avoid.
+function buildArm64DarwinEventSetChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	// The slot holds the UNTAGGED object, because every use below is a field address (MAC8's handle tag).
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexLock)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixWaitSignalled)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffCond)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondSignal)
+
+	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexUnlock)
+	return asm.finishFunction(HostEventSetName)
+end 'buildArm64DarwinEventSetChunk'
+
+// ==========================================================================
+// mrt_host_thread_create(x0 = entry, x1 = arg) -> x0 = object
+// ==========================================================================
+
+// `CreateThread(NULL, 0, entry, arg, 0, NULL)` — start an OS thread and answer a waitable handle for it.
+//
+// ⚠ **WHY THE ENTRY POINT NEEDS NO THUNK is `StdToArm64Conversion.lowerOsThreadCreate`'s note**, because it
+// is true of BOTH lanes' chunks and of the Windows one: the compiler's internal ABI and `pthread_create`'s start
+// routine agree on x0 in and x0 out. It is stated once, at the op both bodies serve.
+//
+// ⚠ **DARWIN'S NICE VALUE IS PER-PROCESS, SO A WORKER M INHERITS THE BACKGROUND PRIORITY WITH NOTHING
+// EMITTED HERE** — `StdOp.osThreadCreate`'s inheritance contract, discharged on this lane by the platform.
+// A Linux lane scopes nice to the THREAD and would owe real work at this call (`PosixRuntime.PosixPrioProcess`
+// carries that asymmetry).
+function buildArm64DarwinThreadCreateChunk() returns FunctionCodeChunk
+	let SlotEntry = 0 as StackSize
+	let SlotArg = 1 as StackSize
+	let SlotObj = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEntry)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotArg)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixWaitKindThread)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
+	// The slot keeps the TAGGED handle (that is what this chunk answers); the field address below is computed
+	// from the untagged pointer, because a tag in the top bits is not part of the address.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDefaultAttributes)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotEntry)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotArg)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCreate)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	return asm.finishFunction(HostThreadCreateName)
+end 'buildArm64DarwinThreadCreateChunk'
+
+// ==========================================================================
+// mrt_host_wait_one(x0 = object, x1 = timeoutMs) -> x0 = WAIT_OBJECT_0 | WAIT_TIMEOUT
+// ==========================================================================
+
+// `WaitForSingleObject`. A THREAD object joins; an EVENT object waits for its signal word, bounded by the
+// caller's timeout.
+//
+// ⚠ **A JOIN IGNORES THE TIMEOUT, AND THE ONE CALLER PASSES `WaitInfinite` ANYWAY.**
+// `SchedRuntime.__sched_stop_workers` is the only site that waits on a thread, and it waits for ever by
+// construction — a worker M has already been told to stop. `pthread_join` has no timed form on Darwin, so a
+// bounded join would need a second condition variable per worker to emulate; there is no caller for it, and
+// inventing one would be untested machinery no test could reach.
+//
+// ⚠ **A TIMED WAIT MAKES EXACTLY ONE `pthread_cond_timedwait_relative_np` CALL AND THEN ANSWERS.** A
+// spurious wake therefore reports `WAIT_TIMEOUT` early rather than re-arming for the full timeout again.
+// That is what every caller wants: `__sched_park_worker` re-checks the run queue after every return, so an
+// early return costs one scan, while a re-arming loop could extend a bounded park without bound. The
+// UNBOUNDED arm does loop, because there is no deadline for a spurious wake to corrupt.
+//
+// ⚠ **`_relative_np` RATHER THAN THE PORTABLE `pthread_cond_timedwait`**: the portable call takes an
+// ABSOLUTE deadline on the condvar's own clock, which would make this wait's correctness depend on which
+// clock `pthread_cond_init` chose. The op carries a relative timeout; the `_np` call takes one.
+function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	let SlotTimeout = 1 as StackSize
+	let SlotResult = 2 as StackSize
+	let SlotTsSec = 3 as StackSize
+	let SlotTsNsec = 4 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(5)
+
+	let isObject = asm.newLabel()
+	let joinThread = asm.newLabel()
+	let awaitChild = asm.newLabel()
+	let testSignal = asm.newLabel()
+	let takeSignal = asm.newLabel()
+	let waitTimed = asm.newLabel()
+	let unlock = asm.newLabel()
+	let finish = asm.newLabel()
+
+	// ⛔ **A DESCRIPTOR IS NOT WAITABLE, AND SAYING SO LOUDLY IS THE POINT (MAC8).** Every reachable
+	// `osWaitHandle` names an object this file minted — a P's wake event, a worker M, or a child process — so
+	// a descriptor or a NULL here means the Std tier reached this op with something it never should have.
+	// Dereferencing it for a kind field would be a wild load; answering `WAIT_TIMEOUT` would be a caller
+	// spinning on a handle nothing can ever signal.
+	arm64PosixHandleKind(asm, dest: Arm64Register.x2, handle: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixHandleKindObject)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: isObject)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinWaitOnDescriptorMessage)
+
+	asm.placeLabel(isObject)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffKind)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixWaitKindThread)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: joinThread)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixWaitKindProcess)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: awaitChild)
+
+	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexLock)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: WaitTimeout)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotResult)
+
+	// testSignal: signalled → take it and leave; else decide how to wait.
+	asm.placeLabel(testSignal)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: takeSignal)
+	// A ZERO timeout is a POLL: the caller wants the state, not a wait (`WaitPollTimeout`, which
+	// `__gt_proc_check` uses). Answer the default `WAIT_TIMEOUT` without touching the condvar.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: unlock)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: WaitInfinite)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: waitTimed)
+	// Unbounded: `pthread_cond_wait(&cond, &mutex)` and re-test. That IS the `while (!signalled)` loop the
+	// primitive requires — a condvar wake is advisory, and re-testing is the only sound response to one.
+	arm64DarwinCondArgs(asm, objSlot: SlotObj)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondWait)
+	arm64EmitBranchTo(asm, label: testSignal)
+
+	// waitTimed: ONE bounded wait, then a single re-test — see this chunk's header for why it does not re-arm.
+	asm.placeLabel(waitTimed)
+	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x1, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+	arm64DarwinCondArgs(asm, objSlot: SlotObj)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotTsSec)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondTimedwaitRelativeNp)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: unlock)
+
+	// takeSignal: consume the signal (the "auto" in auto-reset) and answer WAIT_OBJECT_0.
+	asm.placeLabel(takeSignal)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixWaitNotSignalled)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: WaitObject0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotResult)
+
+	asm.placeLabel(unlock)
+	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexUnlock)
+	arm64EmitBranchTo(asm, label: finish)
+
+	// joinThread: `pthread_join(obj->thread, NULL)`. It cannot fail for a live joinable thread, and the answer
+	// is the same `WAIT_OBJECT_0` a signalled handle gives.
+	asm.placeLabel(joinThread)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDiscardThreadResult)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadJoin)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: WaitObject0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotResult)
+
+	// awaitChild: the child's own wait, in `mrt_darwin_proc_await` — which honours all three timeouts the
+	// callers use, where the two arms above answer only their own kind of object.
+	//
+	// ⚠ A signalled child is signalled FOR EVER — nothing clears the word — which is why this arm does not
+	// go through `takeSignal`, the auto-reset event's consuming take.
+	asm.placeLabel(awaitChild)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcAwaitName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotResult)
+	arm64EmitBranchTo(asm, label: finish)
+
+	asm.placeLabel(finish)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotResult)
+	return asm.finishFunction(HostWaitOneName)
+end 'buildArm64DarwinWaitOneChunk'
+
+let DarwinWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reached with a DESCRIPTOR or a null handle on arm64-macOS, where only a wake event, a worker thread or a child process is waitable\n"
+
+// `x0 = &obj->cond ; x1 = &obj->mutex` — the two arguments BOTH condvar waits open with, in the order both
+// take them. One emitter, because handing `pthread_cond_wait` the mutex as its condvar is not a crash: it is
+// a wait on a lock nobody signals.
+function arm64DarwinCondArgs(asm Arm64RuntimeAsm, objSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: objSlot)
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffCond)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: objSlot)
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: DarwinWaitOffMutex)
+end 'arm64DarwinCondArgs'
+
+// ==========================================================================
+// mrt_host_wait_close(x0 = object)
+// ==========================================================================
+
+// `CloseHandle` — the ONE op that closes everything Win32 calls a handle, dispatching on the kind the value
+// carries (see `Arm64PosixRuntime.PosixHandleKindShift` for why it carries one at all).
+//
+// ⚠ **THIS HEADER USED TO SAY A WAIT OBJECT WAS "THE ONLY HANDLE KIND THIS LANE CAN MINT", AND MAC8 IS
+// EXACTLY THE RUNG THAT FALSIFIED IT.** Its argument was that `osProcessSpawn` did not lower here, so the
+// netpoll's process store was provably empty. It lowers now, and with it come three pipe ends and any file a
+// redirected stream opened — so the close has three arms rather than one.
+//
+// ⭐ **A ZERO DESCRIPTOR IS A NO-OP, AND THAT IS LOAD-BEARING RATHER THAN DEFENSIVE.**
+// `SubprocessRuntime.emitSubpCloseSlotHandles` closes every slot field unconditionally and says so in its
+// own header — *"a slot field left 0 by a non-pipe stream reaches `CloseHandle(0)`, which is the no-op that
+// keeps this path free of kind tests"*. On Windows that is true by the API's own contract; here fd 0 is
+// STANDARD INPUT, and closing it would take the program's stdin away on every spawn that redirects a stream
+// to anything but a pipe. The guard is what keeps that graph's convention true on this lane.
+function buildArm64DarwinWaitCloseChunk() returns FunctionCodeChunk
+	let SlotObj = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let releaseObject = asm.newLabel()
+	let destroyPrimitives = asm.newLabel()
+	let closed = asm.newLabel()
+
+	arm64PosixHandleKind(asm, dest: Arm64Register.x1, handle: Arm64Register.x0)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixHandleKindObject)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: releaseObject)
+
+	// A DESCRIPTOR: a pipe end or a redirected stream's file. Zero means "no handle" — see the header.
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: closed)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64EmitBranchTo(asm, label: closed)
+
+	// An OBJECT: a wake event, a worker thread, or a child process. A child is REAPED first — without a
+	// non-blocking `waitpid` an exited child that nobody waited on stays a zombie for the parent's whole life,
+	// which a spawn/release loop turns into one per iteration. A child still RUNNING cannot be reaped and
+	// stays a zombie until this process exits and `launchd` inherits it; that is the one case POSIX gives no
+	// way to close, and it is what `runDetached` asks for by name.
+	asm.placeLabel(releaseObject)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffKind)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixWaitKindProcess)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: destroyPrimitives)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapWithoutBlocking)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+
+	// Every kind is built by `mrt_host_wait_new`, which initialises both primitives whatever the kind is, so
+	// every kind destroys both. One allocator, one releaser.
+	asm.placeLabel(destroyPrimitives)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64DarwinFieldAddr(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinWaitOffCond)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondDestroy)
+
+	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexDestroy)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+
+	asm.placeLabel(closed)
+	return asm.finishFunction(HostWaitCloseName)
+end 'buildArm64DarwinWaitCloseChunk'
+
+// ==========================================================================
+// mrt_host_lock_init(x0 = region)
+// ==========================================================================
+
+// `InitializeCriticalSection` — initialise a mutex into the region the caller allocated.
+//
+// ⛔⛔ **IT MUST BE RECURSIVE, AND THAT WAS MEASURED AS A HANG RATHER THAN READ OUT OF A MANUAL.** A Win32
+// `CRITICAL_SECTION` is re-entrant by its owning thread — `SchedRuntime`'s own header relies on it in so many
+// words (*"a nested `LeaveCriticalSection` releases nothing"*) — while `pthread_mutex_init(m, NULL)` gives
+// `PTHREAD_MUTEX_DEFAULT`, i.e. `NORMAL`, whose SECOND lock by the owning thread DEADLOCKS. The first
+// arm64-macOS `async` build hung in `__slab_refill` → `_pthread_mutex_firstfit_lock_wait`, on the slab's own
+// lock taken twice down one call chain. So the region is initialised `PTHREAD_MUTEX_RECURSIVE`, which is what
+// the op has always meant.
+//
+// ⚠ **THE ATTRIBUTE OBJECT IS A FRAME LOCAL AND IS DESTROYED**, which is what makes this a chunk rather than
+// the inline sequence it otherwise looks like: `pthread_mutexattr_t` is 16 bytes (MEASURED on this host), so
+// it needs frame slots, and the region pointer has to outlive three calls to reach the `pthread_mutex_init`
+// at the end. Only a frame holds both.
+function buildArm64DarwinLockInitChunk() returns FunctionCodeChunk
+	assertDarwinLockFits()
+	let SlotRegion = 0 as StackSize
+	let SlotAttr = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(SlotAttr + darwinMutexattrSlots())
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotRegion)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttr)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadMutexattrInit)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttr)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinPthreadMutexRecursive)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadMutexattrSettype)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotRegion)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotAttr)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadMutexInit)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttr)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadMutexattrDestroy)
+
+	return asm.finishFunction(HostLockInitName)
+end 'buildArm64DarwinLockInitChunk'
+
+// Darwin's `PTHREAD_MUTEX_RECURSIVE` (MEASURED on this host's `<pthread.h>`, not transcribed from a POSIX
+// table — the constant is an implementation's numbering and Linux numbers `RECURSIVE` 1, not 2).
+let DarwinPthreadMutexRecursive = 2
+
+// `pthread_mutexattr_t` is 16 bytes here. The frame slots it occupies are DERIVED from that rather than
+// written as a 2, so a platform with a wider attribute object moves one number.
+let DarwinPthreadMutexattrBytes = 16
+
+function darwinMutexattrSlots() returns StackSize
+	return DarwinPthreadMutexattrBytes / SpillSlotBytes
+end 'darwinMutexattrSlots'
+
+// ==========================================================================
+// mrt_host_tls_alloc() -> x0 = the per-OS-thread slot key
+// ==========================================================================
+
+// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index. A CHUNK because
+// `pthread_key_create(pthread_key_t *key, void (*destructor)(void*))` is OUT-PARAM shaped: it answers a
+// status in x0 and writes the key through a pointer, so the pointer needs a frame to live in.
+//
+// ⚠ **NO DESTRUCTOR.** The slot holds a `P*` the scheduler owns for the life of the process; a destructor
+// would run at thread exit and free something the scheduler still has in its `__sched_procs` array.
+//
+// ⭐⭐ **TWO ASSERTIONS, AND THE SECOND ONE IS THE WHOLE REASON THIS IS NOT AN INLINE LOWERING.** The Std
+// tier publishes `index * 8 + tlsSlotArrayBase(target)` and every reader treats a ZERO offset as *"the
+// scheduler has not started"*. On Windows that reading is exact, because the base is 0x1480 and no offset
+// into the TEB's slot array can be 0. On Darwin the base is 0, so a key of 0 would produce an offset of 0
+// and every current-P read in the program would answer NULL for ever — a scheduler that silently never
+// runs, with no crash to find it by. Darwin's dynamic keys begin well above zero (MEASURED on this host:
+// the first three are 258, 259, 260) precisely because the low keys are reserved for libSystem's own use,
+// so this cannot happen — and this is the check that says so out loud rather than a comment claiming it.
+function buildArm64DarwinTlsAllocChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotKey = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let created = asm.newLabel()
+	let usable = asm.newLabel()
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotKey)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinNoTlsDestructor)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKeyCreate)
+	// `pthread_key_create` answers 0 on success and an errno otherwise — an `int`, so the upper half of x0
+	// is unspecified and the test is on the low 32 bits (`Arm64NarrowResultShift`, the trap
+	// `mrt_darwin_exe_path` records for `_NSGetExecutablePath`).
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: Arm64NarrowResultShift as ShiftCount)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: created)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinTlsCreateFailedMessage)
+
+	asm.placeLabel(created)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotKey)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: usable)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinTlsKeyZeroMessage)
+
+	asm.placeLabel(usable)
+	return asm.finishFunction(HostTlsAllocName)
+end 'buildArm64DarwinTlsAllocChunk'
+
+// A NULL `void (*)(void*)` destructor — see the chunk header for why this slot must not have one.
+let DarwinNoTlsDestructor = 0
+
+let DarwinTlsCreateFailedMessage = b"panic: the green-thread scheduler could not reserve a per-thread slot (pthread_key_create failed)\n"
+let DarwinTlsKeyZeroMessage = b"panic: pthread_key_create handed out key 0, which this scheduler reads as 'no scheduler yet': the per-thread slot offset would be 0 and every current-processor read would answer NULL\n"
+
+// ==========================================================================
+// mrt_host_env_read(x0 = namePtr, x1 = bufPtr, x2 = bufLen) -> x0 = bytes written
+// ==========================================================================
+
+// `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
+// byte count, NOT counting the NUL. That is `StdOp.osEnvRead`'s contract, and the one caller
+// (`SchedRuntime.emitResolveMaxProcs`, reading `MAXON_MAX_PROCS`) decodes exactly three answers: 0 for
+// "unset", `>= bufLen` for "too small", and anything between for a value that fits.
+//
+// ⚠ **`getenv` ANSWERS A POINTER INTO THE PROCESS ENVIRONMENT AND WINDOWS FILLS A BUFFER**, so the copy is
+// this chunk's work rather than the OS's — the same shape difference `mrt_darwin_exe_path` pays for one
+// section up, and the same `strlen`-then-copy answer.
+//
+// ⚠ **AN UNSET VARIABLE IS `0`, WHICH IS ALSO "an empty value"** — exactly as it is on Windows, where
+// `GetEnvironmentVariableA` answers 0 for both. The caller treats both as "leave the default alone", so the
+// ambiguity is the op's and not this lowering's.
+function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	let SlotValue = 2 as StackSize
+	let SlotWritten = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(4)
+
+	let finish = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBufLen)
+	// An unset variable answers 0 bytes written — `GetEnvironmentVariableA`'s own answer, and the DEFAULT
+	// here so the NULL arm needs no branch of its own.
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixEnvUnset)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotWritten)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.getenv)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotValue)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: finish)
+
+	// The measure-then-copy tail is Windows's contract rather than this lane's, so it is written once
+	// (`Arm64PosixRuntime.arm64PosixEmitEnvValueCopy`) and the LOOKUP above is all that differs.
+	arm64PosixEmitEnvValueCopy(asm, valueSlot: SlotValue, bufPtrSlot: SlotBufPtr, bufLenSlot: SlotBufLen, writtenSlot: SlotWritten, finish: finish)
+
+	asm.placeLabel(finish)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotWritten)
+	return asm.finishFunction(HostEnvReadName)
+end 'buildArm64DarwinEnvReadChunk'
+
+// ==========================================================================
+// mrt_host_handle_file_type(x0 = fd) -> x0 = the GetFileType word
+// ==========================================================================
+
+// `GetFileType` on a lane whose descriptors carry no such enumeration. `isatty` asks exactly the question
+// `__tty_stdout_wants_color` needs — is a PERSON on the other end — and its two answers are the two words
+// the caller compares against (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`).
+//
+// ⚠ **`isatty` RATHER THAN THE `ioctl` IT IS BUILT FROM, WHICH IS WHAT KEEPS THIS BODY THREE LINES.**
+// Darwin's `ioctl` is VARIADIC, so its third argument travels on the STACK under AAPCS64 and the
+// `struct termios` it fills would have to be a frame this chunk owns — the Linux lanes pay both of those
+// because they link no libc and have no `isatty` to call.
+//
+// ⚠ **THE NARROWING IS NOT OPTIONAL.** `isatty` returns a C `int`, whose upper half AAPCS64 leaves
+// unspecified — a compare on the full register would read a stale high word as "a terminal", which is
+// `mrt_host_exe_path`'s trap one facility over.
+function buildArm64DarwinHandleFileTypeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.isatty)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitFileTypeFromStatus(asm, terminalWhen: Arm64CondCode.ne)
+
+	return asm.finishFunction(HostHandleFileTypeName)
+end 'buildArm64DarwinHandleFileTypeChunk'
+
+// ==========================================================================
+// MAC4/5/6/7 — the filesystem, standard-input and argv surface
+// ==========================================================================
+
+// ⭐⭐ **Darwin's `struct stat`, MEASURED ON THIS HOST WITH A C PROBE.** Every one of these is a silent
+// corruption if it is wrong — a wrong `st_size` offset reports a plausible file size, a wrong `st_mode`
+// offset calls every file a directory — so they are transcribed from a run rather than from a header a
+// reader might have in a different SDK. MEASURED 2026-08-31, arm64-macOS:
+// `sizeof = 144`, `st_mode@4` (a `u16`), `st_atimespec@32`, `st_mtimespec@48`, `st_birthtimespec@80`,
+// `st_size@96`.
+//
+// ⚠ **A `timespec` FIELD'S OFFSET IS ITS `tv_sec`**, because `tv_sec` comes first — so the three time
+// offsets below address SECONDS directly and the nanosecond half is simply never read: a FILETIME's
+// consumer (`ManagedFileRuntime.emitFileTimeToUnixSeconds`) divides back down to whole seconds anyway.
+let DarwinStatBytes = 144
+let DarwinStatModeOffset = 4
+let DarwinStatAccessTimeOffset = 32
+let DarwinStatModifyTimeOffset = 48
+let DarwinStatBirthTimeOffset = 80
+let DarwinStatSizeOffset = 96
+
+// The five offsets above as the shared `PosixStatLayout` the two `struct stat` readers take — DERIVED from
+// the named constants rather than a second transcription of them, so the file-size chunk below (which reads
+// `DarwinStatSizeOffset` directly) and the shared find-data fill cannot disagree about where a field is.
+//
+// ⚠ **`st_birthtime` IS THIS LANE'S CREATION TIME AND IT IS A REAL ONE.** Linux's `struct stat` has no birth
+// time at all and its layout names `st_ctime` instead — see `PosixStatLayout`.
+function darwinStatLayout() returns PosixStatLayout
+	return PosixStatLayout.create(DarwinStatBytes, modeOffset: DarwinStatModeOffset, sizeOffset: DarwinStatSizeOffset, creationTimeOffset: DarwinStatBirthTimeOffset, accessTimeOffset: DarwinStatAccessTimeOffset, modifyTimeOffset: DarwinStatModifyTimeOffset)
+end 'darwinStatLayout'
+
+// The two walkers this lane owns. `mrt_darwin_dir_prefix` and `mrt_darwin_dup_cstring` both `malloc`, which
+// is the one thing a Linux surface has no way to do from a chunk — so unlike the four in
+// `Targets/Shared/PosixRuntime` they wear the lane infix rather than the shared `mrt_host_` prefix.
+let DarwinDirPrefixName = b"mrt_darwin_dir_prefix"
+let DarwinDupCStringName = b"mrt_darwin_dup_cstring"
+
+// `struct dirent`'s name field. MEASURED: `sizeof = 1048`, `d_namlen@18`, `d_type@20`, `d_name@21`.
+// ⚠ Only the NAME is read: `d_type` would answer "is it a directory?" one call cheaper than `fstatat`, and
+// the record needs a SIZE and three TIMESTAMPS from that call regardless, so a `d_type` fast path would be
+// a second source for one of six fields.
+let DarwinDirentNameOffset = 21
+
+// `fnmatch(pattern, string, 0)` — no `FNM_PATHNAME`, no `FNM_PERIOD`. Both defaults are what Win32 does:
+// a `*` matches a leading dot (so `./*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std
+// tier's dot filter removes them), and the pattern never spans a `/` because it is only ever a BASE NAME.
+let DarwinDefaultGlobFlags = 0
+
+// ⭐ **THE SEARCH OBJECT `osFileFindFirst` HANDS BACK.** Win32's `HANDLE` carries both the open directory
+// and the pattern still to be matched; POSIX splits them, so this pairs them.
+//
+// ⚠ **A NULL `dir` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
+// answered by one `stat` and has exactly one entry, which `FindFirstFileA` has already reported — so the
+// object it hands back has no directory to walk and the first `FindNextFileA` must report end-of-iteration
+// rather than call `readdir(NULL)`.
+let DarwinSearchDirOffset = 0x00 as MachineWord
+let DarwinSearchPatternOffset = 0x08 as MachineWord
+let DarwinSearchBytes = 16
+
+// `malloc` refusing is a `panic` here for `mrt_host_wait_new`'s reason: the alternative is a store through
+// 0 several instructions later with nothing to attribute it to.
+let DarwinSearchAllocFailedMessage = b"panic: out of memory opening a directory search (malloc failed)\n"
+
+// ==========================================================================
+// Shared emit fragments (MAC4/5/6/7)
+// ==========================================================================
+
+// A libSystem `0`/`-1` STATUS IN x0 BECOMING THE Win32 BOOL THE Std TIER TESTS — the shared conversion
+// (`arm64EmitWin32BoolFromZeroStatus`) with THIS lane's narrowing in front of it, because a libSystem call
+// answers a C `int` whose upper half AAPCS64 leaves unspecified.
+function arm64DarwinWin32BoolFromPosixStatus(asm Arm64RuntimeAsm)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitWin32BoolFromZeroStatus(asm)
+end 'arm64DarwinWin32BoolFromPosixStatus'
+
+// ==========================================================================
+// mrt_darwin_last_error() -> x0 = the Win32 code the Std tier classifies
+// ==========================================================================
+
+// ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH `*__error()` AND HAND IT TO THE SHARED TRANSLATOR.** The
+// MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s and has no lane in it — the five errno values it
+// tests are the same numbers on both POSIX lanes. What is Darwin's is only the FETCH: libc keeps errno in
+// thread-local storage reachable through `__error()`, where the Linux lane has no libc and reads the word its
+// own chunks stashed.
+function buildArm64DarwinLastErrorChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitErrnoToWin32(asm)
+
+	return asm.finishFunction(HostLastErrorName)
+end 'buildArm64DarwinLastErrorChunk'
+
+// ==========================================================================
+// mrt_darwin_read_file / mrt_darwin_write_file
+//   (x0 = fd, x1 = buf, x2 = len, x3 = bytesOutPtr) -> x0 = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`ReadFile`/`WriteFile`'s SHAPE OVER A CALL THAT ANSWERS THE COUNT IN A REGISTER.** The Win32 pair
+// return a BOOL and write the transferred count through a pointer; `read`/`write` return the count (or -1)
+// and write nothing. So the pointer has to OUTLIVE the call, which is this file's structural reason for a
+// chunk, and the two answers have to be separated afterwards.
+//
+// ⛔⛔ **A FAILURE STORES `0` THROUGH THE OUT-PARAM AND NEVER THE `-1`.** `ConsoleRuntime`'s
+// `__con_read_stdin` publishes that word directly as an `Array`'s LENGTH, and a negative length is a
+// corrupt array rather than a failed read — the caller sees a record claiming 2^64-1 bytes. The Win32 pair
+// cannot produce this, because their count and their verdict are different channels; on this lane they are
+// one register and the split is here.
+//
+// ⚠ **ONE BUILDER, TWO CHUNKS**: read and write differ in a symbol and in nothing else — not in the
+// argument order, not in the verdict, not in the out-param — so writing them twice would be one transfer
+// loop with two chances to disagree about which register holds the length.
+function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let transferred = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotOutPtr)
+	// MAC8: a subprocess PIPE END reaches this chunk as a tagged handle (`StdOp.osWriteFile` on the child's
+	// stdin, `StdOp.osReadOverlapped` on either output pipe). Masking the kind bits off is a no-op for the
+	// untagged descriptors `osFileOpenRead`/`osStdHandle` answer, so one mask serves every producer.
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64DarwinCallImport(asm, slot: importSlot)
+
+	// `ssize_t` is already 64 bits wide, so the answer needs no narrowing — unlike every `int`-returning
+	// call in this file. A negative one is the failure.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: transferred)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(transferred)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(name)
+end 'buildArm64DarwinTransferChunk'
+
+// ==========================================================================
+// mrt_darwin_file_size(x0 = fd, x1 = sizeOutPtr) -> x0 = BOOL
+// ==========================================================================
+
+// `GetFileSizeEx` — a BOOL plus a 64-bit size through a pointer, which is `fstat` plus one field read.
+//
+// ⚠ **NOTHING IS WRITTEN THROUGH THE POINTER ON FAILURE, AND THE CALLER ALREADY RELIES ON THAT.** The
+// scratch word comes from `ManagedFileRuntime.emitWin32OutWord`, i.e. from `__mm_alloc`, which hands out
+// ZEROED memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
+function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	let SlotStat = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(darwinStatLayout().bytes))
+
+	let measured = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.fstat)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: measured)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(measured)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: DarwinStatSizeOffset)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileSizeName)
+end 'buildArm64DarwinFileSizeChunk'
+
+// ==========================================================================
+// mrt_darwin_file_delete(x0 = pathPtr) -> x0 = BOOL
+// mrt_darwin_dir_create(x0 = pathPtr) -> x0 = BOOL
+// ==========================================================================
+
+// `DeleteFileA` ⇒ `unlink`. Both take a path and answer a verdict; only the failure ENCODING differs, which
+// `arm64DarwinWin32BoolFromPosixStatus` owns.
+function buildArm64DarwinFileDeleteChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.unlink)
+	arm64DarwinWin32BoolFromPosixStatus(asm)
+
+	return asm.finishFunction(HostFileDeleteName)
+end 'buildArm64DarwinFileDeleteChunk'
+
+// `CreateDirectoryA(path, NULL)` ⇒ `mkdir(path, 0777)`. The Win32 call carries no permissions at all — a
+// new directory inherits its parent's ACL — so the POSIX side hands the widest mask over and lets the
+// process umask narrow it, which is the closest thing to "inherit" POSIX has.
+function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixDirectoryMode)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.mkdir)
+	arm64DarwinWin32BoolFromPosixStatus(asm)
+
+	return asm.finishFunction(HostDirCreateName)
+end 'buildArm64DarwinDirCreateChunk'
+
+// ==========================================================================
+// mrt_darwin_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
+// `rename(2)` KEEPS ONLY ONE OF THEM.** The REPLACE is free: POSIX `rename` is defined to replace an
+// existing destination atomically, which is exactly `MOVEFILE_REPLACE_EXISTING`. The WRITE-THROUGH is not:
+// Win32 promises the operation has reached the disk before it returns, and POSIX records a rename's
+// durability in the DESTINATION DIRECTORY's metadata — so keeping the second promise means opening that
+// directory and `fsync`ing it.
+//
+// ⚠ **THE DURABILITY STEP IS BEST-EFFORT AND ITS FAILURES ARE DELIBERATELY NOT REPORTED.** The rename has
+// already happened and is already visible; a caller told "the rename failed" because the parent directory
+// could not be opened would delete or retry something that is in fact in place. So every exit below the
+// rename answers TRUE, and the only thing that can answer FALSE is the rename itself.
+function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
+	let SlotNewPath = 0 as StackSize
+	let SlotDirBuf = 1 as StackSize
+	let SlotDirFd = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
+
+	let renamed = asm.newLabel()
+	let released = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.rename)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: renamed)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(renamed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotNewPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinDirPrefixName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDirBuf)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: released)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadOnly)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.open)
+	// The RAW answer is what `fsync` and `close` are handed — they read only its low half, exactly as the
+	// callee that produced it wrote only that half. The NARROWED copy exists solely for the sign test: after
+	// `lsl #32` a negative `int` has bit 63 set, so a signed compare against 0 reads the descriptor's sign
+	// and never a stale upper word.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: released)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.fsync)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+
+	asm.placeLabel(released)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDirBuf)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileRenameName)
+end 'buildArm64DarwinFileRenameChunk'
+
+// ==========================================================================
+// mrt_darwin_base_name(x0 = path) -> x0 = the byte after the last '/'
+// mrt_darwin_dir_prefix(x0 = path) -> x0 = a malloc'd directory part, or 0
+// mrt_darwin_has_wildcard(x0 = cstr) -> x0 = 1 | 0
+// mrt_darwin_dup_cstring(x0 = cstr) -> x0 = a malloc'd copy, or 0
+// ==========================================================================
+
+// The DIRECTORY half of a path, as a fresh `malloc`'d C string the caller frees. Three shapes, and each is
+// a real one the corpus writes:
+//
+//   `"temp/x/*.txt"` ⇒ `"temp/x"`   — the prefix without its trailing separator
+//   `"/x"`           ⇒ `"/"`        — the root, which is the ONE case where the separator IS the directory
+//   `"*.txt"`        ⇒ `"."`        — no separator at all means the CURRENT directory
+//
+// ⚠ A NULL answer is `malloc` refusing, and the two callers differ about what that means — correctly.
+// `mrt_darwin_file_rename` skips its durability step and still reports success, because the rename has
+// ALREADY HAPPENED and telling a caller otherwise would have it retry or delete something that is in place.
+// `mrt_darwin_dir_find_first` panics, because it has nothing to hand back and the alternative is a store
+// through 0 several instructions later.
+function buildArm64DarwinDirPrefixChunk() returns FunctionCodeChunk
+	let SlotPath = 0 as StackSize
+	let SlotLength = 1 as StackSize
+	let SlotBuffer = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
+
+	let currentDirectory = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotPath)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: currentDirectory)
+
+	// The prefix INCLUDES the separator, so the directory is one byte shorter — except at the root, where
+	// dropping it would leave the empty string and `opendir("")` fails with ENOENT.
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 1)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 0)
+	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64Register.x2), ifTrue: arm64RuntimeReg(Arm64Register.x1), ifFalse: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLength)
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x2, imm: 1)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBuffer)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: answered)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotPath)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBuffer)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotLength)
+	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x1, dest: Arm64Register.x2, limit: Arm64Register.x3, scratch: Arm64Register.x4)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBuffer)
+	arm64EmitBranchTo(asm, label: answered)
+
+	// No separator: the two bytes `"."` — written directly rather than copied out of a constant, because a
+	// two-byte string is shorter than the code that would address one.
+	asm.placeLabel(currentDirectory)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 2)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: answered)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DotByte as MachineWord)
+	arm64EmitStoreByte(asm, src: Arm64Register.x1, base: Arm64Register.x0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x0, imm: 1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: NulByte as MachineWord)
+	arm64EmitStoreByte(asm, src: Arm64Register.x1, base: Arm64Register.x2)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(DarwinDirPrefixName)
+end 'buildArm64DarwinDirPrefixChunk'
+
+// A `malloc`'d copy of a C string, or 0. The search object owns its pattern for the LIFETIME of the search,
+// while the pattern it was opened with is a scratch buffer the Std tier frees as soon as
+// `osFileFindFirst` returns — so the copy is what keeps `FindNextFileA` able to match anything.
+function buildArm64DarwinDupCStringChunk() returns FunctionCodeChunk
+	let SlotSource = 0 as StackSize
+	let SlotLength = 1 as StackSize
+	let SlotBuffer = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
+
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSource)
+	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x3)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLength)
+
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x2, imm: 1)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBuffer)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: answered)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSource)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBuffer)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotLength)
+	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x1, dest: Arm64Register.x2, limit: Arm64Register.x3, scratch: Arm64Register.x4)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBuffer)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(DarwinDupCStringName)
+end 'buildArm64DarwinDupCStringChunk'
+
+// ==========================================================================
+// mrt_darwin_attrs_from_mode(x0 = statBufPtr) -> x0 = dwFileAttributes
+// mrt_darwin_fill_find_data(x0 = findDataPtr, x1 = statBufPtr, x2 = namePtr)
+// ==========================================================================
+
+// ==========================================================================
+// mrt_darwin_file_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
+// ==========================================================================
+
+// `GetFileAttributesA` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
+// `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
+// `__mf_stat` publishes derived from ONE reading of `st_mode`.
+function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
+	let SlotStat = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(darwinStatLayout().bytes))
+
+	let described = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.stat)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: described)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: InvalidFileAttributes as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(described)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotStat)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileAttributesName)
+end 'buildArm64DarwinFileAttributesChunk'
+
+// ==========================================================================
+// mrt_darwin_dir_current_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
+// ==========================================================================
+
+// ⭐⭐ **`GetCurrentDirectoryA`'s THREE-WAY ANSWER OVER A CALL THAT HAS TWO.** The op's contract
+// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
+// included" and anything else as "too small". `getcwd` answers the buffer or NULL, and only `errno`
+// separates the two failures — so the classification is a compare against `ERANGE`.
+//
+// ⛔ **REPORTING "TOO SMALL" FOR A REAL FAILURE WOULD SPIN THE CALLER'S DOUBLING LOOP FOREVER**, and
+// reporting a failure for a too-small buffer would throw on a long path. That is why this reads errno
+// rather than answering one thing for both.
+//
+// ⚠ **THE "TOO SMALL" ANSWER IS THE CAPACITY ITSELF AND NOT A REQUIRED SIZE**, because POSIX has no call
+// that reports the length of a working directory. `__md_current_path` therefore DOUBLES rather than
+// retrying at a named size — see that builder, which was rewritten for exactly this.
+function buildArm64DarwinDirCurrentPathChunk() returns FunctionCodeChunk
+	let SlotBufLen = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let refused = asm.newLabel()
+	let tooSmall = asm.newLabel()
+	let answered = asm.newLabel()
+
+	// The BUFFER needs no slot: `getcwd` answers it back in x0 on success, and on failure nothing here reads
+	// it again. Only the CAPACITY has to outlive the call, because it is the "too small" answer.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.getcwd)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
+
+	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x3)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x2)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(refused)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoResultTooLarge as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooSmall)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(tooSmall)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufLen)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirCurrentPathName)
+end 'buildArm64DarwinDirCurrentPathChunk'
+
+// ==========================================================================
+// mrt_darwin_dir_find_next(x0 = search, x1 = findDataPtr) -> x0 = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`FindNextFileA` — AND ALSO THE WHOLE OF `FindFirstFileA`'s FIRST ENTRY**, which is why `find_first`
+// below calls this rather than carrying a second copy of the walk. Win32's first and subsequent entries
+// come from one enumeration; so do these.
+//
+// The loop: clear `errno`, take the next directory entry, match it against the pattern, and describe the
+// first one that matches. A NULL from `readdir` is end-of-iteration — which the caller reads as
+// `ERROR_NO_MORE_FILES` through a cleared `errno` (see `PosixErrnoCleared`) — and a `readdir` that FAILS
+// leaves its own errno standing, so the same FALSE carries both answers exactly as Win32's does.
+//
+// ⚠ **A SEARCH WITH NO DIRECTORY IS EXHAUSTED, NOT BROKEN.** A pattern with no wildcard was answered by one
+// `stat` and `FindFirstFileA` has already reported its single entry; the guard is INSIDE the loop head, after
+// the errno clear, so that exit reports end-of-iteration rather than a stale failure.
+//
+// ⚠ **`fstatat`'s VERDICT IS DELIBERATELY DISCARDED AND THE BUFFER IS ZEROED FIRST.** A dangling symbolic
+// link is a real directory entry that Win32 reports; skipping it would silently shorten a listing, and
+// reading a stat buffer the call did not fill would report the PREVIOUS entry's size and timestamps for it.
+// Zeroed, such an entry is reported with its name and with everything else empty.
+function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
+	let SlotSearch = 0 as StackSize
+	let SlotFindData = 1 as StackSize
+	let SlotEntry = 2 as StackSize
+	let SlotStat = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3 + runtimeFrameSlots(darwinStatLayout().bytes))
+
+	let nextEntry = asm.newLabel()
+	let exhausted = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
+
+	asm.placeLabel(nextEntry)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixErrnoCleared as MachineWord)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: exhausted)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.readdir)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: exhausted)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEntry)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchPatternOffset)
+	arm64DarwinEntryNameAddr(asm, dest: Arm64Register.x1, entrySlot: SlotEntry)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinDefaultGlobFlags)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.fnmatch)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: nextEntry)
+
+	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: runtimeFrameSlots(darwinStatLayout().bytes))
+	// `fstatat(dirfd(dir), name, &st, 0)` — RELATIVE to the open directory, which is why this walk never
+	// builds a path and never owns a path buffer.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.dirfd)
+	arm64DarwinEntryNameAddr(asm, dest: Arm64Register.x1, entrySlot: SlotEntry)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotStat)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixFollowSymlinks)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.fstatat)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64DarwinEntryNameAddr(asm, dest: Arm64Register.x2, entrySlot: SlotEntry)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostFillFindDataName)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(exhausted)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirFindNextName)
+end 'buildArm64DarwinDirFindNextChunk'
+
+// `&entry->d_name` — three sites in one chunk want it and each of them wants it in a different register.
+function arm64DarwinEntryNameAddr(asm Arm64RuntimeAsm, dest Arm64Register, entrySlot StackSize)
+	arm64EmitLoadSlot(asm, reg: dest, slot: entrySlot)
+	arm64EmitAddRuntimeImm(asm, dest: dest, base: dest, imm: DarwinDirentNameOffset as Imm32)
+end 'arm64DarwinEntryNameAddr'
+
+// ==========================================================================
+// mrt_darwin_dir_find_first(x0 = patternPtr, x1 = findDataPtr) -> x0 = search | -1
+// ==========================================================================
+
+// `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
+// `INVALID_HANDLE_VALUE` with `errno` telling the caller why.
+//
+// ⭐ **TWO ROUTES, AND WHICH ONE IS TAKEN IS A PROPERTY OF THE PATTERN**: a base name with no `*` or `?`
+// names one path and is answered by one `stat`; anything else opens the directory and walks it. See
+// `mrt_darwin_has_wildcard` for why the fast path is more faithful and not merely faster.
+//
+// ⚠ **AN EMPTY MATCH IS `ERROR_FILE_NOT_FOUND`, WHICH IS Win32's ANSWER AND NOT THIS LANE'S INVENTION.**
+// `FindFirstFileA` on a directory that exists but holds nothing matching fails with exactly that. A walk
+// that ended because `readdir` FAILED keeps its own errno instead, so a real IO error is not reported as a
+// missing file.
+function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotPattern = 0 as StackSize
+	let SlotFindData = 1 as StackSize
+	let SlotGlob = 2 as StackSize
+	let SlotDirBuf = 3 as StackSize
+	let SlotDir = 4 as StackSize
+	let SlotPatternCopy = 5 as StackSize
+	let SlotSearch = 6 as StackSize
+	let SlotSavedErrno = 7 as StackSize
+	let SlotStat = 8 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(8 + runtimeFrameSlots(darwinStatLayout().bytes))
+
+	let walk = asm.newLabel()
+	let described = asm.newLabel()
+	let opened = asm.newLabel()
+	let matched = asm.newLabel()
+	let publishReason = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
+
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotGlob)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostHasWildcardName)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: walk)
+
+	// One path: `stat` it, and hand back a search that is already exhausted.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.stat)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: described)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(described)
+	arm64DarwinEmitAllocateSearch(asm, globalData: globalData, searchSlot: SlotSearch)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: DarwinSearchPatternOffset)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotGlob)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostFillFindDataName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitBranchTo(asm, label: answered)
+
+	// A glob: open the directory the pattern names and let `FindNextFileA` take the first match.
+	asm.placeLabel(walk)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinDirPrefixName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDirBuf)
+	arm64DarwinEmitRequireAllocation(asm, globalData: globalData)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.opendir)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDir)
+	// `opendir`'s errno has to be captured BEFORE the `free` below, which runs allocator code of its own —
+	// the ordering `ManagedFileRuntime` states once for the Std tier, restated here because the free is this
+	// chunk's rather than that graph's.
+	arm64DarwinEmitCaptureErrno(asm, slot: SlotSavedErrno)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDirBuf)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDir)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: opened)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSavedErrno)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(opened)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotGlob)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinDupCStringName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPatternCopy)
+	arm64DarwinEmitRequireAllocation(asm, globalData: globalData)
+	arm64DarwinEmitAllocateSearch(asm, globalData: globalData, searchSlot: SlotSearch)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotDir)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotPatternCopy)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: DarwinSearchPatternOffset)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostDirFindNextName)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: matched)
+
+	// Nothing matched: release the search, then say why. The teardown runs allocator code, so the reason is
+	// captured first and republished after.
+	arm64DarwinEmitCaptureErrno(asm, slot: SlotSavedErrno)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostDirFindCloseName)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSavedErrno)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: publishReason)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixErrnoNoSuchFileOrDirectory as MachineWord)
+
+	asm.placeLabel(publishReason)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(matched)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixInvalidHandle)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirFindFirstName)
+end 'buildArm64DarwinDirFindFirstChunk'
+
+// A `malloc` that must succeed: the value in x0 is either a live pointer or the process cannot continue.
+// `mrt_host_wait_new`'s argument, one family over — the alternative is a store through 0 several
+// instructions later with nothing to attribute it to.
+function arm64DarwinEmitRequireAllocation(asm Arm64RuntimeAsm, globalData GlobalDataTable)
+	let allocated = asm.newLabel()
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: allocated)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: DarwinSearchAllocFailedMessage)
+	asm.placeLabel(allocated)
+end 'arm64DarwinEmitRequireAllocation'
+
+// Allocate one search object, leaving it in x0 AND in `searchSlot`. The caller fills the two fields, which
+// is the only thing its two call sites disagree about.
+function arm64DarwinEmitAllocateSearch(asm Arm64RuntimeAsm, globalData GlobalDataTable, searchSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinSearchBytes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: searchSlot)
+	arm64DarwinEmitRequireAllocation(asm, globalData: globalData)
+end 'arm64DarwinEmitAllocateSearch'
+
+// Read this thread's `errno` into a frame slot, so that a call which runs library code of its own cannot
+// disturb the reason a previous call is about to be blamed for.
+function arm64DarwinEmitCaptureErrno(asm Arm64RuntimeAsm, slot StackSize)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
+end 'arm64DarwinEmitCaptureErrno'
+
+// ==========================================================================
+// mrt_darwin_dir_find_close(x0 = search)
+// ==========================================================================
+
+// `FindClose` — release the enumeration and everything it owns. Idempotence is the Std tier's
+// (`__md_close` stamps its closed sentinel and never calls twice); what is here is that a search opened by
+// the single-`stat` route has NO directory and NO pattern, and both releases must tolerate that.
+// `free(NULL)` is a documented no-op, so only the `closedir` needs a guard.
+function buildArm64DarwinDirFindCloseChunk() returns FunctionCodeChunk
+	let SlotSearch = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let releasePattern = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchDirOffset)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: releasePattern)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.closedir)
+
+	asm.placeLabel(releasePattern)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: DarwinSearchPatternOffset)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+
+	return asm.finishFunction(HostDirFindCloseName)
+end 'buildArm64DarwinDirFindCloseChunk'
+
+// ==========================================================================
+// MAC8 — the CHILD PROCESS substrate: the SPAWN, and nothing else
+// ==========================================================================
+
+// ⭐⭐ **EVERY OTHER MEMBER OF THIS BAND MOVED TO `Arm64PosixRuntime` WHEN arm64-LINUX GREW ONE (L5).** The
+// pipe, its peek, the deadline tick, the reap, the bounded await, the exit-code read, the kill and the
+// netpoll's multi-wait are ONE body each now — `waitpid` and `wait4` decode the same status word, `poll` and
+// `ppoll` fill the same `struct pollfd`, and the three loops among them make no OS call at all. Each takes
+// this lane's libSystem door through `PosixHostCall`.
+//
+// ⛔ **THE SPAWN IS THE ONE THAT COULD NOT MOVE, AND NOT FOR WANT OF TRYING.** `posix_spawnp` is one call
+// plus a file-actions builder; AArch64-Linux has no spawn primitive at all and builds its child by hand out
+// of `clone`, `dup3` and `execve`. There is no shared shape under those two, only a shared NAME.
+
+// `posix_spawnattr` flags, MEASURED on this host.
+//
+// ⭐⭐ **`POSIX_SPAWN_CLOEXEC_DEFAULT` IS WIN32's `bInheritHandles` + `STARTUPINFOA`, EXACTLY.** It inverts
+// the POSIX default so that NOTHING crosses the exec except what the file actions name — which is the whole
+// of what the Windows pair says, and it is why no descriptor on this lane is ever marked `FD_CLOEXEC` by
+// hand. Without it the child would keep a copy of the parent's stdin WRITE end and would never see EOF when
+// `subprocessCloseStdin` closed the parent's, which is a HANG rather than a wrong answer.
+//
+// ⚠ **THE OTHER LANE HAS NO SUCH FLAG AND BUYS THE SAME PROPERTY AT THE `pipe2`**, which is why
+// `buildArm64PosixPipeChunk` takes a `flags` argument and this lane passes it nothing.
+let DarwinSpawnCloexecDefault = 0x4000
+let DarwinPipeNoFlags = 0
+
+// `DETACHED_PROCESS`'s honest twin: a detached child gets its own SESSION, so it outlives the parent's
+// terminal exactly as Win32's flag intends.
+let DarwinSpawnSetSid = 0x400
+
+// ==========================================================================
+// mrt_host_spawn(x0 = argv, x1 = cwd, x2 = creationFlags, x3 = startupInfo, x4 = processInformation,
+//                x5 = lpEnvironment)
+// ==========================================================================
+
+// ⭐⭐⭐ `CreateProcessA` — and the one op in this family whose two sides are shaped differently enough that
+// the Std tier had to move. Win32 takes a command LINE and splits it itself; POSIX takes an ARGUMENT VECTOR
+// and splits nothing. `SubprocessRuntime.SubprocessCommandShape` is where that fork lives, and by the time
+// the request reaches this chunk `command` is already a NULL-terminated `char *const argv[]` — so nothing
+// here re-splits anything and no quoting rule is applied twice.
+//
+// ⭐⭐ **THE TWO WIN32 STRUCTS ARE READ AND WRITTEN AS THEY ARE, WHICH IS WHY THE Std GRAPH DID NOT HAVE TO
+// FORK A SECOND TIME.** `STARTUPINFOA` is READ for its three standard handles and nothing else; the
+// `PROCESS_INFORMATION` this WRITES is a private scratch record the graph immediately decodes, not an ABI
+// obligation — so it is filled with the three facts that record means here: `hProcess` is a wait object of
+// kind `process`, `hThread` is 0 (POSIX has no thread handle to hand back, and `CloseHandle(0)` is the
+// documented no-op the graph already closes it with), and `dwProcessId` is the pid. Making the graph read a
+// bare `pid_t` instead would have meant a second per-target spawn path for a record nothing outside this
+// family ever sees.
+//
+// ⚠ **`posix_spawnp` DOES NOT SET errno — IT RETURNS THE NUMBER** — so the failure arm publishes it through
+// `*__error()` itself. Without that, `emitSubpRecordLastError` would capture whatever an unrelated earlier
+// call left there, and `subprocessLastErrorMessage()` would name the wrong failure.
+//
+// ⚠ **STACK DEPTH.** This chunk's own frame is ten slots, but `posix_spawnp` is a real Darwin syscall
+// wrapper and runs on whatever stack the caller had — a green thread's 2 KB seed, through the
+// `GtStackGuardMarginBytes` free-ride every `mrt_` frame takes. It is the deepest call this lane makes from
+// a chunk; if a future guard tightens, this is the frame to measure first.
+function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
+	let SlotArgv = 0 as StackSize
+	let SlotCwd = 1 as StackSize
+	let SlotFlags = 2 as StackSize
+	let SlotStartup = 3 as StackSize
+	let SlotProcInfo = 4 as StackSize
+	let SlotFileActions = 5 as StackSize
+	let SlotAttributes = 6 as StackSize
+	let SlotPid = 7 as StackSize
+	let SlotEnviron = 8 as StackSize
+	let SlotStatus = 9 as StackSize
+	let SlotEnv = 10 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(11)
+
+	let inheritCwd = asm.newLabel()
+	let noSession = asm.newLabel()
+	let spawned = asm.newLabel()
+	let published = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotArgv)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCwd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotStartup)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotProcInfo)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsInit)
+
+	// The three standard descriptors, exactly as the STARTUPINFOA names them. `adddup2` is what makes the
+	// child's fd 0/1/2 the ends this spawn chose, and — with `POSIX_SPAWN_CLOEXEC_DEFAULT` below — the ONLY
+	// descriptors it gets. A `dup2` also CLEARS the close-on-exec bit on its target, which is why the three
+	// survive the exec while every other end does not.
+	emitArm64DarwinChildDup2(asm, startupSlot: SlotStartup, actionsSlot: SlotFileActions, handleOffset: StartupInfoHStdInputOffset as MachineWord, childDescriptor: PosixChildStdinFd)
+	emitArm64DarwinChildDup2(asm, startupSlot: SlotStartup, actionsSlot: SlotFileActions, handleOffset: StartupInfoHStdOutputOffset as MachineWord, childDescriptor: PosixChildStdoutFd)
+	emitArm64DarwinChildDup2(asm, startupSlot: SlotStartup, actionsSlot: SlotFileActions, handleOffset: StartupInfoHStdErrorOffset as MachineWord, childDescriptor: PosixChildStderrFd)
+
+	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of a chdir action.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCwd)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: inheritCwd)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsAddchdirNp)
+
+	asm.placeLabel(inheritCwd)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrInit)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSpawnCloexecDefault)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: DetachedProcess as MachineWord)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x4, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: noSession)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: DarwinSpawnSetSid)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x5)
+
+	asm.placeLabel(noSession)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrSetflags)
+
+	// `environ` — a Mach-O main executable may not name the symbol directly, so it is reached through the
+	// accessor that answers its address. This is what a NULL `lpEnvironment` means: the parent's environment.
+	arm64DarwinCallImport(asm, slot: OsImportSlot.nsGetEnviron)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEnviron)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotPid)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotArgv)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotFileActions)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotAttributes)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotArgv)
+
+	// `envp` — the caller's own vector when it built one, and `environ` otherwise. A NULL `lpEnvironment` is
+	// the ONLY thing that means "inherit"; `SubprocessRuntime.buildSubpEnvVector` has already turned a
+	// caller-built block into the `char *const envp[]` this argument takes.
+	let envChosen = asm.newLabel()
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: envChosen)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotEnviron)
+	asm.placeLabel(envChosen)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnp)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrDestroy)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsDestroy)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: spawned)
+
+	// Failure: publish the reason as errno and leave a ZERO `hProcess`, which is the Std tier's own spawn
+	// failure test.
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStatus)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitBranchTo(asm, label: published)
+
+	asm.placeLabel(spawned)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixWaitKindProcess)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPid)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x3, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x3, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotStatus)
+
+	// published: x2 = hProcess, x3 = dwProcessId. Both arms arrive with the pair already chosen, so the three
+	// stores that fill the record are written once.
+	asm.placeLabel(published)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: ProcInfoHProcessOffset as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixNoThreadHandle)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x4, base: Arm64Register.x1, byteOffset: ProcInfoHThreadOffset as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x3, base: Arm64Register.x1, byteOffset: ProcInfoDwProcessIdOffset as MachineWord)
+
+	return asm.finishFunction(HostSpawnName)
+end 'buildArm64DarwinSpawnChunk'
+
+// `posix_spawn_file_actions_adddup2(&fa, startup->handle, childDescriptor)` — one of the three the spawn
+// above emits. Its own function because the three differ only in which STARTUPINFOA field they read and
+// which descriptor they become, and because the handle must be UNTAGGED (a pipe end reaches the record as a
+// tagged handle; an inherited standard stream and a redirected file reach it as bare descriptors).
+function emitArm64DarwinChildDup2(asm Arm64RuntimeAsm, startupSlot StackSize, actionsSlot StackSize, handleOffset MachineWord, childDescriptor MachineWord)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: startupSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: handleOffset)
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x1)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: actionsSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: childDescriptor)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsAdddup2)
+end 'emitArm64DarwinChildDup2'
+
+// ==========================================================================
+// The NAMED SHARED SECTION — `mrt_darwin_shm_create` / `mrt_darwin_shm_open`
+// ==========================================================================
+
+// The two chunk symbols the isel branches to on this lane. EXPORTED because `StdToArm64Conversion` names
+// them, and `mrt_darwin_`-infixed because these two BODIES exist here alone: `shm_open` is a libc FUNCTION on
+// Linux, so that lane opens the `/dev/shm` path the function would have built
+// (`LinuxRuntime.LinuxShmCreateName`). The MAP and the UNMAP are one body on both lanes and wear the
+// shared prefix (`Arm64PosixRuntime.buildArm64PosixShmMapChunk`).
+export let DarwinShmCreateName = b"mrt_darwin_shm_create"
+export let DarwinShmOpenName = b"mrt_darwin_shm_open"
+
+// ⭐ **`O_RDWR|O_CREAT|O_EXCL` AS DARWIN NUMBERS THEM, AND THE `O_EXCL` IS LOAD-BEARING.** The create side
+// unlinks the name first, so the object cannot already exist — and if it somehow does, this refuses rather
+// than adopting a segment whose contents another process is still writing.
+//
+// ⚠ **DARWIN'S OWN NUMBERS: `O_CREAT` is 0x200 and `O_EXCL` 0x800 here, where Linux spells them 0x40 and
+// 0x80 (`LinuxRuntime.LinuxShmCreateFlags`).** MEASURED on this host with `otool -tV` over a clang-compiled
+// probe, which emits `mov w1, #0xa02`.
+let DarwinShmCreateFlags = 0xA02
+
+// How far a descriptor is shifted to discard the unspecified upper half of a C `int` return. A shift PAIR
+// zero-extends the low 32 bits, which is what leaves the handle's kind field (`PosixHandleKindShift`) clear
+// so `mrt_host_wait_close` reads it as a plain descriptor.
+let DarwinDescriptorBits = 32 as ShiftCount
+
+// `mrt_darwin_shm_create(x0 = namePtr, x1 = bytes) -> x0 = fd | 0`
+//
+// ⭐⭐ **`CreateFileMappingA` NAMES AND SIZES IN ONE CALL; POSIX TAKES TWO.** `shm_open` only names, so the
+// length is an `ftruncate` on the descriptor it answers — and a failure between the two must undo the name,
+// which is why the whole sequence is a chunk rather than an isel line.
+//
+// ⭐ **A ZERO ANSWER IS THE FAILURE, AND fd 0 IS NOT A CASE THIS LANE HAS.** `mrt_host_wait_close` already
+// reads a zero descriptor as "no handle" and says why: fd 0 is STANDARD INPUT here, so it is never a handle
+// the runtime mints. The same convention makes `stdlib/SharedMemory.maxon`'s `NoSection` test exact.
+//
+// ⚠ **THE MODE TRAVELS ON THE STACK.** `shm_open` is variadic, and Darwin's AAPCS64 passes a variadic
+// argument in the caller's outgoing-argument region whatever its number — hence the one reserved word.
+function buildArm64DarwinShmCreateChunk() returns FunctionCodeChunk
+	let SlotName = 0 as StackSize
+	let SlotBytes = 1 as StackSize
+	let SlotFd = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(3)
+
+	let unsized = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+
+	// A segment left behind by a monitor that died outlives every process that mapped it, so a fresh run
+	// would otherwise adopt a ring holding another run's entries.
+	arm64DarwinCallImport(asm, slot: OsImportSlot.shmUnlink)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotName)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinShmCreateFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixSharedSegmentMode)
+	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.shmOpen)
+	arm64DarwinCaptureDescriptor(asm, slot: SlotFd, failed: refused)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.ftruncate)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unsized)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	// A named object outlives its descriptor, so a segment that could not be sized has to lose BOTH.
+	asm.placeLabel(unsized)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotName)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.shmUnlink)
+
+	asm.placeLabel(refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(DarwinShmCreateName)
+end 'buildArm64DarwinShmCreateChunk'
+
+// `mrt_darwin_shm_open(x0 = envNamePtr, x1 = bufPtr, x2 = bufLen) -> x0 = fd | 0` — the PRODUCER's attach.
+//
+// ⭐ **THE SCRATCH BUFFER THE OP CARRIES IS UNUSED HERE, AND THAT IS THE DIFFERENCE BETWEEN THE TWO HOSTS.**
+// Windows fuses `GetEnvironmentVariableA` with `OpenFileMappingA` because the first FILLS A BUFFER the
+// second reads; `getenv` answers a POINTER into the environment block, which `shm_open` takes directly. The
+// operands stay in the op because it serves both lanes — see `StdOp.osOpenNamedSegment`.
+//
+// An unset variable answers NULL, which is "no monitor is listening" — the same answer a refused open gets.
+function buildArm64DarwinShmOpenChunk() returns FunctionCodeChunk
+	let SlotFd = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let absent = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.getenv)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: absent)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadWrite)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.shmOpen)
+	arm64DarwinCaptureDescriptor(asm, slot: SlotFd, failed: absent)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(absent)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(DarwinShmOpenName)
+end 'buildArm64DarwinShmOpenChunk'
+
+// Park the descriptor a `shm_open` answered, or branch to `failed`.
+//
+// ⚠ **THE SIGN TEST READS A NARROWED COPY AND THE SLOT KEEPS A ZERO-EXTENDED ONE**, which are two different
+// cleanups of the same unspecified upper half: after `lsl #32` a negative `int` has bit 63 set, so a signed
+// compare reads the descriptor's sign; the shift PAIR then clears the upper half for good, because a handle
+// whose top bits carried noise would be read as a WAIT OBJECT by `mrt_host_wait_close`'s kind field.
+function arm64DarwinCaptureDescriptor(asm Arm64RuntimeAsm, slot StackSize, failed BlockId)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: slot)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: DarwinDescriptorBits)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: DarwinDescriptorBits)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
+end 'arm64DarwinCaptureDescriptor'
+
+// Append the arm64-macOS host-surface chunks a program actually reaches.
+//
+// ⚠ **CALLED ONLY FOR `Os.macos`** — the caller (`buildArm64Backend`) makes that test, because arm64-Linux
+// has no import table for any of this to resolve against. Every chunk here would be an unresolved GOT slot
+// there rather than merely dead code.
+//
+// ⚠ **THE GATES ARE THE Std TIER's OWN USAGE BITS, WHICH IS WHAT MAKES A MISSING CHUNK IMPOSSIBLE.** A
+// chunk is emitted exactly when the Std function that calls it is built: `usesWallClock` builds
+// `__clock_now_unix_s` AND emits `mrt_host_wall_clock`. Gating the two on different questions is how a
+// `bl` to an absent symbol happens, and an unresolved `bl` is a link failure rather than a diagnostic.
+export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
+	if usage.usesWallClock 'wallClock'
+		chunks.push(buildArm64DarwinWallClockChunk())
+	end 'wallClock'
+
+	if usage.usesThreadCpuTicks 'threadCpu'
+		chunks.push(buildArm64DarwinThreadCpuChunk())
+	end 'threadCpu'
+
+	// MAC2. The bit is `installProcessRuntime`'s own — `usesExecutablePath` builds `__proc_exe_path`, whose
+	// `osExecutablePath` op is the ONLY producer of a `bl` to this symbol — so the chunk and its caller are
+	// still one bit across two tiers. ⚠ The band's other two ops need NO chunk: `osGetPid` and
+	// `osEnterBackgroundPriority` have no out-param and nothing that must outlive a call, so the isel lowers
+	// both inline (`lowerOsGetPid`, `lowerOsEnterBackgroundPriority`), exactly as `lowerOsCpuCount` does.
+	if usage.usesExecutablePath 'executablePath'
+		chunks.push(buildArm64DarwinExePathChunk())
+	end 'executablePath'
+
+	// `installTerminalRuntime`'s own bit, and the only producer of `osHandleFileType` is the detecting body
+	// it builds under exactly this condition — one bit, two tiers, as everywhere else here.
+	if usage.usesTerminalDetection 'terminalDetection'
+		chunks.push(buildArm64DarwinHandleFileTypeChunk())
+	end 'terminalDetection'
+
+	if posixReadsEnvironment(usage) 'envRead'
+		chunks.push(buildArm64DarwinEnvReadChunk())
+	end 'envRead'
+
+	// ⚠ **THE LOCK IS ONE `pthread_mutex_t` HERE, SO ONLY THE INIT NEEDS A CHUNK** — the enter and the leave
+	// lower to bare import calls, which is why this lane's band is three chunks where a Linux lane's is five.
+	if posixUsesHostObjects(usage) 'hostObjects'
+		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.importCall(OsImportSlot.waitpid)))
+		chunks.push(buildArm64DarwinWaitCloseChunk())
+		chunks.push(buildArm64DarwinLockInitChunk())
+	end 'hostObjects'
+
+	// The monotonic clock and the timed park both ride `usesGt`: `__gt_now_ns` and `__gt_sleep` are
+	// scheduler functions, installed together by `installGtRuntime`, so a program that has either has the
+	// whole band. Splitting them here would be a second reachability analysis that could disagree with the
+	// real one — `installGtRuntime`'s own stated reason for installing its members unconditionally.
+	if usage.usesGt 'schedulerClocks'
+		chunks.push(buildArm64DarwinSleepMsChunk())
+		// MAC3's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
+		// tier whenever `installGtRuntime` runs, and every one of these chunks is the target-side body of an op
+		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each MACHINE's own park event
+		// (it was each P's wake event until W213-C2 moved the idle state onto the M), the worker spawn and
+		// join, and the `MAXON_MAX_PROCS` read. One bit, two tiers, so a `bl` to an absent symbol is not
+		// merely unlikely but unreachable.
+		chunks.push(buildArm64DarwinWaitNewChunk(globalData))
+		chunks.push(buildArm64DarwinEventSetChunk())
+		chunks.push(buildArm64DarwinThreadCreateChunk())
+		chunks.push(buildArm64DarwinWaitOneChunk(globalData))
+		chunks.push(buildArm64DarwinTlsAllocChunk(globalData))
+		// ⭐⭐ **MAC8's CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
+		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a
+		// spawn, an exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that
+		// never runs a child — so a narrower gate here is a `bl` to a symbol nothing laid out, which is a
+		// link failure rather than a diagnostic (MEASURED, twice, while this rung was written).
+		chunks.push(buildArm64PosixProcAwaitChunk())
+		chunks.push(buildArm64PosixWaitAnyChunk())
+		chunks.push(buildArm64DarwinSpawnChunk())
+		chunks.push(buildArm64PosixProcExitCodeChunk())
+	end 'schedulerClocks'
+
+	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
+	// pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and `usesStreaming` implies it — so a
+	// program that spawns a child WITHOUT reading from it pays for none of these. `osPipePeek` and
+	// `osProcessTerminate` have producers only inside that band.
+	if usage.usesIocp 'childPipes'
+		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.importCall(OsImportSlot.pipe), flags: DarwinPipeNoFlags))
+		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.pollImport(OsImportSlot.poll)))
+		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill)))
+	end 'childPipes'
+
+	if posixReadsUptimeClock(usage) 'uptimeClock'
+		chunks.push(buildArm64PosixTickMsChunk())
+	end 'uptimeClock'
+
+	if posixReadsMonotonicClock(usage) 'monotonicClock'
+		chunks.push(buildArm64DarwinMonotonicClockChunk())
+	end 'monotonicClock'
+
+	// ⚠ **FOUR CHUNKS WHERE A LINUX LANE HAS SIX**: `shm_open` NAMES a segment here, so the band needs
+	// neither a `/dev/shm` path builder nor an unlink body — the unpublish is one bare import call.
+	if posixUsesNamedSection(usage) 'namedSection'
+		chunks.push(buildArm64DarwinShmCreateChunk())
+		chunks.push(buildArm64DarwinShmOpenChunk())
+		chunks.push(buildArm64PosixShmMapChunk(PosixHostCall.importCall(OsImportSlot.mmap)))
+		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.importCall(OsImportSlot.munmap)))
+	end 'namedSection'
+
+	// ⭐⭐ **MAC4/5/6/7 — THE FILESYSTEM, STANDARD-INPUT AND argv SURFACE.** Four `RuntimeUsage` bits, and
+	// the gates below are DERIVED from which Std bodies emit which ops rather than from which family a
+	// chunk's name reads like — which is why two of them are unions.
+	//
+	// ⚠ **THE `FindFirstFileA` CLUSTER IS ONE UNIT AND MUST BE GATED AS ONE.** Its members call each other
+	// by `bl` (find-first → find-next → fill → attrs, and find-first → base-name / prefix / wildcard / dup),
+	// so a gate that admitted one and not another would be a `CallFixup` naming a symbol nothing laid out.
+	// BOTH families reach it: `__mf_exists`/`__mf_stat` open a search on a bare path exactly as
+	// `__md_open_search` opens one on a glob.
+	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
+	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF MAC8**, so it is gated one bit wider
+	// than the cluster below it: `__gt_subp_yield_read` classifies a failed read with it and every spawn
+	// failure publishes through it. Splitting it out of the cluster is what keeps the cluster's own
+	// "these call each other, so gate them as one" argument intact.
+	if usesFilesystem or usage.usesIocp 'lastError'
+		chunks.push(buildArm64DarwinLastErrorChunk())
+	end 'lastError'
+
+	if usesFilesystem 'filesystem'
+		chunks.push(buildArm64PosixBaseNameChunk())
+		chunks.push(buildArm64DarwinDirPrefixChunk())
+		chunks.push(buildArm64PosixHasWildcardChunk())
+		chunks.push(buildArm64DarwinDupCStringChunk())
+		chunks.push(buildArm64PosixFillFindDataChunk(darwinStatLayout()))
+		chunks.push(buildArm64DarwinDirFindFirstChunk(globalData))
+		chunks.push(buildArm64DarwinDirFindNextChunk())
+		chunks.push(buildArm64DarwinDirFindCloseChunk())
+	end 'filesystem'
+
+	// ⚠ MAC8: `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
+	// stdin pipe, so the write half rides the same union its read twin does.
+	if usage.usesManagedFile or usage.usesIocp 'managedFileWrite'
+		chunks.push(buildArm64DarwinTransferChunk(HostWriteFileName, importSlot: OsImportSlot.write))
+	end 'managedFileWrite'
+
+	if usage.usesManagedFile 'managedFile'
+		chunks.push(buildArm64DarwinFileSizeChunk())
+		chunks.push(buildArm64DarwinFileDeleteChunk())
+		chunks.push(buildArm64DarwinFileRenameChunk())
+	end 'managedFile'
+
+	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS TWO PRODUCERS.** `__mf_read` and
+	// `__con_read_stdin` emit the identical op — standard input is a descriptor like any other on this
+	// platform — so gating it on `usesManagedFile` alone would leave a stdin-only program branching to a
+	// symbol nothing emitted, and pushing it under both bits would lay the same symbol out twice.
+	// ⚠ MAC8 adds a THIRD producer of the same op shape: `StdOp.osReadOverlapped` lowers to this very chunk
+	// on a lane where a read completes in its caller, so a streaming-subprocess program that touches no file
+	// and no stdin still needs it laid out.
+	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesIocp 'transferIn'
+		chunks.push(buildArm64DarwinTransferChunk(HostReadFileName, importSlot: OsImportSlot.read))
+	end 'transferIn'
+
+	if usage.usesManagedDirectory 'managedDirectory'
+		chunks.push(buildArm64DarwinDirCreateChunk())
+		chunks.push(buildArm64DarwinDirCurrentPathChunk())
+	end 'managedDirectory'
+
+	// The mode→attribute-mask decoder is called by BOTH `mrt_darwin_fill_find_data` (the cluster above) and
+	// `mrt_darwin_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out
+	// of the cluster it used to sit inside.
+	if usesFilesystem or usage.usesIocp 'attrsFromMode'
+		chunks.push(buildArm64PosixAttrsFromModeChunk(darwinStatLayout()))
+	end 'attrsFromMode'
+
+	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AS OF MAC8, AND IT IS NOT A DIRECTORY OP.**
+	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
+	// executable lookup needs this chunk with no `Directory` call anywhere in the program. It is split out of
+	// the directory cluster rather than the cluster widened, because the other two members really are
+	// directory-only.
+	if usage.usesManagedDirectory or usage.usesIocp 'fileAttributes'
+		chunks.push(buildArm64DarwinFileAttributesChunk())
+	end 'fileAttributes'
+
+	// ⚠ **MAC7 CONTRIBUTES NO CHUNK AT ALL, WHICH IS THE POINT OF ITS DESIGN.** On this platform argv is
+	// already a vector, so `__cl_count` is a `.data` load and `__cl_arg` is a bounds check and an indexed
+	// load — builder-built Std that every backend lowers. What is target-specific is only WHO FILLS the two
+	// `.data` words, and that is the entry stub (`Arm64Runtime.buildArm64EntryStubChunk`).
+end 'appendArm64DarwinRuntimeChunks'

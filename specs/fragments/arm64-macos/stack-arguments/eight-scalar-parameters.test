@@ -1,0 +1,34 @@
+// Test: eight-scalar-parameters
+typealias Integer = int(i64.min to i64.max)
+
+function sum8(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
+	return a + b + c + d + e + f + g + h
+end 'sum8'
+
+function main() returns ExitCode
+	return sum8(1, b: 2, c: 4, d: 8, e: 16, f: 32, g: 64, h: 128)
+end 'main'
+---
+ExitCode: 255
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 255
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at eight-scalar-parameters.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

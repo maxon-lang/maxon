@@ -1,0 +1,198 @@
+// Test: first-class-function.generic-instance-returned-through-an-extension-body-alias-is-identified-by-type-not-by-intern-order
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+
+extension Field
+	typealias Builder = function(Integer) returns FieldArray
+
+	export function runIt(f Builder) returns Integer
+		let produced = f(7)
+		let first = try produced.get(0) otherwise panic("runIt: empty array")
+		return first.v
+	end 'runIt'
+end 'Field'
+
+function buildFields(n Integer) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function main() returns ExitCode
+	var s = SmallArray.create()
+	s.push(3)
+	let f = Field.create(1)
+	return (f.runIt(buildFields) + s.count()) as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Field.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Field.runIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rcx, 7
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#7
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#8
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#8:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#7:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.generic-instance-returned-through-an-extension-body-alias-is-identified-by-type-not-by-intern-order.test:22: runIt: empty array\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @buildFields {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Field.create
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.movRegImm rcx, 18446744073709551612
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rax, 1
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegFunc rdx, [rip + __fnref_buildFields]
+    x64.movRegImm32 rax, 0
+    x64.callDirect Field.runIt
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.leaRegRegReg r12, r8, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at first-class-function.generic-instance-returned-through-an-extension-body-alias-is-identified-by-type-not-by-intern-order.test:37: Range check failed: v"...
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

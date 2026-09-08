@@ -1,0 +1,18 @@
+// Test: error.a-set-the-parse-time-decider-cannot-settle
+typealias Integer = int(i64.min to i64.max)
+
+function pick(n Integer)
+	print("n{n}\n")
+end 'pick'
+
+function pick(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pick'
+
+function main() returns ExitCode
+	pick(7)
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:2: the overloads of 'pick' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them

@@ -1,0 +1,141 @@
+// Test: not-over-bool-or-with-overloaded-callees
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 5
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 9
+    x64.leaRegSlot rdx, slot1
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.movRegImm32 rax, 0
+  __il_body#17:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 5
+    x64.setccReg equal, rsi
+  __il_cont#16:
+    x64.movRegImm32 rdi, 1
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, scmerge#2
+  __il_body#19:
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.cmpRegImm32 rsi, 1
+    x64.setccReg equal, rsi
+  __il_cont#18:
+    x64.movRegReg rdi, rsi
+  scmerge#2:
+    x64.xorRegImm32 rdi, rdi, 1
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __il_body#21
+  a:
+    x64.movRegImm32 rax, 1
+  __il_body#21:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 1
+    x64.setccReg equal, rsi
+  __il_cont#20:
+    x64.movRegImm32 rdi, 1
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, scmerge#6
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.cmpRegImm32 rsi, 1
+    x64.setccReg equal, rsi
+  __il_cont#22:
+    x64.movRegReg rdi, rsi
+  scmerge#6:
+    x64.xorRegImm32 rdi, rdi, 1
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __il_body#25
+  c:
+    x64.leaRegRegImm32 rax, rax, 10
+  __il_body#25:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg equal, rcx
+  __il_cont#24:
+    x64.movRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, scmerge#10
+  __il_body#27:
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.cmpRegImm32 rcx, 9
+    x64.setccReg equal, rcx
+  __il_cont#26:
+    x64.movRegReg rsi, rcx
+  scmerge#10:
+    x64.xorRegImm32 rsi, rsi, 1
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit
+  d:
+    x64.leaRegRegImm32 r8, rax, 100
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at not-over-bool-or-with-overloaded-callees.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,51 @@
+// Test: debugstream-log-events.a-unit-demuxes-two-emitters
+function main() returns ExitCode
+	let ev = __DebugStream.nameId("step")
+	__DebugStream.event(ev, 0, 0, 100, 1, 0)
+	__DebugStream.event(ev, 0, 0, 200, 2, 0)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 100
+    x64.movRegImm32 rsi, 1
+    x64.movRegImm32 rdi, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __ds_emit_log_event
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 200
+    x64.movRegImm32 rsi, 2
+    x64.movRegImm32 rdi, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __ds_emit_log_event
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

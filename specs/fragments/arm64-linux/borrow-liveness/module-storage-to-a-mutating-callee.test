@@ -1,0 +1,18 @@
+// Test: module-storage-to-a-mutating-callee
+typealias StringArray = Array with String
+
+var g = ["hello world this is a long string for heap allocation"]
+
+function grow(dest StringArray)
+	dest.clear()
+end 'grow'
+
+function main() returns ExitCode
+	let s = try g.get(0) otherwise ""
+	grow(g)
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:12:2: cannot mutate 'g' via 'grow' while it is borrowed by 's' (borrowed at line 11)

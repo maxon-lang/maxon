@@ -1,0 +1,140 @@
+// Test: dispatch.carried-var-merge-tree
+typealias N = int(0 to 1000)
+
+function pick(x N) returns N
+	var r = 0 as N
+	match x 'c'
+		1 then r = 10
+		2 then r = 20
+		3 then r = 30
+		4 then r = 40
+		5 then r = 50
+		default then r = 99
+	end 'c'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if pick(1) == 10 'a'
+		n = n + 1
+	end 'a'
+	if pick(3) == 30 'b'
+		n = n + 1
+	end 'b'
+	if pick(5) == 50 'c'
+		n = n + 1
+	end 'c'
+	if pick(99) == 99 'd'
+		n = n + 1
+	end 'd'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.carried-var-merge-tree.test:4: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.sub x0, x0, 1
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5] @__jumptable_2
+  matchdefault:
+    arm64.movImm x0, 99
+    arm64.b matchcont
+  matcharm#1:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matcharm#2:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matcharm#3:
+    arm64.movImm x0, 30
+    arm64.b matchcont
+  matcharm#4:
+    arm64.movImm x0, 40
+    arm64.b matchcont
+  matcharm#5:
+    arm64.movImm x0, 50
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 1
+    arm64.bl pick
+    arm64.cmp x0, 10
+    arm64.b.ne ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 3
+    arm64.bl pick
+    arm64.cmp x0, 30
+    arm64.b.ne ifcont#4
+  b:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 5
+    arm64.bl pick
+    arm64.cmp x0, 50
+    arm64.b.ne ifcont#6
+  c:
+    arm64.add x19, x19, 1
+  ifcont#6:
+    arm64.movImm x0, 99
+    arm64.bl pick
+    arm64.cmp x0, 99
+    arm64.b.ne critsplit
+  d:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#8
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#8:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#10
+  __rc_chk#11:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#9
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.carried-var-merge-tree.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#9:
+    arm64.cbnz x1, __rc_panic#13
+  __rc_chk#14:
+    arm64.cbz x2, __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.carried-var-merge-tree.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#12:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

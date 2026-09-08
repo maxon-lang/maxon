@@ -1,0 +1,39 @@
+// Test: error.a-body-with-a-return-beside-its-throw-tail-does-not-always-throw
+typealias Integer = int(i64.min to i64.max)
+
+enum DrainError implements Error
+	pipeDied
+end 'DrainError'
+
+enum FatalError implements Error
+	unrecoverable
+end 'FatalError'
+
+function abandonOrNot(worker Integer, fatal bool) throws FatalError
+	if not fatal 'no'
+		print("worker {worker} survived\n")
+		return
+	end 'no'
+	throw FatalError.unrecoverable
+end 'abandonOrNot'
+
+function drain(fail bool) returns Integer throws DrainError
+	if fail 'broken'
+		throw DrainError.pipeDied
+	end 'broken'
+	return 41
+end 'drain'
+
+function collect(fail bool) returns Integer throws FatalError
+	let lines = try drain(fail) otherwise 'workerDied'
+		try abandonOrNot(7, fatal: false)
+	end 'workerDied'
+	return lines + 1
+end 'collect'
+
+function main() returns ExitCode
+	return try collect(false) otherwise 99
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:28:14: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'

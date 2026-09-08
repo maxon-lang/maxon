@@ -1,0 +1,20 @@
+// Test: error.struct-literal-naming-the-enclosing-enum-through-Self
+enum Toggle
+	off
+	on
+
+	export function bad() returns Toggle
+		return Self{}
+	end 'bad'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.off
+	if t == Toggle.off 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:10: Unsupported: a struct literal naming `enum`/`union` `Toggle` — an enum/union declares no fields to write; a value of it is a CASE (`Toggle.<case>`, or `Self.<case>` from inside its own body)

@@ -1,0 +1,29 @@
+// A packed chain must split one alternative per line.
+module function classify(op StdOp) returns bool
+	match op 'op'
+		add or
+			sub or
+			mul then return true
+		// An already-split chain is a fixed point.
+		div or
+			mod then return false
+		default panic("unreachable")
+	end 'op'
+end 'classify'
+
+// An `or` in an arm BODY is an ordinary boolean and must not split.
+module function pick(a bool, b bool) returns int
+	match a 'a'
+		true then return 1 if a or b else 2
+		default then return 0
+	end 'a'
+end 'pick'
+
+// A scalar chain splits by the same rule.
+module function band(n int) returns int
+	match n 'n'
+		1 to 5 or
+			9 to 12 then return 1
+		default then return 0
+	end 'n'
+end 'band'

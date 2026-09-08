@@ -1,0 +1,26 @@
+// Test: error.a-where-constraint-cannot-bind-more-than-the-interface-declares
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Box uses T where T is Sized with (Integer)
+	var t as T
+
+	export static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	export function size() returns Integer
+		return self.t.size()
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.create(0).size()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2066: <fragment>:8:39: interface 'Sized' declares 0 associated type(s), but this parenthesized 'with' clause binds 1

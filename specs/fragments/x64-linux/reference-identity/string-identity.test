@@ -1,0 +1,56 @@
+// Test: string-identity
+function main() returns ExitCode
+	// Two identical string literals are INTERNED: a never-mutated literal is emitted once as a
+	// shared immortal object, so `a` and `b` refer to the same object and `a is b` is true.
+	let a = "hello"
+	let b = "hello"
+	var result = 0
+	if a is a 'self'
+		result = result + 1
+	end 'self'
+	if a is b 'diff'
+		result = result + 10
+	end 'diff'
+	return result
+end 'main'
+---
+ExitCode: 11
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "hello"
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello"
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegReg rax, rax
+    x64.jcc notEqual, ifcont#2
+  self:
+    x64.movRegImm32 rdx, 1
+  ifcont#2:
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, critsplit
+  diff:
+    x64.leaRegRegImm32 r8, rdx, 10
+    x64.jmp ifcont#4
+  critsplit:
+    x64.movRegReg r8, rdx
+  ifcont#4:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at string-identity.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

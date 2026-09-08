@@ -1,0 +1,22 @@
+// Test: error.nested-struct-backing-missing-nested-field
+typealias Wide = int(0 to 100)
+
+type Inner
+	export let n as Wide
+	export let m as Wide
+end 'Inner'
+
+type Meta
+	export let inner as Inner
+end 'Meta'
+
+enum Task
+	quick = Meta{inner: Inner{n: 1}}
+end 'Task'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:2: Unsupported: field 'm' of the `Inner` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case

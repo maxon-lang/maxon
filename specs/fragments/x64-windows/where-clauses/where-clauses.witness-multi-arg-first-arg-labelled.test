@@ -1,0 +1,211 @@
+// Test: where-clauses.witness-multi-arg-first-arg-labelled
+typealias Code = int(0 to u32.max)
+
+interface Adder
+	function add(a Code, b Code) returns Code
+end 'Adder'
+
+type Point implements Adder
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function add(a Code, b Code) returns Code
+		return self.x + a + b
+	end 'add'
+end 'Point'
+
+type Box uses T where T is Adder
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Code
+		return self.item.add(a: 1, b: 2)
+	end 'go'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	if b.go() == 10 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at where-clauses.witness-multi-arg-first-arg-labelled.test:10: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.movRegImm32 rsi, 4294967295
+    x64.cmpRegReg rdx, rsi
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at where-clauses.witness-multi-arg-first-arg-labelled.test:13: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.movRegImm32 rsi, 4294967295
+    x64.cmpRegReg rax, rsi
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at where-clauses.witness-multi-arg-first-arg-labelled.test:13: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at where-clauses.witness-multi-arg-first-arg-labelled.test:14: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.go {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 2
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rdx, [rip + __witness_Point.Adder]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.leaRegRdata rdx, [rip + __witness_Point.Adder]
+    x64.movRegReg rcx, r12
+    x64.callDirect Box.go
+    x64.cmpRegImm32 r8, 10
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_Point
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_Point
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,90 @@
+// Test: char-literal-codepoint-iteration
+function main() returns ExitCode
+	var count = 0
+	for cp in "a-b-c".codepoints() 'chars'
+		if cp == '-' 'dash'
+			count = count + 1
+		end 'dash'
+	end 'chars'
+	return count
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "a-b-c"
+    x64.callDirect String.codepoints
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect CodepointView.createIterator
+    x64.movRegReg r13, r8
+    x64.movRegReg r14, r10
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_CodepointView
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, forempty
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 16]
+  __il_cont:
+    x64.cmpRegImm32 rax, 45
+    x64.jcc notEqual, forstep
+  dash:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  forstep:
+    x64.movRegReg rcx, r13
+    x64.callDirect CodepointIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CodepointIterator
+    x64.movRegReg r8, rbx
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg r8, rbx
+  forjoin:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at char-literal-codepoint-iteration.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

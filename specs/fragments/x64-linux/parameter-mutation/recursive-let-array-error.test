@@ -1,0 +1,20 @@
+// Test: recursive-let-array-error
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function rec(d IntArray, n Integer)
+	if n <= 0 'base'
+		d.push(5)
+		return
+	end 'base'
+	rec(d, n: n - 1)
+end 'rec'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	rec(a, n: 3)
+	return try a.get(0) otherwise -1
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)

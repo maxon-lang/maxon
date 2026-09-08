@@ -1,0 +1,57 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+  forhdr#1:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greater, forexit
+  outer:
+    x64.movRegImm32 rcx, 1
+  forhdr#5:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greater, forstep#3
+  inner:
+    x64.movRegReg rdx, rax
+    x64.imulRegReg rdx, rax, rcx
+    x64.leaRegRegReg r8, r8, rdx
+  forstep#7:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#5
+  forstep#3:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr#1
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ranges.nested-ranges.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

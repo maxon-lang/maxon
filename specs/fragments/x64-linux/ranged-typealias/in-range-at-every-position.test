@@ -1,0 +1,161 @@
+// Test: in-range-at-every-position
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+type Box
+	export var v as Percent = 7
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function make(p Percent) returns Self
+		return Self{v: p}
+	end 'make'
+end 'Box'
+
+function take(p Percent) returns Percent
+	return p
+end 'take'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b.v = 42
+	var a = PA.create()
+	a.push(3)
+	let s = Box.make(5)
+	return take(b.v) + a.count() + s.v
+end 'main'
+---
+ExitCode: 48
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at in-range-at-every-position.test:12: Range check failed: value outside typealias 'Percent'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @take {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at in-range-at-every-position.test:17: Range check failed: value outside typealias 'Percent'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegSlot rbx, slot0
+    x64.movRegImm32 rax, 7
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 42
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 5
+    x64.callDirect Box.make
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok#6
+  __il_slow:
+    x64.callDirect take
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg r8, rcx
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.leaRegRegReg rax, r8, rax
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#3:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at in-range-at-every-position.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

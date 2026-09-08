@@ -1,0 +1,793 @@
+// Debug/CoverageReport.maxon — the joined coverage model, and the two faces that render it.
+//
+// A report joins THREE artifacts made at three different moments: the binary's own `.text` hash, the
+// `.mxdbg` sidecar's coverage-point table, and the `.mxcov` counters the program wrote on its way out. A
+// counter is an ANONYMOUS INDEX, so a join that is not exactly right names real source lines with numbers
+// belonging to other lines — an instrument that LIES, which is worse than no instrument. That is why every
+// disagreement below is a REFUSAL rather than a best effort.
+//
+// ⭐⭐ **ONE MODEL, TWO RENDERERS.** The annotated listing and the JSON read the same `CovReport` and the
+// same `summarize`; a second aggregation for the second face is how three copies of one rule diverged into
+// a live wrong answer elsewhere in this tree.
+//
+// ⭐⭐ **EVERY SENTENCE HERE IS PINNED BYTE FOR BYTE BY `tests/coverage/`.** A "better" wording is the
+// failure, not a fix.
+//
+// ⭐ **THIS TOOL'S EXIT CODE ANSWERS ONE QUESTION: DID THE MEASUREMENT COMPLETE.** The measured program's
+// status is DATA — `target exit code:` in the text, `targetExitCode` in the JSON — and it is ABSENT rather
+// than zero for a `report`, which watched nothing exit and so has no status to report.
+
+// ============================================================================================
+// THE MODEL
+// ============================================================================================
+
+// A source line number and a source column, as the sidecar carries them.
+typealias CovLineNumber = int(0 to u32.max)
+typealias CovSourceColumn = int(0 to u32.max)
+
+// How many times a point's counter fired.
+typealias CovCount = int(0 to u64.max)
+
+// A position in an array being built, and how many of something a summary counted.
+typealias CovSlot = int(0 to u64.max)
+typealias CovTally = int(0 to u64.max)
+
+// ⭐ The status the measured program returned, or the absence of one. ABSENT — not zero — for a `report`,
+// because that verb ran nothing: printing a 0 there would be this tool inventing a status nobody observed.
+module union CovTargetStatus
+	notObserved
+	observed(code CovTargetExitCode)
+end 'CovTargetStatus'
+
+// A status the OS reported for the measured program. Signed and wide: it is data this tool passes through
+// rather than a number it constrains.
+module typealias CovTargetExitCode = int(i64.min to i64.max)
+
+// ⭐ What a report can say about one source line, and the reason there are FOUR answers rather than three.
+//
+// A line with no entry at all carries no coverage point — a comment, a blank line, an `end`. A line with a
+// point that never fired is `notCovered`: real code the run never reached. And a line whose points ALL lost
+// their code to the optimizer is `eliminated`: there is nothing there to reach, so calling it "not covered"
+// would blame the test for missing code that does not exist, and calling it "no coverage point" would hide
+// it among the comments.
+enum CovLineState
+	covered
+	notCovered
+	eliminated
+end 'CovLineState'
+
+type CovLine
+	export var line as CovLineNumber
+	export var state as CovLineState
+	export var count as CovCount
+
+	static function create(line CovLineNumber, state CovLineState, count CovCount) returns CovLine
+		return Self{line: line, state: state, count: count}
+	end 'create'
+end 'CovLine'
+
+typealias CovLineArray = Array with CovLine
+
+type CovFile
+	export var path as String
+	export var lines as CovLineArray
+
+	static function create(path String, lines CovLineArray) returns CovFile
+		return Self{path: path, lines: lines}
+	end 'create'
+end 'CovFile'
+
+typealias CovFileArray = Array with CovFile
+
+// One arm of one branch. `isImplicit` marks an arm the source never wrote — the `else` of an `if` that has
+// none, which no line table can describe because it has no source text to hold a row. `line` is the ARM's
+// own position, so the branch summary says where to look.
+type CovArm
+	export var kind as String
+	export var line as CovLineNumber
+	export var column as CovSourceColumn
+	export var count as CovCount
+	export var eliminated as bool
+	export var isImplicit as bool
+
+	static function create(kind String, line CovLineNumber, column CovSourceColumn, count CovCount, eliminated bool, isImplicit bool) returns CovArm
+		return Self{kind: kind, line: line, column: column, count: count, eliminated: eliminated, isImplicit: isImplicit}
+	end 'create'
+end 'CovArm'
+
+typealias CovArmArray = Array with CovArm
+
+// One user branch and every arm of it. N arms, not two: an `if` has then/else and a `match` has one per
+// case, and a summary that could only hold a pair would report every `match` as having no branches at all.
+type CovBranch
+	export var file as String
+	export var line as CovLineNumber
+	export var column as CovSourceColumn
+	export var arms as CovArmArray
+
+	static function create(file String, line CovLineNumber, column CovSourceColumn, arms CovArmArray) returns CovBranch
+		return Self{file: file, line: line, column: column, arms: arms}
+	end 'create'
+end 'CovBranch'
+
+typealias CovBranchArray = Array with CovBranch
+
+// The joined result of a point table and a run's counters — the ONE model both faces render.
+// `runCompleted` false means the program died before its dump: every count in here is real, but the run
+// stopped early, so the report says PARTIAL rather than presenting it as a finished measurement.
+type CovReport
+	export var exePath as String
+	export var runCompleted as bool
+	export var targetStatus as CovTargetStatus
+	export var files as CovFileArray
+	export var branches as CovBranchArray
+
+	static function create(exePath String, runCompleted bool, targetStatus CovTargetStatus, files CovFileArray, branches CovBranchArray) returns CovReport
+		return Self{exePath: exePath, runCompleted: runCompleted, targetStatus: targetStatus, files: files, branches: branches}
+	end 'create'
+end 'CovReport'
+
+// The five tallies both faces print, counted in ONE walk. An `eliminated` line is not instrumented — there
+// is no code there to reach — which is why it is subtracted from the denominator and reported separately
+// rather than folded into the uncovered half.
+type CovSummary
+	export var linesCovered as CovTally
+	export var linesInstrumented as CovTally
+	export var linesEliminated as CovTally
+	export var armsTaken as CovTally
+	export var armsInstrumented as CovTally
+
+	static function create(linesCovered CovTally, linesInstrumented CovTally, linesEliminated CovTally, armsTaken CovTally, armsInstrumented CovTally) returns CovSummary
+		return Self{linesCovered: linesCovered, linesInstrumented: linesInstrumented, linesEliminated: linesEliminated, armsTaken: armsTaken, armsInstrumented: armsInstrumented}
+	end 'create'
+end 'CovSummary'
+
+function summarize(report CovReport) returns CovSummary
+	var covered = 0
+	var instrumented = 0
+	var eliminated = 0
+	for file in report.files 'eachFile'
+		for line in file.lines 'eachLine'
+			covered = covered + (1 if line.state == CovLineState.covered else 0)
+			instrumented = instrumented + (0 if line.state == CovLineState.eliminated else 1)
+			eliminated = eliminated + (1 if line.state == CovLineState.eliminated else 0)
+		end 'eachLine'
+	end 'eachFile'
+
+	var taken = 0
+	var armsInstrumented = 0
+	for branch in report.branches 'eachBranch'
+		for arm in branch.arms 'eachArm'
+			taken = taken + (1 if arm.count > 0 else 0)
+			armsInstrumented = armsInstrumented + (0 if arm.eliminated else 1)
+		end 'eachArm'
+	end 'eachBranch'
+
+	return CovSummary.create(covered, linesInstrumented: instrumented, linesEliminated: eliminated, armsTaken: taken, armsInstrumented: armsInstrumented)
+end 'summarize'
+
+// ============================================================================================
+// THE JOIN
+// ============================================================================================
+
+// ⛔ **NOTHING HERE MUTATES A ROW ALREADY IN A CONTAINER**, because a container element reached through
+// `get` is a BORROW and mutating one is refused (E3070). Both joins therefore gather a FLAT table keyed by
+// the grouping they need, sort it once, and walk the sorted table grouping consecutive equal keys — which
+// is also what makes the ordering the reference's rather than arrival order's.
+
+// Where one merged line belongs: its file, and its number within that file.
+type CovLineKey
+	export var path as String
+	export var line as CovLineNumber
+
+	static function create(path String, line CovLineNumber) returns CovLineKey
+		return Self{path: path, line: line}
+	end 'create'
+end 'CovLineKey'
+
+typealias CovLineKeyArray = Array with CovLineKey
+typealias CovMergedLineMap = Map with (String, CovLine)
+
+// One arm, still carrying the position of the construct it belongs to.
+type CovArmRow
+	export var file as String
+	export var branchLine as CovLineNumber
+	export var branchColumn as CovSourceColumn
+	export var arm as CovArm
+
+	static function create(file String, branchLine CovLineNumber, branchColumn CovSourceColumn, arm CovArm) returns CovArmRow
+		return Self{file: file, branchLine: branchLine, branchColumn: branchColumn, arm: arm}
+	end 'create'
+end 'CovArmRow'
+
+typealias CovArmRowArray = Array with CovArmRow
+
+// A line's key as one string. The separator is a NEWLINE, which no path holds, so the pair it encodes can
+// be recovered from it and two different pairs can never spell the same key.
+let KeySeparator = "\n"
+
+function lineKey(path String, line CovLineNumber) returns String
+	return "{path}{KeySeparator}{line}"
+end 'lineKey'
+
+// ⭐ Per-file, per-line states. SEVERAL POINTS CAN LAND ON ONE LINE — a statement's own point and the arm
+// points of an `if` that starts there — so a line takes the HIGHEST count any of them reached: they all
+// count executions OF THAT LINE, and the arm counts are a subset of the statement's. A line is
+// `eliminated` only when EVERY point on it lost its code.
+function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
+	var merged = CovMergedLineMap.create()
+	var order = CovLineKeyArray.create()
+
+	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
+		let point = sidecar.coveragePoint(index as MxdbgIndex)
+		let count = countOf(point, data: data, index: index as CovSlot)
+		let incoming = CovLine.create(point.line as CovLineNumber, state: stateOf(point, count: count), count: count)
+		let key = lineKey(point.file, line: incoming.line)
+		if not merged.contains(key) 'firstPointOnThisLine'
+			order.push(CovLineKey.create(point.file, line: incoming.line))
+		end 'firstPointOnThisLine'
+
+		let winner = busierOf(merged, key: key, incoming: incoming)
+		merged.upsert(key, value: winner)
+	end 'eachPoint'
+
+	order.sort(function(left CovLineKey, right CovLineKey) gives compareLinePosition(left, right: right))
+
+	return groupedFiles(order, merged: merged)
+end 'joinFiles'
+
+// Which of two points on one line the report keeps. Real code outranks eliminated code (the line HAS code),
+// and among real code the larger count wins.
+//
+// ⚠ The held row is COPIED rather than handed back, because it is a borrow of the very map the caller is
+// about to write through.
+function busierOf(merged CovMergedLineMap, key String, incoming CovLine) returns CovLine
+	let held = try merged.get(key) otherwise return incoming
+	if held.state == CovLineState.eliminated 'heldNoCodeAtAll'
+		return incoming
+	end 'heldNoCodeAtAll'
+
+	if incoming.state == CovLineState.eliminated or incoming.count <= held.count 'nothingBusier'
+		return CovLine.create(held.line, state: held.state, count: held.count)
+	end 'nothingBusier'
+
+	return incoming
+end 'busierOf'
+
+function compareLinePosition(left CovLineKey, right CovLineKey) returns Ordering
+	let byFile = compareBytesOrdinally(left.path.toByteArray(), right: right.path.toByteArray())
+
+	return byFile if byFile != Ordering.equalTo else left.line.compare(right.line)
+end 'compareLinePosition'
+
+function groupedFiles(order CovLineKeyArray, merged CovMergedLineMap) returns CovFileArray
+	var files = CovFileArray.create()
+	var groupPath = ""
+	var groupLines = CovLineArray.create()
+
+	for key in order 'eachLine'
+		if groupLines.count() > 0 and key.path != groupPath 'aDifferentFile'
+			files.push(CovFile.create(groupPath, lines: groupLines))
+			groupLines = CovLineArray.create()
+		end 'aDifferentFile'
+
+		groupPath = key.path
+		groupLines.push(try merged.get(lineKey(key.path, line: key.line)) otherwise panic("joinFiles: '{key.path}' line {key.line} is in the order and not in the merged table, which only this function's own walk fills"))
+	end 'eachLine'
+
+	if groupLines.count() > 0 'theLastFile'
+		files.push(CovFile.create(groupPath, lines: groupLines))
+	end 'theLastFile'
+
+	return files
+end 'groupedFiles'
+
+// ⭐ Group each branch's arms. Every arm point carries its CONSTRUCT's position as well as its own, so
+// (file, branchLine, branchCol) identifies the branch exactly — two `if`s or two `match`es cannot share one
+// token position — and no relationship field has to be carried to say which arms belong together.
+//
+// Arms stay in MINT ORDER within a branch, which is source order: then before else, and case before case.
+// That is a total order even when two arms share a line (an `if` and its implicit `else` both sit at the
+// `if`), which a sort by position would not be — so the sort below must be STABLE.
+function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArray
+	var rows = CovArmRowArray.create()
+
+	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
+		let point = sidecar.coveragePoint(index as MxdbgIndex)
+		if not point.isBranchArm() 'notAnArm'
+			continue
+		end 'notAnArm'
+
+		let arm = CovArm.create(armKind(point), line: point.line as CovLineNumber, column: point.column as CovSourceColumn, count: countOf(point, data: data, index: index as CovSlot), eliminated: point.eliminated(), isImplicit: point.isImplicitArm())
+		rows.push(CovArmRow.create(point.file, branchLine: point.branchLine as CovLineNumber, branchColumn: point.branchColumn as CovSourceColumn, arm: arm))
+	end 'eachPoint'
+
+	rows.sort(function(left CovArmRow, right CovArmRow) gives compareBranchPosition(left, right: right))
+
+	return groupedBranches(rows)
+end 'joinBranches'
+
+function compareBranchPosition(left CovArmRow, right CovArmRow) returns Ordering
+	let byFile = compareBytesOrdinally(left.file.toByteArray(), right: right.file.toByteArray())
+	if byFile != Ordering.equalTo 'differentFiles'
+		return byFile
+	end 'differentFiles'
+
+	let byLine = left.branchLine.compare(right.branchLine)
+
+	return byLine if byLine != Ordering.equalTo else left.branchColumn.compare(right.branchColumn)
+end 'compareBranchPosition'
+
+function groupedBranches(rows CovArmRowArray) returns CovBranchArray
+	var branches = CovBranchArray.create()
+	var groupFile = ""
+	var groupLine = 0 as CovLineNumber
+	var groupColumn = 0 as CovSourceColumn
+	var groupArms = CovArmArray.create()
+
+	for row in rows 'eachArm'
+		if groupArms.count() > 0 and not (row.file == groupFile and row.branchLine == groupLine and row.branchColumn == groupColumn) 'aDifferentBranch'
+			branches.push(CovBranch.create(groupFile, line: groupLine, column: groupColumn, arms: groupArms))
+			groupArms = CovArmArray.create()
+		end 'aDifferentBranch'
+
+		groupFile = row.file
+		groupLine = row.branchLine
+		groupColumn = row.branchColumn
+		groupArms.push(row.arm)
+	end 'eachArm'
+
+	if groupArms.count() > 0 'theLastBranch'
+		branches.push(CovBranch.create(groupFile, line: groupLine, column: groupColumn, arms: groupArms))
+	end 'theLastBranch'
+
+	return branches
+end 'groupedBranches'
+
+// An ELIMINATED point's counter is never incremented, so its slot holds whatever the compiler stamped —
+// zero — and reading it would present that as a measurement. The report says "no code here" instead.
+function countOf(point MxdbgCovPointInfo, data MxcovData, index CovSlot) returns CovCount
+	return 0 if point.eliminated() else counterOf(data, index: index)
+end 'countOf'
+
+function counterOf(data MxcovData, index CovSlot) returns CovCount
+	return (try data.counters.get(index) otherwise panic("coverage: counter {index} is past the {data.counters.count()} the .mxcov holds, which the join checks against the point count before reading any")) as CovCount
+end 'counterOf'
+
+function stateOf(point MxdbgCovPointInfo, count CovCount) returns CovLineState
+	if point.eliminated() 'noCodeEmitted'
+		return CovLineState.eliminated
+	end 'noCodeEmitted'
+
+	return CovLineState.covered if count > 0 else CovLineState.notCovered
+end 'stateOf'
+
+function armKind(point MxdbgCovPointInfo) returns String
+	if point.isThenArm() 'then'
+		return ThenArmKind
+	end 'then'
+
+	if point.isElseArm() 'else'
+		return ElseArmKind
+	end 'else'
+
+	if point.isCaseArm() 'case'
+		return CaseArmKind
+	end 'case'
+
+	panic("coverage: the point at {point.file}:{point.line} is a branch arm with no kind")
+end 'armKind'
+
+let ThenArmKind = "then"
+let ElseArmKind = "else"
+let CaseArmKind = "case"
+
+// ============================================================================================
+// THE TEXT FACE
+// ============================================================================================
+
+// Marker for a line with real code that never ran, in gcov's own spelling.
+let NotCoveredMarker = "#####"
+
+// Marker for a line whose code the optimizer removed. The fourth state needs its OWN mark: shown as
+// `#####` it would read as an untested line, and shown blank it would hide among the comments.
+let EliminatedMarker = "-----"
+
+// The listing's two right-aligned columns: the marker, and the source line number beside it.
+let CountColumnWidth = 7 as ColumnWidth
+let LineNumberColumnWidth = 4 as ColumnWidth
+
+// ⚠ Deliberately NOT `---`: `check-debug-goldens.sh` ends an expected block at the first line starting
+// with `--- `, so a report ruled that way is silently TRUNCATED at its first section when a transcript of
+// it is committed, and the gate goes on passing while it has stopped asserting most of what it was
+// written to assert.
+let SectionRule = "==="
+
+// Marks the arm the source never wrote. Present only where it is true, so it states a fact rather than
+// being a column that always reads the same.
+let ImplicitArmSuffix = "(implicit)"
+
+let BranchesSectionName = "branches"
+let PositionSeparator = ":"
+let ArmLineSeparator = "@"
+let ArmCountSeparator = "="
+let ColumnSeparator = "|"
+let LineFeed = "\n"
+let CarriageReturn = "\r"
+
+function renderText(report CovReport) returns String
+	let totals = summarize(report)
+	var out = "coverage: {reportPathDisplay(report.exePath)}{LineFeed}"
+	out.append(targetStatusLine(report.targetStatus))
+
+	if not report.runCompleted 'diedBeforeItsDump'
+		out.append("PARTIAL: the run did not complete — these counts stop where the program died{LineFeed}")
+	end 'diedBeforeItsDump'
+
+	out.append("lines: {totals.linesCovered}/{totals.linesInstrumented} covered  branches: {totals.armsTaken}/{totals.armsInstrumented} arms taken  eliminated: {totals.linesEliminated} lines{LineFeed}")
+	out.append("legend: a count = executed, {NotCoveredMarker} = never executed, {EliminatedMarker} = no code emitted (optimized away), blank = no coverage point{LineFeed}")
+
+	for file in report.files 'eachFile'
+		out.append("{LineFeed}{SectionRule} {reportPathDisplay(file.path)} {SectionRule}{LineFeed}")
+		out.append(renderListing(file))
+	end 'eachFile'
+
+	if report.branches.count() > 0 'someBranches'
+		out.append("{LineFeed}{SectionRule} {BranchesSectionName} {SectionRule}{LineFeed}")
+		for branch in report.branches 'eachBranch'
+			out.append(renderBranchRow(branch))
+		end 'eachBranch'
+	end 'someBranches'
+
+	return out
+end 'renderText'
+
+// The measured program's own status, reported because the tool knows it. ABSENT — not zero — when the
+// report was built from an earlier run's data, because then nobody here watched it exit.
+function targetStatusLine(status CovTargetStatus) returns String
+	return match status 'observed'
+		notObserved gives ""
+		observed(code) gives "target exit code: {code}{LineFeed}"
+	end 'observed'
+end 'targetStatusLine'
+
+function renderBranchRow(branch CovBranch) returns String
+	var row = "  {reportPathDisplay(branch.file)}{PositionSeparator}{branch.line}{PositionSeparator}{branch.column}"
+	for arm in branch.arms 'eachArm'
+		row.append("  {armText(arm)}")
+	end 'eachArm'
+
+	return "{row}{LineFeed}"
+end 'renderBranchRow'
+
+// One arm as `<kind>@<line>=<count>`. Every arm renders the same way, whether it is one of an `if`'s two or
+// one of a `match`'s many, and each names the line to look at — which for an `else` is not the `if`'s line.
+function armText(arm CovArm) returns String
+	let implicit = ImplicitArmSuffix if arm.isImplicit else ""
+	let count = EliminatedMarker if arm.eliminated else "{arm.count}"
+
+	return "{arm.kind}{implicit}{ArmLineSeparator}{arm.line}{ArmCountSeparator}{count}"
+end 'armText'
+
+// ⭐ The gcov-style annotated listing. Reading the source is best-effort: a file that has moved since the
+// build still gets its per-line states, with the text replaced by a stated placeholder rather than the
+// report silently dropping the lines it cannot show.
+function renderListing(file CovFile) returns String
+	return match sourceLines(file.path) 'source'
+		unreadable gives renderStatesOnly(file)
+		read(lines) gives renderAnnotatedSource(file, source: lines)
+	end 'source'
+end 'renderListing'
+
+function renderStatesOnly(file CovFile) returns String
+	var out = "  (source not available: {reportPathDisplay(file.path)}){LineFeed}"
+	for line in file.lines 'eachLine'
+		out.append("{padLeft(marker(line), width: CountColumnWidth)} {ColumnSeparator}{line.line}{LineFeed}")
+	end 'eachLine'
+
+	return out
+end 'renderStatesOnly'
+
+function renderAnnotatedSource(file CovFile, source StringArray) returns String
+	var markerOfLine = CovMarkerMap.create()
+	for line in file.lines 'eachLine'
+		markerOfLine.upsert(line.line, value: marker(line))
+	end 'eachLine'
+
+	var out = ""
+	var lineNumber = 0
+	for text in source 'eachSourceLine'
+		lineNumber = lineNumber + 1
+		let mark = try markerOfLine.get(lineNumber as CovLineNumber) otherwise ""
+		out.append("{padLeft(mark, width: CountColumnWidth)} {ColumnSeparator}{padLeft("{lineNumber}", width: LineNumberColumnWidth)}{ColumnSeparator} {text}{LineFeed}")
+	end 'eachSourceLine'
+
+	return out
+end 'renderAnnotatedSource'
+
+typealias CovMarkerMap = Map with (CovLineNumber, String)
+
+function marker(line CovLine) returns String
+	return match line.state 'state'
+		covered gives "{line.count}"
+		notCovered gives NotCoveredMarker
+		eliminated gives EliminatedMarker
+	end 'state'
+end 'marker'
+
+// A source file's lines, or the fact that it could not be read. A union rather than an empty list, because
+// a file that is genuinely empty and a file that has moved since the build are different answers.
+union CovSourceLookup
+	unreadable
+	read(lines StringArray)
+end 'CovSourceLookup'
+
+// ⚠ Split on `\n` with a trailing `\r` dropped, so a CRLF checkout renders identically to an LF one. The
+// empty element a final newline produces is kept: it is a line of the file, and dropping it would make the
+// listing one row shorter than the source.
+function sourceLines(path String) returns CovSourceLookup
+	let spelled = try FilePath.from(path) otherwise return CovSourceLookup.unreadable
+	let body = try File.readText(spelled) otherwise return CovSourceLookup.unreadable
+
+	var lines = StringArray.create()
+	for row in body.split(LineFeed) 'eachRow'
+		lines.push(row.replace(CarriageReturn, with: "") if row.endsWith(CarriageReturn) else row)
+	end 'eachRow'
+
+	return CovSourceLookup.read(lines)
+end 'sourceLines'
+
+// ============================================================================================
+// THE JSON FACE
+// ============================================================================================
+
+function renderJson(report CovReport) returns String
+	let totals = summarize(report)
+	var out = "\{"
+	out.append("\"exe\":{jsonString(reportPathDisplay(report.exePath))},")
+	out.append("\"runCompleted\":{jsonBool(report.runCompleted)},")
+	out.append(jsonTargetStatus(report.targetStatus))
+	out.append("\"linesCovered\":{totals.linesCovered},")
+	out.append("\"linesInstrumented\":{totals.linesInstrumented},")
+	out.append("\"linesEliminated\":{totals.linesEliminated},")
+	out.append("\"armsTaken\":{totals.armsTaken},")
+	out.append("\"armsInstrumented\":{totals.armsInstrumented},")
+
+	out.append("\"files\":[")
+	var firstFile = true
+	for file in report.files 'eachFile'
+		out.append("" if firstFile else ",")
+		out.append(jsonFile(file))
+		firstFile = false
+	end 'eachFile'
+	out.append("],")
+
+	out.append("\"branches\":[")
+	var firstBranch = true
+	for branch in report.branches 'eachBranch'
+		out.append("" if firstBranch else ",")
+		out.append(jsonBranch(branch))
+		firstBranch = false
+	end 'eachBranch'
+	out.append("]\}")
+
+	return out
+end 'renderJson'
+
+function jsonTargetStatus(status CovTargetStatus) returns String
+	return match status 'observed'
+		notObserved gives ""
+		observed(code) gives "\"targetExitCode\":{code},"
+	end 'observed'
+end 'jsonTargetStatus'
+
+function jsonFile(file CovFile) returns String
+	var out = "\{\"path\":{jsonString(reportPathDisplay(file.path))},\"lines\":["
+	var first = true
+	for line in file.lines 'eachLine'
+		out.append("" if first else ",")
+		out.append(jsonLine(line))
+		first = false
+	end 'eachLine'
+	out.append("]\}")
+
+	return out
+end 'jsonFile'
+
+// An eliminated line reports no count at all rather than a zero a consumer would read as "never executed".
+function jsonLine(line CovLine) returns String
+	let count = "" if line.state == CovLineState.eliminated else ",\"count\":{line.count}"
+
+	return "\{\"line\":{line.line},\"state\":{jsonString(stateName(line.state))}{count}\}"
+end 'jsonLine'
+
+function stateName(state CovLineState) returns String
+	return match state 'state'
+		covered gives "covered"
+		notCovered gives "notCovered"
+		eliminated gives "eliminated"
+	end 'state'
+end 'stateName'
+
+function jsonBranch(branch CovBranch) returns String
+	var out = "\{\"file\":{jsonString(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":["
+	var first = true
+	for arm in branch.arms 'eachArm'
+		out.append("" if first else ",")
+		out.append(jsonArm(arm))
+		first = false
+	end 'eachArm'
+	out.append("]\}")
+
+	return out
+end 'jsonBranch'
+
+// `implicit` is written only where it is TRUE: an arm the source did write has nothing to say here, and a
+// field reading false on every `case` and every `then` is a column of one value. An eliminated arm reports
+// a STATE rather than a count, the same distinction the text listing draws with its own marker.
+function jsonArm(arm CovArm) returns String
+	let implicit = ",\"implicit\":true" if arm.isImplicit else ""
+	let outcome = ",\"state\":\"eliminated\"" if arm.eliminated else ",\"count\":{arm.count}"
+
+	return "\{\"kind\":{jsonString(arm.kind)},\"line\":{arm.line},\"col\":{arm.column}{implicit}{outcome}\}"
+end 'jsonArm'
+
+function jsonBool(value bool) returns String
+	return "true" if value else "false"
+end 'jsonBool'
+
+// A JSON string literal, quotes included. Only the three things JSON cannot carry raw are escaped: the
+// quote, the backslash, and the control range below space.
+function jsonString(text String) returns String
+	var out = "\""
+	for octet in text.bytes() 'eachByte'
+		out.append(jsonEscaped(octet))
+	end 'eachByte'
+	out.append("\"")
+
+	return out
+end 'jsonString'
+
+function jsonEscaped(octet Byte) returns String
+	if octet == JsonQuoteByte 'aQuote'
+		return "\\\""
+	end 'aQuote'
+
+	if octet == JsonBackslashByte 'aBackslash'
+		return "\\\\"
+	end 'aBackslash'
+
+	if octet < JsonFirstPrintableByte 'aControlCharacter'
+		return "\\u{octet:04x}"
+	end 'aControlCharacter'
+
+	return String.from(oneByte(octet))
+end 'jsonEscaped'
+
+function oneByte(octet Byte) returns ByteArray
+	var bytes = ByteArray.create()
+	bytes.push(octet)
+
+	return bytes
+end 'oneByte'
+
+let JsonQuoteByte = 34 as Byte
+let JsonBackslashByte = 92 as Byte
+let JsonFirstPrintableByte = 32 as Byte
+
+// ============================================================================================
+// LOADING, AND EVERY REFUSAL THAT REPLACES A REPORT
+// ============================================================================================
+
+// The join's three artifacts, or the sentence naming which of them is missing or describes a different
+// build. There is no partly-trusted path: either all three agree about which build they describe, or no
+// report is built at all.
+union CovLoad
+	built(report CovReport)
+	refused(reason String)
+end 'CovLoad'
+
+// ⭐ The one entry point both verbs reach. `targetStatus` carries the measured program's exit code for a
+// `run` and says nothing for a `report`, which watched no program exit.
+module function printCoverageReport(exePath String, dataPath String, targetStatus CovTargetStatus, json bool) returns ExitCode
+	return match loadCoverageReport(exePath, dataPath: dataPath, targetStatus: targetStatus) 'loaded'
+		refused(reason) gives refuseCoverageReport(reason)
+		built(report) gives emitCoverageReport(report, json: json)
+	end 'loaded'
+end 'printCoverageReport'
+
+function refuseCoverageReport(reason String) returns ExitCode
+	printError("coverage: {reason}\n")
+
+	return RefusedCoverageExit
+end 'refuseCoverageReport'
+
+// ⭐ stdout is the report and nothing else. The exit code answers whether the MEASUREMENT completed: a run
+// that died before writing its counters is real data CI must not read as a measured pass.
+function emitCoverageReport(report CovReport, json bool) returns ExitCode
+	print("{renderJson(report)}\n" if json else renderText(report))
+
+	return 0 if report.runCompleted else RefusedCoverageExit
+end 'emitCoverageReport'
+
+function loadCoverageReport(exePath String, dataPath String, targetStatus CovTargetStatus) returns CovLoad
+	let binary = try FilePath.from(exePath) otherwise return CovLoad.refused("'{exePath}' is not a spellable path")
+
+	// ⭐ The build-id is recomputed from the binary's OWN code section, so no report can be handed a
+	// sidecar or a data file that describes other code. `binaryCodeSection` is the debugger's, shared:
+	// both commands ask the same question of the same three container readers.
+	return match binaryCodeSection(binary) 'text'
+		refused(reason) gives CovLoad.refused(reason)
+		found(code) gives loadAgainstBuild(exePath, binary: binary, buildId: codeBuildId(code), dataPath: dataPath, targetStatus: targetStatus)
+	end 'text'
+end 'loadCoverageReport'
+
+function loadAgainstBuild(exePath String, binary FilePath, buildId HashDigest, dataPath String, targetStatus CovTargetStatus) returns CovLoad
+	return match loadSidecar(binary, buildId: buildId) 'sidecar'
+		refused(reason) gives CovLoad.refused(reason)
+		loaded(reader) gives loadCounters(exePath, sidecar: reader, buildId: buildId, dataPath: dataPath, targetStatus: targetStatus)
+	end 'sidecar'
+end 'loadAgainstBuild'
+
+union CovSidecarLoad
+	loaded(reader MxdbgReader)
+	refused(reason String)
+end 'CovSidecarLoad'
+
+// ⚠ The build-id refusals deliberately name the FACT and not the two ids. The ids are a build-machine
+// detail a reader can do nothing with, and printing them would make every refusal transcript
+// machine-specific — an instrument whose own output cannot be compared across runs.
+function loadSidecar(binary FilePath, buildId HashDigest) returns CovSidecarLoad
+	let sidecarPath = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise return CovSidecarLoad.refused("'{binary.toString()}' has no spellable sidecar path")
+	if not File.exists(sidecarPath) 'noSidecar'
+		return CovSidecarLoad.refused("no debug-info sidecar at {reportPathDisplay(sidecarPath)} — a coverage report needs the point table it holds. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag.")
+	end 'noSidecar'
+
+	let image = try File.readBinary(sidecarPath) otherwise return CovSidecarLoad.refused("cannot read {reportPathDisplay(sidecarPath)}")
+
+	let reader = try MxdbgReader.parse(image) otherwise (e) 'badImage'
+		return CovSidecarLoad.refused("cannot read {reportPathDisplay(sidecarPath)}: {e.displayReason()}")
+	end 'badImage'
+
+	if reader.buildId != buildId 'differentBuild'
+		return CovSidecarLoad.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
+	end 'differentBuild'
+
+	return CovSidecarLoad.loaded(reader)
+end 'loadSidecar'
+
+function loadCounters(exePath String, sidecar MxdbgReader, buildId HashDigest, dataPath String, targetStatus CovTargetStatus) returns CovLoad
+	// Zero points is not an empty measurement — it is a binary nobody instrumented, and reporting
+	// `0/0 lines covered` for one would be an answer to a question it cannot be asked.
+	if sidecar.coveragePointCount() == 0 'notInstrumented'
+		return CovLoad.refused("{reportPathDisplay(exePath)} was not built with coverage instrumentation — it has no coverage points to report on")
+	end 'notInstrumented'
+
+	let data = try FilePath.from(dataPath) otherwise return CovLoad.refused("'{dataPath}' is not a spellable path")
+	if not File.exists(data) 'noCounters'
+		return CovLoad.refused("no coverage data at {reportPathDisplay(dataPath)} — the program wrote none, so the run did not complete")
+	end 'noCounters'
+
+	let image = try File.readBinary(data) otherwise return CovLoad.refused("cannot read {reportPathDisplay(dataPath)}")
+
+	let counters = try MxcovData.parse(image) otherwise (e) 'badImage'
+		return CovLoad.refused(e.displayReason())
+	end 'badImage'
+
+	return joinAgainstCounters(exePath, sidecar: sidecar, buildId: buildId, data: counters, targetStatus: targetStatus)
+end 'loadCounters'
+
+// ⭐ A `.mxcov` from a DIFFERENT build is refused on the build-id exactly as the sidecar is: counters are
+// anonymous indices, so joining last build's numbers to this build's point table would attribute real
+// counts to the wrong source lines.
+function joinAgainstCounters(exePath String, sidecar MxdbgReader, buildId HashDigest, data MxcovData, targetStatus CovTargetStatus) returns CovLoad
+	if data.buildId != buildId 'differentBuild'
+		return CovLoad.refused("the .mxcov data was written by a different build of this binary — re-run it")
+	end 'differentBuild'
+
+	if (data.counters.count() as MxdbgIndex) != sidecar.coveragePointCount() 'differentStride'
+		return CovLoad.refused("the .mxcov holds {data.counters.count()} counters but this binary has {sidecar.coveragePointCount()} coverage points")
+	end 'differentStride'
+
+	return CovLoad.built(CovReport.create(exePath, runCompleted: data.runCompleted(), targetStatus: targetStatus, files: joinFiles(sidecar, data: data), branches: joinBranches(sidecar, data: data)))
+end 'joinAgainstCounters'

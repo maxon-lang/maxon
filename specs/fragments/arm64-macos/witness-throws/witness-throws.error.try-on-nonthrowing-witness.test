@@ -1,0 +1,36 @@
+// Test: witness-throws.error.try-on-nonthrowing-witness
+typealias Code = int(0 to u32.max)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return try self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return b.itemDigest() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3055: <fragment>:24:10: try requires a throwing function: 'digest' does not throw'

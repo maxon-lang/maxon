@@ -1,0 +1,144 @@
+// Test: builtins-clock.ms-resolves-sub-tick
+function main() returns ExitCode
+	var smallest = 0
+	var prev = __Builtins.currentTimeMs()
+	var i = 0
+	while i < 200000 'sample'
+		let now = __Builtins.currentTimeMs()
+		let delta = now - prev
+		if delta > 0 'advanced'
+			if smallest == 0 or delta < smallest 'newMin'
+				smallest = delta
+			end 'newMin'
+			prev = now
+		end 'advanced'
+		i = i + 1
+	end 'sample'
+	if smallest > 0 and smallest < 5 'subTick'
+		return 9
+	end 'subTick'
+	return 1
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect __gt_now_ns
+    x64.movRegImm rax, 4835703278458516699
+    x64.imulHighReg r8
+    x64.sarRegImm8 rdx, rdx, 18
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg r12, rdx, rax
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.cmpRegImm32 r13, 200000
+    x64.jcc greaterEqual, whileexit
+  sample:
+    x64.callDirect __gt_now_ns
+    x64.movRegImm rax, 4835703278458516699
+    x64.imulHighReg r8
+    x64.sarRegImm8 rdx, rdx, 18
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.movRegReg rcx, rax
+    x64.subRegReg rcx, rax, r12
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc lessEqual, critsplit#14
+  advanced:
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rdx, 1
+    x64.jcc equal, scmerge#6
+  orrhs:
+    x64.cmpRegReg rcx, rbx
+    x64.setccReg less, rdx
+  scmerge#6:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifcont#9
+  critsplit#17:
+    x64.movRegReg rcx, rbx
+    x64.jmp ifcont#9
+  critsplit#14:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+  ifcont#9:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.jcc lessEqual, scmerge#11
+  andrhs:
+    x64.cmpRegImm32 rbx, 5
+    x64.setccReg less, rax
+  scmerge#11:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#13
+  subTick:
+    x64.movRegImm32 r8, 9
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#13:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

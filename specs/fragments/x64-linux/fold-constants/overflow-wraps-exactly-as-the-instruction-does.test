@@ -1,0 +1,82 @@
+// Test: overflow-wraps-exactly-as-the-instruction-does
+typealias Word = int(i64.min to i64.max)
+
+function add(a Word, b Word) returns Word
+	return a + b
+end 'add'
+
+function sub(a Word, b Word) returns Word
+	return a - b
+end 'sub'
+
+function mul(a Word, b Word) returns Word
+	return a * b
+end 'mul'
+
+function main() returns ExitCode
+	if add(i64.max, b: 1) != i64.min 'addWrapsToMin'
+		return 1
+	end 'addWrapsToMin'
+	if sub(i64.min, b: 1) != i64.max 'subWrapsToMax'
+		return 2
+	end 'subWrapsToMax'
+	if mul(i64.min, b: -1) != i64.min 'negateMinIsMin'
+		return 3
+	end 'negateMinIsMin'
+	if mul(i64.max, b: 3) != 9223372036854775805 'mulWrapsTwice'
+		return 4
+	end 'mulWrapsTwice'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#10:
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#9:
+    x64.movRegImm rcx, 9223372036854775808
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, __il_body#12
+  addWrapsToMin:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#12:
+    x64.movRegImm rax, 9223372036854775807
+  __il_cont#11:
+    x64.movRegImm rcx, 9223372036854775807
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, __il_body#14
+  subWrapsToMax:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_body#14:
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#13:
+    x64.movRegImm rcx, 9223372036854775808
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, __il_body#16
+  negateMinIsMin:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  __il_body#16:
+    x64.movRegImm rax, 9223372036854775805
+  __il_cont#15:
+    x64.movRegImm rcx, 9223372036854775805
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, ifcont
+  mulWrapsTwice:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

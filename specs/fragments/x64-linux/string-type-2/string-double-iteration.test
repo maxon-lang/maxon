@@ -1,0 +1,111 @@
+// Test: string-double-iteration
+function main() returns ExitCode
+	let s = "Hello"
+	var count1 = 0
+	for _ in s 'loop1'
+		count1 = count1 + 1
+	end 'loop1'
+	var count2 = 0
+	for _ in s 'loop2'
+		count2 = count2 + 1
+	end 'loop2'
+	if count1 == 5 and count2 == 5 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]  ; "Hello"
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  forhdr#1:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc greaterEqual, forexit#4
+  loop1:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect findGraphemeEnd
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+  forstep#3:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr#1
+  forexit#4:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+  forhdr#5:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc greaterEqual, forexit#8
+  loop2:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect findGraphemeEnd
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __char_at
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+  forstep#7:
+    x64.movRegReg r14, r15
+    x64.jmp forhdr#5
+  forexit#8:
+    x64.cmpRegImm32 r12, 5
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.cmpRegImm32 r13, 5
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

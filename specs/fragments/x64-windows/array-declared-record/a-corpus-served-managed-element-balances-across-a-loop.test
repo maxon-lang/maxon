@@ -1,0 +1,463 @@
+// Test: a-corpus-served-managed-element-balances-across-a-loop
+typealias Slot = int(0 to 1000)
+
+// The record-collapsed `Array`, exercised through a CORPUS-SERVED member that hands back a managed
+// element, in a loop, alongside a clone. Any reference taken one too few or one too many times exits 101.
+type Array uses Element implements BuiltinArrayLiteral, Cloneable
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function clone() returns Self
+		let len = managed.length()
+		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
+		return Self{managed: copy}
+	end 'clone'
+
+	// Off the roster, so this is the corpus door's own path.
+	export function at(i Slot) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+
+	// The `self.` spelling of the same, plus a BARE roster call in the same body.
+	export function lastOne() returns Element
+		return self.at((count() - 1) as Slot)
+	end 'lastOne'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	a.push("gamma")
+
+	var seen = 0 as Slot
+	for _ in 0 upto 50 'rounds'
+		var b = a.clone()
+		b.push("delta")
+		let head = b.at(0)
+		let tail = b.lastOne()
+		if head.byteLength() + tail.byteLength() > 0 'nonEmpty'
+			seen = (seen + 1) as Slot
+		end 'nonEmpty'
+	end 'rounds'
+
+	print("{seen} {a.count()} {a.lastOne()} {a.at(0)}")
+	return 0 as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Array.clone {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg r9, rsi
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-corpus-served-managed-element-balances-across-a-loop.test:21: clone: 0..len is always in range\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.at {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-corpus-served-managed-element-balances-across-a-loop.test:26: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#12:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#15
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#16:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#15:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.movRegReg rsi, r10
+  __im_cont:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-corpus-served-managed-element-balances-across-a-loop.test:27: at: the caller checked the bound\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.lastOne {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rdx
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at a-corpus-served-managed-element-balances-across-a-loop.test:32: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.callDirect Array.at
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 216
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot7, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "alpha"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "beta"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "gamma"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.storeSlotReg slot15, rax
+    x64.cmpRegImm32 rax, 50
+    x64.jcc greaterEqual, forexit
+  rounds:
+    x64.leaRegRdata rdx, [rip + __layout_Array_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.clone
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot19, r13
+    x64.leaRegRdata rcx, [rip + __str_rec_10]  ; "delta"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Array_String]
+    x64.movRegReg rcx, r13
+    x64.callDirect Array.at
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __layout_Array_String]
+    x64.movRegReg rcx, r13
+    x64.callDirect Array.lastOne
+    x64.movRegReg r13, r8
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 r15, [r14 + 8]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc greaterEqual, __il_body#15
+  __il_slow#14:
+    x64.movRegReg rcx, r14
+    x64.callDirect String.byteLength
+    x64.movRegReg r15, r8
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow#17:
+    x64.movRegReg rcx, r13
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.leaRegRegReg rax, r15, r8
+    x64.cmpRegImm32 rax, 0
+    x64.jcc lessEqual, ifcont
+  nonEmpty:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, ifcont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at a-corpus-served-managed-element-balances-across-a-loop.test:51: Range check failed: value outside typealias 'Slot'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 216
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot19
+    x64.callDirect __managed_decref
+  forstep:
+    x64.loadRegSlot rax, slot15
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot20, r8
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot12, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.storeSlotReg slot17, r12
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot16, r8
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.storeSlotReg slot14, r14
+    x64.leaRegRdata rdx, [rip + __layout_Array_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.lastOne
+    x64.storeSlotReg slot0, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot9, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot3, r15
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Array_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.at
+    x64.storeSlotReg slot1, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot6, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot21, rax
+    x64.loadRegSlot rbx, slot20
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot r12, slot16
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot r14, slot13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot21
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.storeSlotReg slot18, r15
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot12
+    x64.loadRegSlot r13, slot17
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot r13, slot11
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot10
+    x64.loadRegSlot r12, slot14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot4
+    x64.loadRegSlot r12, slot3
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot r12, slot21
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot8
+    x64.loadRegSlot rax, slot18
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 216
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

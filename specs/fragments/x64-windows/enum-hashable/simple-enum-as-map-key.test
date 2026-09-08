@@ -1,0 +1,109 @@
+// Test: simple-enum-as-map-key
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias Int = int(i64.min to i64.max)
+typealias ColorMap = Map with (Color, Int)
+
+function main() returns ExitCode
+	var m = ColorMap.create()
+	try m.insert(Color.red, value: 10) otherwise ignore
+	try m.insert(Color.green, value: 20) otherwise ignore
+	try m.insert(Color.blue, value: 30) otherwise ignore
+	let result = try m.get(Color.green) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Map_Color_Int]
+    x64.leaRegRdata rdx, [rip + __witness_Color.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Color.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 10
+    x64.leaRegRdata r9, [rip + __layout_Map_Color_Int]
+    x64.leaRegRdata rsi, [rip + __witness_Color.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Color.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#3
+  trycont#3:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 20
+    x64.leaRegRdata r9, [rip + __layout_Map_Color_Int]
+    x64.leaRegRdata rsi, [rip + __witness_Color.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Color.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#6
+  trycont#6:
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 30
+    x64.leaRegRdata r9, [rip + __layout_Map_Color_Int]
+    x64.leaRegRdata rsi, [rip + __witness_Color.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Color.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#9
+  trycont#9:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Map_Color_Int]
+    x64.leaRegRdata r9, [rip + __witness_Color.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_Color.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#12
+  tryok:
+    x64.movRegReg r12, r8
+  trycont#12:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Map_Color_Int
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at simple-enum-as-map-key.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

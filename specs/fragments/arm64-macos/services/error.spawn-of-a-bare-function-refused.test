@@ -1,0 +1,13 @@
+// Test: error.spawn-of-a-bare-function-refused
+function work() returns Integer
+	return 1
+end 'work'
+
+function main() returns ExitCode
+	let h = spawn work()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3134: <fragment>:7:10: `spawn work…` does not start a service: `spawn` is followed by a STATIC CALL on a type, and there is no bare `spawn f()` green thread — the unit of concurrency is a service, whose message surface the compiler can check. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`

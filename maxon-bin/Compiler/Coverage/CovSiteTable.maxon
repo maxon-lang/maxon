@@ -1,0 +1,102 @@
+// Coverage plumbing types: the SITE TABLE a `--coverage` build mints its counter slots into, and
+// `BlockSourceInfo`, the per-block source footprint `IrModule` writes at every block-creation site and
+// preserves through Maxon→Std lowering.
+//
+// ⚠ The two are independent. A coverage point is minted where the USER'S control-flow structure is
+// still visible, which is above the block graph rather than on it, so nothing here reads
+// `blockSourceInfo`.
+
+// (`LineNumberArray` is homed in Lexer.maxon, next to `LineNumber` — it is shared
+// with `SourceRangeTable`.)
+
+// Source-location metadata for a single basic block. `firstLine` is the line of
+// the token that opened the block (used for display); `lines` is the
+// deduped-in-order sequence of starting lines of the statements appended to the
+// block. An empty `lines` means the block carries no statements of its own
+// (e.g. an if/else merge block that is only a branch target).
+export type BlockSourceInfo
+	export var filePath as String
+	export var firstLine as LineNumber
+	export var lines as LineNumberArray
+
+	// Create a populated entry for a newly-opened block.
+	export static function create(filePath String, firstLine LineNumber) returns BlockSourceInfo
+		return Self{filePath: filePath, firstLine: firstLine, lines: LineNumberArray.create()}
+	end 'create'
+
+	// Sentinel for blocks the parser never saw (detached blocks, blocks
+	// materialized by later passes). Callers detect it via an empty filePath.
+	export static function empty() returns BlockSourceInfo
+		return Self{filePath: "", firstLine: 0, lines: LineNumberArray.create()}
+	end 'empty'
+
+	// True when this entry carries no usable source location.
+	export function isEmpty() returns bool
+		return self.filePath.isEmpty()
+	end 'isEmpty'
+end 'BlockSourceInfo'
+
+// Dense parallel array indexed by flat block reference (position in the owning
+// IrModule's `blocks` array). Unfilled slots hold BlockSourceInfo.empty().
+export typealias BlockSourceInfoArray = Array with BlockSourceInfo
+
+// A coverage point's identity: its INDEX in the module's `CovPointTable`. That one number is the counter
+// slot the emitted code increments, the record index in the `.mxdbg` coverage table, and the counter
+// index in the `.mxcov` data file — stated once, so the three cannot drift.
+export typealias CovPointId = int(0 to u32.max)
+
+// The flag word a point carries, which is the `.mxdbg` coverage record's own `flags` field verbatim. The
+// BITS live in `MxdbgFormat` beside the record they are written into; a second roster here would be the
+// sidecar's encoding written twice.
+export typealias CovPointFlags = int(0 to u32.max)
+
+// One instrumented coverage point: a place in the SOURCE whose executions a `--coverage` build counts.
+//
+// ⭐ **THE FILE IS STORED HERE, NOT RESOLVED FROM THE ENCLOSING FUNCTION.** A point OUTLIVES its
+// function: dead-function elimination removes a function nobody calls, and the report must still say
+// "these lines have no code" — which it cannot do if the only route to their file runs through a
+// function that is no longer in the module. The owning function is named by STRING for the same reason,
+// rather than by an index into the sidecar's function table that an eliminated function is absent from.
+//
+// `branchLine`/`branchCol` is the enclosing branch CONSTRUCT's position — the `if` or `match` keyword —
+// which is what groups one branch's arms together, and it is genuinely different from `line`/`col`, the
+// ARM's own position that LINE coverage counts. Zero for a point that is not an arm.
+export type CovPoint
+	export let funcName as String
+	export let filePath as String
+	export let line as LineNumber
+	export let col as ColumnNumber
+	export let branchLine as LineNumber
+	export let branchCol as ColumnNumber
+	export let flags as CovPointFlags
+
+	export static function create(funcName String, filePath String, line LineNumber, col ColumnNumber, branchLine LineNumber, branchCol ColumnNumber, flags CovPointFlags) returns CovPoint
+		return Self{funcName: funcName, filePath: filePath, line: line, col: col, branchLine: branchLine, branchCol: branchCol, flags: flags}
+	end 'create'
+end 'CovPoint'
+
+export typealias CovPointArray = Array with CovPoint
+
+// The module's coverage points, in mint order. EMPTY unless the compile was asked for `--coverage`:
+// nothing consults it otherwise, so an ordinary build carries no points and emits no instrumentation.
+export type CovPointTable
+	export var points as CovPointArray
+
+	export static function create() returns CovPointTable
+		return Self{points: CovPointArray.create()}
+	end 'create'
+
+	// Allocate the next counter slot, returning its id — which the caller puts into the op that
+	// increments it. Read BEFORE the push, so the id is the position this point takes rather than a
+	// count decremented back to it.
+	export function append(point CovPoint) returns CovPointId
+		let id = self.points.count() as CovPointId
+		self.points.push(point)
+
+		return id
+	end 'append'
+
+	export function count() returns CovPointId
+		return self.points.count() as CovPointId
+	end 'count'
+end 'CovPointTable'

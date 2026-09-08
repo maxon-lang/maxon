@@ -1,0 +1,103 @@
+// Test: write-back-verify
+typealias Integer = int(i64.min to i64.max)
+
+union Wrapper
+	none
+	some(n Integer)
+end 'Wrapper'
+
+function readValue(w Wrapper) returns Integer
+	match w 'r'
+		some(n) then return n
+		none then return 0
+	end 'r'
+end 'readValue'
+
+function main() returns ExitCode
+	var w = Wrapper.some(5)
+	match w 'mutate'
+		some(n) then n = 99
+		none then return 0
+	end 'mutate'
+	return readValue(w)
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#4
+  matcharm#2:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#4:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#3
+  matcharm#1:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.movRegImm32 rax, 99
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#14
+  matcharm#12:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont
+  matchnext#14:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#13
+  matcharm#11:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at write-back-verify.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#13:
+  matchdead#3:
+  matchcont:
+}

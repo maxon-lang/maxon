@@ -1,0 +1,30 @@
+// Test: exported-alias-found-past-a-later-private-one
+// --- file: a.maxon
+export typealias Score = int(0 to 100)
+
+public function fromA() returns Score
+	return 7
+end 'fromA'
+
+// --- file: b.maxon
+typealias Score = int(0 to 50)
+
+public function fromB() returns Score
+	return 3
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = 7 as Score
+	return s
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

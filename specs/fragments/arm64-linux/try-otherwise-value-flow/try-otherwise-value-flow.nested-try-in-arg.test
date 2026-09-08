@@ -1,0 +1,104 @@
+// Test: try-otherwise-value-flow.nested-try-in-arg
+enum E
+	bad
+end 'E'
+
+function getString(i ExitCode) returns ExitCode throws E
+	if i == 0 'zero'
+		throw E.bad
+	end 'zero'
+	return 42
+end 'getString'
+
+function consume(x ExitCode) returns ExitCode throws E
+	if x == 0 'empty'
+		throw E.bad
+	end 'empty'
+	return x
+end 'consume'
+
+function main() returns ExitCode
+	let n = try consume(try getString(1) otherwise 0) otherwise 0
+	return n
+end 'main'
+---
+ExitCode: 42
+---
+func @getString {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  zero:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @consume {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  empty:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl getString
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#3
+  tryerr#2:
+    arm64.movImm x0, 0
+  trycont#3:
+    arm64.bl consume
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#6
+  tryerr#5:
+    arm64.movImm x0, 0
+  trycont#6:
+    arm64.epilogue 16
+    arm64.ret
+}

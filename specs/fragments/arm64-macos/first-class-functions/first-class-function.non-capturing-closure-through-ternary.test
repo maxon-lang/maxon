@@ -1,0 +1,57 @@
+// Test: first-class-function.non-capturing-closure-through-ternary
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let c = 1
+	let twice = function(n Integer) gives n * 2
+	let thrice = function(n Integer) gives n * 3
+	let h = twice if c > 0 else thrice
+	return h(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x19, main$closure_0
+    arm64.leaFuncAddr x0, main$closure_1
+  matchcont:
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.blr x19
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.non-capturing-closure-through-ternary.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.lsl x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main$closure_1 {
+  entry:
+    arm64.prologue 16
+    arm64.arm64AddLsl x0, x0, x0, lsl #1
+    arm64.epilogue 16
+    arm64.ret
+}

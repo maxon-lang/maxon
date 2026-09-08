@@ -1,0 +1,26 @@
+// Test: error.let-global-alias-across-an-if-merge
+typealias Names = Array with String
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns Integer
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function main() returns ExitCode
+	var b = ["q"]
+	if A.count() > 1 'sometimes'
+		b = expose()
+	end 'sometimes'
+	let n = grow(b)
+	return (A.count() + n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)

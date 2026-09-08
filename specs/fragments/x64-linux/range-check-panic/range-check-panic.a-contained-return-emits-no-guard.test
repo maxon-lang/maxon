@@ -1,0 +1,38 @@
+// Test: range-check-panic.a-contained-return-emits-no-guard
+typealias Byte = int(0 to u8.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function pick() returns Byte
+  return opaque(7)
+end 'pick'
+
+function main() returns ExitCode
+  return pick()
+end 'main'
+---
+ExitCode: 7
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect pick
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

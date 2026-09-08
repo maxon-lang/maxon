@@ -1,0 +1,21 @@
+// Test: error.overload-redeclared-with-the-same-parameters
+typealias Integer = int(i64.min to i64.max)
+
+function pick(x Integer) returns Integer
+	return x
+end 'pick'
+
+function pick(flag bool) returns Integer
+	return 1 if flag else 0
+end 'pick'
+
+function pick(flag bool) returns Integer
+	return 2 if flag else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(3) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:12:10: duplicate definition of function 'pick#bool' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names

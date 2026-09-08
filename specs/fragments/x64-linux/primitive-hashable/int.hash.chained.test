@@ -1,0 +1,110 @@
+// Test: int.hash.chained
+function main() returns ExitCode
+	let i = 42
+	let once = i.hash()
+	let twice = i.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if not once.equals(42) 'hashValueEquals'
+		return 2
+	end 'hashValueEquals'
+	match once.compare(41) 'cmp'
+		lessThan then return 3
+		equalTo then return 4
+		greaterThan then return 0
+	end 'cmp'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body#15:
+    x64.movRegImm32 rbx, 42
+  __il_body#19:
+    x64.movRegImm32 rcx, 42
+  __il_body#23:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rdx, rcx
+    x64.andRegReg rdx, rcx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rdx, rax
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
+    x64.callDirect int.hash
+    x64.jmp __il_cont#12
+  __rc_ok:
+    x64.movRegReg r8, rdx
+  __il_cont#12:
+    x64.cmpRegReg rbx, r8
+    x64.jcc equal, __il_body#28
+  chainDiffers:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#28:
+    x64.cmpRegImm32 rbx, 42
+    x64.setccReg equal, rax
+  __il_cont#27:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#30
+  hashValueEquals:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#30:
+    x64.cmpRegImm32 rbx, 41
+    x64.jcc greaterEqual, ifcont#32
+  lt:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#29
+  ifcont#32:
+    x64.cmpRegImm32 rbx, 41
+    x64.jcc lessEqual, ifcont#34
+  gt:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont#29
+  ifcont#34:
+    x64.movRegImm32 rax, 1
+  __il_cont#29:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#9
+  matcharm#5:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#9:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#10
+  matcharm#6:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext#10:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead
+  matcharm#7:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

@@ -1,0 +1,56 @@
+// Test: match-break.match-own-label
+function main() returns ExitCode
+	var r = 0
+	var i = 0
+	while i < 3 'loop'
+		match i 'check'
+			1 then break 'check'
+			default then r = r + 10
+		end 'check'
+		r = r + 1
+		i = i + 1
+	end 'loop'
+	return r
+end 'main'
+---
+ExitCode: 23
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matchcont
+  matchdefault:
+    x64.leaRegRegImm32 rcx, r8, 10
+    x64.movRegReg r8, rcx
+  matchcont:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at match-break.match-own-label.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,605 @@
+// DeadFunctionElimination — the reachability prune that decides WHICH functions reach the back end.
+//
+// A function nothing can reach is still register-allocated, framed, encoded and linked: the whole
+// expensive half of the compiler runs on code that can never execute. This pass runs ONCE, at the
+// target-neutral backend entry (`buildBackend`, immediately after the sugar gate), so x64, arm64 and
+// wasm all inherit it rather than each having to remember to re-add it — the same argument that put
+// `assertNoSugarOps` there.
+//
+// ⭐ **WHY IT IS A PREREQUISITE, not a nicety.** The compiler compiles `stdlib/*.maxon` source into every
+// program. Without this pass, loading one stdlib module drags EVERY function in it into EVERY
+// program — which adds them to all 221+
+// committed goldens, costs every compile, and BREAKS the wasm and arm64 suites outright, because the
+// GT/clock/IOCP substrate those modules reach is x64-windows-only (a `sleep(1)` program dies on wasm at
+// `StdToWasm: emitFuncAddr: no wasm function index for '__gt_trampoline'`). Reachability fixes all
+// three at once.
+//
+// ⭐ **WHO DECIDES WHAT, AND WHY THE TWO DECIDERS CANNOT DISAGREE.** `RuntimeUsage`
+// (`StringRuntime.scanRuntimeUsage` + `noteDestructorUsage`/`noteCascadeUsage`) and this pass answer two
+// DIFFERENT questions, in that order:
+//
+//   * `RuntimeUsage` owns INSTALLATION — *does this program carry the allocator / the GT scheduler /
+//     the IOCP substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because its
+//     `usesHeap`/`usesGt`/`usesIocp`/`usesStreaming` bits also gate the `.data` slots the backend
+//     resolves a `globalAddr` against, and a slot cannot be laid out after the fact.
+//   * This pass owns REACHABILITY — *of what was installed, what can actually be reached from the
+//     program's roots?* It runs LAST, on the finished Std module, and it never installs anything.
+//
+// So the composition is one-way and total: usage decides the FLOOR, DFE prunes within it, and DFE can
+// only ever REMOVE. There is no question both answer, hence nothing for them to disagree about. That
+// asymmetry is what makes an all-or-nothing install (`installManagedMemoryRuntime` installs the whole array
+// runtime as one closure, because the helpers call each other) both correct and cheap: the closure is
+// the safe over-approximation, and this pass takes the slack back.
+//
+// ⭐ **CONSERVATIVE BEATS CLEVER.** A missed prune costs bytes; a wrong prune is a link-time panic or,
+// worse, a silently missing side effect. Every reference this pass cannot SEE is therefore a ROOT, and
+// there are exactly three kinds of them — see `seedRoots`. A wrong prune does at least fail LOUD on
+// every backend (`resolveCallFixups: call to unknown function`, `emitCall: no wasm function index`,
+// `bakeFuncAbs64Relocs: … is in no debug symbol`), never silently.
+//
+// ⭐ **WHAT IT DOES NOT DO: it prunes FUNCTIONS, never `.rdata`.** Pruning witness/layout blobs whose
+// label no live function loads would need a witness-conditional root sidetable, an init write-set map,
+// a second "live vars excluding inits" pre-walk, and a hand-maintained allow-list of name prefixes.
+// Keeping the data and pruning only code is what lets the root set below stay three lines long:
+// because every `.rdata` function slot survives, every function a slot NAMES must survive too, and
+// "is this label reachable?" never has to be asked. Dead-`.rdata` elimination is a
+// separate rung with its own goldens (`.rdata` offsets move, so `RequiredData` moves with them).
+//
+// ⚠ **`.data` IS ALREADY DONE, AND DELIBERATELY NOT HERE** (P1.7 slice 3): a dead top-level global's slot
+// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`. That is
+// upstream of this pass for the reason stated above — a `.data` slot cannot be laid out after the fact — so
+// the two never both answer for a global, and nothing here needs a `shouldKeepGlobal` list either.
+//
+// Orphaned blocks and ops are LEFT BEHIND, exactly as every block-rebuilding pass leaves them
+// (`IrModule.liveOpIndices`' header). `compactOps`/`compactBlocks` would reclaim them, but they cost
+// an O(ops) walk plus two ops-sized arrays to release memory the module drops a few milliseconds
+// later, at the end of the compile that allocated it. Nothing downstream walks the flat arrays.
+
+// The `reached` column is DENSE over `0 .. funcCount-1`, so a name is hashed EXACTLY ONCE per
+// call-graph edge — at the `FunctionNameIndex` lookup that resolves it to an index — and the worklist
+// then carries scalars. A worklist of name STRINGS would re-hash one on every pop plus a `seen` insert
+// per edge, three byte-sequence hashes per edge where this pays one.
+//
+// That index is also where a DUPLICATE NAME is refused, and this pass is the LAST site that builds one over
+// the Std module — the only one downstream of every `install*Runtime`, hence the only one that can see a
+// declaration colliding with an installed runtime symbol (A1t). The policy, and what each site can actually
+// see, live in `FunctionNameIndex`.
+
+// Drop every function unreachable from the program's roots, in place. Rebuilds `module.functions`;
+// the dropped functions' blocks and ops stay in the flat arrays as orphans (see the header).
+//
+// ⭐ **IT RETURNS AN INDEX OVER THE ARRAY IT LEAVES BEHIND, AND THAT REPLACES A WALK RATHER THAN ADDING
+// ONE (A2l).** Every backend derives at least one name-keyed map from the post-prune function array, and
+// the pruning is what makes the index built above stale — positions move. So the fresh one is built HERE,
+// billed to this phase, by the pass that invalidated the old one: a backend cannot then be handed a
+// module without an index, and the index it is handed cannot describe a different array than the module
+// it accompanies. The map it replaces is `buildCalleeResultClasses`, which walked the same array to store
+// a value the index can already reach in two O(1) steps.
+export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns FunctionNameIndex throws CompileError
+	let index = try FunctionNameIndex.create(module.functions, project: project)
+	let byName = index.byName
+
+	var reached = BoolArray.create()
+	reached.resize(module.funcCount())
+	var worklist = FuncIndexArray.create()
+
+	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
+
+	while worklist.count() > 0 'walk'
+		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
+		markCalleesOf(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist)
+	end 'walk'
+
+	requireUnreachableStdlibStayedDead(project, byName: byName, reached: reached)
+	sweepUnreachedFunctions(module, reached: reached, project: project)
+
+	// The survivors are a SUBSET of an array this pass already refused a duplicate over, so this build
+	// cannot report one — it is here for the POSITIONS, which the sweep renumbered. It goes through the one
+	// door anyway rather than a subset-only shortcut: a second construction path is a second place the
+	// check could be skipped, which is the shape this whole mechanism exists to remove.
+	return try FunctionNameIndex.create(module.functions, project: project)
+end 'eliminateDeadFunctions'
+
+// ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Four passes
+// that run BEFORE the back end skip a function `StdlibFacts.unreachable` names — `lowerMaxonToStd` (its
+// body, and therefore its `.rdata`), `insertRangeChecks` (its guards), `scanRuntimeUsage` (its runtime
+// floor) and `checkCalls` (its target refusal) — every one of them on the premise that THIS pass drops it.
+// The two derivations are independent: `StdlibFacts` walks the MAXON module from `main` alone, while this
+// walk starts from a strictly LARGER root set (the entry, the stub-called runtime symbols, and every
+// function an `.rdata` slot names) over the STD module. So the premise is a claim about two algorithms
+// agreeing, not a tautology, and it is checked rather than argued.
+//
+// ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
+// whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
+// call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
+// file's header names.
+//
+// ⚠⚠ **IT USED TO CATCH TWO CAUSES AND ONLY ONE OF THEM WAS A COMPILER BUG (A1w).** The other — an author's
+// declaration of one of the four names kind 2 of `seedRoots` roots — is now refused at that root, with a
+// POSITIONED E4015, so it can no longer arrive here as an unpositioned panic. What is left is the genuine
+// compiler bug: a stdlib function reached through a witness table or a layout-descriptor slot, a DATA edge
+// `StdlibSource`'s Maxon-tier walk does not model (its own header records that this is exact "at this rung"
+// and not in general).
+//
+// COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
+// program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
+// this module does not define is simply not there to keep (the same non-case `markLiveFunction` handles).
+function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByName, reached BoolArray)
+	for name in project.stdlibFacts.unreachable 'eachSkipped'
+		if let idx = try byName.get(name) 'aModuleFunction'
+			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
+			if isLive 'reachedAnyway'
+				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model. Keeping it would emit an EMPTY function the program calls")
+			end 'reachedAnyway'
+		end 'aModuleFunction'
+	end 'eachSkipped'
+end 'requireUnreachableStdlibStayedDead'
+
+// ⭐⭐ **THE ASSUMPTION THE DUPLICATE-NAME REFUSAL RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR
+// BEFORE THE COUNT SEES IT.** A detector that counts two functions is walked around by anything that removes
+// one of them first, and there IS a pass that could remove a side — `StdlibSource.reachableMaxonFunctionNames`
+// computes `StdlibFacts.unreachable`, which gates which runtime floor is installed (`scanRuntimeUsage` skips
+// the body of every function whose NAME is in that set). If a `Builtins.maxon` declaration of `__foo` could
+// land in `unreachable`, the runtime's own `__foo` could go uninstalled, exactly ONE `__foo` would reach the
+// name index, and the compile would SUCCEED with every emitted call bound to the author's stub.
+//
+// ⚠⚠ **IT CAN NOW, AND THE TWO BARS THAT USED TO CLOSE IT ARE BOTH GONE.** They were: *(1)* E2051 — no
+// LOADED stdlib module may declare a `__` name, and the exempt file was not being loaded; *(2)* the exempt
+// file is never stdlib SOURCE, since `Builtins.maxon` could only enter a compile as the user's own ROOT,
+// which `registeredPathsWhenTheRootIsInsideStdlib` keeps out of `stdlibSourcePaths`. **A1s brought
+// `stdlib/Builtins.maxon` into the load**, which deletes both at once: it is the E2051-exempt file AND stdlib source, so
+// its four `__*_fromString` declarations are ordinary members of the space `unreachable` is drawn from. The
+// re-derivation that widening owed is below, and what stands in the bars' place is STRUCTURAL rather than a
+// property of which files happen to be loaded:
+//
+//   1. **SUPPRESSION AND EMISSION ARE DECIDED FROM THE SAME BODIES (A1s).** The bad outcome needs an EMITTED
+//      call to `__foo` whose installer was gated off, and a lowered runtime call is emitted only while
+//      lowering a body. `lowerMaxonToStd` now skips exactly the set `scanRuntimeUsage` skips, so no body can
+//      emit a call whose installer was never offered that body's usage. ⚠ The two DISAGREED before this
+//      rung — lowering emitted `__mm_alloc`/`__str_eq` calls out of bodies the usage scan had skipped, and
+//      it was only this pass dropping the function that kept the dangling call harmless.
+//   2. **THE DECLARATION IS NEVER TAKEN OUT OF THE MODULE.** That skip empties a body; it does not drop the
+//      function, and `lowerMaxonToStd` says so and says this is why. So both sides of a real pair still
+//      reach the count below, which is the assumption this whole paragraph is about.
+//   3. MEASURED: no name `Builtins.maxon` declares is a name the compiler INSTALLS.
+//      `__int_fromString`/`__float_fromString`/`__bool_fromString`/`__byte_fromString` are declarations the
+//      compiler CALLS (A1r), never emits — so there is no pair today, and the whole suite is green with the
+//      module loaded. If that ever ceases to be true the pair exists and E4015 fires, by (2).
+//
+// ⚠ **WHAT WOULD REOPEN IT** is now (1) or (2), not which modules load: making that skip DROP a function rather
+// than empty it, or letting any pass decide a runtime INSTALL from a body some other pass still lowers.
+
+// ⭐ **THE ROOT SET — the three reference kinds no Std op in this module spells.** Everything else is an
+// ordinary call-graph edge and is found by the walk.
+//
+// 1. **`main`** — the program's entry. The entry stub that calls it (`prependEntryStub`,
+//    `prependLinuxEntryStub`, arm64's hand-assembled chunk, wasm's synthesized `$run`) is built AFTER
+//    this pass, at the Target tier, so its call is invisible here.
+//
+// 2. **The functions an ENTRY STUB or a hand-assembled Target-tier CHUNK calls by name.** Both are built
+//    after this pass — the stubs in `augmentWithRuntime`/`buildWasmCoreModule`, the chunks as raw bytes
+//    with `CallFixup`s resolved at concat — so their edges likewise cannot be walked. They were found by
+//    enumerating every `targetName:`/`callDirect` in the stub and chunk builders:
+//      * `__module_init` and `__maxon_global_cleanup` — the managed-global initialization and release the
+//        entry stub brackets `main` with (P1.7 slice 2a, see `ModuleInit`). Nothing in the module calls
+//        either, and they are what makes every managed global's `.data` slot non-null before `main` and
+//        every managed global's record freed after it — so pruning one would turn a leak-gated spec into a
+//        null-pointer store or an exit-101 leak.
+//      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). Nothing
+//        in the module CALLS it, so it survives only by being rooted here. ⭐ Its absence is LOUD on
+//        every backend, and that is a property worth keeping deliberately: each gate emits its call from
+//        `RuntimeUsage.usesHeap` — where installation is decided — never from "is the function still
+//        there?", so a pruned root leaves a call with no callee. MEASURED by deleting this line:
+//        x64 `resolveCallFixups: call to unknown function '__mm_leak_check'` (X64Backend:1794), arm64
+//        `arm64ResolveCallFixups: bl to unknown function` (Arm64Backend:1420), wasm the `usesHeap` panic
+//        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
+//        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
+//        removal turn every exit-101 test silently green.
+//      * `__sched_publish_locked` and `__sched_wake_or_spawn` — the IOCP completion thread's re-ready of a
+//        parked thread and the wake it may owe (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names
+//        both UNCONDITIONALLY, while every Std caller of the publish doors sits behind `__gt_ready` or a
+//        driver's drain, which a program that spawns nothing does not reach — so a SUBPROCESS-only program,
+//        which installs the IOCP substrate and therefore the completion loop but never spawns, reaches them
+//        from data alone. MEASURED for a predecessor by adding the call without a root: `panic at
+//        X64Backend.maxon:2280: resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`,
+//        seventeen `subprocess-builtins` cases at once, exactly the shape `__mm_leak_check`'s note above
+//        predicts.
+//      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
+//        in exactly `__mm_leak_check`'s position and for exactly its reason.
+//    They are rooted unconditionally: a name absent from this module is simply not found (a program
+//    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
+//    belongs to was never installed.
+//
+// 3. **Every function named by an `.rdata` slot** (`GlobalDataTable.pendingRdataRelocs`) — a layout
+//    descriptor's `destroyFunc@40`/`copyFunc@32` and every witness-table method slot. These are
+//    reached through DATA, not code: `witnessCall` loads a `.rdata` table and jumps, and the element
+//    drop walk `callIndirect`s a pointer baked into `.rdata` by `bakeFuncAbs64Relocs`. This is exactly
+//    the precedent `noteDestructorUsage` already set — "referenced from data = live" — and because
+//    this pass never prunes `.rdata` (see the header), rooting ALL of them is not conservatism, it is
+//    the only correct answer: the slot survives, so its target must be there to fill it.
+//
+// ⭐⭐ **KIND 2 CARRIES A PROVENANCE PREMISE OF ITS OWN, AND IT IS THE SECOND DOOR ONTO A1t's DEFECT (A1w).**
+// Every one of those names is the COMPILER's, and rooting one asserts that whatever answers to it is the
+// compiler's function. `main` asserts the opposite — it must be the author's — so the two kinds cannot go through one
+// door. Neither premise was checked, and the `__` half was reachable and LOUD IN THE WRONG WAY: MEASURED, a
+// `stdlib/Builtins.maxon` declaration of `__mm_leak_check` / `__module_init` / `__gt_enqueue` in a program
+// that installs NO runtime under that name panicked in `requireUnreachableStdlibStayedDead` above, with no
+// file and no line — the author's mistake wearing a compiler bug's clothes, which is the exact shape A1t was
+// written to remove. The pair case never reached it because the name index refuses first; this case has no
+// pair to count, so nothing saw it.
+//
+// ⚠ **REFUSED WHETHER OR NOT THE COMPILER EMITS ITS OWN COPY HERE.** Not rooting a parsed hit would compile
+// — the declaration is dead code and would simply be pruned — but then `__module_init` would be legal in a
+// program with no managed global and E4015 in one with a managed global, i.e. the legality of a NAME decided
+// by which runtime floor some other program carries. Refusing makes the rule what it says it is: the name is
+// the compiler's. Same code, same rule, second detection — see E4015's registry entry.
+//
+// ⚠ Kind 3's names are NOT checked this way and must not be: an `.rdata` witness slot names `Type.method`, a
+// PARSED method, so parsed-ness there is the ordinary case rather than the error.
+function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
+	markLiveFunction(project.entryFunctionName, byName: index.byName, reached: reached, worklist: worklist)
+	seedTestRoots(index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE IOCP COMPLETION LOOP's TWO CALLEES (SV1).** That loop is a hand-assembled Target-tier chunk, so
+	// no Std caller reaches what it calls and the prune would drop them — leaving a pipe-reading program
+	// calling functions that were never laid out, which is a LINK failure and not a compile error, in exactly
+	// the programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
+	//
+	// ⚠ **THE PAIR HAS CHANGED TWICE, AND BOTH TIMES BECAUSE THE CHUNK's CALLS DID.** It was `__gt_enqueue`
+	// plus `__sched_wake_or_spawn` until EC10, then `__gt_coro_enqueue` alone (a coroutine goes to its owner's
+	// queue, and no worker M can run one, so there was nobody to wake); SV1 makes the loop publish through the
+	// ROUTING door, because a re-readied reader may now be a GREEN THREAD, and gives the wake back
+	// conditionally for the same reason. `__gt_coro_enqueue` is no longer rooted — `__sched_publish_locked`
+	// calls it, so the walk reaches it by an ordinary edge.
+	try markCompilerOwnedRoot(SchedPublishLockedName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE SYSCALL BRACKET AND ITS RETURN ROAD, AND IT IS THE IOCP LOOP'S CASE EXACTLY.** All three are
+	// called only from the TARGET tier — `__sched_enter_syscall` / `__sched_exit_syscall` from the arm64
+	// isel's dispatch door, `__sched_syscall_regain` from `emitGtExitSyscall`'s hand-assembly — so no Std
+	// caller reaches them, the prune drops them, and the failure is `resolveCallFixups` panicking on an
+	// unknown function at the END of codegen rather than a compile error anywhere near the cause.
+	// ⚠ **WITHIN A LANE THAT BRACKETS, THE ROOTS CANNOT BE NARROWED FURTHER**: which calls get a bracket is
+	// decided at codegen and this pass runs before it.
+	//
+	// ⛔ **IT IS GATED ON THE TARGET, AND THAT GATE IS ONE OF FOUR THAT MUST AGREE** — see
+	// `SchedRuntime.targetBracketsBlockingSyscalls`, which carries the fork; the bracket's own pair rides the
+	// narrower `targetCallsTheSyscallBracket`, which is the same question the installer builds them under. On
+	// a lane that does not build one of these, rooting a name the module does not define is a SILENT no-op
+	// rather than an error, so an ungated root here is exactly the shape in which the two halves would drift
+	// apart with nothing to say so.
+	if targetBracketsBlockingSyscalls(project.target) 'theSyscallHandoffIsBuilt'
+		try markCompilerOwnedRoot(SchedSyscallRegainName, project: project, index: index, reached: reached, worklist: worklist)
+	end 'theSyscallHandoffIsBuilt'
+
+	if targetCallsTheSyscallBracket(project.target) 'theBracketIsCalled'
+		try markCompilerOwnedRoot(SchedEnterSyscallName, project: project, index: index, reached: reached, worklist: worklist)
+		try markCompilerOwnedRoot(SchedExitSyscallName, project: project, index: index, reached: reached, worklist: worklist)
+	end 'theBracketIsCalled'
+	// ⭐ **THE ENTRY STUB's SCHEDULER TEARDOWN (SV1)** — `__gt_drain_at_exit`, called from `mrt_start` between
+	// the global cleanup and the leak gate and from nowhere else. Exactly `__mm_leak_check`'s position, and
+	// rooted for exactly its reason: the gate emits its call from `RuntimeUsage.usesGt` — where installation
+	// is decided — so a pruned root leaves a call with no callee rather than a program without a drain.
+	try markCompilerOwnedRoot(GtDrainAtExitName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
+	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
+	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
+	// were never laid out. Rooting an ABSENT name is a no-op (`markCompilerOwnedRoot` returns when the
+	// module defines none), so an untraced build is unaffected: it installs neither and roots neither.
+	try markCompilerOwnedRoot(DsInitName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(DsShutdownName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE COVERAGE DUMP**, called from `mrt_start` between the leak gate and the exit primitive and from
+	// nowhere else — exactly `__ds_shutdown`'s position and rooted for its reason. `__cov_write_file` under it
+	// is an ordinary call-graph edge and needs no root of its own; an uninstrumented build installs neither
+	// and roots neither, since rooting an absent name is a no-op.
+	try markCompilerOwnedRoot(CoverageDumpName, project: project, index: index, reached: reached, worklist: worklist)
+
+	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
+	end 'eachRdataSlot'
+end 'seedRoots'
+
+// ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
+// a body the program reaches by no edge — so this walk would drop every one of them and the binary would
+// hold no tests at all. `specs/test-declaration.md`'s `survives-dead-function-elimination` pins exactly
+// that, through its minted golden: the exit code cannot see it, because `main` returns 0 whether the test
+// survived or not.
+//
+// ⚠ **IT IS RECOGNISED BY ITS NAME, AND THE NAME IS UNFORGEABLE.** `__test_` is in the space
+// `Parser.requireUnreservedName` refuses to any declared name (E2051), so no source can wear the prefix and
+// there is no side channel here to keep in step with the parser — see `Project.isTestFunctionName`.
+//
+// ⚠ **IT IS NOT A `markCompilerOwnedRoot`, AND THE PROVENANCE PREMISE IS THE OPPOSITE ONE.** Those roots
+// assert the name is the COMPILER's and refuse a parsed declaration of it. A test's body is the AUTHOR's;
+// only its NAME is minted. So it goes through the plain `markLiveFunction`, exactly as `main` does — and a
+// module that declares no test roots nothing here.
+function seedTestRoots(index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray)
+	for func in index.functions 'eachFunction'
+		if isTestFunctionName(func.name) 'aTest'
+			markLiveFunction(func.name, byName: index.byName, reached: reached, worklist: worklist)
+		end 'aTest'
+	end 'eachFunction'
+end 'seedTestRoots'
+
+// Root one of the names the compiler owns, refusing a declaration that took it. The provenance test is
+// the SAME one `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed
+// function carries a `sourceFilePath` and a synthesized one cannot.
+function markCompilerOwnedRoot(name ByteArray, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
+	let func = try index.funcNamed(name) otherwise 'notAModuleFunction'
+		return
+	end 'notAModuleFunction'
+
+	if not func.sourceFilePath.isEmpty() 'declared'
+		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		throw CompileError.compileError
+	end 'declared'
+
+	markLiveFunction(name, byName: index.byName, reached: reached, worklist: worklist)
+end 'markCompilerOwnedRoot'
+
+// Mark `name` reachable and queue its body for the walk. A name this module does not define is not an
+// error and not a miss: it is a hand-assembled chunk (`__gt_context_switch`, `__gt_trampoline`,
+// `__gt_morestack`, `__io_completion_loop`) or a root whose runtime this program never installed. There
+// is nothing to keep and nothing to drop, so it is simply not queued.
+function markLiveFunction(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	let idx = try byName.get(name) otherwise 'notAModuleFunction'
+		return
+	end 'notAModuleFunction'
+
+	let alreadyReached = try reached.get(idx) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {idx}")
+	if alreadyReached 'already'
+		return
+	end 'already'
+
+	try reached.set(idx, value: true) otherwise panic("eliminateDeadFunctions: reached.set OOB at function index {idx}")
+	worklist.push(idx)
+end 'markLiveFunction'
+
+// Every static callee edge out of one live function. Walks LIVE ops (`IrModule.liveOpIndices`), never
+// the flat `module.ops` array: that array is append-only and holds the ops every prior block-rebuilding
+// pass replaced, so scanning it would resurrect callees from IR that no longer exists.
+function markCalleesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("eliminateDeadFunctions: live op index {opIdx} not in module.ops")
+		markCalleeOf(op, byName: byName, reached: reached, worklist: worklist)
+	end 'eachOp'
+end 'markCalleesOf'
+
+// The static reachability edge one `StdOp` names, if any. THREE variants carry a function NAME —
+// `call`, `tryCall` and `funcAddr` — and every one of them is an edge:
+//
+//   * `call` / `tryCall` — the direct call graph.
+//   * `funcAddr` — a function's ADDRESS, and it is a STATIC edge even though the call that consumes it
+//     is indirect. It is the whole of the compiler's first-class-function support: `let f = triple` lowers to
+//     `funcAddr(__fnref_triple)`, whose thunk body then `call`s `triple`; an async spawn takes the
+//     spawned function's bare address; an element destructor is stamped into a descriptor slot the same
+//     way. ⚠ This arm is load-bearing: a `funcAddr` target is NOT already rooted by a `funcRef` that
+//     produced its value — that is false for a directly-emitted one, and the destructor is then
+//     pruned.
+//
+// `callIndirect` and `witnessCall` deliberately name NO callee: they consume a code pointer that some
+// `funcAddr` (marked above) or some `.rdata` slot (rooted in `seedRoots`) already produced, so crediting
+// them would be crediting the same edge twice with no name to credit it to.
+//
+// The arms NAME every variant of the union, so a variant added later FAILS TO COMPILE here rather than
+// being classified by omission. A new variant that carries a callee name must be added as its own arm.
+function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	match op 'op'
+		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret or
+			param then break 'op'
+		call(_, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
+		// stores, and the two OS primitives that name no Maxon function.
+		retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr then break 'op'
+		tryCall(_, _, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
+		errorReturn or
+			osExit then break 'op'
+		funcAddr(_, funcName) then markLiveFunction(funcName, byName: byName, reached: reached, worklist: worklist)
+		// `callIndirect`/`witnessCall` (see above) plus every appended `os*` primitive and `switch`,
+		// none of which names a Maxon function.
+		callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile then break 'op'
+		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
+		osReadWallClock then break 'op'
+		// The THROWING witness call names no Maxon function, exactly as `witnessCall` does not: both read a
+		// code pointer out of a `.rdata` witness table, and the DATA edge that keeps a witness impl live is
+		// counted by the witness-table walk, not here.
+		witnessTryCall then break 'op'
+		// Every file op calls a Win32 IMPORT, not a Maxon function, so none keeps anything live here
+		// (R4.1 + R4.2).
+		osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes then break 'op'
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue then break 'op'
+		osCommandLine then break 'op'
+		// W5. `GetStdHandle` and `GetModuleFileNameA` are Win32 IMPORTS, so neither keeps a Maxon function
+		// live — the file band's reason, and the reason each is named separately from `osCommandLine`: an
+		// op added later must fail to compile here rather than inherit one of their answers.
+		osStdHandle then break 'op'
+		osExecutablePath then break 'op'
+		// W35. The stderr write reaches the OS through an import or a syscall exactly as its stdout twin
+		// does, so it keeps no Maxon function live either.
+		osWriteStderr then break 'op'
+		// A promoted record's address names a frame slot, not a function — it keeps nothing live.
+		stackRecordAddr then break 'op'
+		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
+		osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs then break 'op'
+		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
+		// band, the machine query AND the thread-CPU read — are import calls too (kernel32 and ws2_32), so none
+		// keeps a Maxon function live either.
+		osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks then break 'op'
+		// F1a: the decommit bottoms out in a Win32 import or a raw syscall — or, on wasm, in nothing at all —
+		// so it keeps no Maxon function live either.
+		osDecommitPages then break 'op'
+		// F1b: a fill lowers to INLINE machine code on every target — a store ladder, never a call — so it
+		// keeps no Maxon function live either.
+		memFill then break 'op'
+		// F1c: a reserve and a commit bottom out in `VirtualAlloc`, an `mmap` syscall or a `memory.grow` — never
+		// in a Maxon function, so neither keeps one live.
+		osCommitPages or
+			osReservePages then break 'op'
+		// F2 + G1: the two atomics and the `gs:` TLS read lower to INLINE machine code, and the thread token,
+		// `TlsAlloc`, `TlsSetValue` and `SetEvent` to a raw syscall or an IMPORT — never to a Maxon function, so
+		// no member of this range keeps one live. (Count the members off the range, not off this sentence: it
+		// said "the three" for as long as there were three.)
+		atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority then break 'op'
+		osFileOpenWriteExecutable then break 'op'
+		osEnvBlock or
+			osEnvBlockFree then break 'op'
+		// G3: an ordered access is inline machine code on every lane, so it names no Maxon callee.
+		loadAcquire or
+			storeRelease then break 'op'
+		osHandleFileType then break 'op'
+		// The two named-section calls bottom out in kernel32 imports, never in a Maxon function.
+		osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment then break 'op'
+		// A coverage counter names a `.data` slot, not a callee.
+		covPoint then break 'op'
+		// Every sampling service bottoms out in an import, never in a Maxon function.
+		osHostSample then break 'op'
+	end 'op'
+end 'markCalleeOf'
+
+// Rebuild `module.functions` keeping only what the walk reached.
+//
+// ⚠ **A REBUILD IS A RENUMBERING, and `module.functions` is not the only thing keyed by that numbering.**
+// `Project.valueOrigins` (and the parameter spans inside it) file every row under a function's POSITION
+// in this array, so dropping a function silently re-points every later row at its neighbour. The remap
+// below is part of the sweep, not a courtesy after it — see `ValueOriginTable.remapFunctionIndices`.
+function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
+	let total = module.funcCount()
+	var kept = IrFunctionArray.create()
+	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
+	// for dropped functions are never read (the remap consults `reached` first).
+	var newIndexOfOld = FuncIndexArray.create()
+	// Did dropping renumber any function that SURVIVES? Only a survivor whose index moved has an origin
+	// row to relocate; a drop with no survivor after it moves nothing (see the trailing-drop skip below).
+	var keptNumberingShifted = false
+	for i in 0 upto total 'eachFunc'
+		let func = module.getFunc(i)
+		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
+		let newIndex = kept.count()
+		newIndexOfOld.push(newIndex)
+		if isLive 'live'
+			if newIndex != i 'moved'
+				keptNumberingShifted = true
+			end 'moved'
+			kept.push(func)
+		end 'live' else 'dead'
+			// `String.from` runs INSIDE the lazy message, never beside it: this arm is taken once per
+			// function the pass drops, so materializing the name eagerly would spend an allocation per
+			// SUCCESS — the cost rising with exactly how well the prune works — to render a line that is
+			// off on every build but a `--log=ir:trace` one.
+			logTrace(LogCategory.ir, message: function() gives "dfe: dropping unreachable function '{String.from(func.name)}'")
+		end 'dead'
+	end 'eachFunc'
+
+	let dropped = total - kept.count()
+	logDebug(LogCategory.ir, message: function() gives "dfe: dropped {dropped} unreachable function(s) of {total}")
+	module.functions = kept
+
+	// Nothing dropped ⇒ `newIndexOfOld` is the identity and no row loses its function, so the remap could
+	// only rebuild the origin columns into an exact copy of themselves. Skipped rather than absorbed into
+	// `remapFunctionIndices`, because the saving is the whole REBUILD (the columns are sized by the
+	// program's value count, so the copy is linear in program size): measured +487,704 … +20,528,128 bytes
+	// across the scale ladder, all of it on a corpus that drops nothing.
+	if dropped == 0 'numberingUnchanged'
+		return
+	end 'numberingUnchanged'
+
+	// ⭐ TRAILING DROPS ARE FREE TOO. When every dropped function sits AFTER every survivor — no
+	// survivor's index moved — the remap would keep each survivor's rows at their existing index and
+	// merely discard the trailing dropped rows. But those rows are `lookup`ed by (funcIndex, valueId)
+	// and a dropped function's index is now beyond `module.functions`, so no survivor's lookup can ever
+	// match one: leaving them costs a few extra iterations on the cold E5001 path and nothing else,
+	// where rebuilding the program-sized columns costs the same linear bytes the `dropped == 0` case
+	// avoids. Compiling stdlib source into every program makes this the common case: a stdlib module the
+	// program does not use (e.g. Clock in a program that reads no clock) merges after the user source and
+	// drops as a block, so a program that installs no emitted runtime (the runtime functions append AFTER
+	// it) drops ONLY trailing functions — without this skip every such compile would pay the full rebuild
+	// that loading stdlib newly forced on it. A program that DOES install runtime drops the module from
+	// the MIDDLE
+	// (the runtime sits after it), a survivor's index moves, and the remap correctly runs.
+	if not keptNumberingShifted 'trailingDropsOnly'
+		return
+	end 'trailingDropsOnly'
+
+	project.valueOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
+end 'sweepUnreachedFunctions'

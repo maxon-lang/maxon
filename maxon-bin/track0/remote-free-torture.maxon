@@ -1,0 +1,88 @@
+// Cross-P (remote) FREE torture — the half `track0/alloc-torture.maxon` turns out NOT to reach on the compiler.
+//
+// alloc-torture hands a managed array to an `async` task and expects the task's M to perform the final
+// release. A by-value managed argument is an ALIAS, so the caller still owns it and the array is freed by
+// MAIN — on the very P that allocated it, so that program never reaches a cross-P free.
+//
+// This program forces the cross-P free from the other side: a green thread ALLOCATES managed objects,
+// then SLEEPS. The scheduler parks it and any idle M may resume it, so the scope-end release of everything
+// allocated before the sleep lands on a DIFFERENT P from the one that allocated it.
+//
+// The aggregate is an order-independent sum of index-derived values, exactly as alloc-torture's is.
+
+// ⛔⛔ **SINCE EC10 THIS PROGRAM RUNS ON ONE M AT EVERY `MAXON_MAX_PROCS`, SO ITS
+// CROSS-P SUBJECT HAS NO PRODUCER.** An `async f(...)` call creates a COROUTINE of
+// the green thread that called it — published only to that green thread's queue,
+// never to a P ring — so `__sched_wake_or_spawn` is never called and no worker M is
+// created. `workers=1` at N=1, 2, 7 and 12, against the parent commit's 1, 2, 7 and
+// 9 on the same box (`maxon-bin/track0/pin-matrix.sh`; a high-water mark, so it is
+// how many Ms were NEEDED rather than how many were allowed).
+//
+// ⇒ **WHAT IT STILL MEASURES:** determinism of the aggregate, leak-freedom, and the
+// allocator's single-shard path under heavy churn. **WHAT IT NO LONGER MEASURES:**
+// anything cross-P — the per-P mcache handoff, the remote-free MPSC queue, the span
+// ownership gate. Those are S5's subject and they are correct code with no way to
+// reach them from Maxon until a `spawn` primitive creates a second green thread.
+// **Do not read a green run below as covering them.**
+
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let taskCount = 400
+let heldPerTask = 6
+let churnPerTask = 25
+
+function task(idx Integer) returns Integer
+	var acc = idx
+
+	// Allocated on whichever M starts this green thread.
+	var held = StringArray.create()
+
+	for k in 0 upto heldPerTask 'build'
+		held.push("held{idx}-slot{k}")
+	end 'build'
+
+	// The yield. This thread parks on a timer and is re-enqueued onto the GLOBAL run queue, so the M that
+	// resumes it is whichever one is idle — not necessarily the one above.
+	sleep(1)
+
+	for j in 0 upto churnPerTask 'churn'
+		let tmp = "task{idx}-churn-{j}"
+
+		if not tmp.isEmpty() 'nz'
+			acc = acc + 1
+		end 'nz'
+	end 'churn'
+
+	for h in held 'read'
+		if not h.isEmpty() 'ne'
+			acc = acc + 1
+		end 'ne'
+	end 'read'
+
+	// `held` and its six Strings are released HERE, on the post-sleep M.
+	return acc
+end 'task'
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+
+	for i in 0 upto taskCount 'spawn'
+		promises.push(async task(i))
+	end 'spawn'
+
+	var total = 0
+
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	let workers = __Builtins.schedMaxActiveWorkers()
+
+	print("aggregate={total}\n")
+	print("workers={workers}\n")
+
+	return 42
+end 'main'

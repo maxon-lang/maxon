@@ -1,0 +1,121 @@
+// Test: an-expression-across-a-call-is-recomputed
+typealias Word = int(i64.min to i64.max)
+
+// RECURSIVE, so `inlineLeaves` refuses it and the call in `across` survives to be a barrier. A
+// non-recursive body would be spliced into the caller and the case would silently lose its call —
+// measured on the first cut of this spec, whose fragment showed no `callDirect` at all.
+function noise(v Word) returns Word
+	if v <= 0 'base'
+		return 0
+	end 'base'
+	return v + noise(v - 1)
+end 'noise'
+
+function across(x Word, y Word) returns Word
+	let first = x * 31 + y
+	let middle = noise(first)
+	return first + middle + (x * 31 + y)
+end 'across'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 3 'feed'
+		seed = seed + across(i, y: i + 1)
+	end 'feed'
+	if seed != 2905 'wrongSum'
+		return 1
+	end 'wrongSum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @noise {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greater, ifcont
+  base:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rbx, -1
+    x64.callDirect noise
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @across {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.imulRegRegImm32 rax, rbx, 31
+    x64.leaRegRegReg r13, rax, r12
+    x64.movRegReg rcx, r13
+    x64.callDirect noise
+    x64.leaRegRegReg rax, r13, r8
+    x64.imulRegRegImm32 rcx, rbx, 31
+    x64.leaRegRegReg rcx, rcx, r12
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.leaRegRegImm32 rdx, r12, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect across
+    x64.leaRegRegReg rbx, rbx, r8
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rbx, 2905
+    x64.jcc equal, ifcont
+  wrongSum:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

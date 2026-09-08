@@ -1,0 +1,61 @@
+// Test: divisor-is-read-after-a-checked-divide
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let z = opaque(0)
+	let q = try (100 / d) otherwise 99
+	let r = try (100 / z) otherwise 0
+	return (q + d + r + z) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 21
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_cont#11:
+    x64.movRegImm32 rcx, 0
+  __il_cont#10:
+    x64.movRegImm32 rsi, 100
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rsi
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rsi, rdx, rax
+  trycont#3:
+    x64.movRegImm32 rax, 100
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rcx
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, trycont#6
+  tryerr:
+    x64.movRegImm32 rax, 0
+  trycont#6:
+    x64.leaRegRegImm32 rcx, rsi, 7
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at divisor-is-read-after-a-checked-divide.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

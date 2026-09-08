@@ -1,0 +1,75 @@
+// Test: ten-floats-across-a-call-fit-the-callee-saved-half
+function bump(x Integer) returns Integer
+	return x + 1
+end 'bump'
+
+function pressure(k Integer) returns Integer
+	let a = 1.0
+	let b = 2.0
+	let c = 3.0
+	let d = 4.0
+	let e = 5.0
+	let f = 6.0
+	let g = 7.0
+	let h = 8.0
+	let i = 9.0
+	let j = 10.0
+	var acc = k
+	acc = bump(acc)
+	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e)
+	acc = acc + trunc(f) + trunc(g) + trunc(h) + trunc(i) + trunc(j)
+	return acc
+end 'pressure'
+
+function main() returns ExitCode
+	return pressure(0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 56
+---
+func @pressure {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.leaRegRegImm32 rax, rcx, 1
+  __il_cont:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.leaRegRegImm32 rax, rax, 6
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.leaRegRegImm32 r8, rax, 10
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect pressure
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ten-floats-across-a-call-fit-the-callee-saved-half.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

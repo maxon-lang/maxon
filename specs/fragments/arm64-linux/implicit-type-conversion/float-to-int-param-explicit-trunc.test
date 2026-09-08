@@ -1,0 +1,23 @@
+// Test: float-to-int-param-explicit-trunc
+
+typealias Integer = int(i64.min to i64.max)
+
+function takeInt(x Integer) returns Integer
+	return x
+end 'takeInt'
+
+function main() returns ExitCode
+	let f = 3.7
+	return takeInt(trunc(f))
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

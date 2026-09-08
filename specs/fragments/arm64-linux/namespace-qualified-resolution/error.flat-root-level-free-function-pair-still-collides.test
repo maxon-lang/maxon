@@ -1,0 +1,22 @@
+// Test: error.flat-root-level-free-function-pair-still-collides
+// --- file: a.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 3
+end 'pick'
+
+// --- file: b.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:12:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names

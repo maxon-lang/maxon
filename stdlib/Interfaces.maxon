@@ -1,0 +1,247 @@
+/// Cross-cutting protocol interfaces that don't belong to any one domain type:
+/// Hashable, Equatable, Comparable, Cloneable, Iterator/BidirectionalIterator,
+/// Iterable, Stringable/FormattedStringable, plus the base `Error` interface
+/// that every error enum implements.
+/// @category Core
+public typealias HashValue = int(0 to u32.max)
+public typealias IterStep = int(i64.min to i64.max)
+
+// Error - marker interface for throwable error types
+// Only enums can conform to Error. Error enums represent distinct error conditions
+// and can be thrown and caught using try/throw/catch.
+// Examples:
+//   enum FileError implements Error
+//       notFound
+//       permissionDenied
+//   end 'FileError'
+//
+//   enum HttpError int implements Error
+//       notFound = 404
+//       serverError = 500
+//   end 'HttpError'
+public interface Error
+end 'Error'
+
+// IterationError - errors for iterator navigation
+// exhausted: advance() past the last element
+// atStart:   retreat() before the first element
+public enum IterationError implements Error
+	exhausted
+	atStart
+end 'IterationError'
+
+// Ordering - result of comparing two values
+public enum Ordering
+	lessThan
+	equalTo
+	greaterThan
+end 'Ordering'
+
+// Hashable - types that can be hashed to an integer
+public interface Hashable
+	function hash() returns HashValue
+end 'Hashable'
+
+// The working width `spreadHash` mixes in: a `HashValue` is 32 bits, and each of the two
+// multiplies below produces up to 64 before it is folded back, so the intermediate cannot be
+// a `HashValue` (it would trip that type's own range check on the first multiply).
+typealias HashMixWord = bits(64)
+
+// The two 32-bit odd multipliers and the fold-back mask of MurmurHash3's `fmix32` finalizer,
+// which is where these exact constants come from. They are named rather than inlined because
+// each appears once and a bare 0x85EBCA6B says nothing about what it is for.
+let HashMixMultiplierA = 0x85EBCA6B as HashMixWord
+let HashMixMultiplierB = 0xC2B2AE35 as HashMixWord
+let HashMixWidthMask = 0xFFFFFFFF as HashMixWord
+
+// ⭐ **THE SLOT A HASH SEEDS ITS PROBE AT — the ONE derivation `Map` and `Set` share**, and the
+// reason neither of them may write `hash and mask` directly.
+//
+// Both containers are power-of-two open-addressed tables with LINEAR probing, so the slot is the
+// hash's LOW bits. And `int.hash()` is the IDENTITY (`self and 0xFFFFFFFF`) — so without a mix,
+// structure in the keys is structure in the slot indices, and linear probing turns that into one
+// primary cluster that every later insert has to walk.
+//
+// ⚠ **THAT IS NOT A THEORETICAL HAZARD; IT WAS MEASURED, AND THE KEYS THAT TRIGGERED IT WERE
+// PERFECTLY DENSE.** The victim was the compiler's per-function block-offset table, keyed by `BlockId`.
+// The ids of one function are a dense run 0..N-1 — the ideal case for an identity hash — but they
+// arrive in LAYOUT order, which interleaves the parser's blocks with the ones minted later
+// (critical-edge splits), so ids far apart in value arrive adjacent in time. At every capacity
+// SMALLER than the largest id, the two runs alias onto the same slots and interleaved insertion
+// grows a single cluster; each capacity doubling rehashes and rebuilds it. Same key set, same
+// count, same density — only the ORDER differs, and inserting 24,576 ids cost **346.6 ms in
+// arrival order against 2.3 ms in increasing order, a 150x gap that grows with N** (it is a
+// quadratic: the ladder read x3.8 x3.9 x3.7 x4.0 per doubling). It reached `scale-test` as
+// `phase:encode` climbing x2.0 -> x3.0 across the ladder while its ALLOCATIONS stayed at x1.96 —
+// the exact time-only shape the memory columns cannot see.
+//
+// The fix is the standard one: avalanche the hash before it picks a slot, so that any structure
+// the keys have is not structure the table sees. `fmix32` is used because it is the cheapest
+// finalizer with full avalanche (two multiplies and three shifts, no data-dependent branches).
+//
+// ⚠ It deliberately does NOT change `hash()` itself, and it is NOT what the containers cache in
+// their `hashes` arrays. Those hold the key's true `hash()`, which is what the probe's
+// skip-the-full-`equals()` guard compares; spreading is purely how a hash becomes an INDEX.
+//
+// ⚠ **IT IS INSURANCE, AND THE PREMIUM IS ~3x PROBES ON THE ONE KEY SHAPE THE IDENTITY HASH GETS
+// PERFECT.** A DENSE ASCENDING int run — `0, 1, 2, …` inserted in increasing order — puts every key
+// at its own home slot under the identity hash: **1.000 probes per insert, zero collisions.**
+// Spreading trades that for the ordinary open-addressing average at a 3/4 load factor. Replaying
+// real key sequences through this exact algorithm (The compiler review, 2026-07-26; 601 functions of up to
+// 49 blocks, ascending in 601/601):
+//
+//        identity hash      1.000 probes/insert
+//        spreadHash         2.449 probes/insert
+//
+// and the same replay over a synthetic ladder reads **1.25x at 4 keys, 2.09x at 32, 3.05x at 256,
+// 3.22x at 19,201** — so the premium GROWS with the table and settles near 3x. It buys the
+// guarantee above, which is worth it for a container that cannot know its callers' key order: the
+// alternative is a 150x cliff nobody sees coming.
+//
+// ⇒ **A `Map`/`Set` whose keys ARE a dense index space wants an ARRAY, not a hash table** — the key
+// is already the index, so both operations become one bounds-checked array access with no hash, no
+// rehash chain and two columns instead of four. That is what the compiler's `BlockKeyedTable` is, and why
+// it exists even though this function had already made the quadratic above unreachable.
+public function spreadHash(hash HashValue) returns HashValue
+	var h = hash as HashMixWord
+	h = h xor (h shr 16)
+	h = (h * HashMixMultiplierA) and HashMixWidthMask
+	h = h xor (h shr 13)
+	h = (h * HashMixMultiplierB) and HashMixWidthMask
+	h = h xor (h shr 16)
+	return h as HashValue
+end 'spreadHash'
+
+// Equatable - types that can be compared for equality
+public interface Equatable
+	function equals(other Self) returns bool
+end 'Equatable'
+
+// Comparable - types that can be ordered
+public interface Comparable
+	function compare(other Self) returns Ordering
+end 'Comparable'
+
+// Cloneable - types that can be copied
+public interface Cloneable
+	function clone() returns Self
+end 'Cloneable'
+
+// Iterator - types that hold iteration state and produce elements one at a time.
+//
+// Positioning invariant: a live iterator always points at a valid element. This
+// is established by the constructor (which throws IterationError.exhausted on
+// empty) and preserved by every successful advance(). Because the invariant is
+// maintained at every navigation site, current() has no error path — it just
+// reads.
+//
+// current() returns the element at the current position (infallible) and
+// remains callable for the lifetime of the iterator.
+// advance() moves to the next element; throws IterationError.exhausted when
+// called while positioned on the final element. A thrown advance() leaves the
+// position unchanged, so current() still returns that final element.
+public interface Iterator uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Iterator'
+
+// Extension methods for Iterator - available on all conforming types.
+// advanceBy(n) defaults to calling advance() n times; concrete iterators may
+// override with a faster implementation.
+public extension Iterator
+	public function advanceBy(n IterStep) throws IterationError
+		var i = 0
+		while i < n 'loop'
+			try self.advance()
+			i = i + 1
+		end 'loop'
+	end 'advanceBy'
+end 'Iterator'
+
+// BidirectionalIterator - iterators that can walk backward as well as forward.
+// Types implementing this must also supply retreat(); retreatBy(n) is supplied
+// as an extension method.
+public interface BidirectionalIterator extends Iterator
+	function retreat() throws IterationError
+end 'BidirectionalIterator'
+
+public extension BidirectionalIterator
+	public function retreatBy(n IterStep) throws IterationError
+		var i = 0
+		while i < n 'loop'
+			try self.retreat()
+			i = i + 1
+		end 'loop'
+	end 'retreatBy'
+end 'BidirectionalIterator'
+
+// Iterable - types that can be iterated over (used by for-in loops).
+// createIterator() returns a fresh Iterator for traversal. Each call produces an
+// independent iterator, so nested for-in loops over the same collection work correctly.
+// Conformance: implements Iterable with (ElementType, IteratorType)
+//
+// It throws IterationError for the same reason `Iterator.advance` does: an EMPTY iterable has no
+// first element to position on, so `createIterator` reports `exhausted` rather than handing back an
+// iterator whose `current()` has nothing to return. Every conforming type in this library already
+// declares it (Array, List, Map, Set, Vector, Range, String and the three String views — 11 of 11);
+// the requirement did not, and a dispatch is typed off the REQUIREMENT, so the flag those impls
+// write was read by nobody and the error was dropped.
+public interface Iterable uses Element, Iter
+	function createIterator() returns Iter throws IterationError
+end 'Iterable'
+
+// Extension methods for Iterable - available on all conforming types
+public extension Iterable
+	typealias ElementArray = Array with Element
+	typealias ElementTransform = function(Element) returns Element
+	typealias ElementPredicate = function(Element) returns bool
+
+	public function map(transform ElementTransform) returns ElementArray
+		var result = ElementArray{}
+		for item in self 'loop'
+			result.push(transform(item))
+		end 'loop'
+		return result
+	end 'map'
+
+	public function filter(keep ElementPredicate) returns ElementArray
+		var result = ElementArray{}
+		for item in self 'loop'
+			if keep(item) 'match'
+				result.push(item)
+			end 'match'
+		end 'loop'
+		return result
+	end 'filter'
+
+	public function contains(predicate ElementPredicate) returns bool
+		for item in self 'loop'
+			if predicate(item) 'match'
+				return true
+			end 'match'
+		end 'loop'
+		return false
+	end 'contains'
+
+	typealias WithIterSelf = WithIterIterator with Iter, Element
+
+	public function withIterator() returns WithIterSelf throws IterationError
+		let iter = try self.createIterator()
+		return WithIterSelf.create(iter)
+	end 'withIterator'
+end 'Iterable'
+
+// Stringable - enables custom types to participate in string interpolation
+// Built-in types (int, float, bool, byte, character, string) are handled by the
+// compiler directly and do not need to implement this interface.
+// Implement this for user-defined types: "{myValue}" calls toString()
+public interface Stringable
+	function toString() returns String
+end 'Stringable'
+
+// FormattedStringable - enables format specifiers in string interpolation
+// Implement this for user-defined types that support: "{myValue:format}"
+// The format string after the colon is passed to toString(format)
+public interface FormattedStringable
+	function toString(format String) returns String
+end 'FormattedStringable'

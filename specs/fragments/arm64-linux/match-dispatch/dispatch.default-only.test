@@ -1,0 +1,68 @@
+// Test: dispatch.default-only
+typealias N = int(0 to 100)
+
+function only(x N) returns N
+	return match x 'c'
+		default gives 7
+	end 'c'
+end 'only'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if only(5) == 7 'a'
+		n = n + 1
+	end 'a'
+	if only(0) == 7 'b'
+		n = n + 1
+	end 'b'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  matchdefault#13:
+    arm64.movImm x1, 7
+  __il_cont#11:
+    arm64.cmp x1, 7
+    arm64.b.ne matchdefault#22
+  a:
+    arm64.movImm x0, 1
+  matchdefault#22:
+    arm64.movImm x1, 7
+  __il_cont#20:
+    arm64.cmp x1, 7
+    arm64.b.ne ifcont
+  b:
+    arm64.add x0, x0, 1
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#6
+  __rc_chk#7:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#5
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.default-only.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#5:
+    arm64.cbnz x1, __rc_panic#9
+  __rc_chk#10:
+    arm64.cbz x2, __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.default-only.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#8:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,23 @@
+// Test: unsigned-max-upper-runtime-pass
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let big = 1 shl 63
+	let r = big as Big
+	if r == 1 shl 63 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ok:
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}

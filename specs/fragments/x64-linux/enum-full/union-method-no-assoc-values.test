@@ -1,0 +1,43 @@
+// Test: union-method-no-assoc-values
+union Status
+	pending
+	active
+	closed
+
+	function isActive() returns bool
+		return match self 'check'
+			pending gives false
+			active gives true
+			closed gives false
+		end 'check'
+	end 'isActive'
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.active
+	if s.isActive() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm:
+    x64.movRegImm32 rax, 1
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,24 @@
+// Test: type-parameter-field-expression-default-errors
+typealias Integer = int(i64.min to i64.max)
+typealias StrBox = Box with String
+
+type Box uses T
+	export var value as T = makeIt()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function makeIt() returns Integer
+	return 9
+end 'makeIt'
+
+function main() returns ExitCode
+	let b = StrBox.create()
+	print("{b.value}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:6:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'

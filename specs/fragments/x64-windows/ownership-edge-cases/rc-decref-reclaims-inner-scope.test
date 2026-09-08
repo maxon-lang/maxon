@@ -1,0 +1,87 @@
+// Test: rc-decref-reclaims-inner-scope
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	var a = Cell.create(10)
+	var result = 0
+	if true 'inner'
+		let b = a
+		a = Cell.create(20)
+		result = b.value
+	end 'inner'
+	return result + a.value
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Cell.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 10
+    x64.leaRegSlot rbx, slot0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+  inner:
+    x64.movRegImm32 rcx, 20
+    x64.callDirect Cell.create
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, r8
+  ifcont:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.leaRegRegReg rbx, rax, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at rc-decref-reclaims-inner-scope.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

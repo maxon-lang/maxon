@@ -1,0 +1,55 @@
+// Test: element-payload-through-a-concretely-instantiated-box
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(91, tag: 4)
+	return 4 as ExitCode if b.v.equals(91) else 70 as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 16
+    x64.movRegImm32 rax, 91
+    x64.movRegImm32 rcx, 4
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.storeBaseDispReg.word64 [rdx + 8], rcx
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+  __il_body:
+    x64.cmpRegImm32 rax, 91
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 70
+  matchcont:
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+}

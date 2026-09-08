@@ -1,0 +1,561 @@
+// Test: shared-borrow-root-break-edge
+typealias Count = int(0 to 1000)
+
+type Clause
+	export var paramName as String
+	export var traitName as String
+	export var typeName as String
+
+	static function create(paramName String, traitName String, typeName String) returns Self
+		return Self{paramName: paramName, traitName: traitName, typeName: typeName}
+	end 'create'
+end 'Clause'
+
+typealias ClauseArray = Array with Clause
+typealias ClauseMap = Map with (String, ClauseArray)
+
+function satisfied(traitName String) returns bool
+	return traitName == "Equatable"
+end 'satisfied'
+
+// Borrow a map-owned array, iterate it, and on the conditional break read three
+// fields of the borrowed element into outer vars — three interior borrows of the
+// same element on one edge.
+function firstFailing(m ClauseMap, key String) returns Count
+	var failedParam = ""
+	var failedTrait = ""
+	var failedType = ""
+	let clauses = try m.get(key) otherwise ClauseArray.create()
+	for i in 0 upto clauses.count() 'each'
+		let c = try clauses.get(i) otherwise panic("firstFailing: get OOB")
+		if not satisfied(c.traitName) 'fail'
+			failedParam = c.paramName
+			failedTrait = c.traitName
+			failedType = c.typeName
+			break
+		end 'fail'
+	end 'each'
+	return failedParam.count() + failedTrait.count() + failedType.count()
+end 'firstFailing'
+
+function main() returns ExitCode
+	var m = ClauseMap.create()
+	var arr = ClauseArray.create()
+	arr.push(Clause.create("Item", traitName: "Comparable", typeName: "NotComparable"))
+	try m.insert("MyHolder.isGreater", value: arr) otherwise return 1
+	// "Item"(4) + "Comparable"(10) + "NotComparable"(13) = 27
+	return firstFailing(m, key: "MyHolder.isGreater")
+end 'main'
+---
+ExitCode: 27
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Clause.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 16], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @satisfied {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rdx, [rip + __str_rec_6]  ; "Equatable"
+    x64.callDirect __str_eq
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @firstFailing {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rbx, rcx
+    x64.storeSlotReg slot5, rdx
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; ""
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot3, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; ""
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; ""
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __layout_Map_String_ClauseArray]
+    x64.leaRegRdata r9, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Clause]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  tryok#1:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  forhdr:
+    x64.cmpRegReg r12, r13
+    x64.jcc greaterEqual, critsplit#21
+  each:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __rc_ok#12
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_47]  ; "panic at shared-borrow-root-break-edge.test:30: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 r14, [rax + r12*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#22
+  __im_empty:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, critsplit#23
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg r14, r8
+    x64.jmp __im_cont
+  critsplit#23:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#22:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at shared-borrow-root-break-edge.test:30: firstFailing: get OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#8:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 8]
+    x64.callDirect satisfied
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep
+  fail:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot4, r13
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rbx, slot4
+    x64.jmp forexit
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  critsplit#21:
+    x64.loadRegSlot rbx, slot1
+    x64.loadRegSlot r12, slot2
+    x64.loadRegSlot r13, slot3
+    x64.movRegReg r14, rbx
+    x64.movRegReg rbx, r13
+    x64.movRegReg r13, r12
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect String.count
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect String.count
+    x64.leaRegRegReg r12, r12, r8
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#15
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, __rc_ok#14
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_48]  ; "panic at shared-borrow-root-break-edge.test:38: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#14:
+    x64.movRegReg r8, r12
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_ClauseArray]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.storeSlotReg slot0, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Clause]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRdata rax, [rip + __str_rec_9]  ; "Item"
+    x64.leaRegRdata rbx, [rip + __str_rec_10]  ; "Comparable"
+    x64.leaRegRdata rcx, [rip + __str_rec_11]  ; "NotComparable"
+    x64.storeSlotReg slot2, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegImm32 rcx, rbx, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot3, r13
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, rbx
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.loadRegSlot rax, slot2
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.loadRegSlot rdx, slot3
+    x64.movRegReg rax, r13
+    x64.callDirect Clause.create
+    x64.loadRegSlot rbx, slot1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "MyHolder.isGreater"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata r9, [rip + __layout_Map_String_ClauseArray]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect Map.insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 1
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Map_String_ClauseArray
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRdata rdx, [rip + __str_rec_12]  ; "MyHolder.isGreater"
+    x64.loadRegSlot rbx, slot0
+    x64.movRegReg rcx, rbx
+    x64.callDirect firstFailing
+    x64.movRegReg r12, r8
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Map_String_ClauseArray
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at shared-borrow-root-break-edge.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

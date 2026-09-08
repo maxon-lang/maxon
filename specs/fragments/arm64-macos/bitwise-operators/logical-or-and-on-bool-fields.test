@@ -1,0 +1,133 @@
+// Test: logical-or-and-on-bool-fields
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Flags.make {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.byte [x0 + 0], x19
+    arm64.storeBaseDispReg.byte [x0 + 8], x20
+    arm64.storeBaseDispReg.byte [x0 + 16], x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl Flags.make
+    arm64.loadRegBaseDisp.byte x1, [x0 + 0]
+    arm64.movImm x2, 1
+    arm64.cbnz x1, __il_body#11
+  orrhs#1:
+    arm64.loadRegBaseDisp.byte x1, [x0 + 8]
+    arm64.movRegReg x2, x1
+  __il_body#11:
+    arm64.cbz x2, ifcont#13
+  isTrue#12:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#10
+  ifcont#13:
+    arm64.movImm x1, 0
+  __il_cont#10:
+    arm64.loadRegBaseDisp.byte x2, [x0 + 0]
+    arm64.movImm x3, 0
+    arm64.cbz x2, critsplit
+  andrhs:
+    arm64.loadRegBaseDisp.byte x2, [x0 + 16]
+    arm64.b __il_body#15
+  critsplit:
+    arm64.movRegReg x2, x3
+  __il_body#15:
+    arm64.cbz x2, ifcont#17
+  isTrue#16:
+    arm64.movImm x2, 1
+    arm64.b __il_cont#14
+  ifcont#17:
+    arm64.movImm x2, 0
+  __il_cont#14:
+    arm64.loadRegBaseDisp.byte x3, [x0 + 8]
+    arm64.movImm x4, 1
+    arm64.cbnz x3, __il_body#19
+  orrhs#5:
+    arm64.loadRegBaseDisp.byte x3, [x0 + 8]
+    arm64.movRegReg x4, x3
+  __il_body#19:
+    arm64.cbz x4, ifcont#21
+  isTrue#20:
+    arm64.movImm x3, 1
+    arm64.b __il_cont#18
+  ifcont#21:
+    arm64.movImm x3, 0
+  __il_cont#18:
+    arm64.lsl x1, x1, 2
+    arm64.arm64AddLsl x1, x1, x2, lsl #1
+    arm64.add x19, x1, x3
+    arm64.bl __mm_decref
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at logical-or-and-on-bool-fields.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

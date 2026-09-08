@@ -1,0 +1,47 @@
+// Test: large-magnitudes-relate-correctly
+function main() returns ExitCode
+	var r = 0
+	if 1.0e300 > 0.0 'positiveBig'
+		r = r + 1
+	end 'positiveBig'
+	if 1.0e-300 > 0.0 'positiveSmall'
+		r = r + 2
+	end 'positiveSmall'
+	if 1.0e150 * 1.0e150 > 1.0e300 / 2.0 'squareIsSameDecade'
+		r = r + 4
+	end 'squareIsSameDecade'
+	if 1.0e300 * 1.0e-300 > 0.5 'reciprocalIsOne'
+		r = r + 8
+	end 'reciprocalIsOne'
+	return r
+end 'main'
+---
+ExitCode: 15
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  positiveBig:
+    arm64.movImm x0, 1
+  positiveSmall:
+    arm64.add x0, x0, 2
+  squareIsSameDecade:
+    arm64.add x0, x0, 4
+  reciprocalIsOne:
+    arm64.add x0, x0, 8
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at large-magnitudes-relate-correctly.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

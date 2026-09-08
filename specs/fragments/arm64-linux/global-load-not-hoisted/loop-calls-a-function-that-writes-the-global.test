@@ -1,0 +1,62 @@
+// Test: loop-calls-a-function-that-writes-the-global
+
+
+var counter = 0
+
+function bump()
+	counter = counter + 1
+end 'bump'
+
+function main() returns ExitCode
+	var seen = 0
+	var n = 0
+	while n < 5 'loop'
+		bump()
+		seen = seen + counter
+		n = n + 1
+	end 'loop'
+	return seen
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  whilehdr:
+    arm64.cmp x1, 5
+    arm64.b.ge whileexit
+  __il_body:
+    arm64.leaGlobal x2, __data_counter
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x2, 1
+    arm64.leaGlobal x3, __data_counter
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+  __il_cont:
+    arm64.leaGlobal x2, __data_counter
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x0, x0, x2
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at loop-calls-a-function-that-writes-the-global.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

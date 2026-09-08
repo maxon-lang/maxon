@@ -1,0 +1,25 @@
+// Test: enum-as-parameter-name-crossfile
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
+
+// --- file: api/helper.maxon
+export function pickOne(enum StdType) returns StdType
+	return enum
+end 'pickOne'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return pickOne(7)
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

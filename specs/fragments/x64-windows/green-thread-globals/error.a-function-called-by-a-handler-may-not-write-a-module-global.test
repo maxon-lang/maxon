@@ -1,0 +1,29 @@
+// Test: error.a-function-called-by-a-handler-may-not-write-a-module-global
+var total = 0
+
+function record(by Integer)
+	total = total + by
+end 'record'
+
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Integer)
+		record(by)
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	h.add(5)
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3143: <fragment>:5:2: `record` writes the module-level `total`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `total = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+note: <fragment>:21:10: the `spawn` that makes `Counter` a service

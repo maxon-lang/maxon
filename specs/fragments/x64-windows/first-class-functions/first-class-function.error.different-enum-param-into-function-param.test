@@ -1,0 +1,38 @@
+// Test: first-class-function.error.different-enum-param-into-function-param
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeFn(s Shade) returns Color
+	match s 'k'
+		dark then return Color.red
+		light then return Color.green
+	end 'k'
+end 'shadeFn'
+
+function takesFn(f ColorFn) returns Color
+	return f(Color.blue)
+end 'takesFn'
+
+function main() returns ExitCode
+	let c = takesFn(shadeFn)
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:28:10: argument type mismatch for 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'

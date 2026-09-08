@@ -1,0 +1,27 @@
+// Test: directives.not-doubles-back
+function main() returns ExitCode
+	#if not os(Wasi)
+		#if os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#else
+		#if not os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#endif
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 10
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,23 @@
+// Test: return-in-if-then-reachable
+function classify(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 0
+end 'classify'
+
+function main() returns ExitCode
+	return classify(5)
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  positive:
+    arm64.movImm x0, 1
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

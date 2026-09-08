@@ -1,0 +1,196 @@
+// Test: a-byte-operand-with-a-proven-count-is-still-64-bit
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shl n
+end 'shlLowByte'
+
+function shlTopByte(n Bits) returns Num
+	let b = 255 as Byte
+	return b shl n
+end 'shlTopByte'
+
+function shrLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shr n
+end 'shrLowByte'
+
+function bits(step Num) returns Bits
+	return step as Bits
+end 'bits'
+
+function main() returns ExitCode
+	if shlLowByte(bits(10)) != 204800 'tenBits'
+		return 1
+	end 'tenBits'
+	if shlTopByte(bits(56)) != -72057594037927936 'topByte'
+		return 2
+	end 'topByte'
+	if shrLowByte(bits(3)) != 25 'shrByte'
+		return 3
+	end 'shrByte'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlLowByte {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:6: Range check failed: value outside typealias 'Bits'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 r8, 200
+    x64.shlRegCl r8, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @shlTopByte {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:11: Range check failed: value outside typealias 'Bits'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 r8, 255
+    x64.shlRegCl r8, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @shrLowByte {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:16: Range check failed: value outside typealias 'Bits'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 r8, 200
+    x64.shrRegCl r8, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __rc_ok#10:
+    x64.movRegImm32 rcx, 10
+  __il_body#13:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#16
+  __rc_chk#15:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok#14
+  __il_slow#16:
+    x64.callDirect shlLowByte
+    x64.jmp __il_cont#7
+  __rc_ok#14:
+    x64.movRegImm32 rax, 200
+    x64.shlRegCl rax, rax
+    x64.movRegReg r8, rax
+  __il_cont#7:
+    x64.cmpRegImm32 r8, 204800
+    x64.jcc equal, __rc_ok#20
+  tenBits:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#20:
+    x64.movRegImm32 rcx, 56
+  __il_body#23:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#26
+  __rc_chk#25:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok#24
+  __il_slow#26:
+    x64.callDirect shlTopByte
+    x64.jmp __il_cont#17
+  __rc_ok#24:
+    x64.movRegImm32 rax, 255
+    x64.shlRegCl rax, rax
+    x64.movRegReg r8, rax
+  __il_cont#17:
+    x64.movRegImm rax, 18374686479671623680
+    x64.cmpRegReg r8, rax
+    x64.jcc equal, __rc_ok#30
+  topByte:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#30:
+    x64.movRegImm32 rcx, 3
+  __il_body#33:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#36
+  __rc_chk#35:
+    x64.cmpRegImm32 rcx, 63
+    x64.jcc lessEqual, __rc_ok#34
+  __il_slow#36:
+    x64.callDirect shrLowByte
+    x64.jmp __il_cont#27
+  __rc_ok#34:
+    x64.movRegImm32 rax, 200
+    x64.shrRegCl rax, rax
+    x64.movRegReg r8, rax
+  __il_cont#27:
+    x64.cmpRegImm32 r8, 25
+    x64.jcc equal, ifcont
+  shrByte:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

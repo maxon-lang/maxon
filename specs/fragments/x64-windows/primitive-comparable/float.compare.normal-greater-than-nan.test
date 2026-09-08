@@ -1,0 +1,68 @@
+// Test: float.compare.normal-greater-than-nan
+function main() returns ExitCode
+	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
+	let x = 42.0
+	let result = x.compare(nan)
+	match result 'check'
+		lessThan then return 1
+		equalTo then return 1
+		greaterThan then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0x7ff0000000000000]
+    x64.subsdRegReg xmm0, xmm0, xmm0
+    x64.movsdRegRip xmm1, [rip + __fconst_42]
+  ifcont#13:
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.jcc parity, other_nan
+  fordered:
+    x64.jcc equal, ifcont#15
+  other_nan:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont
+  ifcont#15:
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc belowEqual, ifcont#17
+  lt:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont
+  ifcont#17:
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc belowEqual, ifcont#19
+  gt:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont
+  ifcont#19:
+    x64.movRegImm32 rax, 1
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#5
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext#5:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#6
+  matcharm#2:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext#6:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead
+  matcharm#3:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

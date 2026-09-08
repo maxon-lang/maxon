@@ -1,0 +1,57 @@
+// The profiled program the green-thread case measures, and the claim it exists to settle.
+//
+// ⭐ A PROFILER THAT COULD ONLY SEE OS THREADS WOULD BE USELESS FOR A MAXON PROGRAM: the scheduler
+// multiplexes green threads onto a pool of workers, so the failure to fear is a report that names
+// `__sched_worker_loop` as every program's hotspot. This file gives the profiler two green threads with
+// nothing else running, so a report that names the scheduler instead of them is unmistakable.
+//
+// ⚠ THE 2:1 RATIO IS DELIBERATE. With equal work the two rows sit inside each other's noise and their
+// ORDER in every table is a coin flip; making one genuinely busier turns the ordering from something a
+// case must tolerate into something it can assert. Separate FUNCTIONS rather than one called twice,
+// because what is being demonstrated is that the profiler tells the two green threads apart.
+//
+// ⚠ EACH TASK'S `sleep` IS AT THE END. `async` on a body that never yields is refused outright, and a
+// yield at the START would park the task the instant a worker picked it up.
+
+typealias ExitCode = int(0 to 255)
+typealias Rounds = int(0 to i64.max)
+
+function spinA(rounds Rounds) returns Rounds
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'spinALoop'
+		acc = acc + i
+		i = i + 1
+	end 'spinALoop'
+
+	sleep(1)
+
+	return acc / 1000000000
+end 'spinA'
+
+function spinB(rounds Rounds) returns Rounds
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'spinBLoop'
+		acc = acc + i
+		i = i + 1
+	end 'spinBLoop'
+
+	sleep(1)
+
+	return acc / 1000000000
+end 'spinB'
+
+function main() returns ExitCode
+	let a = async spinA(800000000)
+	let b = async spinB(400000000)
+
+	let ra = await a
+	let rb = await b
+
+	print("done {ra} {rb}\n")
+
+	return 0
+end 'main'

@@ -1,0 +1,20 @@
+// Test: error.match-arms-across-aliases
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+function pick(k Narrow, n Narrow, w Wide) returns Wide
+	let r = match k 'm'
+		0 gives n
+		default gives w
+	end 'm'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	let r = pick(0, n: 5, w: 9)
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:6:10: match arms give incompatible types: 'Wide' vs 'Narrow'

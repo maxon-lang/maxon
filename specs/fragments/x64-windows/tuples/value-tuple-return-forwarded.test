@@ -1,0 +1,141 @@
+// Test: value-tuple-return-forwarded
+typealias Num = int(0 to 1000)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function forward(a Num, b Num) returns (Num, Num)
+	return pair(a, b: b)
+end 'forward'
+
+function main() returns ExitCode
+	let f = forward(10, b: 20)
+	return f._0 + f._1
+end 'main'
+---
+ExitCode: 33
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @pair {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at value-tuple-return-forwarded.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at value-tuple-return-forwarded.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.leaRegRegImm32 r10, rdx, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @forward {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at value-tuple-return-forwarded.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at value-tuple-return-forwarded.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.callDirect pair
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 20
+    x64.callDirect forward
+    x64.leaRegRegReg r8, r8, r10
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at value-tuple-return-forwarded.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

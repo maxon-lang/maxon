@@ -1,0 +1,23 @@
+// Test: error.an-ordinary-generics-own-Self-states-no-count
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+type Box uses T
+	export var value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function slots() returns Int
+		return countof(Self)
+	end 'slots'
+end 'Box'
+
+function main() returns ExitCode
+	var b = IntBox.create(1)
+	return b.slots()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:10: Unsupported: countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`

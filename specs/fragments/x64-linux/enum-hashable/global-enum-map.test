@@ -1,0 +1,206 @@
+// Test: global-enum-map
+enum LogLevel
+	NONE
+	ERROR
+	INFO
+end 'LogLevel'
+
+enum LogCategory
+	compiler
+	lexer
+	parser
+end 'LogCategory'
+
+typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
+
+var categoryLevels = CategoryLevelMap.create()
+
+function setCategoryLevel(category LogCategory, level LogLevel)
+	try categoryLevels.insert(category, value: level) otherwise ignore
+end 'setCategoryLevel'
+
+function getCategoryLevel(category LogCategory) returns LogLevel
+	return try categoryLevels.get(category) otherwise LogLevel.NONE
+end 'getCategoryLevel'
+
+function main() returns ExitCode
+	setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
+	setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
+	let compilerLevel = getCategoryLevel(LogCategory.compiler)
+	let lexerLevel = getCategoryLevel(LogCategory.lexer)
+	let r1 = match compilerLevel 'c'
+		INFO gives true
+		NONE gives false
+		ERROR gives false
+	end 'c'
+	let r2 = match lexerLevel 'l'
+		ERROR gives true
+		NONE gives false
+		INFO gives false
+	end 'l'
+	if r1 and r2 'both'
+		return 1
+	end 'both'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __data_categoryLevels@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @setCategoryLevel {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.leaRegGlobal rax, __data_categoryLevels
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.leaRegRdata r9, [rip + __layout_Map_LogCategory_LogLevel]
+    x64.leaRegRdata rsi, [rip + __witness_LogCategory.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_LogCategory.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect Map.insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont
+  trycont:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Map_LogCategory_LogLevel
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @getCategoryLevel {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __data_categoryLevels
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __layout_Map_LogCategory_LogLevel]
+    x64.leaRegRdata r9, [rip + __witness_LogCategory.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_LogCategory.Equatable]
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Map_LogCategory_LogLevel
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 2
+    x64.callDirect setCategoryLevel
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 1
+    x64.callDirect setCategoryLevel
+    x64.movRegImm32 rcx, 0
+    x64.callDirect getCategoryLevel
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getCategoryLevel
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, matchnext#5
+  matcharm#2:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#7
+  matchnext#5:
+    x64.cmpRegImm32 rbx, 1
+    x64.jcc notEqual, matchnext#6
+  matcharm#3:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#7
+  matchnext#6:
+    x64.cmpRegImm32 rbx, 2
+    x64.jcc notEqual, matchdead#4
+  matcharm#1:
+    x64.movRegImm32 rax, 1
+  matchcont#7:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, matchnext#12
+  matcharm#9:
+    x64.movRegImm32 rcx, 0
+    x64.jmp matchcont#14
+  matchnext#12:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, matchnext#13
+  matcharm#8:
+    x64.movRegImm32 rcx, 1
+    x64.jmp matchcont#14
+  matchnext#13:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, matchdead#11
+  matcharm#10:
+    x64.movRegImm32 rcx, 0
+  matchcont#14:
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, scmerge
+  critsplit:
+    x64.movRegReg rcx, rdx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  both:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#11:
+  matchdead#4:
+}

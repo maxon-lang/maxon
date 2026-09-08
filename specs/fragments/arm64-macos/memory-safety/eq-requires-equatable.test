@@ -1,0 +1,23 @@
+// Test: eq-requires-equatable
+typealias Integer = int(i64.min to i64.max)
+typealias FnTypeAlias1 = function() returns Integer
+
+type Callback
+	export var fn as FnTypeAlias1
+
+	static function create(fn FnTypeAlias1) returns Self
+		return Self{fn: fn}
+	end 'create'
+end 'Callback'
+
+function main() returns ExitCode
+	let a = Callback.create(main)
+	let b = Callback.create(main)
+	if a == b 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:7: type mismatch: 'cannot compare struct with struct'

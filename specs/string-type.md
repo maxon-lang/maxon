@@ -1,0 +1,1134 @@
+---
+feature: string-type
+status: experimental
+keywords: [string, sso, utf8, cow]
+category: types
+---
+
+# String Type
+
+## Documentation
+
+The `string` type provides an efficient, UTF-8 encoded string with automatic memory management.
+
+### Small String Optimization (SSO)
+
+Short strings (up to 15 bytes) are stored directly in the string value itself, requiring no heap allocation.
+
+```maxon
+var short = "hello"        // Stored inline (5 bytes)
+var longer = "this is a longer string"  // Heap allocated
+```
+
+### String Methods
+
+```maxon
+var s = "hello"
+var len = s.count()           // Returns 5 (grapheme count)
+var bytes = s.bytes().count() // Returns 5 (byte count)
+var empty = s.isEmpty()       // Returns false
+```
+
+### Search Methods
+
+```maxon
+var s = "hello world"
+s.startsWith("hello")      // true
+s.endsWith("world")        // true
+s.contains("lo wo")        // true (substring search)
+s.contains('o')            // true (character search)
+s.findFirst("world")            // 6 (index, or -1 if not found)
+```
+
+### Split
+
+```maxon
+var parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
+var csv = "a,b,c".split(",")              // ["a", "b", "c"]
+```
+
+`split(delimiter: String) returns Array with String` divides a string into an array of substrings. If the delimiter is not found, the result is a single-element array containing the original string. An empty delimiter also returns a single-element array. Consecutive delimiters produce empty strings in the result:
+
+```maxon
+var parts = "a,,b".split(",")   // ["a", "", "b"]
+```
+
+### String Concatenation
+
+```maxon
+var greeting = "Hello"
+var name = "World"
+var message = greeting + ", " + name + "!"  // "Hello, World!"
+```
+
+### Character Iteration
+
+Iterate over grapheme clusters (user-perceived characters) in a string:
+
+```maxon
+var s = "café"
+for c in s 'loop'
+	print("{c}\n")  // Prints c, a, f, é (4 chars, not 5 bytes)
+end 'loop'
+```
+
+Each iteration yields a `character` value representing an Extended Grapheme Cluster (EGC).
+
+### String Views
+
+Strings provide multiple views for different iteration granularities:
+
+**Default iteration** - Grapheme clusters (character):
+```maxon
+for c in "café" 'chars'
+	// c is a character (grapheme cluster)
+	print("{c}\n")
+end 'chars'
+```
+
+**Codepoint view** - Unicode codepoints (int):
+```maxon
+for cp in s.codepoints() 'codepoints'
+	print("{cp}\n")  // Unicode codepoint values
+end 'codepoints'
+```
+
+**Byte view** - Raw UTF-8 bytes:
+```maxon
+for b in s.bytes() 'bytes'
+	print("{b}\n")  // Raw byte values
+end 'bytes'
+```
+
+**UTF-16 view** - UTF-16 code units (useful for Windows API or JavaScript interop):
+```maxon
+for u in s.utf16() 'utf16'
+	print("{u}\n")  // UTF-16 code units
+end 'utf16'
+```
+
+Characters outside the Basic Multilingual Plane (codepoints > U+FFFF like emoji) produce surrogate pairs in UTF-16:
+```maxon
+var emoji = "😀"
+for u in emoji.utf16() 'loop'
+	print("{u}\n")  // 55357, 56832 (surrogate pair for U+1F600)
+end 'loop'
+```
+
+### UTF-16 Utility Functions
+
+The `stdlib/string/utf16.maxon` module provides utility functions for working with UTF-16 encoding:
+
+```maxon
+// Check surrogate types
+utf16IsLeadSurrogate(55357)   // true (0xD83D)
+utf16IsTrailSurrogate(56832)  // true (0xDE00)
+utf16IsSurrogate(55357)        // true
+
+// Get encoding width (1 or 2 code units)
+utf16Width(65)      // 1 (ASCII 'A')
+utf16Width(128512)  // 2 (😀 U+1F600 needs surrogate pair)
+
+// Encode codepoint to surrogates
+utf16LeadSurrogate(128512)   // 55357 (0xD83D)
+utf16TrailSurrogate(128512)  // 56832 (0xDE00)
+
+// Decode surrogate pair to codepoint
+utf16DecodeSurrogates(55357, low: 56832)  // 128512 (U+1F600)
+```
+
+### String Slicing
+
+Create a substring view that shares storage with the original string:
+
+```maxon
+var s = "hello world"
+var start = s.startIndex()
+var spaceIdx = try s.findFirst(" ") otherwise return  // find throws StringError.notFound if not found
+var sub = s.slice(start, endIndex: spaceIdx)  // "hello" - shares storage with s
+print(sub)
+```
+
+Slices are immutable views into the parent string. They do not copy data, making them efficient for parsing and substring operations.
+
+### Copy-on-Write Behavior
+
+Strings use copy-on-write (COW) semantics for efficiency:
+
+```maxon
+var original = "hello"
+var copy = original        // Both share the same storage
+copy = copy.toLower()      // copy gets its own storage, original unchanged
+print(original)            // "hello" - not modified
+print(copy)                // "hello" - new copy
+```
+
+When you assign a string to another variable, they share storage. If either is mutated, a copy is made automatically, ensuring the other remains unchanged.
+
+## Tests
+
+<!-- test: basic-declaration -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	if s == "hello" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: empty-string -->
+```maxon
+function main() returns ExitCode
+	let s = ""
+	if s == "" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: long-string -->
+```maxon
+function main() returns ExitCode
+	let s = "this string is longer than fifteen bytes"
+	if s == "this string is longer than fifteen bytes" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: inequality -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	if s != "world" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: equality-with-logical-and -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	let c = 'A'
+	if s == "hello" and c == 'A' 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: print-string -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	print(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: print-literal -->
+```maxon
+function main() returns ExitCode
+	print("Hello, World!")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hello, World!
+```
+
+<!-- test: print-multiple-literals-and-global -->
+```maxon
+var total = 0
+
+function bump(n Integer) returns Integer
+	total = total + n
+	return total
+end 'bump'
+
+function main() returns ExitCode
+	print("foo")
+	let a = bump(10)
+	print("bar")
+	let b = bump(5)
+	print("baz")
+	return b - a - 5
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+foobarbaz
+```
+
+<!-- test: string-interpolation-concatenation -->
+```maxon
+function main() returns ExitCode
+	let a = "hello"
+	let b = "world"
+	let c = "{a} {b}"
+	print(c)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: count-method -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: isEmpty-method -->
+```maxon
+function main() returns ExitCode
+	let empty = ""
+	let nonempty = "hello"
+	if empty.isEmpty() 'check1'
+		print("1\n")
+	end 'check1'
+	if nonempty.isEmpty() 'check2'
+		print("0\n")
+	end 'check2' else 'not_empty'
+		print("2\n")
+	end 'not_empty'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+2
+```
+
+<!-- test: startsWith -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	if s.startsWith("hello") 'c1'
+		print("1\n")
+	end 'c1'
+	if s.startsWith("world") 'c2'
+		print("0\n")
+	end 'c2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: endsWith -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	if s.endsWith("world") 'c1'
+		print("1\n")
+	end 'c1'
+	if s.endsWith("hello") 'c2'
+		print("0\n")
+	end 'c2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: contains -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	if s.contains("lo wo") 'c1'
+		print("1\n")
+	end 'c1'
+	if s.contains("xyz") 'c2'
+		print("0\n")
+	end 'c2'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: contains-both-overloads -->
+### BOTH members of the corpus `contains` pair, from one program
+`contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:456`) and
+`contains(character Character)` (`:464`) — and until W49 wave 4 the compiler served the `String` form from a
+synthesized `__str_contains` arm, so the `Character` form did not exist here at all. Retiring the member
+hands both to `SemanticCheck.resolveOverloadedCalls`.
+
+⚠ **THE CHARACTER MEMBER WAS DOCUMENTED IN THIS FILE'S PROSE AND PINNED BY NOTHING**, which is why "the
+suite stayed green" could not have been evidence that retiring the pair was safe. It is pinned here, with
+the non-ASCII case that distinguishes a GRAPHEME search from a byte one: the `Character` member's body
+converts to a String and searches, so a multi-byte cluster must match itself and not its first byte.
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let a = s.contains("lo wo")
+	let b = s.contains("xyz")
+	let c = s.contains('o')
+	let d = s.contains('z')
+	let e = "café naïve"
+	let f = e.contains('é')
+	let g = e.contains('ü')
+	print("{a} {b} {c} {d} {f} {g}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false true false true false
+```
+
+<!-- test: contains-in-a-loop-does-not-leak -->
+### Neither member leaks its temporary
+The `Character` member builds a `String` from its argument (`character.toString()`) and the `String`
+member borrows its needle. Both are the CORPUS's bodies now, so the drops are the ones its declarations
+own rather than ones a synthesized arm enrolled — a loop is what makes a missing one exit 101.
+```maxon
+function main() returns ExitCode
+	var hits = 0
+	for i in 0 upto 200 'each'
+		let s = "hello world {i}"
+		if s.contains('o') 'ch'
+			hits = hits + 1
+		end 'ch'
+		if s.contains("wor") 'st'
+			hits = hits + 1
+		end 'st'
+	end 'each'
+	print("{hits}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+400
+```
+
+<!-- test: find -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let idx = try s.findFirst("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	let idx2 = try s.findFirst("xyz") otherwise s.endIndex()
+	if idx2 == s.endIndex() 'not_found'
+		print("-1\n")
+	end 'not_found'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+-1
+```
+
+<!-- test: find-last-basic -->
+```maxon
+function main() returns ExitCode
+	let s = "abcabc"
+	let idx = try s.findLast("abc") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	print("{idx.bytePos()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+3
+```
+
+<!-- test: find-last-single -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let idx = try s.findLast("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: find-last-not-found -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	if let idx = try s.findLast("xyz") 'found'
+		print("FOUND\n")
+		return idx.charIndex() as ExitCode
+	end 'found' else 'not_found'
+		print("NOT_FOUND\n")
+	end 'not_found'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+NOT_FOUND
+```
+
+<!-- test: find-last-at-end -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let idx = try s.findLast("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: find-last-at-start -->
+```maxon
+function main() returns ExitCode
+	let s = "abcdef"
+	let idx = try s.findLast("abc") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: find-last-overlapping -->
+```maxon
+function main() returns ExitCode
+	let s = "aaa"
+	let idx = try s.findLast("aa") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: replace-single -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replace("world", with: "there")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello there
+```
+
+<!-- test: replace-multiple -->
+```maxon
+function main() returns ExitCode
+	let s = "aaa bbb aaa"
+	let result = s.replace("aaa", with: "x")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x bbb x
+```
+
+<!-- test: replace-no-match -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replace("xyz", with: "abc")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: replace-empty-needle -->
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	let result = s.replace("", with: "x")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: replace-with-empty -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replace("o", with: "")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell wrld
+```
+
+<!-- test: replace-adjacent -->
+```maxon
+function main() returns ExitCode
+	let s = "aaaa"
+	let result = s.replace("aa", with: "b")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bb
+```
+
+<!-- test: replaceFirst-single -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replaceFirst("o", with: "0")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell0 world
+```
+
+<!-- test: replaceFirst-multiple-occurrences -->
+```maxon
+function main() returns ExitCode
+	let s = "aaa bbb aaa"
+	let result = s.replaceFirst("aaa", with: "x")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x bbb aaa
+```
+
+<!-- test: replaceFirst-no-match -->
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replaceFirst("xyz", with: "abc")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: for-in-string -->
+```maxon
+function main() returns ExitCode
+	let s = "abc"
+	for c in s 'loop'
+		print("{c}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a
+b
+c
+```
+
+<!-- test: byteview-iteration -->
+```maxon
+function main() returns ExitCode
+	let s = "abc"
+	for b in s.bytes() 'loop'
+		print("{b}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+97
+98
+99
+```
+
+<!-- test: utf16-ascii -->
+```maxon
+function main() returns ExitCode
+	let s = "ABC"
+	for u in s.utf16() 'loop'
+		print("{u}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+66
+67
+```
+
+<!-- test: utf16-bmp -->
+```maxon
+function main() returns ExitCode
+	let s = "αβγ"
+	for u in s.utf16() 'loop'
+		print("{u}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+945
+946
+947
+```
+
+<!-- test: utf16-surrogate-pair -->
+```maxon
+function main() returns ExitCode
+	let s = "😀"
+	for u in s.utf16() 'loop'
+		print("{u}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+55357
+56832
+```
+
+<!-- test: utf16-mixed -->
+```maxon
+function main() returns ExitCode
+	let s = "A😀B"
+	for u in s.utf16() 'loop'
+		print("{u}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+55357
+56832
+66
+```
+
+<!-- test: utf16-length -->
+```maxon
+function main() returns ExitCode
+	let s = "A😀B"
+	let view = s.utf16()
+	print("{view.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: utf16-is-lead-surrogate -->
+```maxon
+function main() returns ExitCode
+	// 0xD83D = 55357 (high surrogate for 😀)
+	if utf16IsLeadSurrogate(55357) 'c1'
+		print("1\n")
+	end 'c1'
+	if utf16IsLeadSurrogate(56832) 'c2'
+		print("0\n")
+	end 'c2'
+	if utf16IsLeadSurrogate(65) 'c3'
+		print("0\n")
+	end 'c3'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: utf16-is-trail-surrogate -->
+```maxon
+function main() returns ExitCode
+	// 0xDE00 = 56832 (low surrogate for 😀)
+	if utf16IsTrailSurrogate(56832) 'c4'
+		print("1\n")
+	end 'c4'
+	if utf16IsTrailSurrogate(55357) 'c5'
+		print("0\n")
+	end 'c5'
+	if utf16IsTrailSurrogate(65) 'c6'
+		print("0\n")
+	end 'c6'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: utf16-is-surrogate -->
+```maxon
+function main() returns ExitCode
+	if utf16IsSurrogate(55357) 'c7'
+		print("1\n")
+	end 'c7'
+	if utf16IsSurrogate(56832) 'c8'
+		print("2\n")
+	end 'c8'
+	if utf16IsSurrogate(65) 'c9'
+		print("0\n")
+	end 'c9'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+2
+```
+
+<!-- test: utf16-width -->
+```maxon
+function main() returns ExitCode
+	print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
+	print("{utf16Width(945)}\n")     // Greek α = 1 code unit (BMP)
+	print("{utf16Width(128512)}\n")  // 😀 U+1F600 = 2 code units
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+1
+2
+```
+
+<!-- test: utf16-encode-surrogates -->
+```maxon
+function main() returns ExitCode
+	// 😀 U+1F600 = 128512
+	print("{utf16LeadSurrogate(128512)}\n")   // 55357 (0xD83D)
+	print("{utf16TrailSurrogate(128512)}\n")  // 56832 (0xDE00)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+55357
+56832
+```
+
+<!-- test: utf16-decode-surrogates -->
+```maxon
+function main() returns ExitCode
+	// Decode surrogate pair back to codepoint
+	let cp = utf16DecodeSurrogates(55357, low: 56832)
+	print("{cp}\n")  // 128512 (U+1F600)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+128512
+```
+
+<!-- test: utf16-is-bmp -->
+```maxon
+function main() returns ExitCode
+	if utf16IsBmp(65) 'c10'
+		print("1\n")       // ASCII
+	end 'c10'
+	if utf16IsBmp(945) 'c11'
+		print("2\n")      // Greek α
+	end 'c11'
+	if utf16IsBmp(65535) 'c12'
+		print("3\n")    // U+FFFF (last BMP)
+	end 'c12'
+	if utf16IsBmp(128512) 'c13'
+		print("0\n")   // 😀 (not BMP)
+	end 'c13'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+2
+3
+```
+
+<!-- test: utf16-valid-surrogate-pair -->
+```maxon
+function main() returns ExitCode
+	if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
+		print("1\n")  // valid pair
+	end 'c14'
+	if utf16IsValidSurrogatePair(56832, low: 55357) 'c15'
+		print("0\n")  // reversed
+	end 'c15'
+	if utf16IsValidSurrogatePair(65, low: 66) 'c16'
+		print("0\n")        // not surrogates
+	end 'c16'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: split-result-crosses-a-user-function-and-a-struct-field -->
+### An owned `Array with String` survives being returned out of the corpus body
+`split` was held back from three retirement waves for ONE unmeasured question, and this case is where it
+was settled. It is the only retired `String` member that CONSTRUCTS a container: until W49 wave 5 the
+compiler's own arm built the result through `emitArrayCreateOp`, so the compiler — not the corpus — decided that
+array's element size and its `element_destroy@40` stamp. The corpus builds it through
+`StringArray.create()` (`stdlib/String.maxon:621-625`) instead.
+
+⚠ **A WRONG STAMP ANNOUNCES ITSELF IN NEITHER DIRECTION**: too small and the segments leak, too eager and
+they are freed twice, and both compile clean. So the result is carried across every boundary that could
+drop it — out of the corpus body, out of a user function, into a struct field, back out of a field read,
+and into a second array that outlives the receiver each segment was cut from — with the leak gate (exit
+101) as the verdict on all of it. The empty-delimiter arm is included because it is the one shape the
+scan cannot produce: it clones the whole receiver rather than slicing it.
+```maxon
+typealias Pieces = Array with String
+
+type Holder
+	export var parts as Pieces
+
+	static function create(parts Pieces) returns Self
+		return Self{parts: parts}
+	end 'create'
+end 'Holder'
+
+function pieces(s String) returns Pieces
+	return s.split(",")
+end 'pieces'
+
+function main() returns ExitCode
+	let a = pieces("one,two,three")
+	print("{a.count()}\n")
+
+	var h = Holder.create(pieces("p,q"))
+	let first = try h.parts.get(0) otherwise panic("two elements were pushed")
+	print("[{first}]\n")
+
+	var derived = ["seed"]
+	for round in 0 upto 200 'rounds'
+		let tmp = "{round},x,{round}"
+		for p in tmp.split(",") 'each'
+			derived.push(p.clone())
+		end 'each'
+	end 'rounds'
+	print("{derived.count()}\n")
+
+	let whole = "abc".split("")
+	print("{whole.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+[p]
+601
+1
+```
+
+<!-- test: a-split-result-and-an-array-literal-are-one-type -->
+### The corpus's `StringArray` and a caller's `Array with String` are ONE instance
+The corpus declares `typealias StringArray = Array with String` INSIDE `type String`
+(`stdlib/String.maxon:621`) and this file declares its own `Array with String`. Two spellings, and the
+retirement is only sound if they are one `GenericInstanceId` — interning is keyed on `(typeNameId, args)`
+across the whole program, so they cannot be two, and this is what says so out loud: a split result is
+passed where the literal's type is declared and a literal is passed where the corpus's return type would
+be, which are the two directions a second instance would break as an `E3005`.
+```maxon
+typealias Pieces = Array with String
+
+function takesPieces(p Pieces) returns Integer
+	return p.count()
+end 'takesPieces'
+
+function main() returns ExitCode
+	var literal = ["seed"]
+	let fromSplit = "a,b,c".split(",")
+	print("{takesPieces(fromSplit as Pieces)}\n")
+	print("{takesPieces(literal)}\n")
+	for p in fromSplit 'each'
+		literal.push(p.clone())
+	end 'each'
+	print("{literal.count()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+3
+1
+4
+```

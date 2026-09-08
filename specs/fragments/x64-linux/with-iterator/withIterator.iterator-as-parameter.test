@@ -1,0 +1,202 @@
+// Test: withIterator.iterator-as-parameter
+typealias TokenIter = ArrayIterator with String
+
+function printRest(iter TokenIter)
+	for t in iter 'rest'
+		print("{t}\n")
+	end 'rest'
+end 'printRest'
+
+function main() returns ExitCode
+	let toks = ["a", "b", "c", "d"]
+	var iter = try toks.createIterator() otherwise return 9
+	try iter.advance() otherwise return 9
+	try iter.advance() otherwise return 9
+	printRest(iter)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @printRest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  rest:
+    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.current
+    x64.storeSlotReg slot0, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegReg rax, r13, rax
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r13, slot3
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot r12, slot2
+    x64.storeBaseDispReg.word64 [r12 + 0], r15
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __str_decref
+  forstep:
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_6]  ; "a"
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "b"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "d"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.createIterator
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rbx, 9
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r13, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_ArrayIterator_String
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r13, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_ArrayIterator_String
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, rbx
+    x64.callDirect printRest
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_ArrayIterator_String
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

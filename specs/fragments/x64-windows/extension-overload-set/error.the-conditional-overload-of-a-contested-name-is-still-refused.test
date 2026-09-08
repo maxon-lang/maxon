@@ -1,0 +1,39 @@
+// Test: error.the-conditional-overload-of-a-contested-name-is-still-refused
+type Opaque
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Opaque'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder where Element is Comparable
+	export function beats(other Element) returns bool
+		return self.value.compare(other) == Ordering.greaterThan
+	end 'beats'
+end 'Holder'
+
+export extension Holder
+	export function beats(assumed bool) returns bool
+		return assumed
+	end 'beats'
+end 'Holder'
+
+typealias OpaqueHolder = Holder with Opaque
+
+function main() returns ExitCode
+	let o = OpaqueHolder.create(Opaque.create())
+	if o.beats(Opaque.create()) 'cmp'
+		return 1
+	end 'cmp'
+	return 0
+end 'main'
+---
+CompilerError:
+error E4006: <fragment>:32:7: Type 'Holder' has no field named 'beats' ('beats' is available as a conditional extension where Element is Comparable, but 'Opaque' does not implement 'Comparable')

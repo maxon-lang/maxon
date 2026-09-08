@@ -1,0 +1,23 @@
+// Test: error.a-count-reading-call-from-inside-a-closure-is-refused
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+
+	export function viaClosure(other Self) returns Int
+		let f = function(v Self) gives v.capacity()
+		return f(other)
+	end 'viaClosure'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec3.create()
+	return a.viaClosure(b)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:36: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer

@@ -1,0 +1,53 @@
+// Test: ternary-expression.function-arms-called-directly
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function trp(n Integer) returns Integer
+	return n * 3
+end 'trp'
+
+function main() returns ExitCode
+	let c = 0
+	return (dbl if c > 0 else trp)(14)
+end 'main'
+---
+ExitCode: 42
+---
+func @trp {
+  entry:
+    arm64.prologue 16
+    arm64.arm64AddLsl x0, x0, x0, lsl #1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  ternaryfalse:
+    arm64.leaFuncAddr x19, __fnref_trp
+  matchcont:
+    arm64.movImm x0, 14
+    arm64.movImm x1, 0
+    arm64.blr x19
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at ternary-expression.function-arms-called-directly.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

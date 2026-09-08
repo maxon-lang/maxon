@@ -1,0 +1,239 @@
+// Test: subprocess-exit-code
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("exit 42")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 42")
+	#endif
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
+	if result.exitCode() != 42 'check-exit'
+		return 3
+	end 'check-exit'
+	if result.succeeded() 'check-success'
+		return 4
+	end 'check-success'
+	let statusCode = match result.status 'status'
+		exited(c) gives c
+		signalled(c) gives c
+	end 'status'
+	if statusCode != 42 'check-status'
+		return 5
+	end 'check-status'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __io_iocp@280 = i64 0
+  __io_done_event@288 = i64 0
+  __io_init_done@296 = i64 0
+  __io_pending@304 = i64 0
+  __io_pipe_seq@312 = i64 0
+  __subp_table@320 = i64 0
+  __subp_last_error@328 = i64 0
+  __slab_arena_list@336 = i64 0
+  __slab_arena_map_l1@344 = i64 0
+  __slab_state@352 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_26]  ; "/bin/sh"
+    x64.callDirect FilePath.from
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_27]  ; "-c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_28]  ; "exit 42"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect Subprocess.run
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r13
+    x64.callDirect CollectedOutput.exitCode
+    x64.cmpRegImm32 r8, 42
+    x64.jcc equal, ifcont#6
+  check-exit:
+    x64.movRegImm32 r14, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegReg rcx, r13
+    x64.callDirect CollectedOutput.succeeded
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#8
+  check-success:
+    x64.movRegImm32 r14, 4
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#9:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#10:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  matchcont:
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, ifcont#15
+  check-status:
+    x64.movRegImm32 r14, 5
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

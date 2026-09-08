@@ -1,0 +1,93 @@
+// Test: two-string-fields-drop
+type Pair
+	export var first as String
+	export var second as String
+
+	static function create() returns Self
+		return Self{first: "ab", second: "cde"}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create()
+	if p.first == "ab" and p.second == "cde" 'both'
+		return 5
+	end 'both'
+	return 0
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pair.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_2  ; "ab"
+    arm64.leaRdata x20, __str_rec_3  ; "cde"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Pair.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.leaRdata x1, __str_rec_2  ; "ab"
+    arm64.bl __str_eq
+    arm64.movImm x1, 0
+    arm64.cbz x0, critsplit
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.leaRdata x1, __str_rec_3  ; "cde"
+    arm64.bl __str_eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+  scmerge:
+    arm64.cbz x0, ifcont
+  both:
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Pair
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Pair
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

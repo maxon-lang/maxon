@@ -1,0 +1,219 @@
+// `build` MCP tool. Spawns `scripts/build.sh` so a client drives the canonical
+// build through one structured call.
+//
+// The build is NOT re-spelled here. Maxon compiles Maxon, so producing the tree's
+// binary is a compile into `.next` and a rename into place; that sequence lives in
+// the script, which humans run directly and which this tool spawns — including
+// its prerequisite checks, so a checkout with nothing to build from is answered in
+// one place whether a human or this tool asked.
+
+// A full compile is minutes on its own, and the ceiling sits well clear of that
+// rather than at it: a build that runs long should be reported with its elapsed
+// time, not killed at the moment it becomes interesting.
+let buildTimeoutMs = 1800000
+
+// The one place the build sequence is written. Humans run it directly; this tool
+// spawns it, so there is a single implementation to be wrong.
+let buildScriptRelativePath = "scripts/build.sh"
+
+// Where the script is asked to leave its structured result. It sits in the
+// compiler's own output directory, which is already gitignored and already holds
+// everything else this build produces.
+let buildResultRelativePath = "maxon-bin/.maxon/build-result.json"
+
+// Tail of captured output we surface in `rawTail`. Long enough to include
+// the error summary at the end of a failed build without flooding the MCP
+// response. ~4 KiB.
+let rawTailMaxBytes = 4096
+
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree to
+/// build IN — resolved and validated by the dispatcher, never by this tool.
+export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
+	let script = childPath(repoRoot, segment: buildScriptRelativePath)
+	if not File.exists(script) 'noScript'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build: `{script.path}` does not exist, so this checkout has no build to run.")
+	end 'noScript'
+
+	// A STALE result document is worse than none: read back after a run that broke
+	// before writing one, it would report the PREVIOUS build's binaries and durations
+	// as this one's. Deleting it up front makes its absence mean something.
+	let resultPath = childPath(repoRoot, segment: buildResultRelativePath)
+	try File.delete(resultPath) otherwise ignore
+
+	var argv = StringArray.create()
+	argv.push(buildScriptRelativePath)
+	argv.push("--result-json={resultPath.path}")
+
+	// `--from` names the compiler to build WITH. The script's own order — the binary in
+	// the slot, then the downloaded release — is right for a self-rebuild; a caller
+	// overrides it to recover from a slot a failed build left empty.
+	let from = try argsDoc.getString(argsId, key: "from") otherwise ""
+	if not from.isEmpty() 'haveFrom'
+		argv.push("--from={from}")
+	end 'haveFrom'
+
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.name("bash"), arguments: argv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs) otherwise (err) 'spawn'
+		// There was no child to inspect, so there is no exit code and no success-shaped
+		// envelope to fill.
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "build: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(timing)
+
+	let stagesJson = try File.readText(resultPath) otherwise ""
+	return buildOutcome(result, durationMs: elapsed, expectedBinary: compilerBinaryPath(repoRoot), stagesJson: stagesJson)
+end 'buildToolHandler'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+// Build the success/error JSON envelope for one build invocation.
+//
+// `stagesJson` is the build script's own result document, empty when it wrote none.
+// It carries no default: four other tools here declare a file-private
+// `buildOutcome`, and a default published under a name several declarations share
+// cannot be resolved at parse time (E2015).
+function buildOutcome(result CollectedOutput, durationMs DurationMs, expectedBinary FilePath, stagesJson String) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode() as JsonFloat))
+	let durationId = doc.add(JsonNode.numberNode(durationMs as JsonFloat))
+	let successId = doc.add(JsonNode.boolNode(result.succeeded()))
+
+	let combinedOutput = combineStreams(result.stdout, stderr: result.stderr)
+	let errors = parseBuildErrors(combinedOutput)
+	let errorsArr = buildErrorsArray(doc, errors: errors)
+	let rawTail = lastBytes(combinedOutput, max: rawTailMaxBytes)
+	let rawTailId = doc.add(JsonNode.stringNode(rawTail))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("durationMs")
+	children.push(durationId)
+	keys.push("success")
+	children.push(successId)
+	if result.succeeded() 'haveBinary'
+		let binaryId = doc.add(JsonNode.stringNode(expectedBinary.path))
+		keys.push("binaryPath")
+		children.push(binaryId)
+	end 'haveBinary'
+	if not stagesJson.isEmpty() 'haveStages'
+		pushStages(doc, keys: keys, children: children, stagesJson: stagesJson)
+	end 'haveStages'
+	keys.push("errors")
+	children.push(errorsArr)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'
+
+// Splice the build script's own result document — each binary it produced and how
+// long that compile took — into the envelope. The script is the only party that
+// knows those paths, so they are echoed from it rather than re-derived here.
+//
+// A document that will not parse gets its own key rather than a half-filled
+// `stages`: the two facts are "the script reported this" and "the script reported
+// something unreadable", and a reader must not have to tell them apart by shape.
+function pushStages(doc JsonDoc, keys StringArray, children JsonNodeIdArray, stagesJson String)
+	let parsed = try Json.parse(stagesJson) otherwise (err) 'badJson'
+		keys.push("stagesError")
+		children.push(doc.add(JsonNode.stringNode("the build script's result document is not valid JSON ({err.name})")))
+		return
+	end 'badJson'
+
+	keys.push("stages")
+	children.push(copyJsonNode(parsed, srcId: parsed.root, dst: doc))
+end 'pushStages'
+
+// =============================================================================
+// Error parsing
+// =============================================================================
+
+type BuildError
+	export var message as String
+	export var code as String = ""
+
+	export static function fromMessage(message String) returns BuildError
+		return Self{message: message}
+	end 'fromMessage'
+end 'BuildError'
+
+typealias BuildErrorArray = Array with BuildError
+
+// Walk the combined build output line by line for the compiler's
+// `error E3014: <file>:<line>:<col>: <message>`. Anything not matching is ignored
+// — `rawTail` already carries the full context for ad-hoc inspection.
+function parseBuildErrors(combined String) returns BuildErrorArray
+	var errors = BuildErrorArray.create()
+	let lines = combined.split("\n")
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let line = try lines.get(i) otherwise 'gErr'
+			panic("parseBuildErrors: lines.get OOB — i bounds-checked")
+		end 'gErr'
+		if line.isEmpty() 'empty'
+			continue
+		end 'empty'
+		extractMaxonError(line, errors: errors)
+	end 'each'
+	return errors
+end 'parseBuildErrors'
+
+// Match the Maxon compiler's `error EXXXX: file:line:col: message` shape.
+function extractMaxonError(line String, errors BuildErrorArray)
+	let marker = " error E"
+	let bytes = line.toByteArray()
+	let total = bytes.count()
+	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noMaxon'
+		return
+	end 'noMaxon'
+	// Everything after "error E" up to the first colon is the code.
+	let afterMarker = pos + marker.byteLength()
+	var codeEnd = afterMarker
+	while codeEnd < total 'scanCode'
+		let b = try bytes.get(codeEnd) otherwise 'gErr'
+			panic("extractMaxonError: bytes.get OOB — codeEnd bounded")
+		end 'gErr'
+		if b == 0x3A 'colon'
+			break
+		end 'colon'
+		codeEnd = codeEnd + 1
+	end 'scanCode'
+	// `pos` points to the leading space. ` error ` is 7 chars, so `pos + 7`
+	// lands on the `E` itself — codeStr already includes the leading `E`.
+	let codeStr = sliceString(line, from: pos + 7, until: codeEnd)
+	let message = sliceString(line, from: codeEnd + 1, until: total).trim()
+	var err = BuildError.fromMessage(message)
+	err.code = codeStr
+	errors.push(err)
+end 'extractMaxonError'
+
+// =============================================================================
+// JSON helpers
+// =============================================================================
+
+function buildErrorsArray(doc JsonDoc, errors BuildErrorArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = errors.count()
+	for i in 0 upto n 'each'
+		let err = try errors.get(i) otherwise 'gErr'
+			panic("buildErrorsArray: errors.get OOB — i bounds-checked")
+		end 'gErr'
+		let messageId = doc.add(JsonNode.stringNode(err.message))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		if not err.code.isEmpty() 'haveCode'
+			let codeId = doc.add(JsonNode.stringNode(err.code))
+			keys.push("code")
+			children.push(codeId)
+		end 'haveCode'
+		keys.push("message")
+		children.push(messageId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'buildErrorsArray'

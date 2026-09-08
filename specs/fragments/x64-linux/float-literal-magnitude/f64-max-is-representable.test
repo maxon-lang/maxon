@@ -1,0 +1,46 @@
+// Test: f64-max-is-representable
+function main() returns ExitCode
+	var r = 0
+	if 1.7976931348623157e308 > 1.0e308 'aboveOneE308'
+		r = r + 1
+	end 'aboveOneE308'
+	if 1.7976931348623157e308 * 2.0 > 1.7976931348623157e308 'doublingEscapes'
+		r = r + 2
+	end 'doublingEscapes'
+	if 1.0e308 * 10.0 > 1.7976931348623157e308 'tenTimesOverflows'
+		r = r + 4
+	end 'tenTimesOverflows'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  aboveOneE308:
+    x64.movRegImm32 rax, 1
+  doublingEscapes:
+    x64.leaRegRegImm32 rax, rax, 2
+  tenTimesOverflows:
+    x64.leaRegRegImm32 r8, rax, 4
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at f64-max-is-representable.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

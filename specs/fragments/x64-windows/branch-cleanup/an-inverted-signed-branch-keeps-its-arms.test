@@ -1,0 +1,131 @@
+// Test: an-inverted-signed-branch-keeps-its-arms
+var seed = 4
+
+function main() returns ExitCode
+	let a = seed
+	let b = seed + 1
+	var hits = 0
+
+	if a < b 'lt'
+		hits = hits + 1
+	end 'lt' else 'ltElse'
+		return 11
+	end 'ltElse'
+
+	if a > b 'gt'
+		return 12
+	end 'gt' else 'gtElse'
+		hits = hits + 1
+	end 'gtElse'
+
+	if a <= b 'le'
+		hits = hits + 1
+	end 'le' else 'leElse'
+		return 13
+	end 'leElse'
+
+	if a >= b 'ge'
+		return 14
+	end 'ge' else 'geElse'
+		hits = hits + 1
+	end 'geElse'
+
+	if a == b 'eq'
+		return 15
+	end 'eq' else 'eqElse'
+		hits = hits + 1
+	end 'eqElse'
+
+	if a != b 'ne'
+		hits = hits + 1
+	end 'ne' else 'neElse'
+		return 16
+	end 'neElse'
+
+	return 0 if hits == 6 else 17
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __data_seed
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, ifelse#2
+  ifcont#3:
+    x64.cmpRegReg rax, rcx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 12
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, ifelse#8
+  ifcont#9:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, ifcont#12
+  ge:
+    x64.movRegImm32 r8, 14
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, ifcont#15
+  eq:
+    x64.movRegImm32 r8, 15
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, ifelse#17
+  ternarytrue:
+    x64.movRegImm32 r8, 0
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inverted-signed-branch-keeps-its-arms.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse#17:
+    x64.movRegImm32 r8, 16
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse#8:
+    x64.movRegImm32 r8, 13
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse#2:
+    x64.movRegImm32 r8, 11
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

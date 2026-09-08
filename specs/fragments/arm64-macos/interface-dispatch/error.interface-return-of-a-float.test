@@ -1,0 +1,17 @@
+// Test: error.interface-return-of-a-float
+typealias Integer = int(i64.min to i64.max)
+
+interface Ranked
+	function rank() returns Integer
+end 'Ranked'
+
+function pick() returns Ranked
+	return 2.5
+end 'pick'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3121: <fragment>:9:2: Cannot return a `float` from 'pick', which is declared to return the interface type 'Ranked': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Ranked', or declare the return type as `float`

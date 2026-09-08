@@ -1,0 +1,23 @@
+// Test: error.self-referential-tuple-alias-with-an-unrelated-tuple-interned-alongside
+// --- file: aaa.maxon
+export typealias Other = ((String, String), int)
+
+export function makeOther() returns Other
+	return (("a", "b"), 1)
+end 'makeOther'
+
+// --- file: main.maxon
+typealias Int = int(i64.min to i64.max)
+typealias P = (P, Int)
+
+function make() returns P
+	return ((1, 2), 3)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	return t.1 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:2: Cannot return '__Tuple2.__Tuple2#90fac2b26f6571d1.int' from function declared to return '__Tuple2.__Tuple2#41e3ea25fc813804.int'

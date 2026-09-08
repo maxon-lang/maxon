@@ -1,0 +1,14 @@
+// Test: error.top-level-literal-enum-column
+enum Kind
+	one
+	two
+end 'Kind'
+
+var m = [b"a": Kind.one, b"b": Kind.two]
+
+function main() returns ExitCode
+	return m.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:16: Unsupported: a `Kind` case as a top-level map literal's value — a `Map`'s column type has to be nameable from the whole-program index, and an enum case folded at file scope carries its enum's name as BYTES rather than as an id this tier can put in `Map with (…)`. Build the map inside a function, where the literal's instance is interned from the file's own parse artifact

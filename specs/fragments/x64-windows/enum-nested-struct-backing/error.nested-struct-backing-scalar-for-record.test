@@ -1,0 +1,21 @@
+// Test: error.nested-struct-backing-scalar-for-record
+typealias Wide = int(0 to 100)
+
+type Inner
+	export let n as Wide
+end 'Inner'
+
+type Meta
+	export let inner as Inner
+end 'Meta'
+
+enum Task
+	quick = Meta{inner: 4}
+end 'Task'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:2: Unsupported: the constant written for field 'inner' of the `Meta` backing, which is declared `Inner` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`

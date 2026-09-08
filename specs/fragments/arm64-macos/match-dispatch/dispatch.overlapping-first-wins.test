@@ -1,0 +1,166 @@
+// Test: dispatch.overlapping-first-wins
+typealias N = int(i64.min to i64.max)
+
+function over(x N) returns N
+	return match x 'c'
+		1 to 100 gives 1
+		50 to 60 gives 2
+		200 gives 3
+		300 gives 4
+		400 gives 5
+		default gives 9
+	end 'c'
+end 'over'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if over(55) == 1 'a'
+		n = n + 1
+	end 'a'
+	if over(50) == 1 'b'
+		n = n + 1
+	end 'b'
+	if over(60) == 1 'c'
+		n = n + 1
+	end 'c'
+	if over(1) == 1 'd'
+		n = n + 1
+	end 'd'
+	if over(100) == 1 'e'
+		n = n + 1
+	end 'e'
+	if over(200) == 3 'f'
+		n = n + 1
+	end 'f'
+	if over(400) == 5 'g'
+		n = n + 1
+	end 'g'
+	if over(150) == 9 'h'
+		n = n + 1
+	end 'h'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+func @over {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 300
+    arm64.b.ge matchhi
+  matchlo:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 100
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbz x1, matchnext#9
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext#9:
+    arm64.cmp x0, 200
+    arm64.b.ne matchdefault
+  matcharm#3:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matchhi:
+    arm64.cmp x0, 300
+    arm64.b.ne matchnext#10
+  matcharm#4:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matchnext#10:
+    arm64.cmp x0, 400
+    arm64.b.ne matchdefault
+  matcharm#5:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matchdefault:
+    arm64.movImm x0, 9
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 55
+    arm64.bl over
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 50
+    arm64.bl over
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#4
+  b:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 60
+    arm64.bl over
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#6
+  c:
+    arm64.add x19, x19, 1
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.bl over
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#8
+  d:
+    arm64.add x19, x19, 1
+  ifcont#8:
+    arm64.movImm x0, 100
+    arm64.bl over
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#10
+  e:
+    arm64.add x19, x19, 1
+  ifcont#10:
+    arm64.movImm x0, 200
+    arm64.bl over
+    arm64.cmp x0, 3
+    arm64.b.ne ifcont#12
+  f:
+    arm64.add x19, x19, 1
+  ifcont#12:
+    arm64.movImm x0, 400
+    arm64.bl over
+    arm64.cmp x0, 5
+    arm64.b.ne ifcont#14
+  g:
+    arm64.add x19, x19, 1
+  ifcont#14:
+    arm64.movImm x0, 150
+    arm64.bl over
+    arm64.cmp x0, 9
+    arm64.b.ne critsplit
+  h:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#16
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#16:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.overlapping-first-wins.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

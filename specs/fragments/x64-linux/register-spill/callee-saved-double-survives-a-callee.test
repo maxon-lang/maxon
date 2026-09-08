@@ -1,0 +1,74 @@
+// Test: callee-saved-double-survives-a-callee
+function leaf(x Integer) returns Integer
+	return x + 1
+end 'leaf'
+
+function inner(k Integer) returns Integer
+	let p = 2.0
+	var acc = k
+	acc = leaf(acc)
+	return acc + trunc(p)
+end 'inner'
+
+function outer(k Integer) returns Integer
+	let a = 42.5
+	var acc = k
+	acc = inner(acc)
+	return acc + trunc(a)
+end 'outer'
+
+function main() returns ExitCode
+	return outer(0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 45
+---
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.leaRegRegImm32 rax, rcx, 1
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.leaRegRegImm32 r8, r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect outer
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at callee-saved-double-survives-a-callee.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,131 @@
+// Test: rc-release-on-error-propagation-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(flag)
+
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 77
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @failingLookup {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r10, 2
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @compute {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 56
+    x64.leaRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc lessEqual, ifcont
+  positive:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.leaRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.callDirect failingLookup
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.movRegImm32 r10, 0
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect compute
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 77
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at rc-release-on-error-propagation-in-block.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

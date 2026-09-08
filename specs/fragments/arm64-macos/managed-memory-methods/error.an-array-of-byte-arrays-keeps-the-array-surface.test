@@ -1,0 +1,14 @@
+// Test: error.an-array-of-byte-arrays-keeps-the-array-surface
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufArray = Array with ByteArray
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let m = try a.get(0) otherwise return 1
+	return m.length() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

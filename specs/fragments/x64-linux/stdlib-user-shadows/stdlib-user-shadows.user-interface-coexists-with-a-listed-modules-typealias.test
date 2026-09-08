@@ -1,0 +1,60 @@
+// Test: stdlib-user-shadows.user-interface-coexists-with-a-listed-modules-typealias
+interface Tolerance
+	function score() returns ExitCode
+end 'Tolerance'
+
+type Fixed implements Tolerance
+	export static function create() returns Fixed
+		return Self{}
+	end 'create'
+
+	export function score() returns ExitCode
+		return 7
+	end 'score'
+end 'Fixed'
+
+function main() returns ExitCode
+	let f = Fixed.create()
+	return f.score()
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Fixed.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect Fixed.create
+  __il_body:
+    x64.movRegImm32 rbx, 7
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

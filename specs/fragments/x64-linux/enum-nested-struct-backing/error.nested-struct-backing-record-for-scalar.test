@@ -1,0 +1,25 @@
+// Test: error.nested-struct-backing-record-for-scalar
+typealias Wide = int(0 to 100)
+
+type Inner
+	export let n as Wide
+end 'Inner'
+
+type Meta
+	export let count as Wide
+end 'Meta'
+
+function readIt(t Task) returns Wide
+	return t.rawValue.count
+end 'readIt'
+
+enum Task
+	quick = Meta{count: Inner{n: 1}}
+end 'Task'
+
+function main() returns ExitCode
+	return readIt(Task.quick)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:20: Unsupported: a nested `Inner` constant written for field 'count' of the `Meta` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take

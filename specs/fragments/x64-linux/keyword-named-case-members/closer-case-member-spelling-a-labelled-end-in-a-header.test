@@ -1,0 +1,57 @@
+// Test: closer-case-member-spelling-a-labelled-end-in-a-header
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while Kw.end == Kw.end 'spin'
+		if Kw.end == Kw.end 'inner'
+			acc = acc + 21
+		end 'inner'
+		i = i + 1
+		if i == 2 'done'
+			break
+		end 'done'
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  inner:
+    x64.leaRegRegImm32 rax, rax, 21
+  ifcont:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, inner
+  done:
+    x64.movRegReg r8, rax
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at closer-case-member-spelling-a-labelled-end-in-a-header.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

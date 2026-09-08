@@ -1,0 +1,134 @@
+// Test: dispatch.dense-zero-based-enum
+enum Color
+	c0
+	c1
+	c2
+	c3
+	c4
+	c5
+	c6
+	c7
+end 'Color'
+
+function classify(c Color) returns ExitCode
+	return match c 'k'
+		c0 gives 10
+		c1 gives 11
+		c2 gives 12
+		c3 gives 13
+		c4 gives 14
+		c5 gives 15
+		c6 gives 16
+		c7 gives 17
+	end 'k'
+end 'classify'
+
+function main() returns ExitCode
+	// A zero-based dense enum (span 8, covered 8/8) lowers to an O(1) jump table with NO bias subtract --
+	// the enum value IS the index. Every ordinal routes to its own arm.
+	var n = 0 as ExitCode
+	if classify(Color.c0) == 10 'a'
+		n = n + 1
+	end 'a'
+	if classify(Color.c5) == 15 'b'
+		n = n + 1
+	end 'b'
+	if classify(Color.c7) == 17 'c'
+		n = n + 1
+	end 'c'
+	return n
+end 'main'
+---
+ExitCode: 3
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5, [5]=matcharm#6, [6]=matcharm#7, [7]=matcharm#8] @__jumptable_2
+  matchdead:
+  matcharm#1:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matcharm#2:
+    arm64.movImm x0, 11
+    arm64.b matchcont
+  matcharm#3:
+    arm64.movImm x0, 12
+    arm64.b matchcont
+  matcharm#4:
+    arm64.movImm x0, 13
+    arm64.b matchcont
+  matcharm#5:
+    arm64.movImm x0, 14
+    arm64.b matchcont
+  matcharm#6:
+    arm64.movImm x0, 15
+    arm64.b matchcont
+  matcharm#7:
+    arm64.movImm x0, 16
+    arm64.b matchcont
+  matcharm#8:
+    arm64.movImm x0, 17
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.dense-zero-based-enum.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 0
+    arm64.bl classify
+    arm64.cmp x0, 10
+    arm64.b.ne ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 5
+    arm64.bl classify
+    arm64.cmp x0, 15
+    arm64.b.ne ifcont#4
+  b:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 7
+    arm64.bl classify
+    arm64.cmp x0, 17
+    arm64.b.ne critsplit
+  c:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#6
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#6:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.dense-zero-based-enum.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

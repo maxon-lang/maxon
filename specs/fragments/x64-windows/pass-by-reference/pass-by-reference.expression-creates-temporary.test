@@ -1,0 +1,25 @@
+// Test: pass-by-reference.expression-creates-temporary
+
+typealias Integer = int(i64.min to i64.max)
+
+function readVal(x Integer) returns Integer
+	return x
+end 'readVal'
+
+function main() returns ExitCode
+	let a = 20
+	let b = 22
+	return readVal(a + b)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

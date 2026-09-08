@@ -1,0 +1,74 @@
+// Test: keyword-as-case-name
+enum TokenType
+	function
+	return
+	end
+	if
+	else
+	let
+	var
+	identifier
+end 'TokenType'
+
+function main() returns ExitCode
+	let t = TokenType.function
+	let result = match t 'check'
+		function gives 1
+		return gives 0
+		end gives 0
+		if gives 0
+		else gives 0
+		let gives 0
+		var gives 0
+		identifier gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5, [5]=matcharm#6, [6]=matcharm#7, [7]=matcharm#8] @__jumptable_1
+  matchdead:
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm#2:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#3:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#4:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#5:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#6:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#7:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm#8:
+    arm64.movImm x0, 0
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at keyword-as-case-name.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

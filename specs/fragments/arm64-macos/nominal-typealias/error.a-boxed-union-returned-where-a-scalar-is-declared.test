@@ -1,0 +1,20 @@
+// Test: error.a-boxed-union-returned-where-a-scalar-is-declared
+typealias Wide = int(0 to u64.max)
+
+union Slot
+	held(v Wide)
+	empty
+end 'Slot'
+
+function unwrap() returns Wide
+	let s = Slot.held(5)
+	return s
+end 'unwrap'
+
+function main() returns ExitCode
+	print("{unwrap()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:2: Cannot return 'Slot' from function declared to return 'Wide'

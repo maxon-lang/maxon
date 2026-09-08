@@ -1,0 +1,849 @@
+// IrModule: generic top-level container for every IR phase.
+// Parameterized by the op type (MaxonOp, StdOp, TargetOp) so that the
+// type checker enforces phase separation while the implementation is
+// written once.
+//
+// Each phase instantiates this as a typealias:
+//   typealias MaxonModule  = IrModule with MaxonOp
+//   typealias StdModule    = IrModule with StdOp
+//   typealias TargetModule = IrModule with TargetOp
+
+export typealias OpCount = int(0 to u64.max)
+export typealias BlockCount = int(0 to u64.max)
+typealias FuncCount = int(0 to u64.max)
+export typealias FuncIndex = int(0 to u64.max)
+
+module typealias BlockRefIndex = int(0 to u64.max)
+
+// The result of `IrModule.blockIndexById`: a function's `BlockId` to its position in
+// `func.blockRefs`. Named here beside `BlockRefIndex`, which is what it holds.
+export typealias BlockIndexById = BlockKeyedTable with BlockRefIndex
+
+// Thrown by IrModule.findBlockRef when the given block isn't registered in
+// the function's block list — used by the parser's statement-line recorder
+// to silently skip detached sink blocks produced by newDetachedBlock.
+export enum BlockRefLookupError implements Error
+	notInFunction
+end 'BlockRefLookupError'
+
+export type IrModule uses Op
+	typealias OpArray = Array with Op
+
+	export var functions as IrFunctionArray = IrFunctionArray.create()
+	export var blocks as IrBlockArray = IrBlockArray.create()
+	export var ops as OpArray = OpArray.create()
+	// Parallel to `blocks`: entry at index i describes the source footprint
+	// of blocks[i]. Populated by the parser at every block-creation site,
+	// preserved through lowerMaxonToStd, and consumed by the coverage
+	// instrumentation pass to map each block to the source lines it covers.
+	// Blocks created outside the parser (e.g. by later passes) keep the
+	// BlockSourceInfo.empty() sentinel.
+	export var blockSourceInfo as BlockSourceInfoArray = BlockSourceInfoArray.create()
+	// Parallel to `ops`: entry i is the SOURCE SPAN of ops[i], as an id into `Project.debugSpanTable`.
+	// Filled through the cursor on the column rather than at each append site — see `DebugSpanColumn`.
+	// Empty and untouched unless the build asked for debug info, which is what keeps the emitted code
+	// byte-identical either way.
+	export var spans as DebugSpanColumn = DebugSpanColumn.create()
+	// ⭐⭐ **WHETHER THE CODE THIS MODULE EMITS CARRIES THE DEBUGSTREAM PRODUCER (`--debugstream`,
+	// Workstream O3), AND IT IS A FIELD RATHER THAN A PARAMETER FOR ONE REASON: A BUILDER THAT FORGETS TO
+	// THREAD IT EMITS A SILENTLY INCOMPLETE TRACE.** Every runtime builder that allocates or refcounts must
+	// know it — the MM family, the String, array, list, file and directory runtimes, the synthesized
+	// destructor and cloner cascades — which is some forty functions across seven files. Threaded as an
+	// argument, the failure mode of a NEW one that does not pass it along is not a compile error: it is an
+	// allocation that never appears in the trace, which is exactly the lie this whole instrument exists to
+	// prevent. Asked of the module, there is nothing to forget.
+	//
+	// It is also the honest place for it. This is not per-call-site information: it is a property of the
+	// WHOLE emitted module, set once by the driver from `buildCarriesDebugStream` before any runtime is
+	// installed, and true or false of every function in it alike. ⚠ It is the FULL condition — the flag AND
+	// `usesHeap` — not the bare flag, so a module that says it carries the producer is one that does: a
+	// build claiming otherwise would put a `globalAddr __ds_base` into an image whose `.data` never laid
+	// that slot out, which the backend answers with a relocation panic.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and an ordinary build is
+	// byte-identical — which is the compile-time half of the gating rule (`DebugStreamRuntime`'s header).
+	// The Maxon and Target modules carry the field too and neither reads it today; that is the price of one
+	// generic container, and it is a bool.
+	export var debugStream as bool = false
+
+	// ⭐ **DOES THIS MODULE SPAWN A CHILD PROCESS?** Set once by the driver from `RuntimeUsage.usesStreaming`
+	// — the bit the `__gt_subp_*` prefix scan already computes — and read in exactly one place, the PE
+	// writer's OPTIONAL TRAILING IMPORT BAND. It is `debugStream`'s twin one producer over: both answer
+	// "does this image reference the imports at the end of `IatSlot`", and the band is emitted when EITHER
+	// says yes (`isOptionalTrailingImport` carries why the two cannot be gated apart).
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that spawns
+	// nothing has a byte-identical import table.
+	export var usesSubprocess as bool = false
+
+	// ⭐ **DOES THIS MODULE ASK THE MACHINE FOR ITS PROCESSOR COUNT?** Set once by the driver from
+	// `RuntimeUsage.usesCpuCount`, and read in exactly one place — the PE writer's OPTIONAL TRAILING IMPORT
+	// BAND, which is where `GetActiveProcessorCount` lives. `usesSubprocess`'s twin one producer over: the
+	// three bits answer one question between them (*does this image reference the imports at the end of
+	// `IatSlot`*), and the band is emitted when ANY of them says yes (`isOptionalTrailingImport` carries why
+	// they cannot be gated apart).
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that asks no
+	// question of the machine has a byte-identical import table.
+	export var usesCpuCount as bool = false
+
+	// ⭐ **DOES THIS MODULE ASK TO BE PUT AT BACKGROUND PRIORITY?** Set once by the driver from
+	// `RuntimeUsage.usesBackgroundPriority`, and read in exactly one place — the PE writer's OPTIONAL
+	// TRAILING IMPORT BAND, which is where `SetPriorityClass` and `GetPriorityClass` live. `usesCpuCount`'s
+	// sibling one producer over: the bits answer one question between them (*does this image reference the
+	// imports at the end of `IatSlot`*), and the band is emitted when ANY of them says yes.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never asks
+	// to be de-prioritised has a byte-identical import table.
+	export var usesBackgroundPriority as bool = false
+	// ⭐ **DOES THIS IMAGE ASK WHETHER STDOUT IS A TERMINAL?** Set from `RuntimeUsage.usesTerminalDetection`,
+	// and read in exactly one place — the PE writer's OPTIONAL trailing import band, which is where
+	// `GetFileType` lives. Its neighbours' header owns the rest of the argument.
+	export var usesTerminalDetection as bool = false
+
+	// ⭐ **DOES THIS MODULE CREATE OR MAP A NAMED SHARED SECTION?** Set from `RuntimeUsage.usesSharedMemory`,
+	// and read in exactly one place — the PE writer's OPTIONAL trailing import band, which is where
+	// `CreateFileMappingA` and `UnmapViewOfFile` live. Its neighbours' header owns the rest of the argument.
+	export var usesSharedMemory as bool = false
+
+	// ⭐⭐ **DOES THIS MODULE SAMPLE ANOTHER PROCESS'S THREADS?** Set once by the driver from
+	// `RuntimeUsage.usesProcessSampling`, and read in exactly TWO places, both in the PE writer: the optional
+	// trailing import band (the suspend/context/read/resume family, the timer pair and the module walk all
+	// live at the end of kernel32's run) and `ImportGates.threadWalk`, which decides whether `ntdll.dll` has
+	// a directory entry at all — this bit is the ONLY producer of that DLL in the language.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that profiles
+	// nothing has a byte-identical import table.
+	export var usesProcessSampling as bool = false
+
+	// ⭐ **DOES THIS MODULE ASK HOW MUCH CPU TIME ITS OWN THREAD HAS USED?** Set once by the driver from
+	// `RuntimeUsage.usesThreadCpuTicks`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
+	// IMPORT BAND, which is where `QueryThreadCycleTime` lives. `usesCpuCount`'s twin one producer over: the
+	// four bits answer one question between them (*does this image reference the imports at the end of
+	// `IatSlot`*), and the band is emitted when ANY of them says yes.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never times
+	// itself has a byte-identical import table.
+	export var usesThreadCpuTicks as bool = false
+
+	// ⭐ **DOES THIS MODULE ASK HOW LONG THE MACHINE HAS BEEN UP?** Set once by the driver from
+	// `RuntimeUsage.usesUptimeClock`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
+	// IMPORT BAND, which is where `GetTickCount64` lives. `usesThreadCpuTicks`'s twin one producer over: the
+	// bits answer one question between them (*does this image reference the imports at the end of
+	// `IatSlot`*), and the band is emitted when ANY of them says yes (`isOptionalTrailingImport` carries why
+	// they cannot be gated apart).
+	//
+	// ⚠ **IT IS NOT `debugStream`'s, THOUGH BOTH REACH `GetTickCount64`.** That bit says the image carries
+	// the trace PRODUCER; this one says the image reads the counter the producer measures against, which is
+	// what a CONSUMER — `maxon monitor` — does. A monitor carries no producer at all.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never asks
+	// has a byte-identical import table.
+	export var usesUptimeClock as bool = false
+
+	// ⭐ **DOES THIS MODULE CARRY THE GREEN-THREAD SCHEDULER?** Set once by the driver from
+	// `RuntimeUsage.usesGt`, and read in exactly one place — the PE writer's OPTIONAL TRAILING IMPORT BAND.
+	// `usesThreadCpuTicks`'s twin one producer over: the five bits answer one question between them (*does
+	// this image reference the imports at the end of `IatSlot`*), and the band is emitted when ANY of them
+	// says yes (`isOptionalTrailingImport` carries why they cannot be gated apart).
+	//
+	// ⚠ **IT IS NOT `PassPipeline.usesGreenThreads`, THOUGH BOTH DERIVE FROM `RuntimeUsage.usesGt`.** That
+	// one is a PIPELINE fact read by a Std pass to decide whether stack promotion is legal; this one is a
+	// MODULE fact read by the PE writer to decide which imports the image carries. The two live on different
+	// objects with different lifetimes — the pipeline's is written before `run()`, this one after, because
+	// `lowerMaxonToStd` replaces `stdModule` in between — and folding them would put one of them on the
+	// module that gets thrown away.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program with no green
+	// threads has a byte-identical import table.
+	export var usesGt as bool = false
+
+	// ⭐ **DOES THIS IMAGE REACH THE SOCKET RUNTIME?** Set by the `__ms_` prefix scan, and read in exactly
+	// one place — the PE writer's `dllIsEmitted`, which decides whether the image carries a `ws2_32.dll`
+	// import directory entry at all.
+	//
+	// ⚠ **IT IS NOT `usesSubprocess`'s TWIN, AND THE DIFFERENCE IS THE GRANULARITY.** That bit gates a
+	// trailing BAND inside kernel32's run, so it shares one gate with `debugStream` (see
+	// `isOptionalTrailingImport`). This bit gates a WHOLE DLL, so it stands alone and nothing else may be
+	// folded into it: a traced or spawning program must not acquire a Winsock dependency it never uses.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that opens no
+	// socket has a byte-identical import table.
+	export var usesSockets as bool = false
+
+	// ⭐⭐ **THE ASYNC-TRACE TAG TABLE (`--async-trace`), AND IT IS A FIELD FOR `debugStream`'s REASON, ONE
+	// SIGNATURE OVER.** `__gt_io_park` prints the OPERATION its caller is parked in — `[file_exists]`,
+	// `[net_connect]` — so in a traced build it takes that suffix as two parameters and every one of its
+	// eighteen call sites passes them. Those sites are runtime builders in three OTHER files
+	// (`ManagedFileRuntime`, `ManagedDirectoryRuntime`, `ManagedSocketRuntime`), none of which is handed the
+	// green-thread install's tags. Threaded as an argument, a builder that failed to pass it along would not
+	// be a compile error: it would be a call whose ARGUMENT COUNT disagrees with the park's arity. Asked of
+	// the module — by the sites AND by `buildGtIoPark` — there is one answer and nothing to forget.
+	//
+	// Set once by `installGtRuntime` from the tags it registered, before it builds anything.
+	//
+	// ⚠ It defaults to the UNTRACED table, whose empty operation list is what `GtTraceTags.ioTag` reads as
+	// "no suffix" — so every `IrModule.create()` site is unchanged, the park keeps its zero arity and an
+	// ordinary build is byte-identical. The Maxon and Target modules carry the field and neither reads it,
+	// which is the price of one generic container that `debugStream` already records.
+	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
+
+	// ⭐⭐ **DOES A BLOCKING KERNEL CALL YIELD ON THIS TARGET?** True wherever `targetProvidesFacility` grants
+	// `greenThreads`; false on a lane that has no scheduler at all. `emitIoPark`'s nineteen call sites —
+	// runtime builders in three other files — ask it here for `asyncTraceTags`' reason one field up: none of
+	// them is handed the target, and threading it would make a builder that forgot to pass it emit a park
+	// into a program with nothing to park on.
+	//
+	// ⚠ **A FALSE HERE IS NOT AN OPTIMIZATION, IT IS THE ONLY CORRECT ANSWER ON SUCH A LANE.** The park exists
+	// to let OTHER green threads run while this one waits; where there is exactly one thread of execution
+	// there is nothing to yield to, and the call would be a `bl` into a scheduler nothing installed.
+	//
+	// ⛔ **IT MUST AGREE WITH `RuntimeUsage.parksOnIo`, AND BOTH COME FROM ONE COMPUTATION IN
+	// `Compiler.compileToCodeResult`.** The usage bit decides whether the SCHEDULER IS INSTALLED and this
+	// field decides whether the park IS EMITTED; a disagreement is either a scheduler nothing calls or a call
+	// to a function nothing built.
+	//
+	// ⚠ It defaults to TRUE, which is every complete target's answer, so every `IrModule.create()` site is
+	// unchanged and an ordinary build is byte-identical.
+	export var parksOnIo as bool = true
+
+	// ⭐⭐ **CAN THIS MODULE'S TARGET RESERVE ADDRESS SPACE WITHOUT PAYING FOR IT?** True on the three
+	// native lanes, where a reservation takes a range and backs none of it — Windows does not charge a
+	// `MEM_RESERVE`, and Linux does not fault in a `PROT_NONE` mapping. FALSE on wasm32-wasi, where linear
+	// memory has no reservation at all: `memory.grow` takes the range AND backs it, so `osReservePages` IS
+	// `osAllocPages` there. The slab's page layer reads it to pick its arena geometry — 64 MiB of reserved
+	// address space where a reservation is free, 512 KiB of real memory where it is not — which is the split
+	// Go makes for the same reason at `vendor/go/src/runtime/malloc.go:259`.
+	//
+	// ⚠ **IT IS NAMED FOR THE MECHANISM AND NOT FOR THE TARGET, AND THAT IS THE POINT.** `isWasm` would
+	// answer this question today and would then have to be RE-READ by every later consumer that actually
+	// cares about something else — a stack-switching strategy, an atomics floor, a page size — until one
+	// name stood for four unrelated facts and no consumer could be changed without auditing the others.
+	// What `SlabArena` asks is whether a reservation is free; that is what the field says.
+	//
+	// It is a FIELD for `debugStream`'s reason a few declarations up, and this is the honest place for it:
+	// it is not per-call-site information but a property of the WHOLE emitted module, set once by the driver
+	// and true of every function in it alike. The alternative is a `target` parameter on the Std-tier runtime
+	// installs — which `SlabArena`'s header named as the blocker when this was still a follow-up, because
+	// those builders are handed a module and a usage set and nothing else. Adding the target to them would
+	// hand every runtime in the tree a knob it has no business reading, to answer one question about pages.
+	//
+	// ⚠ It defaults to TRUE, which is the geometry every lane already had, so every `IrModule.create()` site
+	// is unchanged and the three native lanes are byte-identical. The Maxon and Target modules carry the
+	// field and neither reads it, which is the price of one generic container.
+	export var hasPageReservation as bool = true
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function opCount() returns OpCount
+		return self.ops.count()
+	end 'opCount'
+
+	// Count ops that are still reachable from any block — i.e., the size
+	// of the `block.opRefs` union plus one per block that has a terminator
+	// op. This differs from `opCount` (which is just the underlying array
+	// size) because passes like mem2reg rebuild blocks by clearing
+	// `opRefs` and appending fresh ops to `module.ops`, leaving the
+	// previous entries as orphans. The orphans never reach codegen but
+	// inflate `opCount` and make the per-pass IR-summary log line read
+	// like ops doubled when in fact the live set shrank.
+	//
+	// Cold path — only called from `summarizeForPass` when the IR trace
+	// log is enabled or `--dump-stages` is on. The walk is O(blocks +
+	// total opRefs entries) per call, dwarfed by anything diagnostic
+	// modes already pay.
+	export function liveOpCount() returns OpCount
+		var count = 0 as OpCount
+		for func in self.functions 'eachFunc'
+			count = count + self.liveOpIndices(func).count()
+		end 'eachFunc'
+		return count
+	end 'liveOpCount'
+
+	// THE block-reachability walk: every op index reachable from `func`, in
+	// execution order (each block's `opRefs`, then its terminator). Every consumer
+	// that needs "the ops that are actually live" goes through here rather than
+	// hand-rolling the funcs → blockRefs → blocks → opRefs+terminator descent —
+	// `liveOpCount` above and the backend's `assertNoSugarOps` gate both do.
+	//
+	// This is NOT interchangeable with iterating `self.ops`. That flat array is
+	// append-only: every block-rebuilding pass clears a block's `opRefs` and
+	// re-appends fresh ops, leaving the ops it replaced behind as orphans (see
+	// `compactOps`). A consumer that scans `self.ops` therefore sees dead ops from
+	// every prior pass — which is a false positive for anything asking "did this
+	// pass leave a forbidden op behind?".
+	//
+	// ⚠ **THE MAXON TIER ORPHANS TOO, SINCE THE CONSTANT-SLICE FOLD.**
+	// `Parser.removeCurrentBlockOpAt` takes one op ref out of a block and leaves the
+	// op itself in `self.ops` (it must: `ConstPayloadDomain.stringLiteralOp` and
+	// `Parser.charLiteralOps` both FILE indices into this array, so closing the gap
+	// would invalidate them). So "orphans start at the Std tier" is no longer true,
+	// and a Maxon-tier consumer must reach ops through a block like every other.
+	export function liveOpIndices(func IrFunction) returns OpIndexArray
+		var indices = OpIndexArray.create()
+		self.collectLiveOpIndices(func, into: indices)
+		return indices
+	end 'liveOpIndices'
+
+	// ⭐ THE SAME WALK INTO A CALLER-OWNED COLUMN — for a WHOLE-MODULE pass, which asks it once per
+	// function and discards the answer before the next iteration. `liveOpIndices`' fresh array is then
+	// one allocation per function OF THE PROGRAM; `Array.clear` keeps capacity, so a buffer hoisted out
+	// of the function loop allocates once for the whole walk instead.
+	export function collectLiveOpIndices(func IrFunction, into OpIndexArray)
+		into.clear()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.blocks.get(blockRef) otherwise panic("collectLiveOpIndices: blockRef from func.blockRefs not in blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				into.push(opIdx)
+			end 'eachOp'
+
+			if block.hasTerminatorOp() 'hasTerm'
+				into.push(block.terminatorIndex())
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'collectLiveOpIndices'
+
+	// THE INVERSE OF `func.blockRefs` — a block's `BlockId` to its POSITION in that array, dense and
+	// built in one walk. It answers the question every consumer of a TERMINATOR has: a terminator
+	// names its successors by `BlockId`, `blockRefs` is in LAYOUT order, and there is otherwise no
+	// route from the one to the other short of a linear scan per branch.
+	//
+	// The POSITION is what it stores, not the `BlockRef`, because that is the form both callers need
+	// and the one the other is recoverable from: the wasm backend's `loop`+`br_table` dispatcher
+	// indexes blocks by exactly this position (`StdToWasm.dispatchIndexOf`), and a caller that wants
+	// the block itself composes `func.blockRefs.get(position)` — one more array read, no second
+	// table. Storing `BlockRef` instead would have made the wasm side unserviceable.
+	//
+	// It is a dense `BlockKeyedTable` and not a `Map with (BlockId, …)` for the reason that type's
+	// header states at length: block ids ARE the index space, and the hash was measured to be a
+	// quadratic before `spreadHash` and a 3x probe tax after it.
+	export function blockIndexById(func IrFunction) returns BlockIndexById
+		var byId = BlockIndexById.forBlockCount(func.nextBlockId)
+		for i in 0 upto func.blockRefs.count() 'eachBlock'
+			let blockRef = try func.blockRefs.get(i) otherwise panic("blockIndexById: blockRefs.get OOB at {i} despite the upto bound")
+			let block = try self.blocks.get(blockRef) otherwise panic("blockIndexById: blockRef {blockRef} from func.blockRefs not in blocks")
+			byId.place(block.id, value: i)
+		end 'eachBlock'
+		return byId
+	end 'blockIndexById'
+
+	// Reclaim orphaned ops from `self.ops` in place.
+	//
+	// Every block-rebuilding pass (mem2reg, canonicalize, CSE, DCE, LICM,
+	// insertDrops, lowerToMachineForm, …) clears each block's
+	// `opRefs` and re-appends fresh ops via `appendOp`, which only ever pushes
+	// onto `self.ops` and never removes the now-unreferenced predecessors. Those
+	// orphans accumulate across passes — during the backend phase they bloat
+	// `self.ops` to many times its live size, exhausting the commit limit on a
+	// large compile (e.g. the compiler compiling itself) even though the working
+	// set stays small. `liveOpCount` already documents and measures the gap.
+	//
+	// Compaction is done strictly IN PLACE: the live ops are moved leftward
+	// within the existing backing array and the tail is truncated, so no second
+	// ops-sized array is ever allocated (a transient old+new coexistence would
+	// double the peak right at the commit limit). The only extra allocation is
+	// the forwarding map, sized `ops.count()` — ~1/8 of one ops array.
+	//
+	// The live ops keep their original relative order, so block `opRefs` /
+	// terminators still reference the same ops; only their indices are renumbered.
+	// Codegen output is therefore byte-identical — this drops unreachable orphans
+	// and renumbers indices, nothing more.
+	export function compactOps()
+		let oldCount = self.ops.count()
+		let plan = computeOpCompaction(self.functions, blocks: self.blocks, opCount: oldCount)
+		if plan.liveCount == oldCount 'noOrphans'
+			// Every op is still reachable — no move, no truncation, no rewrite.
+			// The common case for passes that don't orphan; bail before touching
+			// the array so a clean module pays only the O(blocks + opRefs) walk.
+			return
+		end 'noOrphans'
+
+		// The span column is parallel to `ops` only on a build that asked for debug info; on every other
+		// one it is empty and there is nothing to compact. Guarded exactly as `compactBlocks` guards
+		// `blockSourceInfo`, and for the same reason.
+		//
+		// ⚠ **THE COUNT IS ASKED, NOT USED AS THE CONDITION.** A capturing module whose column had gone
+		// short would fail a `count == oldCount` test and be quietly left uncompacted — desynced from the
+		// swaps below rather than merely short, which is a wrong line at every op past the first move.
+		let compactSpans = self.spans.armed
+		self.spans.requireParallelTo(oldCount, what: "before compactOps")
+
+		// Move each live op leftward into its compacted slot by SWAPPING (never
+		// `set`): a swap moves ownership between the two slots with refcounts
+		// unchanged, whereas `set` would decref the slot's prior occupant —
+		// which, for a managed-payload op (String/array operands), is an op that
+		// was already relocated and now shares those payloads, so the decref
+		// would free memory the relocated op still references (a UAF). `forward`
+		// assigns live ops dense ascending slots, so `forward[old] <= old`: the
+		// op currently at `old` is always still the original op `old` (no earlier
+		// swap targets an index this large), and the displaced occupant is parked
+		// at `old` to be truncated or swapped again later.
+		for oldIdx in 0 upto oldCount 'move'
+			let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactOps: forward.get OOB at {oldIdx}")
+			if newIdx == plan.deadMarker 'orphan'
+				continue
+			end 'orphan'
+			if newIdx != oldIdx 'needsSwap'
+				self.ops.swap(newIdx, j: oldIdx)
+				if compactSpans 'swapSpan'
+					self.spans.swapAt(newIdx, j: oldIdx)
+				end 'swapSpan'
+			end 'needsSwap'
+		end 'move'
+
+		// After the swaps every orphan sits in the contiguous tail
+		// `[liveCount, oldCount)`. Pop each off and DROP it (the discarded `pop`
+		// result releases the op's +1, freeing its managed payload — String /
+		// ValueId-array operands). A bare `setLength`/`resize` would NOT free those
+		// payloads (it only rewrites the length word), so the orphans would leak
+		// what the whole-array teardown used to reclaim. Popping the LAST element
+		// is O(1) (no tail shift), so the loop is O(orphan count).
+		for _ in plan.liveCount upto oldCount 'dropOrphan'
+			_ = try self.ops.pop() otherwise panic("compactOps: ops.pop on non-empty tail failed")
+			if compactSpans 'popSpan'
+				self.spans.dropLast()
+			end 'popSpan'
+		end 'dropOrphan'
+
+		rewriteBlockOpRefs(self.functions, blocks: self.blocks, plan: plan)
+	end 'compactOps'
+
+	// Reclaim orphaned blocks from `self.blocks` (and the parallel
+	// `self.blockSourceInfo`) in place.
+	//
+	// A pass that drops a function (`eliminateDeadFunctions`) or a block leaves
+	// the blocks it dropped resident in the shared `self.blocks` array — they
+	// are simply no longer referenced by any function. Like the orphan ops
+	// `compactOps` reclaims, these accumulate and inflate the committed-but-live
+	// block storage during the long backend phase of a large compile (the
+	// compiler compiling itself). This compactor drops them.
+	//
+	// ⚠ NOTHING CALLS IT YET, and nor does `compactOps`. Both are ported ahead of
+	// the pass that will want them; dead-function elimination deliberately does
+	// NOT, because an O(ops) walk plus two ops-sized arrays to release memory the
+	// module frees milliseconds later at the end of the compile is a bad trade
+	// (see DeadFunctionElimination's header).
+	//
+	// In-place, mirroring `compactOps`: live blocks are swapped leftward within
+	// the existing `self.blocks` / `self.blockSourceInfo` arrays and the tails
+	// truncated, so no second blocks-sized array is ever allocated. The only
+	// extra allocations are the two `blockCount`-sized maps (live flags +
+	// forwarding).
+	//
+	// Block renumbering is byte-identical to a no-op for codegen: `func.blockRefs`
+	// holds FLAT `self.blocks[]` indices (rewritten here), while every other
+	// block reference — branch terminators, CFG edges — keys off the function-
+	// local `BlockId` (stored inside the op / the block), which this never
+	// touches. Only the flat-index layer is renumbered; the live blocks keep
+	// their relative order, so even the flat order is preserved modulo the
+	// dropped orphans.
+	export function compactBlocks()
+		let oldCount = self.blocks.count()
+		let plan = computeBlockCompaction(self.functions, blockCount: oldCount)
+		if plan.liveCount == oldCount 'noOrphans'
+			// No function dropped a block since the last compaction — skip the
+			// move/truncate/rewrite and pay only the O(total blockRefs) walk.
+			return
+		end 'noOrphans'
+
+		// `blockSourceInfo` is parallel to `blocks` only while the parser-built
+		// table is still live (the Maxon and Std tiers): the Std→Target skeleton
+		// clone (`StdToX64Lowering.prepareSkeleton`) rebuilds `blocks` 1:1 but
+		// leaves `blockSourceInfo` empty, since coverage instrumentation — its
+		// only consumer — already ran in the Std tier. Compact the source-info
+		// table in lockstep only when it is actually parallel; in the Target tier
+		// it is empty and there is nothing (and nobody) to compact.
+		let compactSourceInfo = self.blockSourceInfo.count() == oldCount
+
+		// Swap each live block (and its parallel source-info entry, when present)
+		// leftward into its compacted slot. `forward[old] <= old` (dense ascending
+		// assignment), so the slot at `old` still holds original block `old` when
+		// we reach it — the same clobber-free property `compactOps` relies on. Swap
+		// (not set) so the displaced orphan is parked at `old` for truncation
+		// rather than being dropped here (its teardown happens in the pop loop).
+		for oldIdx in 0 upto oldCount 'move'
+			let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactBlocks: forward.get OOB at {oldIdx}")
+			if newIdx == plan.deadMarker 'orphan'
+				continue
+			end 'orphan'
+			if newIdx != oldIdx 'needsSwap'
+				self.blocks.swap(newIdx as IrBlockArray.SortIndex, j: oldIdx)
+				if compactSourceInfo 'swapInfo'
+					self.blockSourceInfo.swap(newIdx as BlockSourceInfoArray.SortIndex, j: oldIdx)
+				end 'swapInfo'
+			end 'needsSwap'
+		end 'move'
+
+		// Every orphan now sits in the contiguous tail `[liveCount, oldCount)`.
+		// Pop each off `blocks` (and `blockSourceInfo` when parallel) and drop it
+		// (releasing the orphan block's `opRefs`/`blockArgs`/`branchEdges` array
+		// payloads).
+		for _ in plan.liveCount upto oldCount 'dropOrphan'
+			_ = try self.blocks.pop() otherwise panic("compactBlocks: blocks.pop on non-empty tail failed")
+			if compactSourceInfo 'popInfo'
+				_ = try self.blockSourceInfo.pop() otherwise panic("compactBlocks: blockSourceInfo.pop on non-empty tail failed")
+			end 'popInfo'
+		end 'dropOrphan'
+
+		rewriteFuncBlockRefs(self.functions, plan: plan)
+	end 'compactBlocks'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+		// In lockstep, for `merge`'s reason: a column that is not parallel to `ops` makes the NEXT append
+		// through one of the three doors fail its next-slot check, and a source module carrying no spans
+		// contributes positionless ones rather than nothing.
+		self.spans.appendFrom(source.spans, count: source.ops.count())
+	end 'appendOps'
+
+	export function blockCount() returns BlockCount
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index BlockRef) returns IrBlock
+		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
+	end 'getBlock'
+
+	export function pushBlock(block IrBlock)
+		self.blocks.push(block)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+	end 'pushBlock'
+
+	export function funcCount() returns FuncCount
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index FuncIndex) returns IrFunction
+		return try self.functions.get(index) otherwise panic("getFunc: index out of bounds")
+	end 'getFunc'
+
+	export function pushFunc(func IrFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	// Both op-appenders assign the new op the index `self.ops.count()` — i.e. the
+	// value `opCount()` returns immediately BEFORE the call. The Maxon tier relies
+	// on that to key its op-parallel `SourceRangeTable` (see
+	// FileParseArtifact.emitOp), which is also the only caller that cares; every
+	// other tier just wants the op appended, so neither returns the index.
+	export function appendOp(block IrBlock, op Op)
+		// A block's conditional branch is the LAST thing in its body — the `jmp` terminator
+		// that carries the other edge is emitted immediately after it. An op appended past
+		// it would sit BETWEEN the two branches and so execute only on the not-taken path,
+		// which is a miscompile whatever the op is. It would also hide a second successor
+		// behind a body op the CFG builder no longer scans for (see `CondBranch`). Refused
+		// here, at the one append point, in O(1) — the callers that legitimately extend a
+		// block's body (SSA-destruction edge moves, the epilogue) only ever do so on
+		// single-successor / `ret` blocks, which have no conditional branch.
+		if block.hasCondBranchOp() 'pastCondBranch'
+			panic("appendOp: block '{String.from(block.label)}' already ends in a conditional branch (op {block.condBranchIndex()}) — an op appended after it would run only on the not-taken path. Insert it BEFORE the conditional branch instead.")
+		end 'pastCondBranch'
+		let idx = self.ops.count()
+		self.ops.push(op)
+		self.spans.pushCurrent(idx)
+		block.opRefs.push(idx)
+	end 'appendOp'
+
+	// Append the block's CONDITIONAL-branch body op (x64 `jcc`) and record where it landed.
+	// THE ONLY WAY a conditional branch may enter a block: the recorded index is what makes
+	// a block's second successor O(1) to find instead of a scan of every op in the block,
+	// and a `jcc` appended through plain `appendOp` would leave that index unset — an edge
+	// missing from every CFG the allocator builds. `TargetLiveness.checkCondBranchIndex`
+	// asserts, against the ops themselves, that no such op ever got in another way.
+	//
+	// Generic over `Op` like the rest of this container, so it cannot itself check that the
+	// op IS a conditional branch — which is exactly why that sweep has to exist: `appendOp`
+	// cannot refuse a `jcc` either. The op-kind check lives with the dialect, in
+	// `TargetLiveness`.
+	export function appendCondBranch(block IrBlock, op Op)
+		if block.hasCondBranchOp() 'second'
+			panic("appendCondBranch: block '{String.from(block.label)}' already has a conditional branch at op {block.condBranchIndex()} — a block has at most one")
+		end 'second'
+		let idx = self.ops.count()
+		self.ops.push(op)
+		self.spans.pushCurrent(idx)
+		block.opRefs.push(idx)
+		block.condBranch = CondBranch.opIndex(idx)
+	end 'appendCondBranch'
+
+	export function setTerminator(block IrBlock, op Op)
+		let idx = self.ops.count()
+		self.ops.push(op)
+		self.spans.pushCurrent(idx)
+		block.terminator = Terminator.opIndex(idx)
+	end 'setTerminator'
+
+	export function addBlock(func IrFunction, label ByteArray) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+		return block
+	end 'addBlock'
+
+	// There is no mid-list block insertion: a continuation block's ref cannot be spliced between
+	// existing ones, because that needs a `NodeIndex` list-position type this module does not have.
+
+	// Parser-facing variant of addBlock that records the block's source
+	// footprint (file path + opening line) in the parallel blockSourceInfo
+	// table. `firstLine` is the line of the token that triggered the block's
+	// creation — the condition/while keyword, the entry token of a function
+	// body, etc.
+	export function addBlockAt(func IrFunction, label ByteArray, filePath String, firstLine LineNumber) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
+		return block
+	end 'addBlockAt'
+
+	// Create a new IrBlock, append it to the blocks array, and register its
+	// index in the function's blockRefs. The caller must bump func.nextBlockId
+	// after calling this (the function returns the allocated id via the block).
+	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray) returns IrBlock
+		let blockIdx = blocks.count()
+		let block = IrBlock.create(id, label: label)
+		blocks.push(block)
+		blockRefs.push(blockIdx)
+		return block
+	end 'createAndRegisterBlock'
+
+	// Re-fetch a block alias by its (function-local) id, scanning the
+	// function's block set. Use this instead of holding an IrBlock struct
+	// alias across other block-creating / block-mutating calls: those calls
+	// can leave a previously-captured alias stale. Mirrors how the if/else
+	// finalizer threads BlockIds rather than struct aliases.
+	export function getBlockByIdIn(func IrFunction, id BlockId) returns IrBlock throws BlockRefLookupError
+		for blockRef in func.blockRefs 'each'
+			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
+			if candidate.id == id 'match'
+				return candidate
+			end 'match'
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'getBlockByIdIn'
+
+	// Enforce the invariant that every block in the module has committed to a
+	// terminator (real op, dead, or fallthrough). Parser ops emit ops into
+	// blocks starting with Terminator.unset — any block still in that state
+	// after parsing is a bug in the parser, not a user error. Callers invoke
+	// this on success paths only; error paths may legitimately leave blocks
+	// unfinished (e.g. missing-return aborts emission).
+	export function assertAllBlocksTerminated()
+		for block in self.blocks 'eachBlock'
+			block.assertTerminated()
+		end 'eachBlock'
+	end 'assertAllBlocksTerminated'
+
+	// Merge all data from a source module into this module.
+	// Adjusts block indices in functions and op indices in blocks to account
+	// for the existing entries in the destination arrays. Block source info
+	// entries are carried across 1:1 so coverage/debug metadata survives the
+	// runtime-merge step.
+	export function merge(source Self)
+		let opOffset = self.ops.count()
+		let blockOffset = self.blocks.count()
+
+		self.ops.append(source.ops)
+		self.spans.appendFrom(source.spans, count: source.ops.count())
+
+		for i in 0 upto source.blocks.count() 'eachBlock'
+			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
+			self.blocks.push(relocateIrBlock(srcBlock, opOffset: opOffset))
+			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+			self.blockSourceInfo.push(srcInfo)
+		end 'eachBlock'
+
+		for srcFunc in source.functions 'eachFunc'
+			self.functions.push(IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset))
+		end 'eachFunc'
+	end 'merge'
+end 'IrModule'
+
+// Forwarding plan for an in-place array compaction. `forward[oldIndex]` holds the
+// compacted destination index of the entry that lived at `oldIndex`, or
+// `deadMarker` when that entry is an orphan (nothing references it). `liveCount`
+// is the number of survivors — the new array length after compaction.
+// `deadMarker` is the old count (one past every valid new index), so a live
+// entry can never collide with it. Despite the `Op` in the name, the plan is
+// index-type-agnostic and drives both of `IrModule`'s in-place compactors:
+// `compactOps` (the ops array) and `compactBlocks` (the blocks array). Every
+// tier — including `TargetModule`, now just `IrModule with TargetOp` — shares
+// those two inherited methods. The array move + reference rewrite are
+// entry-typed and stay on the module; the index arithmetic is shared here.
+type OpCompactionPlan
+	export var forward as OpIndexArray
+	export var liveCount as OpCount
+	export var deadMarker as OpIndex
+
+	export static function create(forward OpIndexArray, liveCount OpCount, deadMarker OpIndex) returns OpCompactionPlan
+		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}
+	end 'create'
+end 'OpCompactionPlan'
+
+// Turn a liveness bitmap into a compaction forwarding map. Shared by the op and
+// block compaction planners, which differ only in how they MARK liveness — the
+// slot-assignment arithmetic is identical for both.
+//
+// Assigns compacted slots in ASCENDING old-index order: scanning ascending
+// guarantees `forward[old] <= old` for every live entry (at most `old + 1` slots
+// are consumed by the time index `old` is reached), which is what makes the
+// leftward in-place move in `compactOps`/`compactBlocks` clobber-free. Orphans
+// (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
+function assignCompactionSlots(live BoolArray, count OpCount) returns OpCompactionPlan
+	let deadMarker = count
+	var forward = OpIndexArray.create()
+	forward.resize(count)
+	var nextSlot = 0 as OpIndex
+	for oldIdx in 0 upto count 'assign'
+		let isLive = try live.get(oldIdx) otherwise panic("assignCompactionSlots: live.get OOB at {oldIdx}")
+		if isLive 'assignLive'
+			try forward.set(oldIdx, value: nextSlot) otherwise panic("assignCompactionSlots: forward.set OOB at {oldIdx}")
+			nextSlot = nextSlot + 1
+		end 'assignLive' else 'assignDead'
+			try forward.set(oldIdx, value: deadMarker) otherwise panic("assignCompactionSlots: forward.set OOB at {oldIdx}")
+		end 'assignDead'
+	end 'assign'
+
+	return OpCompactionPlan.create(forward, liveCount: nextSlot as OpCount, deadMarker: deadMarker as OpIndex)
+end 'assignCompactionSlots'
+
+// Compute the in-place compaction forwarding map for a module's ops array.
+// Marks every op index reachable from a block (`opRefs` entry or `opIndex`
+// terminator) as live, then hands the bitmap to `assignCompactionSlots`. The
+// walk is O(blocks + total opRefs); the two `opCount`-sized arrays (live flags +
+// forwarding) are the only allocations and are dwarfed by the orphan bytes
+// reclaimed.
+function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount OpCount) returns OpCompactionPlan
+	var live = BoolArray.create()
+	live.resize(opCount)
+
+	for func in functions 'markFunc'
+		for blockRef in func.blockRefs 'markBlock'
+			let block = try blocks.get(blockRef) otherwise panic("computeOpCompaction: blockRef from func.blockRefs not in blocks")
+			for opIdx in block.opRefs 'markOpRef'
+				try live.set(opIdx, value: true) otherwise panic("computeOpCompaction: live.set OOB at opRef {opIdx} (opCount={opCount})")
+			end 'markOpRef'
+			if block.hasTerminatorOp() 'markTerm'
+				let termIdx = block.terminatorIndex()
+				try live.set(termIdx, value: true) otherwise panic("computeOpCompaction: live.set OOB at terminator {termIdx} (opCount={opCount})")
+			end 'markTerm'
+		end 'markBlock'
+	end 'markFunc'
+
+	return assignCompactionSlots(live, count: opCount)
+end 'computeOpCompaction'
+
+// Rewrite every block's `opRefs` entries and `opIndex` terminator through a
+// compaction plan's forwarding map, IN PLACE — an entry is replaced by its
+// forwarded index, so no second array is built and nothing is allocated. Shared by
+// both module compactors. Must run AFTER the op-array move + truncate so the
+// renumbered indices line up with the relocated ops.
+function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
+	for func in functions 'rewriteFunc'
+		for blockRef in func.blockRefs 'rewriteBlock'
+			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
+			for pos in 0 upto block.opRefs.count() 'eachRef'
+				let oldIdx = try block.opRefs.get(pos) otherwise panic("rewriteBlockOpRefs: opRefs.get OOB at {pos}")
+				let newIdx = try plan.forward.get(oldIdx) otherwise panic("rewriteBlockOpRefs: forward.get OOB at opRef {oldIdx}")
+				if newIdx == plan.deadMarker 'orphanRef'
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' references orphaned op {oldIdx} — live op marked dead")
+				end 'orphanRef'
+				try block.opRefs.set(pos, value: newIdx) otherwise panic("rewriteBlockOpRefs: opRefs.set OOB at {pos}")
+			end 'eachRef'
+			if block.hasTerminatorOp() 'rewriteTerm'
+				let oldTerm = block.terminatorIndex()
+				let newTerm = try plan.forward.get(oldTerm) otherwise panic("rewriteBlockOpRefs: forward.get OOB at terminator {oldTerm}")
+				if newTerm == plan.deadMarker 'orphanTerm'
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' terminator references orphaned op {oldTerm}")
+				end 'orphanTerm'
+				block.terminator = Terminator.opIndex(newTerm)
+			end 'rewriteTerm'
+
+			// The conditional branch is an `opRefs` entry, so compaction renumbers it like any
+			// other op — and the index recorded on the block must follow, or it would name a
+			// DIFFERENT op after compaction and the block's second successor would be read off
+			// whatever landed in that slot.
+			if block.hasCondBranchOp() 'rewriteCondBranch'
+				let oldCond = block.condBranchIndex()
+				let newCond = try plan.forward.get(oldCond) otherwise panic("rewriteBlockOpRefs: forward.get OOB at conditional branch {oldCond}")
+				if newCond == plan.deadMarker 'orphanCond'
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' conditional branch references orphaned op {oldCond}")
+				end 'orphanCond'
+				block.condBranch = CondBranch.opIndex(newCond)
+			end 'rewriteCondBranch'
+		end 'rewriteBlock'
+	end 'rewriteFunc'
+end 'rewriteBlockOpRefs'
+
+// Compute the in-place compaction forwarding map for a module's `blocks` array.
+// Mirrors `computeOpCompaction` but keys liveness off `func.blockRefs` (the flat
+// `blocks[]` indices each function still references) instead of `block.opRefs`:
+// every flat block index appearing in any `func.blockRefs` is live; DCE-pruned
+// blocks appear in no function's refs and stay unmarked. The bitmap then goes to
+// the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
+// sized arrays (live flags + forwarding) are the only allocations.
+function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount) returns OpCompactionPlan
+	var live = BoolArray.create()
+	live.resize(blockCount)
+
+	for func in functions 'markFunc'
+		for blockRef in func.blockRefs 'markRef'
+			try live.set(blockRef, value: true) otherwise panic("computeBlockCompaction: live.set OOB at blockRef {blockRef} (blockCount={blockCount})")
+		end 'markRef'
+	end 'markFunc'
+
+	return assignCompactionSlots(live, count: blockCount as OpCount)
+end 'computeBlockCompaction'
+
+// Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
+// compaction plan's forwarding map, IN PLACE. Must run AFTER the blocks-array move +
+// truncate so the renumbered indices line up with the relocated blocks.
+function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
+	for funcIdx in 0 upto functions.count() 'rewriteFunc'
+		let func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
+		for pos in 0 upto func.blockRefs.count() 'eachRef'
+			let oldRef = try func.blockRefs.get(pos) otherwise panic("rewriteFuncBlockRefs: blockRefs.get OOB at {pos}")
+			let newRef = try plan.forward.get(oldRef) otherwise panic("rewriteFuncBlockRefs: forward.get OOB at blockRef {oldRef}")
+			if newRef == plan.deadMarker 'orphanRef'
+				panic("rewriteFuncBlockRefs: func '{String.from(func.name)}' references orphaned block {oldRef} — live block marked dead")
+			end 'orphanRef'
+			try func.blockRefs.set(pos, value: newRef) otherwise panic("rewriteFuncBlockRefs: blockRefs.set OOB at {pos}")
+		end 'eachRef'
+	end 'rewriteFunc'
+end 'rewriteFuncBlockRefs'
+
+// RELOCATE a block into a destination module: everything that names an op by index —
+// `opRefs`, the terminator, the cond-branch — shifts by `opOffset`, because `merge`
+// appended the source's ops after the destination's. Nothing is deep-copied; this is
+// index arithmetic, not a clone.
+//
+// The phi model (`blockArgs` / `branchEdges`) is SHARED with the source block, whose
+// module is the parse memo's. Safe because no Maxon-tier pass mutates it, and the one
+// in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
+// copies before it writes. See IrBlock's header for the ownership rules.
+function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
+	let shift = opOffset as OpIndex
+	var block = IrBlock.create(src.id, label: src.label)
+	block.blockArgs = src.blockArgs
+	block.branchEdges = src.branchEdges
+	for opIdx in src.opRefs 'eachOp'
+		block.opRefs.push(opIdx + shift)
+	end 'eachOp'
+	block.terminator = match src.terminator 'relocate'
+		unset gives Terminator.unset
+		dead gives Terminator.dead
+		fallthrough gives Terminator.fallthrough
+		opIndex(index) gives Terminator.opIndex(index + shift)
+	end 'relocate'
+	block.condBranch = match src.condBranch 'relocateCond'
+		none gives CondBranch.none
+		opIndex(index) gives CondBranch.opIndex(index + shift)
+	end 'relocateCond'
+	return block
+end 'relocateIrBlock'
+
+export typealias MaxonModule = IrModule with MaxonOp

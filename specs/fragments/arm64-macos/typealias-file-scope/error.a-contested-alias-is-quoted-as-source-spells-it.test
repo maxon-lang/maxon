@@ -1,0 +1,21 @@
+// Test: error.a-contested-alias-is-quoted-as-source-spells-it
+// --- file: narrow.maxon
+typealias Byte = int(0 to 255)
+
+export function narrowByte(v Byte) returns Byte
+	return v
+end 'narrowByte'
+
+// --- file: main.maxon
+typealias Byte = int(300 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	let v = 500 as Byte
+	b.push(v)
+	return ((try b.get(0) otherwise 0) / 100) + narrowByte(5)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:11: otherwise value 0 is outside the range of 'Byte' (int(300 to 1000))

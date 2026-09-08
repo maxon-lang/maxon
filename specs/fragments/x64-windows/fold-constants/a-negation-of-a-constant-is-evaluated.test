@@ -1,0 +1,63 @@
+// Test: a-negation-of-a-constant-is-evaluated
+typealias Word = int(i64.min to i64.max)
+
+function negate(a Word) returns Word
+	return -a
+end 'negate'
+
+function complement(a Word) returns Word
+	return not a
+end 'complement'
+
+function main() returns ExitCode
+	if negate(42) != -42 'negative'
+		return 1
+	end 'negative'
+	if negate(-9223372036854775808) != -9223372036854775808 'wraps'
+		return 2
+	end 'wraps'
+	if complement(0) != -1 'allOnes'
+		return 3
+	end 'allOnes'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#8:
+    x64.movRegImm rax, 18446744073709551574
+  __il_cont#7:
+    x64.cmpRegImm32 rax, -42
+    x64.jcc equal, __il_body#10
+  negative:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#10:
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#9:
+    x64.movRegImm rcx, 9223372036854775808
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, __il_body#12
+  wraps:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_body#12:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#11:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, ifcont
+  allOnes:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

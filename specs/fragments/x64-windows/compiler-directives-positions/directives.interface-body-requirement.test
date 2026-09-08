@@ -1,0 +1,89 @@
+// Test: directives.interface-body-requirement
+interface Shape
+	function area() returns ExitCode
+	#if testing(false)
+		function perimeter() returns ExitCode
+	#endif
+end 'Shape'
+
+type Square implements Shape
+	export let side as ExitCode
+
+	export static function create(side ExitCode) returns Square
+		return Square{side: side}
+	end 'create'
+
+	export function area() returns ExitCode
+		return side
+	end 'area'
+
+	export function perimeter() returns ExitCode
+		return 29
+	end 'perimeter'
+end 'Square'
+
+function main() returns ExitCode
+	let s = Square.create(4)
+	return s.perimeter()
+end 'main'
+---
+ExitCode: 29
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Square.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at directives.interface-body-requirement.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 4
+    x64.callDirect Square.create
+  __il_body:
+    x64.movRegImm32 rbx, 29
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

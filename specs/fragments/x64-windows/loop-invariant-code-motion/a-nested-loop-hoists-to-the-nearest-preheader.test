@@ -1,0 +1,137 @@
+// Test: a-nested-loop-hoists-to-the-nearest-preheader
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function grid(a WordArray, rows Word, k Word) returns Word
+	var t = 0
+	for _ in 0 upto rows 'outer'
+		for v in a 'inner'
+			t = t + v + k * 5
+		end 'inner'
+	end 'outer'
+	return t
+end 'grid'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(2)
+	a.push(3)
+	a.push(5)
+
+	// Each row adds (2 + 3 + 5) + 3 * (2 * 5) = 40; three rows = 120.
+	if grid(a, rows: 3, k: 2) != 120 'nested'
+		return 1
+	end 'nested'
+	if grid(a, rows: 0, k: 2) != 0 'noRows'
+		return 2
+	end 'noRows'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @grid {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rsi, 0
+    x64.imulRegRegImm32 rax, rax, 5
+  forhdr#1:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc greaterEqual, forexit
+  outer:
+    x64.movRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 r9, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
+  forhdr#5:
+    x64.cmpRegReg rdi, r9
+    x64.jcc greaterEqual, forstep#3
+  inner:
+    x64.loadRegBaseIndexScale.word64 r11, [r10 + rdi*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg r8, r8, r11
+    x64.leaRegRegReg r8, r8, rax
+  forstep#7:
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.jmp forhdr#5
+  forstep#3:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp forhdr#1
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect grid
+    x64.cmpRegImm32 r8, 120
+    x64.jcc equal, ifcont#2
+  nested:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect grid
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#4
+  noRows:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

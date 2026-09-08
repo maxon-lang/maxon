@@ -1,0 +1,20 @@
+// Test: error.var-from-immutable-struct
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = Box.create(5)
+	var u = t
+	u.value = 9
+	return u.value
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:14:6: cannot assign immutable variable 't' to mutable binding 'u'; use 'let' instead of 'var', or use clone()

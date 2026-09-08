@@ -1,0 +1,1213 @@
+// X64Runtime — the emitted program's PANIC RUNTIME, hand-assembled into `.text`.
+//
+// When the CPU raises `#DE` — on `a / 0`, or on the one other quotient that does not exist,
+// `i64.min / -1` — Windows offers the fault to any vectored exception handler BEFORE it kills
+// the process. This file emits that handler and the diagnostic it prints:
+//
+//     panic: integer divide by zero at rip=0x… diag_base=0x…
+//     Stack trace:
+//       in main
+//       in mrt_start
+//
+// The two causes are ONE trap and two NTSTATUS codes, so which of the two lines above's first
+// words appear is a classification the handler makes (`HardwareFaultKind`); `i64.min / -1` reads
+// `panic: integer overflow` and is otherwise identical.
+//
+// The mechanism is the CPU's, not the compiler's: no divisor is ever tested. `idiv`
+// traps for free, and a divide guarded by an explicit `cmp/jz` would cost every division
+// in every program to diagnose the one that faults.
+//
+// WHY HAND-ASSEMBLED BYTES, NOT IR. Everything below is a `FunctionCodeChunk` built by
+// calling X64Backend's encoders directly, rather than a Maxon or Std function the normal
+// pipeline lowers. The Std tier at this milestone has only `arith` and `call` — it cannot
+// load from an address, cannot store to one, and cannot name a machine register — so
+// there is no Std spelling of "read CONTEXT.Rip" or "walk a saved-RBP chain". Growing the
+// Std tier a memory/system band to express six runtime functions is a decision that
+// belongs to R1 (P1.2), where the stdlib cone needs it for its own reasons; making it
+// here, as a side effect of a fault handler, would pre-empt that with the narrowest
+// possible evidence.
+//
+// These chunks are appended AFTER the module's own functions, so they are laid out after
+// user code and before `__symtable` (which concat appends last). They are ordinary chunks
+// in every other respect: `call rel32` between them resolves by name, `call [rip]` through
+// the IAT resolves by slot, and `lea r64, [rip + <chunk>]` files a `CallFixup` like a call
+// — a RIP-relative disp32 and a `call rel32` measure from the same place.
+//
+// WHAT IS DELIBERATELY ABSENT:
+//   - No CONTEXT REDIRECT. Rewriting the faulting thread's Rip/Rsp/Rbp to resume at a
+//     separate diagnostic function and returning EXCEPTION_CONTINUE_EXECUTION is what a
+//     STACK OVERFLOW needs, because there the faulting stack cannot be used to print
+//     anything. Only `#DE` is converted, whose stack is intact, so the handler prints on
+//     the spot and exits.
+//   - No FAULT GLOBALS. Printing in place means Rip/Rbp/Rsp stay in this frame and travel
+//     as ORDINARY ARGUMENTS — which is also why `mrt_fault_backtrace` takes three
+//     parameters and reads no global. There is no writable-data-section pipeline here, so
+//     this deletes a dependency rather than dodging one.
+//   - No RE-ENTRANCY GUARD. A fault raised inside the diagnostic could only be an access
+//     violation, which this handler declines (ContinueSearch), so it cannot recurse into
+//     itself. The diagnostic divides nothing, so neither converted code can arise inside
+//     it either.
+//   - No GREEN-THREAD COUPLING. There is no scheduler until P1.5 and no `recover()`, so
+//     there is no `gt` to find and nowhere to resume TO. The handler exits the process.
+//
+// CALLING CONVENTION. Every function here uses the Win64 ABI (args in RCX/RDX/R8/R9),
+// including for its own internal calls — they interleave with kernel32 calls, and one
+// convention throughout is one fewer thing to get wrong. This is NOT Maxon's custom ABI
+// (primary return in R8); nothing here is callable from Maxon source, and `mrt_start`
+// reaches the runtime through `mrt_runtime_init`, which takes no arguments.
+
+// --- Win64 ABI ---
+// The stack pointer must be 16-byte aligned AT a `call`. Every function below opens with
+// `push rbp; mov rbp, rsp; sub rsp, <multiple of 16>`: entry is rsp ≡ 8 (mod 16), the push
+// makes it ≡ 0, and a multiple-of-16 reservation keeps it there — so every `call` this
+// file emits is aligned by construction. That matters more than it looks: kernel32 uses
+// SSE internally, and a misaligned RSP surfaces as a crash deep inside WriteFile rather
+// than anywhere near the mistake.
+//
+// The alignment itself is `X64PrologueEpilogue.StackFrameAlignment` — the SAME constant the
+// compiled functions' frames are built from, not a local `= 16`. These frames interleave
+// with those on one stack, so they are one fact, and a second copy could only ever drift
+// into a silent misalignment.
+
+// The first outgoing STACK argument sits just above the shadow space. Only `WriteFile`
+// needs one here (its 5th parameter, `lpOverlapped`).
+let FirstStackArgDisp = ShadowSpaceBytes as Imm32
+
+// --- kernel32 ---
+//
+// ⭐ **EXPORTED AT W35, WHEN THE ISEL BECAME A SECOND READER.** This selector lived here, unexported,
+// because the hand-assembled panic chunk below was the only thing that named it — the same reason
+// `StderrFd` lived in `BacktraceFormat.maxon`. `printError` ended both: `StdToX64Conversion.win64StdHandleSelector`
+// materializes this for `osWriteStderr` exactly as it materializes `StdOutputHandle`/`StdInputHandle`.
+// The two mechanisms still share nothing else (this file hand-assembles chunks with no register
+// allocator; the isel is register-allocated), so the constant is exported rather than moved — one
+// spelling, read from both. Its POSIX counterpart went the other way and MOVED, to
+// `StdLoweringShared.StderrFd`: a descriptor is a target-independent fact and belongs with its stdout
+// twin, where a Win32 HANDLE SELECTOR is an x64-Windows one and belongs with the rest of this table.
+export let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+
+// AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
+// previously registered one.
+let VehHandlerFirst = 1
+
+// A vectored handler's return values. `ContinueSearch` lets the OS's default disposition
+// apply — which for a fault we did not convert is exactly what should happen.
+let VehContinueSearch = 0
+
+// A Windows NTSTATUS exception code. A DWORD — which is also the width `EXCEPTION_RECORD` stores it
+// at and the width the thunk loads it with, so the comparand and the loaded value are one type.
+typealias ExceptionCode = int(0 to u32.max)
+
+// The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises, and the only two this
+// handler converts. `idiv` raises the SAME trap for a zero divisor and for a quotient that does not
+// fit (`i64.min / -1`), and the CPU distinguishes them only by which code the OS then reports.
+let ExcCodeIntDivideByZero = 0xC0000094  // EXCEPTION_INT_DIVIDE_BY_ZERO — a zero divisor.
+let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresentable quotient.
+
+// EXCEPTION_ACCESS_VIOLATION — a read or write through an address the process does not own. Unlike the
+// two above it is raised by no ONE instruction: any memory operand can take it, which is why the handler
+// converts it on the CODE alone and reads nothing else out of the record.
+let ExcCodeAccessViolation = 0xC0000005
+
+// EXCEPTION_POINTERS field offsets (the struct RCX points at).
+let ExcPtrsOffExceptionRecord = 0x00
+let ExcPtrsOffContextRecord = 0x08
+
+// EXCEPTION_RECORD.ExceptionCode — a DWORD at offset 0, so it must be read with a 32-bit
+// load. A 64-bit load would drag in the neighbouring ExceptionFlags field; a SIGN-extended
+// read would turn 0xC0000094 into a negative number that matches nothing.
+let ExcRecOffExceptionCode = 0x00
+
+// CONTEXT field offsets (x64). The three registers a backtrace needs.
+let ContextOffRsp = 0x098
+let ContextOffRbp = 0x0A0
+let ContextOffRip = 0x0F8
+
+// --- Hex formatting: the x64 writer's own two constants ---
+//
+// The FORMAT is `Targets/Shared/BacktraceFormat`'s (16 digits, the ASCII bases, the buffer). These two
+// are how THIS instruction stream reaches a nibble and belong to no other writer.
+
+// log2 of the 4 bits a hex digit carries: `index * 4` is emitted as `shl index, 2`. Spelled as its own
+// constant because a shift COUNT is not a bit-width — deriving one from the other (`bits / 2`) is right
+// for 4-bit digits and silently wrong for any other width.
+let HexBitsPerDigitShift = 2
+
+// x64 shifts the chosen nibble down by a VARIABLE count, so the digit has to be masked out of what sits
+// below it.
+let HexNibbleMask = 0xF
+
+// --- Runtime function names ---
+//
+// The names every lane shares are `Targets/Shared/BacktraceFormat`'s. These two are x64-Windows's own:
+// a VEH callback and the trampoline the x86-64 kernel demands.
+
+// The vectored exception handler `AddVectoredExceptionHandler` registers. A different name from the
+// POSIX `FaultHandlerName` because the two are reached differently — one is a callback the OS invokes
+// with `EXCEPTION_POINTERS`, the other a signal handler.
+let FaultThunkName = b"mrt_fault_thunk"
+
+// The rt_sigreturn trampoline `sa_restorer` points at. x86-64 has no kernel signal trampoline, so the
+// kernel demands a restorer address to build the return frame — mandatory even though this handler never
+// returns through it. Just `mov eax, 15; syscall` (rt_sigreturn).
+let LinuxSigreturnName = b"mrt_rt_sigreturn"
+
+// ==========================================================================
+// The chunk assembler
+// ==========================================================================
+
+typealias RuntimeStringLabelMap = Map with (ByteArray, BlockId)
+typealias RuntimeStringLabelArray = Array with BlockId
+typealias RuntimeStringBytesArray = Array with ByteArray
+
+// Assembles ONE hand-written runtime function into a FunctionCodeChunk: the buffers an
+// emitter needs, a label allocator for its branches and strings, and the frame contract.
+//
+// It carries no per-instruction methods on purpose. X64Backend's encoders are the
+// instruction vocabulary and they are called directly (`encodeRmRegDirect(asm.code,
+// opcode: OpcodeMovRmReg, …)`); a method per instruction would be a wrapper whose whole
+// body is one call with a constant swapped, which is the same objection X64Backend already
+// makes to a `encodeMov`/`encodeSub`/`encodeCmp` family. What lives here is only what
+// needs STATE: labels, the string pool, and the frame.
+export type X64RuntimeAsm
+	export var code as ByteArray
+	export var callFixups as CallFixupArray
+	export var iatRelocs as RelocationArray
+	// `.data` references: the Linux host surface reaches its errno word through `lea reg, [rip + disp32]`,
+	// whose displacement only the executable writer can fill in.
+	export var rdataRelocs as RdataRelocationArray
+	export var rel32Fixups as ChunkRel32FixupArray
+	export var labelOffsets as BlockOffsetTable
+	export var nextLabel as BlockId
+	// Strings are laid down at the END of the chunk, past the `ret`, so they are data the
+	// function can address but never execute. Deduped by content within the chunk.
+	export var stringLabelOf as RuntimeStringLabelMap
+	export var stringLabels as RuntimeStringLabelArray
+	export var stringBytes as RuntimeStringBytesArray
+	export var frameBytes as StackSize
+	export var slotAreaBytes as StackSize
+
+	// Open a function: allocate its frame and emit `push rbp; mov rbp, rsp; sub rsp, N`.
+	//
+	// `slots` is how many 8-byte locals the body needs; `outgoingStackArgBytes` is space for
+	// call arguments BEYOND the four the Win64 ABI passes in registers. The frame is laid
+	// out from the bottom up — shadow space, outgoing args, then the slots — and rounded to
+	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
+	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
+		let slotAreaBytes = slots * SpillSlotBytes
+		let frameBytes = alignUpStack(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
+
+		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
+		// then a single immutable construction rather than a build-then-mutate.
+		var code = ByteArray.create()
+		encodePushReg(code, reg: X64Register.rbp)
+		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
+		// No certificate: every panic-runtime chunk's frame is a hand-counted handful of slots (the
+		// widest is `mrt_write_hex64`'s 17-byte buffer), so none can reach the guard page. A chunk
+		// that ever wanted a page-sized buffer would panic here rather than emit a frame that
+		// steps over it — and would then have to name a free scratch register, which is a claim
+		// about ITS entry contract that this shared builder cannot make on its behalf.
+		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
+
+		return Self{
+			code: code,
+			callFixups: CallFixupArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			rel32Fixups: ChunkRel32FixupArray.create(),
+			labelOffsets: BlockOffsetTable.create(),
+			nextLabel: 0,
+			stringLabelOf: RuntimeStringLabelMap.create(),
+			stringLabels: RuntimeStringLabelArray.create(),
+			stringBytes: RuntimeStringBytesArray.create(),
+			frameBytes: frameBytes,
+			slotAreaBytes: slotAreaBytes
+		}
+	end 'beginFunction'
+
+	// Close a function: the epilogue (the exact mirror of the prologue — `add rsp` undoes
+	// the `sub`, `pop rbp` the `push`, so rsp comes home by balanced arithmetic), the `ret`,
+	// then the string pool, then resolve every chunk-local rel32 now that all of it is
+	// placed. Neither the epilogue nor `ret` touches RAX, so a function's return value
+	// survives them.
+	//
+	// ONE exit per function, by construction: an early-out branches to a label placed just
+	// before this epilogue rather than emitting a second one.
+	export function finishFunction(name ByteArray) returns FunctionCodeChunk
+		encodeEpilogue(self.code, stackSize: self.frameBytes)
+		encodePopReg(self.code, reg: X64Register.rbp)
+		self.code.push(OpcodeRet)
+
+		for (iter, bytes) in self.stringBytes.withIterator() 'strings'
+			let label = try self.stringLabels.get(iter.index()) otherwise panic("finishFunction: stringLabels and stringBytes are appended together in stringLabel(), so index {iter.index()} must exist in both")
+			self.placeLabel(label)
+			self.code.append(bytes)
+			self.code.push(0)  // the NUL every consumer here scans for
+		end 'strings'
+
+		resolveChunkRel32Fixups(self.code, labelOffsets: self.labelOffsets, rel32Fixups: self.rel32Fixups)
+
+		return FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs, rdataConstants: GlobalDataTable.create())
+	end 'finishFunction'
+
+	// Mint a fresh chunk-local label id.
+	export function newLabel() returns BlockId
+		let id = self.nextLabel
+		self.nextLabel = id + 1
+		return id
+	end 'newLabel'
+
+	// Fix `label` at the current offset. Every branch to it — already emitted or not — is
+	// patched by `finishFunction`.
+	export function placeLabel(label BlockId)
+		self.labelOffsets.place(label, value: self.code.count())
+	end 'placeLabel'
+
+	// The label of a NUL-terminated string constant in this chunk, laying it out on first
+	// use. Deduped by content: two `lea`s of the same bytes share one copy.
+	export function stringLabel(bytes ByteArray) returns BlockId
+		let existing = try self.stringLabelOf.get(bytes) otherwise 'fresh'
+			let label = self.newLabel()
+			self.stringLabelOf.upsert(bytes, value: label)
+			self.stringLabels.push(label)
+			self.stringBytes.push(bytes)
+			return label
+		end 'fresh'
+		return existing
+	end 'stringLabel'
+
+	// The `[rbp + disp]` displacement of local slot `index`. Slots grow DOWNWARD from rbp,
+	// so they occupy the top of the frame and can never collide with the shadow space or an
+	// outgoing argument at the bottom — which a callee is free to clobber.
+	export function slotDisp(index StackSize) returns Imm32
+		let offset = (index + 1) * SpillSlotBytes
+		if offset > self.slotAreaBytes 'outOfFrame'
+			panic("X64RuntimeAsm.slotDisp: slot {index} needs {offset} bytes but the frame reserved only {self.slotAreaBytes} — `beginFunction` was asked for too few slots")
+		end 'outOfFrame'
+		return -offset as Imm32
+	end 'slotDisp'
+end 'X64RuntimeAsm'
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// `cmp reg, imm` — the zero/constant test every guard below is written in terms of. x64's
+// group-1 immediate is SIGN-extended to 64 bits, which is what makes `cmp rax, -1` (the
+// "no symbol found" marker) compare against the full-width value and not 0x00000000FFFFFFFF.
+export function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: reg, imm: imm)
+end 'emitCmpRegImm'
+
+// `lea dest, [rip + <string>]` — load the address of a chunk-local string constant.
+// Exported: the Linux host surface takes the address of its own chunk-local constants the same way — the
+// `/proc/self/exe` path it hands `readlinkat`, and every panic message a green-thread chunk names.
+export function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
+	encodeLeaRegLabel(asm.code, rel32Fixups: asm.rel32Fixups, dest: dest, targetLabel: asm.stringLabel(bytes), site: PatchSite.x64RuntimeLabelDisp32)
+end 'emitLeaString'
+
+// Print a chunk-local string constant: `lea rcx, [rip + s]; call mrt_write_cstr_stderr`.
+// The single most repeated three lines in this file.
+function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
+	emitLeaString(asm, dest: X64Register.rcx, bytes: bytes)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+end 'emitPrintString'
+
+// `dest = <the runtime address of `mrt_start`>` — the backtrace's `text_base`. Every
+// symbolizable address is expressed relative to it, and concat asserts it is the FIRST
+// chunk in `.text` so that offset can never be negative.
+function emitLeaTextBase(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: EntryPointName)
+end 'emitLeaTextBase'
+
+// `rax = strlen(cstrReg)`, leaving `cstrReg` holding the string start. A C string does not carry its
+// length and the emitted program links no CRT, so this walk is the only way to it.
+//
+// Shared by the WINDOWS writer (which hands the length to `WriteFile`) and the LINUX one (which hands
+// it to `write(2)`), because how long a string is is not an OS question. It had been open-coded in
+// both, instruction for instruction: nothing made the two agree, and an off-by-one corrected in one
+// of them is a truncated or over-long diagnostic from the other, not a compile error.
+//
+// Clobbers rdx (the byte under test).
+//
+// Exported: the Linux host surface measures an environment variable's value the same way, for the same
+// reason — a `char*` out of the `envp` vector carries no length either.
+export function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
+	let lenLoop = asm.newLabel()
+	let lenDone = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: cstrReg, wide: true)
+
+	asm.placeLabel(lenLoop)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
+
+	asm.placeLabel(lenDone)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: cstrReg, wide: true)
+end 'emitCstrLenIntoRax'
+
+// `dest = <the runtime address of `__symtable`>`. Doubles as the `.text` upper bound:
+// concat lays the table down immediately after the last function, so `__symtable -
+// mrt_start` IS the size of the code.
+function emitLeaSymtable(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: SymbolTableName)
+end 'emitLeaSymtable'
+
+// Everything a fault diagnostic prints AFTER its opening words: the two ADDRESSES that recover the
+// ASLR slide (`rip=` is already open when this is called, `diag_base=` is opened here), and the
+// symbolized backtrace under them.
+//
+// Shared by the Windows thunk and the Linux handler because only the CLASSIFICATION and the exit
+// route differ between the two OSes — this middle is identical, tags and call sequence and all, and two
+// copies of a format is two chances for one of them to move.
+function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rbpSlot StackSize, rspSlot StackSize)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(ripSlot), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: FaultDiagBaseTag)
+	emitLeaTextBase(asm, dest: X64Register.rcx)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: FaultLineTerminator)
+
+	// mrt_fault_backtrace(rcx = rip, rdx = rbp, r8 = rsp) — prints `Stack trace:`, frame 0 from the
+	// faulting rip, then the saved-rbp chain bounded to the faulted stack.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(ripSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(rbpSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(rspSlot), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+end 'emitFaultAddressesAndBacktrace'
+
+// Terminate the process with `PanicExitCode` — the LAST instruction of every terminal diagnostic in
+// this file, and the ONE thing about a panic that is still an OS question once the message and the
+// backtrace are printed. `route` is `x64OsCallKind`'s own answer, derived once in
+// `appendX64RuntimeChunks` and threaded down, so this file cannot grow a third opinion about which OSes
+// the x64 backend serves. The two fault chunks name their own route as a literal instead, and that is
+// not a second opinion: `buildFaultThunkChunk` is a VEH callback and `buildLinuxFaultHandlerChunk`
+// answers a `rt_sigaction` signal — each is one OS by its own content, not by a decision made elsewhere.
+//
+// Shared by all THREE terminal paths — the Windows fault thunk, the Linux fault handler, and the
+// OS-parametric `mrt_panic` — for `emitFaultAddressesAndBacktrace`'s reason: the first two had each
+// open-coded their two instructions, and `mrt_panic` becoming OS-parametric would have made that two
+// copies apiece. A panic's exit code and the register it travels in are one fact per OS.
+//
+// ⚠ THE ARGUMENT REGISTER IS PART OF THE DOOR, NOT A DETAIL BESIDE IT. Win64 passes `ExitProcess`'s
+// code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
+// inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
+// same reason.
+function emitPanicProcessExit(asm X64RuntimeAsm, route X64OsCallKind)
+	match route 'route'
+		importCall then emitWin64PanicProcessExit(asm)
+		syscall then emitLinuxPanicProcessExit(asm)
+	end 'route'
+end 'emitPanicProcessExit'
+
+// Windows: `ExitProcess(PanicExitCode)` through the IAT. Never returns, so nothing follows it.
+function emitWin64PanicProcessExit(asm X64RuntimeAsm)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+end 'emitWin64PanicProcessExit'
+
+// Linux: `exit_group(PanicExitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
+// `X64LinuxRuntime.X64LinuxSyscallExitGroup` states — a panic ends the thread GROUP.
+function emitLinuxPanicProcessExit(asm X64RuntimeAsm)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExitGroup)
+end 'emitLinuxPanicProcessExit'
+
+// Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
+// offset) names code this image can symbolize, jumping to `rejectLabel` if not:
+// `0 <= offset < __symtable - mrt_start`. Signed comparisons throughout — a return address
+// into a system DLL lands either below the image (negative) or far above the code, and both
+// ends must reject. `scratchA`/`scratchB` are clobbered.
+//
+// Shared by the walker (which applies it to every return address) and the fault backtrace
+// (which applies it to the faulting RIP), because "is this offset inside our code" is one
+// question and a second copy of it could answer differently.
+function emitTextBoundsGuard(asm X64RuntimeAsm, offsetReg X64Register, scratchA X64Register, scratchB X64Register, textBaseSlot StackSize, symtableSlot StackSize, rejectLabel BlockId)
+	emitCmpRegImm(asm, reg: offsetReg, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: rejectLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: scratchA, base: X64Register.rbp, disp: asm.slotDisp(symtableSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: scratchB, base: X64Register.rbp, disp: asm.slotDisp(textBaseSlot), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: scratchA, src: scratchB, wide: true)  // scratchA = textSize
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: offsetReg, src: scratchA, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: rejectLabel)
+end 'emitTextBoundsGuard'
+
+// ==========================================================================
+// mrt_write_cstr_stderr(rcx = NUL-terminated string)
+// ==========================================================================
+
+// Write a C string to stderr. The emitted program links no CRT — there is no `fprintf`,
+// and stderr is a HANDLE you ask kernel32 for — so this is `GetStdHandle(-12)` plus
+// `WriteFile`, with the length measured here because a C string does not carry one.
+//
+// Slots: 0 = cstr, 1 = length, 2 = WriteFile's lpNumberOfBytesWritten out-param.
+// One outgoing stack argument: WriteFile's 5th parameter (lpOverlapped).
+function buildWriteStderrChunk() returns FunctionCodeChunk
+	let SlotCstr = 0
+	let SlotLength = 1
+	let SlotWritten = 2
+	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: 8)
+
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), srcReg: X64Register.rcx)
+
+	// RCX holds the string start untouched across the walk, so the length needs no second slot.
+	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rax)
+
+	// An empty string is a no-op — WriteFile with a zero count is legal but pointless, and
+	// skipping it keeps the empty case from depending on that.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// GetStdHandle(STD_ERROR_HANDLE). The parameter is a DWORD, so the 32-bit `mov` — which
+	// zero-extends — puts exactly (DWORD)-12 in ECX.
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: StdErrorHandle)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetStdHandle))
+
+	// WriteFile(handle, cstr, length, &written, NULL)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten))
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: FirstStackArgDisp, srcReg: X64Register.rax)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.WriteFile))
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WriteStderrName)
+end 'buildWriteStderrChunk'
+
+// ==========================================================================
+// mrt_write_hex64(rcx = value)
+// ==========================================================================
+
+// Print `value` as 16 zero-padded lowercase hex digits. Formats into a frame buffer and
+// hands it to `mrt_write_cstr_stderr` — one WriteFile, not sixteen.
+//
+// Slots: 0 = value, 1 = digit index, 2..4 = the 17-byte output buffer.
+function buildWriteHexChunk() returns FunctionCodeChunk
+	let SlotValue = 0
+	let SlotIndex = 1
+	let SlotBuffer = 2
+	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
+	var asm = X64RuntimeAsm.beginFunction(((SlotBuffer + bufferSlots) as StackSize))
+
+	let loop = asm.newLabel()
+	let loopDone = asm.newLabel()
+	let isDigit = asm.newLabel()
+	let store = asm.newLabel()
+
+	// The buffer occupies slots SlotBuffer.. upward in memory, so its first byte is at the
+	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
+	let bufferDisp = asm.slotDisp(((SlotBuffer + bufferSlots - 1) as StackSize))
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+
+	asm.placeLabel(loop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: HexDigitsPerWord)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: loopDone)
+
+	// nibble = (value shr (60 - 4*index)) and 0xF — most significant digit first.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: HexBitsPerDigitShift)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: HexTopDigitShift)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rcx, src: X64Register.r8, wide: true)
+	// SHR, not SAR: these are the raw bits of an address, not a signed quantity — an
+	// arithmetic shift would smear the top bit across every digit of a high address.
+	encodeGrp2RegCl(asm.code, ext: Grp2ExtShr, reg: X64Register.rdx)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: HexNibbleMask)
+
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: HexDigitTen)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: isDigit)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiLowerAMinusTen)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: store)
+	asm.placeLabel(isDigit)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: HexAsciiZero)
+
+	asm.placeLabel(store)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: 0, srcReg: X64Register.rdx)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
+
+	asm.placeLabel(loopDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: HexDigitsPerWord, srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.r9, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+
+	return asm.finishFunction(WriteHexName)
+end 'buildWriteHexChunk'
+
+// ==========================================================================
+// mrt_panic_print_frame(rcx = text_offset, rdx = symtable_ptr)
+// ==========================================================================
+
+// Print one frame as `  in <name>\n`, resolving `text_offset` through the symbol table.
+// A linear scan keeping the LAST entry whose codeOffset is <= text_offset — which is the
+// GREATEST such entry because the table ascends (asserted where it is built).
+//
+// Slots: 0 = text_offset, 1 = symtable_ptr, 2 = count, 3 = index, 4 = best name offset.
+function buildPrintFrameChunk() returns FunctionCodeChunk
+	let SlotTextOffset = 0
+	let SlotSymtable = 1
+	let SlotCount = 2
+	let SlotIndex = 3
+	let SlotBestName = 4
+	assertSymtabStride()
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let lookup = asm.newLabel()
+	let next = asm.newLabel()
+	let lookupDone = asm.newLabel()
+	let unknown = asm.newLabel()
+	let newline = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx)
+
+	emitPrintString(asm, bytes: FrameLinePrefix)
+
+	// count = *(u32*)symtable — a 32-bit load, which zero-extends. Loading 8 bytes and
+	// masking would be the same value in two instructions.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rax)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	// -1 = "no symbol matched yet". A real nameOffset is a u32 read from the table, so it
+	// can never collide with this.
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: u64.max)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
+
+	asm.placeLabel(lookup)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: lookupDone)
+
+	// entry = symtable + 4 + index*8
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SymtabEntryShift)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.r8, scale: MemoryIndexScale.byOne)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: SymtabOffEntries)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffCodeOffset, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: next)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffNameOffset, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
+
+	asm.placeLabel(next)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lookup)
+
+	asm.placeLabel(lookupDone)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: -1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: unknown)
+
+	// name_ptr = symtable + best (nameOffset is relative to the table's start)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: newline)
+
+	asm.placeLabel(unknown)
+	emitPrintString(asm, bytes: UnknownFrameName)
+
+	asm.placeLabel(newline)
+	emitPrintString(asm, bytes: FrameLineTerminator)
+
+	return asm.finishFunction(PrintFrameName)
+end 'buildPrintFrameChunk'
+
+// ==========================================================================
+// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low, r8 = stack_high)
+// ==========================================================================
+
+// Walk the saved-RBP chain from `start_frame`, printing up to 32 symbolized frames.
+//
+// ONE walker, two callers, distinguished by `stack_high`, and the reason it is one function and
+// not two: `stack_high == 0` trusts the chain (a SOFTWARE panic, whose frames it built itself),
+// while a non-zero `stack_high` additionally requires every frame pointer to lie in
+// [stack_low, stack_high) and to STRICTLY ASCEND — so a hardware fault that corrupted RBP degrades
+// to a short trace rather than a second fault inside the diagnostic.
+//
+// ⭐ BOTH ARMS ARE LIVE, on BOTH x64 lanes. The software arm prints EVERY range-check backtrace the
+// compiler emits, through `mrt_panic`, and it does NO bounds validation — measured safe because every
+// frame it walks is a compiled prologue this backend built (including a green thread's, whose chain
+// terminates on the zeroed saved-rbp `__gt_trampoline` inherits from a fresh GT stack).
+//
+// Slots: 0 = frame, 1 = stack_low, 2 = stack_high, 3 = counter, 4 = text_base,
+//        5 = symtable, 6 = next frame.
+function buildWalkFramesChunk() returns FunctionCodeChunk
+	let SlotFrame = 0
+	let SlotStackLow = 1
+	let SlotStackHigh = 2
+	let SlotCounter = 3
+	let SlotTextBase = 4
+	let SlotSymtable = 5
+	let SlotNextFrame = 6
+	var asm = X64RuntimeAsm.beginFunction(7)
+
+	let loop = asm.newLabel()
+	let getReturnAddr = asm.newLabel()
+	let advance = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), srcReg: X64Register.r8)
+
+	emitLeaTextBase(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	emitLeaSymtable(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: MaxBacktraceFrames)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
+
+	asm.placeLabel(loop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
+
+	// A null frame pointer ends the chain — `mrt_start`'s saved rbp is whatever the loader
+	// left, which on the initial thread is zero.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// stack_high == 0 disables range validation (the software-panic caller).
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: getReturnAddr)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+
+	asm.placeLabel(getReturnAddr)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffReturnAddr, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// text_offset = (return_addr - 1) - text_base
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -ReturnAddrSymbolBias)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: done)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+
+	// next = [frame]
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffSavedFramePointer, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
+
+	// Require next > frame. The stack grows down, so a caller's frame is always at a HIGHER
+	// address; a link that does not ascend is a corrupt chain, and following it would be the
+	// wild read this walk exists to avoid.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+
+	asm.placeLabel(advance)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WalkFramesName)
+end 'buildWalkFramesChunk'
+
+// ==========================================================================
+// mrt_fault_backtrace(rcx = fault_rip, rdx = fault_rbp, r8 = fault_rsp)
+// ==========================================================================
+
+// Print `Stack trace:` and a symbolized backtrace for a hardware fault. There is no `gt` lookup —
+// the context arrives as three arguments.
+//
+// Frame 0 is the faulting instruction, symbolized from `fault_rip` with NO bias: a fault
+// RIP already points AT the instruction that trapped, whereas a return address points past
+// its call and needs the -1 (see ReturnAddrSymbolBias). Frames 1..N come from walking the
+// saved-RBP chain, bounded to [fault_rsp, fault_rsp + 64 MiB).
+//
+// Slots: 0 = fault_rip, 1 = fault_rbp, 2 = fault_rsp, 3 = text_base, 4 = symtable.
+function buildFaultBacktraceChunk() returns FunctionCodeChunk
+	let SlotFaultRip = 0
+	let SlotFaultRbp = 1
+	let SlotFaultRsp = 2
+	let SlotTextBase = 3
+	let SlotSymtable = 4
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let walk = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8)
+
+	emitPrintString(asm, bytes: BacktraceHeader)
+
+	emitLeaTextBase(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	emitLeaSymtable(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+
+	// Frame 0. A fault whose RIP is in a system DLL has no local symbol, so the bounds guard
+	// skips it and the trace starts at the RBP chain instead.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: walk)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+
+	asm.placeLabel(walk)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: StackWindowBytes)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
+
+	return asm.finishFunction(FaultBacktraceName)
+end 'buildFaultBacktraceChunk'
+
+// ==========================================================================
+// mrt_fault_thunk(rcx = EXCEPTION_POINTERS*)  — the vectored exception handler
+// ==========================================================================
+
+// ONE classification arm: "if the OS's code equals `excCode`, this fault is `kind`". A match records
+// that kind's panic prefix in `prefixSlot` and jumps to `classified`; a miss falls through to the
+// next arm. Both arms go through this function so the code→words mapping is decided in exactly one
+// place, and so the sign-extension trap is dodged by one technique rather than by two.
+//
+// ⚠ THE COMPARAND TRAVELS THROUGH A REGISTER. x64's group-1 immediate is SIGN-extended, so
+// `cmp rax, 0xC0000094` would compare against 0xFFFFFFFFC0000094 and never match the zero-extended
+// DWORD the caller just loaded. Both codes have bit 31 set, so this is not a quirk of one of them.
+function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, kind HardwareFaultKind, prefixSlot StackSize, classified BlockId)
+	let next = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: scratch, value: excCode as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: scratch, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: next)
+
+	emitLeaString(asm, dest: scratch, bytes: faultPanicLinePrefix(kind))
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(prefixSlot), srcReg: scratch)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: classified)
+
+	asm.placeLabel(next)
+end 'emitFaultCodeArm'
+
+// The callback `AddVectoredExceptionHandler` invokes on a hardware fault, BEFORE the OS
+// applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
+// in EAX.
+//
+// It converts the two integer `#DE` codes and the ACCESS VIOLATION, and NOTHING ELSE. Every
+// other code returns EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler
+// that swallowed faults it was not asked about would turn every unrelated crash into this
+// one's diagnostic. (STACK OVERFLOW is not converted: it would be the same one `cmp` per code, but
+// it also needs a guard page the handler can run on, which none of the three here do.)
+//
+// ⚠ **THE ACCESS-VIOLATION ARM IS WHAT MAKES THIS HANDLER TESTABLE AT ALL.** Every other route
+// to it is a compiler BUG, so until `__Builtins.forceSegfault()` existed the whole thunk was
+// code no spec case could reach on purpose. `FaultProbeRuntime` is that door.
+//
+// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
+function buildFaultThunkChunk() returns FunctionCodeChunk
+	let SlotExcPtrs = 0
+	let SlotFaultRip = 1
+	let SlotFaultRbp = 2
+	let SlotFaultRsp = 3
+	let SlotPanicPrefix = 4
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let continueSearch = asm.newLabel()
+	let classified = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
+
+	// code = *(u32*)(p->ExceptionRecord), then one arm per code we convert. An arm that matches
+	// leaves its panic prefix in `SlotPanicPrefix` and jumps to `classified`; falling out of the last
+	// arm means this is not our fault, and the OS keeps it.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: HardwareFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: HardwareFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeAccessViolation, kind: HardwareFaultKind.accessViolation, prefixSlot: SlotPanicPrefix, classified: classified)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
+
+	asm.placeLabel(classified)
+
+	// Stash the faulting Rip/Rbp/Rsp. The faulted frames are still mapped and untouched —
+	// the handler runs on the same thread, BELOW the faulting RSP — so this chain is walkable
+	// exactly as it stands.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRip, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRbp, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRsp, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx)
+
+	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
+	// is the OS-neutral one. The harness strips the addresses, an operator reads them.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPanicPrefix), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotFaultRip, rbpSlot: SlotFaultRbp, rspSlot: SlotFaultRsp)
+
+	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
+	// onto, so a converted fault is terminal.
+	emitPanicProcessExit(asm, route: X64OsCallKind.importCall)
+
+	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
+	// reaches directly.
+	asm.placeLabel(continueSearch)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: VehContinueSearch)
+
+	return asm.finishFunction(FaultThunkName)
+end 'buildFaultThunkChunk'
+
+// ==========================================================================
+// mrt_runtime_init()
+// ==========================================================================
+
+// Register the fault handler. `mrt_start` calls this before `main`, so the very first
+// instruction of user code is already covered.
+//
+// It exists as its own function because `mrt_start` is built from TargetOps, and the Target
+// tier has no op for "the address of a function" — the argument `AddVectoredExceptionHandler`
+// needs. Rather than mint a TargetOp variant for one hand-built call site (a new variant has
+// to be band-appended, and every `match` over the union pays for it forever), the address is
+// taken HERE, in a chunk that assembles its own bytes, and `mrt_start` reaches it with the
+// `callDirect` it already has. This is also where the runtime's later prelude lands.
+function buildRuntimeInitChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: VehHandlerFirst)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rdx, targetName: FaultThunkName)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.AddVectoredExceptionHandler))
+
+	return asm.finishFunction(RuntimeInitName)
+end 'buildRuntimeInitChunk'
+
+// ==========================================================================
+// mrt_panic(rcx = NUL-terminated cstr)  — the callable software-panic entry
+// ==========================================================================
+
+// The panic a P1.9 range guard calls when a value falls outside its typealias. Prints the caller's
+// message, a `Stack trace:` header, a symbolized backtrace, and exits 1. It ASSEMBLES the existing
+// fault-path primitives — it does not reimplement any of them:
+//   (1) `mrt_write_cstr_stderr` prints the cstr in RCX (the pass bakes the whole `panic at …\n` line);
+//   (2) the same writer prints the `Stack trace:` header;
+//   (3) `mrt_panic_walk_frames`'s SOFTWARE arm (`stack_high == 0`, which trusts the saved-rbp chain the
+//       compiled frames build rather than range-validating it) walks from THIS frame — so `[rbp+8]`,
+//       the return address into the function whose guard fired, is the first symbolized frame and
+//       `mrt_panic` never appears in the trace;
+//   (4) under `--coverage` only, `__cov_dump(ABORTED)` publishes the counters this run did reach;
+//   (5) `exit(PanicExitCode)` through `exitRoute`'s OS door.
+//
+// This is the reader the walker's software arm was written for and had been waiting on (X64Runtime's
+// header noted the arm was unreached until P1.2's `panic()`; the range guard reaches it first).
+//
+// ⭐ THE ONLY OS-PARAMETRIC CHUNK IN THIS FILE, and steps (1)–(3) are why: every primitive it calls is
+// either OS-NEUTRAL (the walker, the frame printer, `__symtable` — one chunk each, appended to BOTH
+// lanes) or reached BY NAME through a writer each lane appends its own copy of under the same
+// `mrt_write_cstr_stderr` label. So the assembly above is identical on Windows and Linux, and only
+// step (4) — the process exit — has an OS in it. `exitRoute` carries exactly that and nothing more.
+// Every other chunk here is either shared outright or named for its one OS (`buildLinux…`).
+//
+// ⚠ RBP MUST SURVIVE STEPS (1) AND (2), because step (3) loads it as the walk's seed — and a walk over
+// a clobbered frame pointer prints plausible nonsense, which on a fault path is strictly worse than
+// printing nothing. It survives on BOTH lanes, and NOT because of a callee-saved convention this file
+// could only assume: `X64RuntimeAsm.beginFunction` gives every chunk a `push rbp` prologue and
+// `finishFunction` the matching `pop rbp`, so each writer restores it by balanced arithmetic. This is
+// what makes the Linux writer safe here despite ending in a `syscall`, which CLOBBERS RCX AND R11 —
+// neither of which this chunk reads across a call (the message in RCX is consumed by step (1) itself,
+// and step (3) re-loads RCX from RBP). It takes NO slots for the same reason: nothing is live across
+// the calls.
+function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+
+	// (2) The `Stack trace:` header.
+	emitPrintString(asm, bytes: BacktraceHeader)
+
+	// (3) Walk from this frame with the software arm: rcx = current rbp, rdx = stack_low (unused when
+	// stack_high == 0), r8 = stack_high = 0.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rbp, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
+
+	// (4) The counters, on an instrumented build only.
+	emitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
+
+	// (5) exit(PanicExitCode) — the one step with an OS in it.
+	emitPanicProcessExit(asm, route: exitRoute)
+
+	return asm.finishFunction(PanicName)
+end 'buildPanicChunk'
+
+// ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`.** The entry stub's dump is the
+// only other one, and it is on a path a panic never takes: without this, a program that dies loses every
+// count it accumulated — which is the run a reader most wants coverage for — and no reader ever sees a
+// PARTIAL report at all. `__cov_dump` allocates nothing and takes no lock, which is what makes it
+// callable from a path the program is already failing on (`CoverageRuntime`'s header).
+//
+// ⛔ **LAST, AFTER THE MESSAGE AND THE BACKTRACE.** A panic's own diagnostics are worth more than its
+// counters, so nothing the dump does can come between the reader and them.
+//
+// ⛔ **ONLY THE DELIBERATE ABORT DUMPS — THE CPU-FAULT PATH STAYS UNHOOKED.** A fault handler runs on an
+// already-compromised stack, where opening a file turns a diagnosable fault into a silent kill. Such a
+// run leaves no data file, which every driver already reports as a run that wrote none.
+//
+// ⚠ **THE STACK IS ALIGNED BY CONSTRUCTION, NOT BY CORRECTION.** `beginFunction` lays `push rbp` over a
+// frame rounded to `StackFrameAlignment`, so RSP is 16-byte aligned at every call in this chunk — the two
+// above included. A re-alignment here would be the defect: it would MIS-align the call it was meant to fix.
+function emitCoverageAbortDump(asm X64RuntimeAsm, dumpCoverage bool)
+	if not dumpCoverage 'notInstrumented'
+		return
+	end 'notInstrumented'
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: MxcovStatusAborted as MachineWord)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: CoverageDumpName)
+end 'emitCoverageAbortDump'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// ==========================================================================
+// The Linux (x64) fault runtime
+// ==========================================================================
+//
+// THE LINUX TWIN OF THE WINDOWS FAULT RUNTIME, and it reuses most of it. `mrt_fault_backtrace`,
+// `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_hex64` are OS-NEUTRAL — they call each
+// other and `mrt_write_cstr_stderr` BY NAME and touch no IAT — so the Linux runtime appends them
+// unchanged. Only THREE chunks differ from Windows, all because Linux reaches the OS through raw syscalls
+// rather than kernel32 imports: the stderr writer (`write` vs GetStdHandle+WriteFile), the fault ENTRY (a
+// SIGFPE handler reading the ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init`
+// (rt_sigaction vs AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows
+// twins (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to
+// whichever the OS build appended — never both in one binary.
+
+// mrt_rt_sigreturn — the `sa_restorer` trampoline. Raw `mov eax, 15; syscall`, with NO prologue: the
+// kernel enters a restorer with the signal frame already on the stack, so a push/frame would corrupt it.
+// Built directly (not through X64RuntimeAsm, which opens a frame). Never actually executed while this
+// handler exits, but the kernel demands the address exists to build the return frame at all.
+function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+	encodeX64Syscall(code, number: X64LinuxSyscallRtSigreturn)
+	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildLinuxSigreturnTrampolineChunk'
+
+// mrt_write_cstr_stderr (LINUX) — rcx = NUL-terminated string. The Linux twin of `buildWriteStderrChunk`:
+// the same strlen, then a single `write(2, cstr, len)` syscall instead of GetStdHandle+WriteFile through
+// the IAT. Keeps the file's internal Win64 convention (the string arrives in rcx).
+function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let done = asm.newLabel()
+
+	// rcx (the string start) is held untouched across the walk; len = rax - rcx.
+	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
+
+	// An empty string is a no-op — skip `write(2, buf, 0)`.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// write(2, cstr, len): args go in rdi/rsi/rdx. Move len (rax) and cstr (rcx) into place BEFORE the
+	// syscall number overwrites eax.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: StderrFd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WriteStderrName)
+end 'buildLinuxWriteStderrChunk'
+
+// mrt_fault_handler (LINUX) — the SIGFPE handler. Kernel SA_SIGINFO entry ABI: rdi=signum, rsi=siginfo*,
+// rdx=ucontext*. The Linux twin of `buildFaultThunkChunk`: reads the faulting RIP/RBP/RSP from the
+// ucontext (not a Windows CONTEXT), prints the SAME panic line + backtrace, and terminates with
+// exit_group(1) (not ExitProcess). It NEVER returns, which is why the sigaction needs no restorer.
+//
+// ⚠ IT CANNOT MAKE THE WINDOWS THUNK'S DISTINCTION, AND THE LIMITATION IS THE KERNEL'S. The Windows
+// thunk tells a zero divisor from an unrepresentable quotient (`i64.min / -1`) because the two arrive
+// as different NTSTATUS codes. Linux offers only `siginfo->si_code`, and x86's `exc_divide_error`
+// reports `FPE_INTDIV` for EVERY `#DE` — the CPU never told the kernel which of the two causes fired,
+// so there is nothing to branch on. MEASURED, not inferred: this handler was instrumented to print
+// the raw `si_code` and both a zero divisor and `i64.min / -1` read 1 (`FPE_INTDIV`). Recovering the
+// distinction would mean decoding the faulting `idiv`'s ModRM at the ucontext RIP to find which
+// register held the divisor — a disassembler in hand-assembled bytes, welded to one encoding, whose
+// failure mode is a CONFIDENTLY WRONG diagnostic rather than a missing one. So this handler prints
+// the divide-by-zero wording for every SIGFPE it receives, which is also why a stray floating-point
+// trap would read that way; `specs/safety.md` states both halves and gates the overflow case to
+// `x64-windows`.
+//
+// Slots: 0=rip, 1=rbp, 2=rsp.
+function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
+	let SlotRip = 0
+	let SlotRbp = 1
+	let SlotRsp = 2
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	// Stash the faulting RIP/RBP/RSP from the ucontext (rdx) BEFORE any call clobbers rdx.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRipOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRbpOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRspOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rax)
+
+	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
+	// cannot drift on the wording and the harness's strip-from-` at rip=0x` leaves an identical line.
+	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.divideByZero))
+	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
+
+	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
+	emitPanicProcessExit(asm, route: X64OsCallKind.syscall)
+
+	return asm.finishFunction(FaultHandlerName)
+end 'buildLinuxFaultHandlerChunk'
+
+// mrt_runtime_init (LINUX) — registers the SIGFPE handler via rt_sigaction. `mrt_start` calls this before
+// `main`, so the first user instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
+// Builds a `struct sigaction` on the stack: the handler address, SA_SIGINFO (so the handler receives the
+// ucontext), a NULL restorer (the handler exits, so rt_sigreturn is never reached), and an empty mask —
+// then rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
+// slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
+function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
+	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
+	let SlotFlags = 2  // rbp-24 = sa_flags (offset 8)
+	let SlotRestorer = 1  // rbp-16 = sa_restorer (offset 16)
+	let SlotMask = 0  // rbp-8 = sa_mask (offset 24)
+	var asm = X64RuntimeAsm.beginFunction(4)
+
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: FaultHandlerName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxSigactionFlags)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax)
+	// sa_restorer = &mrt_rt_sigreturn — MANDATORY on x86-64: the kernel builds the signal return frame from
+	// it, and a missing/NULL restorer is a KERNEL SIGSEGV during delivery (measured), before the handler.
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxSigreturnName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRestorer), srcReg: X64Register.rax)
+	// sa_mask = 0 (block nothing additional during the handler).
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax)
+
+	// rt_sigaction(SIGFPE, &act, NULL, 8): rdi=SIGFPE, rsi=&act (the lowest field's address), rdx=0
+	// (oldact), r10=8 (the kernel's sigset_t size).
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxSignalFpe)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler))
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
+
+	return asm.finishFunction(RuntimeInitName)
+end 'buildLinuxRuntimeInitChunk'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// Append the x64 fault runtime for `target`'s OS. Called after the module's own functions are encoded, so
+// the runtime lays out above user code; `__symtable` closes `.text` after all of it. `macos`/`wasi` never
+// reach here — `buildX64Backend` appends this only for windows/linux.
+//
+// ⭐ THE EXIT ROUTE IS DERIVED HERE, ONCE, FROM THE SAME DOOR EVERY OTHER x64 OS DECISION ASKS
+// (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
+// in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
+// that can answer without repeating itself; the lane appenders receive the answer and pass it on.
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool)
+	let exitRoute = x64OsCallKind(target.os)
+
+	match target.os 'os'
+		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+		macos or
+			wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
+	end 'os'
+end 'appendX64RuntimeChunks'
+
+// ⭐ THE CHUNKS BOTH LANES NEED, WRITTEN ONCE. A per-lane copy of this list is not a compile error when
+// the two drift — a chunk missing from one of them is a diagnostic that simply does not print there,
+// under a green suite. Written once, a shared chunk cannot be present on one lane and absent from the
+// other, which closes the failure mode rather than one instance of it.
+//
+// `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)); every other byte
+// they assemble is identical on both lanes, either because the chunk is OS-neutral outright or because it
+// reaches the OS BY NAME through `mrt_write_cstr_stderr`, which each lane appends its own writer under.
+//
+// ⚠ ORDER AMONG RUNTIME CHUNKS IS INERT and this function relies on it: they all lay out inside
+// `[mrt_start, __symtable)`, which is the only range `emitTextBoundsGuard` tests, and every reference
+// between them is a name resolved by the intra-`.text` call fixup rather than a distance. Verified by
+// running both suites and the panic probes across the reordering this function introduced.
+function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
+	chunks.push(buildPanicChunk(exitRoute, dumpCoverage: dumpCoverage))
+	chunks.push(buildFaultBacktraceChunk())
+	chunks.push(buildWalkFramesChunk())
+	chunks.push(buildPrintFrameChunk())
+	chunks.push(buildWriteHexChunk())
+end 'appendX64SharedRuntimeChunks'
+
+// The Windows-ONLY half of the fault runtime: the VEH `runtime_init` + `fault_thunk`, over a
+// GetStdHandle+WriteFile stderr writer. Everything else it needs comes from the shared appender above.
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
+	chunks.push(buildRuntimeInitChunk())
+	chunks.push(buildFaultThunkChunk())
+	chunks.push(buildWriteStderrChunk())
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+end 'appendX64WindowsRuntimeChunks'
+
+// The Linux-ONLY half: the rt_sigaction `runtime_init`, the sigreturn trampoline and the SIGFPE
+// `fault_handler`, over a `write`-syscall stderr writer published under the same
+// `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks call it
+// without knowing which lane they are on.
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
+	chunks.push(buildLinuxRuntimeInitChunk())
+	chunks.push(buildLinuxSigreturnTrampolineChunk())
+	chunks.push(buildLinuxFaultHandlerChunk())
+	chunks.push(buildLinuxWriteStderrChunk())
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+end 'appendX64LinuxRuntimeChunks'

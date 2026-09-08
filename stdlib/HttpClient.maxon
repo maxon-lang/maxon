@@ -1,0 +1,248 @@
+/// HTTP/1.1 client for making HTTP requests over TCP.
+/// @category Network
+/// HTTP client errors
+public enum HttpError implements Error
+	invalidUrl
+	connectFailed
+	sendFailed
+	recvFailed
+	invalidResponse
+end 'HttpError'
+
+/// HTTP request methods
+public enum HttpMethod
+	get
+	post
+	put
+	delete
+	head
+	patch
+end 'HttpMethod'
+
+/// Case-insensitive HTTP header map.
+public type HttpHeaders
+	typealias CaseInsensitiveHeaders = Map with String, String
+
+	public var headers as CaseInsensitiveHeaders
+
+	public static function create() returns HttpHeaders
+		return HttpHeaders{headers: CaseInsensitiveHeaders.create()}
+	end 'create'
+
+	/// Set a header (name is lowercased for case-insensitive storage).
+	public function set(name String, value String)
+		var key = name
+		headers.upsert(key.toLower(), value: value)
+	end 'set'
+
+	/// Get a header value by name. Throws if not present.
+	public function get(name String) returns String throws HttpError
+		var key = name
+		let val = try headers.get(key.toLower()) otherwise 'notFound'
+			throw HttpError.invalidResponse
+		end 'notFound'
+		return val
+	end 'get'
+
+	/// Check if a header is present.
+	public function has(name String) returns bool
+		var key = name
+		return headers.contains(key.toLower())
+	end 'has'
+end 'HttpHeaders'
+
+/// An HTTP request with method, URL, headers, and body.
+public type HttpRequest
+	var httpMethod as HttpMethod
+	var requestUrl as URL
+	var requestHeaders as HttpHeaders
+	var requestBody as String
+
+	/// Create a request from a method and URL string.
+	public static function create(method HttpMethod, url String) returns HttpRequest throws HttpError
+		let parsed = try URL.parse(url) otherwise 'badUrl'
+			throw HttpError.invalidUrl
+		end 'badUrl'
+		return HttpRequest{
+			httpMethod: method,
+			requestUrl: parsed,
+			requestHeaders: HttpHeaders.create(),
+			requestBody: ""
+		}
+	end 'create'
+
+	/// Set a request header.
+	public function setHeader(name String, value String)
+		requestHeaders.set(name, value: value)
+	end 'setHeader'
+
+	/// Set the request body.
+	public function setBody(body String)
+		requestBody = body
+	end 'setBody'
+
+	public function url() returns URL
+		return requestUrl
+	end 'url'
+
+	public function method() returns HttpMethod
+		return httpMethod
+	end 'method'
+
+	public function headers() returns HttpHeaders
+		return requestHeaders
+	end 'headers'
+
+	public function body() returns String
+		return requestBody
+	end 'body'
+end 'HttpRequest'
+
+/// HTTP status codes.
+public enum StatusCode
+	ok = 200
+	created = 201
+	noContent = 204
+	movedPermanently = 301
+	found = 302
+	notModified = 304
+	badRequest = 400
+	unauthorized = 401
+	forbidden = 403
+	notFound = 404
+	methodNotAllowed = 405
+	conflict = 409
+	gone = 410
+	internalServerError = 500
+	notImplemented = 501
+	badGateway = 502
+	serviceUnavailable = 503
+end 'StatusCode'
+
+/// An HTTP response with status code, headers, and body.
+public type HttpResponse
+	var code as StatusCode
+	var reasonPhrase as String
+	var responseHeaders as HttpHeaders
+	var responseBody as String
+
+	public static function create(code StatusCode, reasonPhrase String, responseHeaders HttpHeaders, responseBody String) returns HttpResponse
+		return HttpResponse{code: code, reasonPhrase: reasonPhrase, responseHeaders: responseHeaders, responseBody: responseBody}
+	end 'create'
+
+	public function statusCode() returns StatusCode
+		return code
+	end 'statusCode'
+
+	public function reason() returns String
+		return reasonPhrase
+	end 'reason'
+
+	public function headers() returns HttpHeaders
+		return responseHeaders
+	end 'headers'
+
+	public function body() returns String
+		return responseBody
+	end 'body'
+
+	/// Get a response header by name. Throws if not present.
+	public function header(name String) returns String throws HttpError
+		return try responseHeaders.get(name)
+	end 'header'
+end 'HttpResponse'
+
+/// Stateless HTTP/1.1 client. All methods are static.
+/// HTTP only (no TLS). Uses Connection: close for simple response reading.
+public type HttpClient
+
+	/// Send an HTTP request and return the response.
+	public static function send(request HttpRequest) returns HttpResponse throws HttpError
+		let url = request.url()
+		let host = try url.host() otherwise 'noHost'
+			throw HttpError.invalidUrl
+		end 'noHost'
+		let port = try url.port() otherwise 80
+
+		// Build the raw HTTP request
+		let rawRequest = httpBuildRequest(request)
+
+		// Connect via TcpClient
+		var client = try TcpClient.connect(host, port: port as NetworkPort) otherwise 'connFail'
+			throw HttpError.connectFailed
+		end 'connFail'
+
+		// Send the request
+		_ = try client.send(rawRequest) otherwise 'sendFail'
+			throw HttpError.sendFailed
+		end 'sendFail'
+
+		#if testing(true)
+			// to ensure test output is deterministic we sleep briefly to allow the server to send the full response before we start receiving. In production this is not needed and would just add unnecessary latency.
+			sleep(100)
+		#endif
+
+		// Receive the response until the server closes the connection.
+		//
+		// `connectionClosed` is the ONLY clean end of the body — the server signalling it has sent
+		// everything. A `recvFailed` is a RESET, not an ending. The loop used to be written as
+		// `if let chunk = try client.recv(...)`, which treats EVERY throw alike, so a connection
+		// dropped mid-response was indistinguishable from a complete one: the body was silently
+		// TRUNCATED and handed to the parser as if it were whole. A throttling or failing server —
+		// exactly what a busy test suite provokes — therefore produced a garbage response instead of
+		// an error the caller could see.
+		//
+		// The chunks accumulate into a `StringBuilder`, never into a `String`: a `String` owns exactly
+		// the bytes it holds, so appending a chunk to one reallocates and recopies the whole response
+		// received so far (see String.maxon). A 1 MB body arriving in 4 KB chunks would copy half a
+		// gigabyte.
+		var responseData = StringBuilder.create()
+		var receiving = true
+		while receiving 'recvLoop'
+			let chunk = try client.recv(4096) otherwise (e) 'recvErr'
+				if e == NetworkError.connectionClosed 'serverFinished'
+					receiving = false
+					continue
+				end 'serverFinished'
+
+				throw HttpError.recvFailed
+			end 'recvErr'
+
+			responseData.append(chunk)
+		end 'recvLoop'
+
+		// Close connection
+		client.close()
+
+		// Parse the response
+		let response = try httpParseResponse(responseData.build())
+		return response
+	end 'send'
+
+	/// Perform an HTTP GET request.
+	public static function get(url String) returns HttpResponse throws HttpError
+		let request = try HttpRequest.create(HttpMethod.get, url: url)
+		return try send(request)
+	end 'get'
+
+	/// Perform an HTTP POST request with a body.
+	public static function post(url String, body String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.post, url: url)
+		request.setBody(body)
+		request.setHeader("content-type", value: "application/x-www-form-urlencoded")
+		return try send(request)
+	end 'post'
+
+	/// Perform an HTTP PUT request with a body.
+	public static function put(url String, body String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.put, url: url)
+		request.setBody(body)
+		return try send(request)
+	end 'put'
+
+	/// Perform an HTTP DELETE request.
+	public static function delete(url String) returns HttpResponse throws HttpError
+		let request = try HttpRequest.create(HttpMethod.delete, url: url)
+		return try send(request)
+	end 'delete'
+end 'HttpClient'

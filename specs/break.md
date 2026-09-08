@@ -1,0 +1,332 @@
+---
+feature: break
+status: stable
+keywords: break, loop, control flow, exit
+category: control-flow
+---
+# Break Statement
+
+## Documentation
+
+Exit from the innermost enclosing loop.
+
+**Syntax:**
+
+```maxon
+break           // Break from innermost loop
+break 'label'   // Break from loop with specified label
+```
+**Example:**
+
+```maxon
+var x = 5
+while true 'loop'
+	x = x + 2
+	if x == 11 'check'
+		break
+	end 'check'
+end 'loop'
+// x is now 11
+```
+
+**Labeled Break Example:**
+
+```maxon
+while true 'outer'
+	while true 'inner'
+		break 'outer'  // Breaks out of outer loop
+	end 'inner'
+end 'outer'
+```
+
+**Labeled Continue:**
+
+The same syntax works for `continue` to jump to a specific loop's next iteration:
+
+```maxon
+while x < 10 'outer'
+	x = x + 1
+	while y < 10 'inner'
+		y = y + 1
+		if y == 3 'check'
+			continue 'outer'  // Skips to next iteration of outer loop
+		end 'check'
+	end 'inner'
+end 'outer'
+```
+
+**Notes:**
+- Exits the innermost `while` or `for` loop
+- Control flow continues after the loop's `end` statement
+- Must be inside a loop (compile error otherwise)
+- Label must match an enclosing loop's label
+- `continue 'label'` jumps to the next iteration of the labeled loop
+
+## Tests
+
+<!-- test: break.in-loop -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while true 'loop'
+		x = x + 1
+		if x == 5 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: break.with-if -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while true 'loop'
+		x = x + 1
+		if x == 10 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: break.multiple-conditions -->
+```maxon
+function main() returns ExitCode
+	var x = 5
+	var count = 0
+	while x < 100 'loop'
+		x = x + 1
+		count = count + 1
+		if count == 3 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: break.labeled-break-outer -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while x < 10 'outer'
+		x = x + 1
+		while true 'inner'
+			if x == 3 'check'
+				break 'outer'
+			end 'check'
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: break.labeled-break-inner -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	var y = 0
+	while x < 5 'outer'
+		x = x + 1
+		while y < 10 'inner'
+			y = y + 1
+			if y == 3 'check'
+				break
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: break.labeled-break-triple-nested -->
+```maxon
+function main() returns ExitCode
+	var result = 0
+	while true 'outer'
+		while true 'middle'
+			while true 'inner'
+				result = result + 1
+				if result == 5 'check'
+					break 'outer'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return result
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: break.labeled-continue-outer -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	var count = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			count = count + 1
+			if y == 2 'check'
+				continue 'outer'
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return count
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: break.labeled-continue-inner -->
+```maxon
+function main() returns ExitCode
+	var sum = 0
+	var x = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			if y == 3 'check'
+				continue
+			end 'check'
+			sum = sum + 1
+		end 'inner'
+	end 'outer'
+	return sum
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: break.labeled-continue-triple-nested -->
+```maxon
+function main() returns ExitCode
+	var count = 0
+	var a = 0
+	while a < 2 'outer'
+		a = a + 1
+		var b = 0
+		while b < 3 'middle'
+			b = b + 1
+			var c = 0
+			while c < 4 'inner'
+				c = c + 1
+				count = count + 1
+				if c == 2 'check'
+					continue 'middle'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return count
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: break.error-break-own-label -->
+Error: break with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+	while true 'loop'
+		break 'loop'
+	end 'loop'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-break-own-label.test:4:9: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
+```
+
+<!-- test: break.error-continue-own-label -->
+Error: continue with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while x < 10 'loop'
+		x = x + 1
+		continue 'loop'
+	end 'loop'
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-continue-own-label.test:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
+```
+
+<!-- test: break.error-unreachable-after-break -->
+Error: `break` leaves the block unconditionally, so a statement after it in the
+same block is unreachable — the same rule `return`/`throw`/`panic` already carry.
+It is also what keeps the block well formed: `break` emits its branch and leaves
+the parser positioned on the block it just terminated, so a statement accepted
+here would append its ops AFTER a terminator, and the successor walk reads only
+the last op.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			break
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-break.test:9:4: unreachable code after 'break'
+```
+
+<!-- test: break.error-unreachable-after-continue -->
+Error: the same for `continue`, which branches to the loop header.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			continue
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-continue.test:9:4: unreachable code after 'continue'
+```

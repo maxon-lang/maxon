@@ -1,0 +1,32 @@
+// Test: opaque-inner-alias-in-a-closure-is-refused
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function sized() returns Count
+		let make = function() gives ElementArray{}.count()
+		return make()
+	end 'sized'
+end 'Holder'
+
+typealias IntHolder = Holder with ExitCode
+
+function main() returns ExitCode
+	var h = IntHolder.create()
+	let c = h.sized()
+	if c == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:31: Unsupported: constructing an opaque type-parameter `Array` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice

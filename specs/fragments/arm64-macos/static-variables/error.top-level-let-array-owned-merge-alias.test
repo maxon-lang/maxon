@@ -1,0 +1,20 @@
+// Test: error.top-level-let-array-owned-merge-alias
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function fresh() returns Names
+	var n = Names.create()
+	n.push("zz")
+	return n
+end 'fresh'
+
+function main() returns ExitCode
+	let c = true
+	var pick = A if c else fresh()
+	pick.push("qq")
+	return A.count()
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:15:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)

@@ -1,0 +1,21 @@
+// Test: async-promise-drop.error.a-promise-handed-to-an-awaiting-callee-is-consumed
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Runtime.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	return await p
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(6)
+	let handed = finish(p)
+	return (handed + (await p)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:17:26: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment

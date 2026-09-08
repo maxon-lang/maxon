@@ -1,0 +1,25 @@
+// Test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller
+// --- file: api/wide.maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+export function makeWide() returns Bytes
+	var b = Bytes.create()
+	b.push(300)
+	return b
+end 'makeWide'
+
+// --- file: app/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takesNarrow(b Bytes) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'takesNarrow'
+
+function main() returns ExitCode
+	return takesNarrow(makeWide())
+end 'main'
+---
+CompilerError:
+error E3005: app/<fragment>:21:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'

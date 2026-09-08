@@ -1,0 +1,15 @@
+// Test: error.mod-without-try
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let d = opaque(7)
+	let r = 100 mod d
+	return r as ExitCode
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:10:14: throwing division requires try: wrap it as `try (a mod b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error

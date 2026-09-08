@@ -1,0 +1,65 @@
+// Test: an-inverted-zero-test-keeps-its-sense
+var seed = 4
+
+function main() returns ExitCode
+	let flag = seed > 3
+	var hits = 0
+
+	if flag 'yes'
+		hits = hits + 1
+	end 'yes' else 'no'
+		return 41
+	end 'no'
+
+	if not flag 'inv'
+		return 42
+	end 'inv' else 'invElse'
+		hits = hits + 1
+	end 'invElse'
+
+	return 0 if hits == 2 else 43
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 3
+    arm64.cset x0, gt
+    arm64.b.le ifelse
+  ifcont:
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ternarytrue
+  inv:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ternarytrue:
+    arm64.movImm x0, 0
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-inverted-zero-test-keeps-its-sense.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 41
+    arm64.epilogue 16
+    arm64.ret
+}

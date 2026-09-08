@@ -1,0 +1,73 @@
+// Test: an-inverted-zero-test-keeps-its-sense
+var seed = 4
+
+function main() returns ExitCode
+	let flag = seed > 3
+	var hits = 0
+
+	if flag 'yes'
+		hits = hits + 1
+	end 'yes' else 'no'
+		return 41
+	end 'no'
+
+	if not flag 'inv'
+		return 42
+	end 'inv' else 'invElse'
+		hits = hits + 1
+	end 'invElse'
+
+	return 0 if hits == 2 else 43
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 3
+    x64.setccReg greater, rax
+    x64.jcc lessEqual, ifelse
+  ifcont:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternarytrue
+  inv:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ternarytrue:
+    x64.movRegImm32 r8, 0
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inverted-zero-test-keeps-its-sense.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 41
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

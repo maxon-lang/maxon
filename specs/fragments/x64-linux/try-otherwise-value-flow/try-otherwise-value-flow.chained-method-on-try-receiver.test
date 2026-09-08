@@ -1,0 +1,311 @@
+// Test: try-otherwise-value-flow.chained-method-on-try-receiver
+function swapFirstTwo(rows StringArray, doSwap bool)
+	if doSwap 'swap'
+		let tmp = (try rows.get(0) otherwise panic("oob")).clone()
+		try rows.set(0, value: try rows.get(1) otherwise panic("oob")) otherwise panic("oob")
+		try rows.set(1, value: tmp) otherwise panic("oob")
+	end 'swap'
+end 'swapFirstTwo'
+
+function main() returns ExitCode
+	var rows = StringArray.create()
+	rows.push("a")
+	rows.push("b")
+	swapFirstTwo(rows, doSwap: true)
+	let first = try rows.get(0) otherwise panic("oob")
+	return first.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @swapFirstTwo {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ifcont
+  swap:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#33
+  __im_empty#14:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#34
+  __im_slow#12:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont#11
+  critsplit#34:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#11
+  critsplit#33:
+    x64.movRegReg r10, rax
+  __im_cont#11:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#2
+  tryerr#3:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:4: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#2:
+    x64.callDirect String.clone
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#16
+  __im_load#17:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#35
+  __im_empty#18:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#36
+  __im_slow#16:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont#15
+  critsplit#36:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#15
+  critsplit#35:
+    x64.movRegReg r10, rax
+  __im_cont#15:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#4:
+    x64.callDirect __str_retain
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow#20
+  __im_owned#21:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow#20
+  __im_bounds#22:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#20
+  __im_buffer#23:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#20
+  __im_viewed#24:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store#25
+  __im_slow#20:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.jmp __im_cont#19
+  __im_store#25:
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r10, rax
+  __im_cont#19:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#6
+  tryerr#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#6:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow#27
+  __im_owned#28:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow#27
+  __im_bounds#29:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#27
+  __im_buffer#30:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#27
+  __im_viewed#31:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store#32
+  __im_slow#27:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.jmp __im_cont#26
+  __im_store#32:
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r10, rax
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:6: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#8:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+  ifcont:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "a"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "b"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect swapFirstTwo
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#14
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#15
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont
+  critsplit#15:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:15: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.movRegReg r12, r8
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

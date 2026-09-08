@@ -1,0 +1,24 @@
+// Test: error.callarg-wrong-union-borrowed
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+union BoxB
+	code(n Integer)
+end 'BoxB'
+
+function readA(e BoxA) returns Integer
+	match e 'k'
+		msg then return 1
+	end 'k'
+end 'readA'
+
+function main() returns ExitCode
+	let bb = BoxB.code(5)
+	return readA(bb) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:9: argument type mismatch for 'e': expected 'BoxA', got 'BoxB'

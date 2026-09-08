@@ -1,0 +1,56 @@
+// Test: default-throws-statement
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum MatchError
+	unmatched
+end 'MatchError'
+
+function checkColor(c Color) returns ExitCode throws MatchError
+	match c 'check'
+		green then return 1
+		default throws MatchError.unmatched
+	end 'check'
+end 'checkColor'
+
+function main() returns ExitCode
+	let c = Color.green
+	let result = try checkColor(c) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @checkColor {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.b.ne matchdefault
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdefault:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl checkColor
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 0
+  trycont:
+    arm64.epilogue 16
+    arm64.ret
+}

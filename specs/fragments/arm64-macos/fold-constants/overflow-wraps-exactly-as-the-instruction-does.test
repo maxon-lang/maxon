@@ -1,0 +1,81 @@
+// Test: overflow-wraps-exactly-as-the-instruction-does
+typealias Word = int(i64.min to i64.max)
+
+function add(a Word, b Word) returns Word
+	return a + b
+end 'add'
+
+function sub(a Word, b Word) returns Word
+	return a - b
+end 'sub'
+
+function mul(a Word, b Word) returns Word
+	return a * b
+end 'mul'
+
+function main() returns ExitCode
+	if add(i64.max, b: 1) != i64.min 'addWrapsToMin'
+		return 1
+	end 'addWrapsToMin'
+	if sub(i64.min, b: 1) != i64.max 'subWrapsToMax'
+		return 2
+	end 'subWrapsToMax'
+	if mul(i64.min, b: -1) != i64.min 'negateMinIsMin'
+		return 3
+	end 'negateMinIsMin'
+	if mul(i64.max, b: 3) != 9223372036854775805 'mulWrapsTwice'
+		return 4
+	end 'mulWrapsTwice'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body#10:
+    arm64.movImm x0, 9223372036854775808
+  __il_cont#9:
+    arm64.movImm x1, 9223372036854775808
+    arm64.cmp x0, x1
+    arm64.b.eq __il_body#12
+  addWrapsToMin:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#12:
+    arm64.movImm x0, 9223372036854775807
+  __il_cont#11:
+    arm64.movImm x1, 9223372036854775807
+    arm64.cmp x0, x1
+    arm64.b.eq __il_body#14
+  subWrapsToMax:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#14:
+    arm64.movImm x0, 9223372036854775808
+  __il_cont#13:
+    arm64.movImm x1, 9223372036854775808
+    arm64.cmp x0, x1
+    arm64.b.eq __il_body#16
+  negateMinIsMin:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#16:
+    arm64.movImm x0, 9223372036854775805
+  __il_cont#15:
+    arm64.movImm x1, 9223372036854775805
+    arm64.cmp x0, x1
+    arm64.b.eq ifcont
+  mulWrapsTwice:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

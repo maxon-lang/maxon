@@ -1,0 +1,42 @@
+// Test: match-statements.fallthrough-to-default
+function main() returns ExitCode
+	let x = 3
+	var result = 0
+	match x 'check'
+		1 then result = 10
+		2 then result = 20
+		3 then result = result + 30 and fallthrough
+		default then result = result + 90
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 120
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  matcharm:
+    x64.movRegImm32 rax, 30
+  matchdefault:
+    x64.leaRegRegImm32 r8, rax, 90
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at match-statements.fallthrough-to-default.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

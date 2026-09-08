@@ -1,0 +1,16 @@
+// Test: unreachable-after-throw
+enum LoadError implements Error
+	notFound
+end 'LoadError'
+
+function load() returns ExitCode throws LoadError
+	throw LoadError.notFound
+	return 1
+end 'load'
+
+function main() returns ExitCode
+	return try load() otherwise 0
+end 'main'
+---
+CompilerError:
+error E3071: <fragment>:8:2: unreachable code after 'throw'

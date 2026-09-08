@@ -1,0 +1,13 @@
+// Test: error.a-raw-byte-write-is-refused-on-a-declared-float-element
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	try a.managed.setByte(0, value: 223) otherwise panic("test invariant: setByte OOB")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3118: <fragment>:8:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Real' (float(-1.7976931348623157E+308 to 1.7976931348623157E+308)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element

@@ -1,0 +1,95 @@
+// Test: shift-by-parameter-count
+typealias Num = int(i64.min to i64.max)
+
+function shiftLeft(value Num, count Num) returns Num
+	return value shl count
+end 'shiftLeft'
+
+function shiftRight(value Num, count Num) returns Num
+	return value shr count
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftLeft(7, count: 65) != 0 'shlPastWidth'
+		return 1
+	end 'shlPastWidth'
+	if shiftLeft(7, count: 3) != 56 'shlInRange'
+		return 2
+	end 'shlInRange'
+	if shiftRight(-1, count: 100) != -1 'shrNegPastWidth'
+		return 3
+	end 'shrNegPastWidth'
+	if shiftRight(8, count: 100) != 0 'shrPosPastWidth'
+		return 4
+	end 'shrPosPastWidth'
+	if shiftRight(-8, count: 1) != -4 'shrInRange'
+		return 5
+	end 'shrInRange'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.movImm x1, 65
+  __il_body#12:
+    arm64.lslv x0, x0, x1
+    arm64.movImm x16, 0
+    arm64.and x0, x0, x16
+  __il_cont#11:
+    arm64.cmp x0, 0
+    arm64.b.eq __il_body#14
+  shlPastWidth:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#14:
+    arm64.movImm x0, 56
+  __il_cont#13:
+    arm64.cmp x0, 56
+    arm64.b.eq ifcont#4
+  shlInRange:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+  __il_body#16:
+    arm64.movImm x1, 18446744073709551615
+    arm64.asrv x0, x0, x1
+  __il_cont#15:
+    arm64.cmp x0, -1
+    arm64.b.eq ifcont#6
+  shrNegPastWidth:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 8
+  __il_body#18:
+    arm64.movImm x1, 18446744073709551615
+    arm64.asrv x0, x0, x1
+  __il_cont#17:
+    arm64.cmp x0, 0
+    arm64.b.eq __il_body#20
+  shrPosPastWidth:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#20:
+    arm64.movImm x0, 18446744073709551612
+  __il_cont#19:
+    arm64.cmp x0, -4
+    arm64.b.eq ifcont#10
+  shrInRange:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

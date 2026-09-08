@@ -1,0 +1,231 @@
+// Test: an-inverted-unsigned-branch-keeps-its-arms
+typealias Cell = int(0 to u8.max)
+typealias CellArray = Array with Cell
+
+function main() returns ExitCode
+	var xs = CellArray.create()
+	xs.push(4)
+	xs.push(5)
+	let a = try xs.get(0) otherwise 200
+	let b = try xs.get(1) otherwise 200
+	var hits = 0
+
+	if a < b 'lo'
+		hits = hits + 1
+	end 'lo' else 'loElse'
+		return 31
+	end 'loElse'
+
+	if a > b 'hi'
+		return 32
+	end 'hi' else 'hiElse'
+		hits = hits + 1
+	end 'hiElse'
+
+	if a <= b 'ls'
+		hits = hits + 1
+	end 'ls' else 'lsElse'
+		return 33
+	end 'lsElse'
+
+	if a >= b 'hs'
+		return 34
+	end 'hs' else 'hsElse'
+		hits = hits + 1
+	end 'hsElse'
+
+	return 0 if hits == 4 else 35
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#29
+  __im_word#27:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#31:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#30
+  __im_stride#29:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#26
+  __im_byte#28:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#30:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#25
+  __im_empty#33:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#25
+  __im_slow#26:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#25:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr#2:
+    x64.movRegImm32 r12, 200
+    x64.jmp trycont#3
+  tryok:
+    x64.movRegReg r12, rax
+  trycont#3:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#38
+  __im_word#36:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#35
+  __im_load#40:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#39
+  __im_stride#38:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#35
+  __im_byte#37:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#35
+  __im_load#41:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#39:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#34
+  __im_empty#42:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#34
+  __im_slow#35:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#34:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, trycont#6
+  tryerr#5:
+    x64.movRegImm32 rax, 200
+  trycont#6:
+    x64.cmpRegReg r12, rax
+    x64.jcc greaterEqual, ifelse#8
+  ifcont#9:
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, ifcont#12
+  hi:
+    x64.movRegImm32 r12, 32
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, ifelse#14
+  ifcont#15:
+    x64.cmpRegReg r12, rax
+    x64.jcc less, ternarytrue
+  hs:
+    x64.movRegImm32 r12, 34
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inverted-unsigned-branch-keeps-its-arms.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifelse#14:
+    x64.movRegImm32 r12, 33
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifelse#8:
+    x64.movRegImm32 r12, 31
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

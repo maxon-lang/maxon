@@ -1,0 +1,34 @@
+// Test: error.a-nested-member-does-not-leak-to-another-types-extension
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+end 'Holder'
+
+export type Other
+	export var w as Num
+end 'Other'
+
+extension Holder
+	typealias Idx = int(0 to 100)
+
+	export function fromA(i Idx) returns Num
+		return self.v + i
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Other
+	export function fromB(i Idx) returns Num
+		return self.w + i
+	end 'fromB'
+end 'Other'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3011: Unknown type 'Idx'

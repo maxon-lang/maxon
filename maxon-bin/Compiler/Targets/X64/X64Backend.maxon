@@ -1,0 +1,2757 @@
+// X64Backend — the machine-code encoder. Turns a register-allocated,
+// prologue/epilogue-inserted `TargetModule` into `.text` bytes plus the fixups a
+// PE writer needs. Two public entry points:
+//   emitFunctionChunk(module, func)  -> FunctionCodeChunk  (one function's bytes
+//                                       with CHUNK-LOCAL fixup offsets)
+//   concatX64FunctionChunks(...)     -> CodeResult         (lays out `.text` in
+//                                       function order, rebases + resolves fixups,
+//                                       and CLOSES `.text` with `__symtable`)
+//
+// THIN for maxon M1: encodes exactly the TargetOps the `return 42` slice and
+// its `mrt_start` entry stub produce — prologue/epilogue (`sub`/`add rsp, N`),
+// ret, mov reg,imm (32- and 64-bit forms), 64- and 32-bit reg-reg moves,
+// `call rel32`, and `call [rip]` through the IAT. Later milestones GROW the
+// dispatch as the TargetOp union grows. arm64 is a separate backend at its own
+// milestone.
+//
+// The encoders are also EXPORTED, because the panic runtime (X64Runtime) hand-assembles
+// its functions from them rather than from TargetOps — see that file's header for why. A
+// second encoder for an instruction this file already spells would be the project's
+// signature bug (one fact written down twice) at the byte level, so the runtime gets these
+// and mints none of its own. That is also why the exports are the ENCODERS and the OPCODE
+// CONSTANTS, not a `encodeMov`/`encodeSub`/`encodeCmp` wrapper family: the caller naming
+// the opcode is this file's existing convention (see `encodeRmRegDirect`).
+//
+// ENCODING FACTORING (pre-empting the duplication review): every instruction is
+// assembled from shared primitives — `emitRex` (REX prefix with W/R/B bits),
+// `emitRexRXB` (its SIB-index sibling that adds REX.X, for `lea [base + index]`),
+// `emitModRmRegReg` / `emitModRmExt` (the mod=11 register-direct ModR/M byte),
+// `emitModRmRipRel` (the mod=00 rm=101 `[rip + disp32]` ModR/M, shared by the IAT `call`
+// and the runtime's address-taking `lea`),
+// `encodeModRmDirect` (REX + optional 0F escape + opcode + ModR/M, the one place a
+// register-direct instruction is assembled), its opcode-extension sibling
+// `encodeModRmExtDirect` (REX + opcode + `/ext` ModR/M), its MEMORY-operand sibling
+// `encodeModRmBaseDisp` (REX + optional escape + opcode + the `[base + disp]` operand — the
+// one place a load, a 32-bit load, a store, a byte store, a `movzx` or a `lea [base+disp]`
+// is assembled), the `[base + disp]` address assembler `emitBaseDispModRm` (ModR/M +
+// optional SIB + disp8/disp32, the one place a base+displacement operand is encoded), and
+// the `BinaryHelpers` little-endian writers.
+// No REX/ModRM/SIB byte is hand-spelled per instruction: `mov`/`sub`/`cmp`/`and`/`or`/
+// `xor`/`xchg` reg-reg all share `encodeRmRegDirect` (only the opcode differs), the
+// two-byte `imul` and the 3-operand `imul r, r/m, imm32` reuse `encodeModRmDirect` (only
+// the operand-to-field mapping is swapped — dest in reg, src in rm), and every
+// OPCODE-EXTENSION form routes through `encodeModRmExtDirect` behind one encoder PER
+// OPCODE GROUP rather than one per instruction — `encodeGrp1RegImm32` (cmp/and/or/xor
+// `r/m, imm32`), `encodeGrp2RegImm8` + `encodeGrp2RegCl` (shl/sar by a constant / by CL),
+// `encodeGrp3Reg` (neg/not/idiv), plus the `sub rsp`/`add rsp` frame pair. Both `lea`
+// forms select their ModR/M mod field through `chooseDispMod` and emit their trailing
+// displacement through `emitTrailingDisp`, so the rbp/r13 zero-disp8 SIB trap is spelled
+// in exactly ONE place for both; both RIP-relative `lea` forms share `emitLeaRipRelPrefix`
+// and differ only in which fixup table records their disp32.
+// Signed immediates/displacements go through `writeImm32Signed` (one two's-complement
+// converter). Opcodes, REX bits, and ModR/M/SIB constants are all NAMED below — no bare
+// hex is scattered through the emitters.
+
+// --- REX prefix (0x40 | W<<3 | R<<2 | X<<1 | B) ---
+// REX.W selects 64-bit operand size; REX.R/B extend the ModR/M reg / rm fields to
+// registers r8-r15. REX.X extends a SIB INDEX to r8-r15 — needed by `lea dest,
+// [base + index]` (the 3-operand `+`).
+let RexBase = 0x40
+let RexW = 0x08
+let RexR = 0x04
+let RexX = 0x02
+let RexB = 0x01
+
+// Registers r8-r15 / xmm8-xmm15 (ENCODING number >= 8) need a REX.R/REX.B extension
+// bit; their low 3 bits go in the ModR/M field. See `regNumber` for why the encoding
+// number is the low NIBBLE of the rawValue and not the rawValue itself.
+let ExtendedRegThreshold = 8
+
+// The low nibble of an `X64Register.rawValue`: its ENCODING number within its own register
+// file. Bit 4 is the FILE itself (0 = GPR, 1 = XMM) — see the enum's declaration, which
+// places xmm0-15 at 16-31 precisely so this mask is all an encoder needs.
+let RegisterEncodingMask = 0xF
+
+// ModR/M mod field values (bits 6-7): 00 = no displacement (or, for a memory rm,
+// disp0), 01 = disp8, 10 = disp32, 11 = register-direct (rm names a register).
+let ModRmMod00 = 0x00
+let ModRmMod01 = 0x40
+let ModRmMod10 = 0x80
+let ModRmRegDirect = 0xC0
+
+// ModR/M rm field value 100: a SIB byte follows (for `[base + index]` and for a
+// base register — rsp/r12 — whose low-3-bits are themselves 100).
+let ModRmRmSibFollows = 4
+
+// SIB byte fields: scale in bits 6-7 (00 = scale 1), index in bits 3-5, base in bits
+// 0-2. Index field 100 with REX.X clear means "no index" (only rsp triggers this —
+// see X64SibNoIndex); base field 101 with mod=00 means "no base, disp32" (so an
+// rbp/r13 base is forced to mod=01) — see RbpR13Low3.
+//
+// ⚠ THERE IS NO `SibScale1` CONSTANT. The scale field's four values are `MemoryIndexScale`'s case
+// list, and `memoryIndexScaleShift` is the one map to these bits — a second name for `byOne`'s shift
+// would be the set written down twice, one of them unable to grow.
+let SibScaleShift = 6
+let SibNoIndexField = 4
+
+// SIB base field 101 with mod=00 means "NO base register — a disp32-only absolute address" (the same bit
+// pattern as rbp/r13's low-3, which is exactly why an rbp/r13 base is forced to mod=01 above). Used by
+// `encodeMovGsAbsReg` for the segment-relative `gs:[disp32]` TIB writes.
+let SibBaseDisp32Field = 5
+
+// A base register whose low-3-bits are 101 (rbp / r13): with mod=00 the ModR/M or SIB
+// base field 101 means "no base", so an rbp/r13 base MUST use mod=01 (disp8, zero when
+// there is no real displacement). R13 is x64's silent-lea-miscompile trap.
+let RbpR13Low3 = 5
+
+// ⭐ **THE SIB INDEX OF AN x64 MEMORY OPERAND — this register, or `X64SibNoIndex` for none (EC16).**
+//
+// It is what lets `[base + disp]` and `[base + index*scale + disp]` be ONE address operand and
+// therefore ONE assembler (`emitBaseDispModRmBits`). Every `[base + disp]` LOAD/STORE encoder in this
+// file takes the pair `index` + `indexScale` with these defaults, so the 150-odd hand-assembly call
+// sites that address `[base + disp]` say nothing about an index and the scaled-index band says exactly
+// one thing more. (`encodeCmpRegBaseDisp` and the two GS-ABSOLUTE forms do not: nothing indexes a
+// compare's memory operand, and a `gs:[disp32]` has no base register to index off.)
+//
+// ⚠ **THE "NONE" SPELLING IS x64'S OWN, NOT AN INVENTED SENTINEL.** SIB index field 100 with REX.X
+// clear IS "no index register" — that is `SibNoIndexField`, the value `sibByte` is given for a
+// bare `[base + disp]` — and 100 is rsp's encoding number. A register the ISA has already spent on
+// meaning "absent" cannot also mean itself, which is exactly why rsp can never be a real index and why
+// `x64SibIndex` PANICS on one rather than encoding it.
+//
+// ⚠ **IT IS TWO SCALARS AND NOT A RECORD, AND THAT IS MEASURED.** A record-typed parameter with a
+// `none()` default is CONSTRUCTED at every call, and these encoders run once per emitted instruction:
+// the first cut of EC16 did exactly that and `scale-test` charged `phase:encode` **+47% allocations**
+// (372,734 → 548,168 at rung 5) for it, against a control taken the same session. `StdArithOperands`'
+// header records the same trap one tier up, for the same reason.
+// ⛔⛔ **`public`, NOT `export`, AND THAT IS A HOLE IN E3092 RATHER THAN AN API-SURFACE CLAIM.** A
+// DEFAULT ARGUMENT is evaluated in the CALLER's scope, so `X64GtRuntime` and `X64Runtime` — which call
+// the exported encoders above without naming an index — resolve THIS NAME in their own files. MEASURED:
+// drop the visibility and the build stops with 20 x `E2004 Undefined variable 'X64SibNoIndex'` at
+// `X64GtRuntime.maxon` and `X64Runtime.maxon`, which is the compiler agreeing that the use is
+// real and cross-file. `checkUnusedExports` cannot see it — it counts the names a file WRITES — so an
+// `export` here is reported as E3092 and the SELF-COMPILE refuses the compiler's own source — MEASURED,
+// not predicted. `public` is the one spelling that survives, and its documented meaning is exactly the
+// statement needed: *"nobody here names it" is not a finding*. ⚠ The checker gap is real and is NOT
+// fixed here — a default argument's names are cross-file uses E3092 structurally misses.
+public let X64SibNoIndex = X64Register.rsp
+
+// The colored register an INDEXED operand names, asserted to be a real index.
+//
+// A colored rsp reaching an index field would not be refused by the assembler — it IS `X64SibNoIndex`,
+// so the operand would silently lose its index and address the wrong element. rsp is not allocatable,
+// so a hit here is an allocator bug and not a user one. Every caller that has an index passes through
+// this; the ones that have none pass `X64SibNoIndex` and never reach it.
+function x64SibIndex(index X64Register) returns X64Register
+	if index == X64SibNoIndex 'rspIndex'
+		panic("x64SibIndex: RSP cannot be a SIB index — index field 100 with REX.X clear encodes 'no index' (`X64SibNoIndex`), so this operand would silently drop its index; the allocator must never colour an index to rsp, which is not allocatable")
+	end 'rspIndex'
+	return requireClass(index, class: RegClass.gpr)
+end 'x64SibIndex'
+
+// ModR/M rm field value 101 with mod=00: on x64 this combination does NOT mean `[rbp]`
+// — it is repurposed as `[rip + disp32]`, the disp32 measured from the END of the
+// instruction. Shared by `call [rip+disp32]` (through the IAT) and `lea r64, [rip+disp32]`
+// (a runtime function taking the address of a label). It is the same rm slot as
+// `RbpR13Low3`, and that collision is precisely WHY an rbp/r13 base cannot use mod=00.
+let ModRmRmRipRelative = 5
+
+// The ModR/M reg-field opcode extension of `call r/m64` (group-5 `/2`).
+let Grp5ExtCall = 2
+
+// The ModR/M reg-field opcode extension of `jmp r/m64` (group-5 `/4`) — the jump table's indirect branch.
+let Grp5ExtJmp = 4
+
+// --- Opcodes ---
+export let OpcodeRet = 0xC3
+export let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source) — the STORE form (spill)
+let OpcodeMovRegRm = 0x8B  // mov r, r/m  (reg field = dest)   — the LOAD form (reload)
+let OpcodeMovRm8Reg8 = 0x88  // mov r/m8, r8 (reg field = source) — the BYTE store form
+
+// test r/m, r (85 /r) — a bitwise AND that sets flags and discards the result. `test reg, reg` sets ZF iff
+// reg is zero, which is how the GT syscall shim checks `currentGt`/`stackBase` for null. EXPORTED because the
+// shim (X64GtRuntime, hand-assembled) drives it through `encodeRmRegDirect` like the other reg-reg forms.
+export let OpcodeTestRmReg = 0x85
+
+// add r/m, r (01 /r; reg field = source), same shape as sub. EXPORTED because the hand-assembled
+// `__gt_morestack` (X64GtRuntime) does several in-place `add`s (rebase rbp / a saved link by the relocation
+// offset, compute new bounds) through `encodeRmRegDirect`.
+export let OpcodeAddRmReg = 0x01
+export let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as mov
+export let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
+
+// cmp r, r/m (3B /r; reg field = DEST, r/m = source) — the LOAD-form compare, so `cmp reg, [base+disp]`
+// computes `reg - [mem]` and sets flags in THAT direction (unlike `cmp [mem], reg` = 0x39, which negates them).
+// EXPORTED because the GT stack guard (X64GtRuntime) needs `projectedRsp - [gt+stackGuard]` for its `jae`.
+let OpcodeCmpRegRm = 0x3B
+export let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
+export let OpcodeOrRmReg = 0x09  // or  r/m, r  (reg field = source), same shape as sub
+export let OpcodeXorRmReg = 0x31  // xor r/m, r  (reg field = source), same shape as sub
+let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
+let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
+let OpcodeLea = 0x8D  // lea reg, [mem]  (reg field = dest, rm field = the address)
+let OpcodeImulRegImm = 0x69  // imul r, r/m, imm32  (3-operand; reg = dest, rm = source)
+let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
+let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
+let OpcodeGrp2Imm8 = 0xC1  // group-2 SHIFT, r/m, imm8 (a COUNT — never sign-extended)
+let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in CL
+let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
+let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
+let OpcodeMovsxd = 0x63  // movsxd r64, r/m32 (REX.W 63 /r; reg field = dest) — the jump table's signed i32 load
+let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
+let OpcodeCallRel32 = 0xE8  // call rel32
+let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
+
+// The same group-5 opcode reached through a different ModR/M extension: /0 = inc r/m64. Named apart from
+// `OpcodeCallIndirect` because the two are different instructions that happen to share a byte, and a
+// coverage counter reading as an indirect call at the one site that greps for it would be the worse bug.
+let OpcodeGroup5 = 0xFF
+let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
+let OpcodePushBase = 0x50  // push r64 (50+r) — 64-bit operand size by default in long mode
+let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
+
+// `int3` (CC) — the one-byte trap. EXPORTED: it follows a syscall that cannot return (a worker M's `exit`, a
+// failed-exec child's), so the decoder traps rather than walking into whatever bytes come next.
+export let OpcodeInt3 = 0xCC
+
+// The second byte of `syscall` (0F 05) — a two-byte opcode (the `0F` escape then this), with no
+// ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
+let OpcodeSyscallSecondByte = 0x05
+
+// --- F2: atomics and the thread-identity read ---
+//
+// `LOCK` (F0) is an instruction PREFIX, not an opcode: it makes the read-modify-write memory operation
+// that follows indivisible against every other core. Only a small set of instructions accept it, and all
+// three atomics below are in it.
+let LockPrefix = 0xF0
+
+// EXPORTED: the x64-Linux green-thread floor's hand-assembled chunks publish and take a futex word with it —
+// an auto-reset event's `0 -> 1` and `1 -> 0`, and the recursive mutex's three acquire steps — and a chunk has
+// no `StdOp.atomicCas` to lower through.
+export let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
+
+// EXPORTED: the syscall bracket's exit (`X64GtRuntime.emitGtExitSyscall`) is the one hand-assembled caller
+// that wants `xadd`'s two answers at once — it clears the in-call bit and reads what the bit was, which is
+// how it learns whether a processor was taken while it was in the kernel, in ONE instruction.
+export let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field = the addend IN and the prior value OUT
+
+// The displacement every atomic's `[base]` operand carries. An atomic names an ADDRESS and nothing else —
+// `StdOp.atomicCas`/`atomicRmw` have no field-offset operand, unlike `loadIndirect`/`storeIndirect` — so
+// this is the only value it can take, and it is named rather than a bare 0 so that stays visible.
+let AtomicWordDisp = 0 as Imm32
+
+// The TEB self-pointer's offset within the Win64 TEB — `NtCurrentTeb()` reads `gs:[0x30]`. The pointer is
+// established by the OS before a thread's first instruction and is never null, which is what makes it a
+// legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` renders it in a golden.
+export let WindowsTebSelfPointerOffset = 0x30
+
+// --- SSE opcodes (all TWO-byte: the 0F escape, then this byte, under a mandatory prefix) ---
+//
+// The prefix is not optional decoration — see `SseMandatoryPrefix`. Each comment states the
+// full encoding so the pair can be read as one fact.
+let OpcodeMovsdRegRm = 0x10  // movsd xmm, xmm/m64 (F2 0F 10 /r) — reg field = DEST  (the LOAD form)
+let OpcodeMovsdRmReg = 0x11  // movsd xmm/m64, xmm (F2 0F 11 /r) — reg field = SOURCE (the STORE form)
+let OpcodeAddsd = 0x58  // addsd xmm, xmm/m64 (F2 0F 58 /r)
+let OpcodeMulsd = 0x59  // mulsd xmm, xmm/m64 (F2 0F 59 /r)
+let OpcodeSubsd = 0x5C  // subsd xmm, xmm/m64 (F2 0F 5C /r)
+let OpcodeDivsd = 0x5E  // divsd xmm, xmm/m64 (F2 0F 5E /r)
+
+// ucomisd xmm, xmm/m64 (66 0F 2E /r). UNORDERED-signalling only for a SIGNALLING NaN, which
+// is what makes it the right compare for IEEE's quiet predicates: it sets ZF=PF=CF=1 on a
+// quiet NaN rather than raising. It writes ZF/PF/CF and leaves OF=SF=AF=0 — see X64CondCode.
+let OpcodeUcomisd = 0x2E
+
+// xorpd xmm, xmm/m128 (66 0F 57 /r) — a 128-bit bitwise XOR: the ONLY tool an XMM swap has (there is
+// no `xchg xmm, xmm`, see `emitRegRegSwap`), and the last step of an f64 NEGATE (`encodeNegF64Reg`).
+let OpcodeXorpd = 0x57
+
+// pcmpeqd xmm, xmm/m128 (66 0F 76 /r) — compare dwords for equality. Against ITSELF it answers all
+// ones in every lane, which is how an f64 negate builds its sign mask in a register with no `.rdata`
+// constant to load (`encodeNegF64Reg`). SSE2, like the group-14 shifts below.
+let OpcodePcmpeqd = 0x76
+
+// cvtsi2sd xmm, r/m64 (F2 REX.W 0F 2A /r) — reg field = XMM dest, r/m = GPR source. REX.W is
+// what selects the 64-bit source; without it this converts a 32-bit int.
+let OpcodeCvtsi2sd = 0x2A
+
+// cvttsd2si r64, xmm/m64 (F2 REX.W 0F 2C /r) — reg field = GPR dest, r/m = XMM source. The
+// second `t` is TRUNCATE (toward zero), as opposed to `cvtsd2si`, which rounds by MXCSR's
+// mode. Truncation is what `trunc()` means and what the spec's `3.14 -> 3` pins; the rounding
+// form would answer 3 there and 4 for `3.99`, so the two are not interchangeable.
+let OpcodeCvttsd2si = 0x2C
+
+// sqrtsd xmm, xmm/m64 (F2 0F 51 /r) — an ordinary two-byte scalar-double form, so it shares
+// `encodeSseRegReg` with `addsd` and friends. NO REX.W: both operands are XMM, and the mandatory F2
+// has already selected scalar-double.
+let OpcodeSqrtsd = 0x51
+
+// minsd / maxsd xmm, xmm/m64 (F2 0F 5D /r and F2 0F 5F /r) — two more ordinary two-byte
+// scalar-double forms, so they too share `encodeSseRegReg`. NO REX.W: both operands are XMM and the
+// mandatory F2 has already selected scalar-double. They compute `dest < src ? dest : src` and
+// `dest > src ? dest : src`, which are the language's whole definitions of `min` and `max` — see
+// `TargetOp.minMaxSdRegReg`. The two differ in this BYTE and in nothing else, which is why one op
+// carrying a `FloatMinMaxKind` covers both.
+let OpcodeMinsd = 0x5D
+let OpcodeMaxsd = 0x5F
+
+// The opcode byte a `minMaxSdRegReg` encodes to — the ONE place the target-neutral `FloatMinMaxKind`
+// becomes an x86 opcode, the twin of `roundsdImm8` below.
+function minMaxSdOpcode(kind FloatMinMaxKind) returns MachineWord
+	return match kind 'k'
+		min gives OpcodeMinsd
+		max gives OpcodeMaxsd
+	end 'k'
+end 'minMaxSdOpcode'
+
+// movq r/m64, xmm (66 REX.W 0F 7E /r) — reg field = XMM SOURCE, r/m = GPR DEST. The BIT
+// REINTERPRETATION `float.hash` rests on: the same 64 bits, moved to the other register file, with
+// no conversion and no rounding.
+//
+// ⚠⚠ ITS FIELD MAPPING IS THE `r/m, r` ONE — the reverse of `cvttsd2si`, which shares its direction
+// (xmm → gpr) but writes its GPR dest in the REG field. Handing this opcode to `encodeSseRegReg`,
+// which assumes `r, r/m`, assembles the two registers the wrong way round: legal bytes, a `movq`
+// between the wrong pair, and NOTHING to report it. That is `encodeMovqGprXmm`'s whole content.
+//
+// ⚠ 66 is the mandatory prefix here (`packedDouble`), NOT the F2 of the scalar-double family: `F3 0F
+// 7E` is `movq xmm, xmm/m64` — a different instruction, in the other direction. REX.W is required and
+// is what makes it the 64-bit GPR transfer rather than `movd`'s 32-bit one.
+let OpcodeMovqRmXmm = 0x7E
+
+// movq xmm, r/m64 (66 REX.W 0F 6E /r) — the INVERSE reinterpretation, `bitcastI64ToF64`'s instruction:
+// the same 64 bits moved back into the float file so a decimal reader's answer can be a `float`.
+//
+// ⚠ ITS FIELD MAPPING IS THE ORDINARY `r, r/m` ONE (reg = the XMM DEST, r/m = the GPR source), which is
+// exactly what `encodeSseRegReg` assembles — so unlike its twin above this direction needs no encoder of
+// its own. The asymmetry is Intel's: `0F 7E` is a STORE-shaped form and `0F 6E` a LOAD-shaped one.
+//
+// ⚠ REX.W is required for the mirror of `0F 7E`'s reason: without it `66 0F 6E` is `movd xmm, r/m32`,
+// which would move 32 bits and leave the resulting double's exponent and sign zeroed.
+let OpcodeMovqXmmRm = 0x6E
+
+// --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) and NEGATE ---
+//
+// `psllq xmm, imm8` is `66 0F 73 /6 ib` and `psrlq xmm, imm8` is `66 0F 73 /2 ib` — ONE opcode byte
+// whose meaning is chosen by the ModR/M reg field, exactly like the group-1/2/3/5 GPR forms above, and
+// the only SSE instructions in this file that carry an opcode extension instead of a second register.
+// Each shifts BOTH 64-bit lanes; The compiler reads only the low one.
+//
+// ⭐ SHIFTING LEFT BY ONE AND BACK IS AN f64 `abs`: the sign bit falls off the top and zero fills in
+// behind it, so bit 63 ends clear and bits 0-62 (exponent and mantissa) are exactly as they were. That
+// is absolute value for EVERY pattern — `-0.0` becomes `+0.0`, `-inf` becomes `+inf`, and a NaN keeps
+// its payload — because it is a bit operation and never an arithmetic one. Why the sign bit is cleared
+// this way rather than with an `andpd` + `.rdata` mask is recorded in full on `TargetOp.absF64RegReg`.
+//
+// ⚠ SSE2, unlike the SSE4.1 `roundsd` below — this pair does not move the compiler's x64 baseline.
+let OpcodeGrp14ShiftQImm8 = 0x73
+let Grp14ExtPsrlq = 2
+let Grp14ExtPsllq = 6
+
+// The shift COUNT both halves of the sign-bit clear use: one bit, which is the sign bit's whole width.
+let SignBitShiftCount = 1 as ShiftCount
+
+// The sign bit's POSITION — what an all-ones lane is shifted left by to leave exactly bit 63 set, the
+// mask an f64 negate XORs against (`encodeNegF64Reg`).
+let SignBitPosition = 63 as ShiftCount
+
+// --- `roundsd`: the ONE three-byte opcode in this file (SSE4.1) ---
+//
+// `roundsd xmm, xmm/m64, imm8` is `66 0F 3A 0B /r ib`. TWO things make it unlike every other SSE
+// form here, and each is why it cannot ride `encodeSseRegReg`:
+//   • its opcode is THREE bytes — the 0F escape, then a SECOND escape byte (0x3A), then 0x0B. The
+//     shared `encodeModRmDirect` emits at most one escape (`twoByteEscape`), by design: bending it
+//     into "0, 1 or 2 escapes plus an optional trailing immediate" would complicate the byte
+//     assembler every GPR instruction in the file goes through, for one instruction.
+//   • it carries a TRAILING IMM8 the shared assembler has no notion of.
+// ⇒ It assembles its own prefix/escape bytes and then reuses the shared REX + ModR/M primitives, so
+// the register-numbering and REX.R/REX.B rules are still spelled exactly once.
+//
+// ⚠ SSE4.1 — the first instruction in the compiler's x64 output that is not SSE2. Every x86-64 part since
+// ~2008 (Penryn / Bulldozer) has it; the baseline moves here and nowhere else.
+let OpcodeThreeByteEscape3A = 0x3A
+let OpcodeRoundsd = 0x0B
+
+// `roundsd`'s imm8. Bits [1:0] are the rounding mode when bit 2 is clear; bit 3 is the PRECISION
+// MASK, which suppresses the inexact (#P) exception.
+//
+// ⚠ BIT 3 IS DELIBERATELY NOT SET. The VALUES are identical either way — the mask changes only
+// whether an MXCSR flag is raised, and the compiler reads no MXCSR flag anywhere: a bit nobody reads is a
+// fact written down for no reason.
+let RoundsdImm8Nearest = 0x00  // round to nearest, TIES TO EVEN — `round(2.5)` is 2, not 3
+let RoundsdImm8Down = 0x01  // toward -inf — `floor`
+let RoundsdImm8Up = 0x02  // toward +inf — `ceil`
+
+// Base of the two-byte `jcc rel32` opcode: after the 0x0F escape, `0x80 | cc` gives
+// the conditional-jump opcode (e.g. `0x80 | 0x4` = 0x84 = JE). The `cc` nibble comes
+// from X64CondCode's backing value.
+let OpcodeJccRel32Base = 0x80
+
+// Base of the two-byte `setcc r/m8` opcode: after the 0x0F escape, `0x90 | cc` gives
+// the conditional-set opcode (e.g. `0x90 | 0x4` = 0x94 = SETE). The SAME `cc` nibble a
+// `jcc` uses — one condition-code enum drives the branch and the materialization, so a
+// fused compare and a materialized one can never disagree about the predicate.
+let OpcodeSetccRm8Base = 0x90
+
+// `setcc`'s ModR/M reg field is a fixed opcode extension of ZERO (`0F 90+cc /0`) — the
+// instruction has one operand, and the reg field carries no register.
+let SetccExtNone = 0
+
+// Two-byte-opcode escape: a `0x0F` prefix byte introduces the two-byte opcode map
+// (e.g. `imul r, r/m` is `0F AF /r`). `encodeModRmDirect` emits it when asked.
+let TwoByteOpcodeEscape = 0x0F
+
+// --- SSE mandatory prefixes ---
+//
+// An SSE instruction's IDENTITY is the pair (mandatory prefix, two-byte opcode): `0F 10` on
+// its own is `movups`, under F2 it is `movsd`, under F3 `movss`, under 66 `movupd`. The
+// prefix is part of the opcode, not a modifier of it — which is why it is spelled here beside
+// the opcode bytes and named for the FAMILY it selects rather than for its hex.
+//
+// ⚠⚠ IT MUST PRECEDE THE REX BYTE, AND GETTING THAT BACKWARDS IS SILENT. x64 fixes the order
+// legacy-prefixes → REX → opcode, and REX must be the LAST prefix before the opcode. Emit
+// `REX F2 0F 58` instead of `F2 REX 0F 58` and the CPU reads the REX as a stray prefix that
+// the following F2 supersedes — it decodes a different instruction, with no fault. That
+// ordering is precisely why this rides the SHARED ModR/M assemblers as a PARAMETER (they emit
+// it immediately before their own `emitRex` call) instead of being pushed by callers, who by
+// construction could not get a byte in ahead of a REX the assembler has not written yet.
+enum SseMandatoryPrefix
+	// No mandatory prefix — every GPR instruction in this file.
+	none
+	// F2 — the SCALAR DOUBLE family: movsd, addsd, subsd, mulsd, divsd, and both converts.
+	scalarDouble
+	// 66 — every SSE form in this file whose mandatory prefix is NOT F2. This byte is ALSO the
+	// operand-size override prefix, which is exactly why no generic path may be left to guess at it.
+	//
+	// ⚠ NO ROSTER, DELIBERATELY. This comment used to name its two members and went stale TWICE
+	// without anything noticing — `roundsd` joined at P1.0d.4-C and `movq r/m64, xmm` at P1.7a's last
+	// slice, and a reader who trusted the list would have concluded the 66 path had no encoder to
+	// share. Each site states its own prefix at the call, which is the fact that cannot drift; grep
+	// `packedDouble` for the current set rather than reading one here.
+	packedDouble
+end 'SseMandatoryPrefix'
+
+let SsePrefixScalarDoubleByte = 0xF2
+let SsePrefixPackedDoubleByte = 0x66
+
+// The two segment-override legacy prefixes. On Win64 `gs:` addresses the Thread Information Block, whose
+// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovGsAbsReg`); under SysV
+// `fs:` addresses the thread pointer, which on the Linux lane is the scheduler's own slot block. Like the SSE
+// mandatory prefixes each precedes the REX byte.
+let GsSegmentPrefix = 0x65
+let FsSegmentPrefix = 0x64
+
+// The prefix byte a segment choice becomes — the ONE map, so a lane that picks a segment cannot also pick a
+// byte and have the two disagree. `X64ThreadPointerSegment` is `X64LinuxRuntime`'s, beside `x64OsCallKind`,
+// because which segment holds the thread pointer is an OS fact rather than an encoding one.
+function segmentPrefixByte(segment X64ThreadPointerSegment) returns MachineWord
+	return match segment 'seg'
+		gs gives GsSegmentPrefix
+		fs gives FsSegmentPrefix
+	end 'seg'
+end 'segmentPrefixByte'
+
+// Emit an SSE instruction's mandatory prefix, if it has one. The shared ModR/M assemblers
+// call this BEFORE `emitRex` — see `SseMandatoryPrefix` for why that order is load-bearing.
+function emitSseMandatoryPrefix(code ByteArray, prefix SseMandatoryPrefix)
+	match prefix 'p'
+		none then break 'p'
+		scalarDouble then code.push(SsePrefixScalarDoubleByte)
+		packedDouble then code.push(SsePrefixPackedDoubleByte)
+	end 'p'
+end 'emitSseMandatoryPrefix'
+
+// Second byte of the two-operand signed multiply `imul r, r/m` (0F AF /r). Unlike
+// the `r/m, r` ALU forms, its ModR/M reg field is the DESTINATION — see
+// encodeImulRegReg.
+let OpcodeImul2ndByte = 0xAF
+
+// Group-1 ALU opcode-extension (ModR/M reg field) values.
+export let Grp1ExtAdd = 0  // ADD — exported: `__gt_morestack` (X64GtRuntime) does `add reg, imm32` (guard margin, +8 rsp fixup)
+export let Grp1ExtOr = 1  // OR  (the `or r/m, imm` immediate form)
+export let Grp1ExtAnd = 4  // AND (the `and r/m, imm` immediate form)
+export let Grp1ExtSub = 5  // SUB — exported: the GT syscall shim computes the TIB StackLimit as `sub rax, GtSystemStackSize`
+let Grp1ExtXor = 6  // XOR (the `xor r/m, imm` immediate form — also the LOGICAL `not`)
+export let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
+
+// Group-2 SHIFT opcode-extension (ModR/M reg field) values (C1 /ext ib, D3 /ext).
+// `shr` (the Maxon keyword) lowers to SAR, not SHR: Maxon's `int` is SIGNED, so a
+// logical shift would make `-8 shr 1` a huge positive number. The x86 mnemonic SHR
+// (/5) is therefore deliberately absent — nothing in the language reaches it.
+export let Grp2ExtShl = 4  // SHL r/m, count
+let Grp2ExtSar = 7  // SAR r/m, count — ARITHMETIC right shift (sign-replicating)
+export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filling)
+
+// Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
+let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
+let Grp3ExtNeg = 3  // NEG r/m
+let Grp3ExtImul = 5  // IMUL r/m — SIGNED 128-bit multiply RAX × r/m (low→RAX, HIGH→RDX)
+export let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
+let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
+
+// 2^32 — used to fold a negative signed 32-bit immediate/displacement into its
+// two's-complement low-32-bit encoding (see imm32Bits).
+let TwoToThe32 = 4294967296
+
+// ==========================================================================
+// Shared REX / ModR/M primitives
+// ==========================================================================
+
+// The x64 ENCODING number of a register — what goes in a ModR/M reg / r/m field, a SIB
+// field, or an opcode's +rd slot. rax=0..r15=15 AND xmm0=0..xmm15=15, because the two files
+// have SEPARATE encoding spaces: `rbx` and `xmm3` are both register 3, and which one an
+// instruction means is decided by its OPCODE, never by the number.
+//
+// ⭐ THAT is why this is a mask and not a lookup table, and it is the whole reason the one-enum
+// design costs nothing here: `X64Register` places xmm0-15 at rawValue 16-31 so that the low
+// nibble already IS the encoding number. Masking it at this one door makes every primitive
+// built on it — `regLow3`, `regIsExtended`, and through them EVERY REX, ModR/M and SIB byte
+// this file emits — serve both files with no XMM-specific path anywhere. A second register enum
+// whose numbers restarted at 0 would need a parallel REX emitter beside every one of them.
+//
+// It is BEHAVIOUR-PRESERVING for the GPRs: their rawValues are 0-15, where `x and 0xF == x`.
+function regNumber(reg X64Register) returns MachineWord
+	return (reg.rawValue as MachineWord) and RegisterEncodingMask
+end 'regNumber'
+
+// The register FILE `reg` lives in. `regClassOf` (RegBits) is keyed on the raw register
+// NUMBER — the allocator's currency — so this is the dialect enum's one door to it, and the
+// only place this file converts between the two spellings of a register.
+function registerClass(reg X64Register) returns RegClass
+	return regClassOf(reg.rawValue as RegNum)
+end 'registerClass'
+
+// The low 3 bits that go in a ModR/M reg or r/m field.
+function regLow3(reg X64Register) returns MachineWord
+	return regNumber(reg) mod ExtendedRegThreshold
+end 'regLow3'
+
+// True for r8-r15 (need a REX extension bit).
+function regIsExtended(reg X64Register) returns bool
+	return regNumber(reg) >= ExtendedRegThreshold
+end 'regIsExtended'
+
+// Emit the REX prefix for an instruction with a ModR/M reg field and r/m field.
+// `wide` selects 64-bit operand size (REX.W). The prefix is emitted whenever it
+// carries any bit: always for 64-bit ops, and for 32-bit ops only when a reg is
+// extended (r8-r15). For opcode-extension forms (ModR/M /ext) the reg field holds
+// an extension 0..7 that never needs REX.R, so callers pass a base register
+// (`X64Register.rax`) as `regField`.
+//
+// `force` emits the prefix even when it carries NO bit (a bare 0x40) — required by
+// exactly one instruction the compiler emits, `setcc r/m8`. In an 8-BIT register operand, the
+// numbers 4..7 name AH/CH/DH/BH when NO REX is present and SPL/BPL/SIL/DIL when ANY
+// REX is. rsi/rdi are allocatable argument registers here, so without the forced
+// prefix `setcc sil` would silently assemble as `setcc dh` and set the wrong register.
+// ⭐ **ONE REX EMITTER, ALL FOUR BITS.** `indexIsExtended` is the SIB INDEX's extension bit (REX.X) —
+// the one field `regField`/`rmField` cannot express — and it defaults to `false`, which is the right
+// answer for every operand shape that has no index at all (register-direct, `[base + disp]`, RIP-
+// relative). It used to be a separate `emitRexRXB` differing in that one bit and in nothing else,
+// which is the same fact written down twice, one bit apart.
+function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false, indexIsExtended bool = false)
+	var rex = RexBase
+	if wide 'w'
+		rex = rex or RexW
+	end 'w'
+	if regIsExtended(regField) 'r'
+		rex = rex or RexR
+	end 'r'
+	if indexIsExtended 'x'
+		rex = rex or RexX
+	end 'x'
+	if regIsExtended(rmField) 'b'
+		rex = rex or RexB
+	end 'b'
+	if wide or force or rex != RexBase 'needed'
+		code.push(rex)
+	end 'needed'
+end 'emitRex'
+
+// The two's-complement low 32 bits of a signed immediate/displacement, as an unsigned
+// word `writeDword` can emit. A negative value wraps by adding 2^32 (the standard
+// modular reduction), giving e.g. -8 -> 0xFFFFFFF8. `writeImm32Signed` is the caller.
+function imm32Bits(value Imm32) returns MachineWord
+	if value >= 0 'nonNeg'
+		return value
+	end 'nonNeg'
+	return TwoToThe32 + value
+end 'imm32Bits'
+
+// Emit a signed 32-bit immediate / displacement field (little-endian two's complement).
+function writeImm32Signed(code ByteArray, value Imm32)
+	writeDword(code, value: imm32Bits(value))
+end 'writeImm32Signed'
+
+// ModR/M byte for a register-direct (mod=11) reg-to-r/m instruction.
+function emitModRmRegReg(code ByteArray, regField X64Register, rmField X64Register)
+	code.push(ModRmRegDirect or (regLow3(regField) shl 3) or regLow3(rmField))
+end 'emitModRmRegReg'
+
+// ModR/M byte for a register-direct (mod=11) instruction whose reg field carries
+// a fixed opcode extension (e.g. group-1 /5 for SUB).
+function emitModRmExt(code ByteArray, ext MachineWord, rmField X64Register)
+	code.push(ModRmRegDirect or (ext shl 3) or regLow3(rmField))
+end 'emitModRmExt'
+
+// Emit a mod=11 register-direct instruction from its parts: the REX prefix (with
+// W/R/B), an optional two-byte-opcode escape (0x0F), the opcode byte, and the
+// ModR/M byte. `regField`/`rmField` are the registers the ModR/M reg and r/m fields
+// name — the caller maps DEST/SRC onto them, because the mapping is opcode-family-
+// specific: the `r/m, r` forms (mov/add/sub) put SOURCE in reg and DEST in rm,
+// while the `r, r/m` forms (imul) put DEST in reg and SOURCE in rm. This is the one
+// primitive both `encodeRmRegDirect` and `encodeImulRegReg` build on, so the
+// two-byte `imul` needs no hand-spelled REX/ModR/M of its own.
+//
+// `ssePrefix` is the SSE band's one addition, and it is emitted FIRST — before the REX, which
+// is the only order x64 accepts (see `SseMandatoryPrefix`). It defaults to `none`, so every
+// GPR caller is untouched and there is no second register-direct encoder for the SSE forms.
+function encodeModRmDirect(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, rmField X64Register, wide bool, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none)
+	emitSseMandatoryPrefix(code, prefix: ssePrefix)
+	emitRex(code, wide: wide, regField: regField, rmField: rmField)
+	if twoByteEscape 'esc'
+		code.push(TwoByteOpcodeEscape)
+	end 'esc'
+	code.push(opcode)
+	emitModRmRegReg(code, regField: regField, rmField: rmField)
+end 'encodeModRmDirect'
+
+// Emit a mod=11 opcode-EXTENSION register-direct instruction's prefix + opcode +
+// ModR/M: the REX prefix (always 64-bit here — every opcode-extension form the compiler
+// emits is 64-bit; the `/ext` reg field is an opcode extension 0..7 that never
+// needs REX.R, so `regField` is the base `rax`), the opcode byte, and the ModR/M
+// byte whose reg field carries the fixed extension. The opcode-extension analogue
+// of `encodeModRmDirect` — the one place a `neg r/m` (`F7 /3`) or `sub/add rsp`
+// (group-1) form is assembled; callers append any trailing immediate.
+function encodeModRmExtDirect(code ByteArray, opcode MachineWord, ext MachineWord, rmField X64Register)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: rmField)
+	code.push(opcode)
+	emitModRmExt(code, ext: ext, rmField: rmField)
+end 'encodeModRmExtDirect'
+
+// Emit a `[base + disp]` MEMORY-operand instruction from its parts: the REX prefix (with
+// W/R/B), an optional two-byte-opcode escape, the opcode byte, and the ModR/M (+ SIB +
+// displacement) `emitBaseDispModRm` assembles. The memory-operand twin of
+// `encodeModRmDirect`, and the ONE place a `[base + disp]` instruction is assembled — a
+// 64-bit load, a 32-bit load, a store, a byte store and a `movzx` differ only in the
+// arguments handed to it, so they cannot drift apart on the rsp-SIB / rbp-disp8 traps.
+//
+// `forceRex` exists for the 8-BIT register operand (see `emitRex`): with no REX prefix the
+// register numbers 4..7 name AH/CH/DH/BH rather than SPL/BPL/SIL/DIL, so a byte store from
+// rsi would silently assemble as a store from dh.
+// `ssePrefix` mirrors `encodeModRmDirect`'s: emitted before the REX, defaulted to `none`, so
+// `movsd xmm, [base+disp]` shares this assembler — and therefore the rsp-SIB and rbp-disp8
+// traps — with every GPR load and store rather than forking a second memory-operand path.
+function encodeModRmBaseDisp(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, base X64Register, disp Imm32, wide bool, forceRex bool = false, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	emitSseMandatoryPrefix(code, prefix: ssePrefix)
+	// REX.X extends the SIB INDEX. `X64SibNoIndex` is rsp, whose encoding number is 4, so the absent
+	// case answers `false` through the very same test rather than needing a presence check of its own.
+	emitRex(code, wide: wide, regField: regField, rmField: base, force: forceRex, indexIsExtended: regIsExtended(index))
+	if twoByteEscape 'esc'
+		code.push(TwoByteOpcodeEscape)
+	end 'esc'
+	code.push(opcode)
+	emitBaseDispModRm(code, regField: regField, base: base, disp: disp, index: index, indexScale: indexScale)
+end 'encodeModRmBaseDisp'
+
+// ModR/M byte for a RIP-relative operand (mod=00, rm=101 — see ModRmRmRipRelative).
+// `regFieldBits` is the raw reg field: a register's low 3 bits for `lea`, an opcode
+// extension for `call /2`.
+function emitModRmRipRel(code ByteArray, regFieldBits MachineWord)
+	code.push(ModRmMod00 or (regFieldBits shl 3) or ModRmRmRipRelative)
+end 'emitModRmRipRel'
+
+// ==========================================================================
+// Per-op encoders
+// ==========================================================================
+
+// Register-direct (mod=11) `opcode r/m, r` — the reg field is the SOURCE, the r/m field the
+// DEST. That is the shared byte shape of EVERY single-byte reg-to-reg ALU form the compiler emits:
+// `mov` (0x89), `sub` (0x29), `cmp` (0x39), `and` (0x21), `or` (0x09), `xor` (0x31) and
+// `xchg` (0x87). All seven dispatch straight here from their `emitTargetOp` arm with only
+// the opcode swapped — there is no per-instruction wrapper, because a function whose whole
+// body is this call with a different constant is not an abstraction, it is a copy.
+//
+// `wide` selects REX.W (64-bit) vs 32-bit (which zero-extends into the full register), which
+// is what also makes this serve the `mov ecx, r8d` ABI bridge. (`imul` does NOT route here —
+// its operand-to-field mapping is swapped and its opcode is two-byte; see encodeImulRegReg.)
+export function encodeRmRegDirect(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, wide bool)
+	encodeModRmDirect(code, twoByteEscape: false, opcode: opcode, regField: src, rmField: dest, wide: wide)
+end 'encodeRmRegDirect'
+
+// `imul dest, src` — the two-operand signed multiply `imul r64, r/m64` (0F AF /r),
+// `dest = dest * src`, always 64-bit. Its ModR/M reg field is the DESTINATION and
+// r/m is the SOURCE — the OPPOSITE mapping from the `r/m, r` forms above — and its
+// opcode is two-byte, so it takes the escape path through the shared primitive
+// rather than `encodeRmRegDirect`.
+export function encodeImulRegReg(code ByteArray, dest X64Register, src X64Register)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeImul2ndByte, regField: dest, rmField: src, wide: true)
+end 'encodeImulRegReg'
+
+// The GROUP-3 unary ALU forms (`F7 /ext`, always 64-bit, in-place on one register):
+// `neg` (/3, `reg = -reg`), `not` (/2, `reg = ~reg`), `idiv` (/7) and `div` (/6, UNSIGNED
+// divide RDX:RAX by `reg`). All are byte-identical but for the extension nibble, so they
+// share ONE encoder rather than four one-line wrappers around the same call. The /ext
+// rides the ModR/M reg field, which is why this routes through `encodeModRmExtDirect`
+// (with `sub/add rsp` and the group-1 immediate forms) and not the reg-to-reg path.
+//
+// ⚠ **BOTH DIVIDES READ RDX AND THE CALLER MUST SET IT.** `div` needs `xor edx, edx` ahead
+// of it or the dividend is a 128-bit value with garbage in its high half — which faults
+// (#DE) rather than answering wrongly whenever the quotient overflows 64 bits.
+export function encodeGrp3Reg(code ByteArray, ext MachineWord, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: ext, rmField: reg)
+end 'encodeGrp3Reg'
+
+// The GROUP-1 register/IMMEDIATE forms (`REX.W 81 /ext id`, a SIGN-EXTENDED imm32):
+// `cmp` (/7), `and` (/4), `or` (/1), `xor` (/6). Same prefix, same opcode, same ModR/M,
+// same trailing immediate — only the extension differs, so the four share one encoder.
+// The literal occupies no register in any of them.
+export function encodeGrp1RegImm32(code ByteArray, ext MachineWord, reg X64Register, imm Imm32)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: reg)
+	writeImm32Signed(code, value: imm)
+end 'encodeGrp1RegImm32'
+
+// The GROUP-2 SHIFT forms, by a CONSTANT count (`REX.W C1 /ext ib`): `shl` (/4) and
+// `sar` (/7). The trailing byte is a COUNT, not a signed immediate — it is never
+// sign-extended, and `ShiftCount`'s 0..63 range is exactly the domain x64 distinguishes
+// (it masks a 64-bit shift's count to 6 bits), so the byte is written verbatim.
+export function encodeGrp2RegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp2Imm8, ext: ext, rmField: reg)
+	code.push(count)
+end 'encodeGrp2RegImm8'
+
+// The GROUP-2 SHIFT forms, by a VARIABLE count (`REX.W D3 /ext`): `shl` (/4) and `sar`
+// (/7). The count is IMPLICIT — x64 reads it from CL and from nowhere else — so the
+// instruction has no immediate and no second register operand. StdToX64Conversion is
+// what puts the count in RCX (see `lowerShiftCl`).
+export function encodeGrp2RegCl(code ByteArray, ext MachineWord, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp2Cl, ext: ext, rmField: reg)
+end 'encodeGrp2RegCl'
+
+// `setcc dest8` + `movzx dest, dest8` — MATERIALIZE a comparison's boolean into a full
+// 64-bit register. Two instructions from one op, because the pair is indivisible:
+// `setcc` writes only the LOW BYTE of its destination, so on its own it leaves the upper
+// 56 bits holding whatever the register carried before, and the "bool" would compare
+// unequal to both 0 and 1.
+//
+// The REX prefix is FORCED (see `emitRex`): rsi/rdi are allocatable here, and in an
+// 8-bit operand WITHOUT a REX prefix, register number 6 is DH — not SIL.
+function encodeSetccReg(code ByteArray, dest X64Register, cond X64CondCode)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest, force: true)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeSetccRm8Base or (cond.rawValue as MachineWord))
+	emitModRmExt(code, ext: SetccExtNone, rmField: dest)
+	// `movzx dest64, dest8` (REX.W 0F B6 /r): reg field = dest (the 64-bit destination),
+	// r/m field = dest (the 8-bit source setcc just wrote). REX.W is present, so the r/m
+	// byte register uses the SPL/BPL/SIL/DIL encoding — no forced prefix needed here.
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: dest, rmField: dest, wide: true)
+end 'encodeSetccReg'
+
+// ==========================================================================
+// The SSE band (P1.0d.4)
+// ==========================================================================
+
+// `<sse> dest, src` — the register-direct form of EVERY two-operand SSE instruction the compiler
+// emits. ONE encoder for all of them, because they differ in exactly two constants: the
+// mandatory prefix and the opcode byte. That is the same rule `encodeRmRegDirect` states for
+// the seven GPR `r/m, r` forms — a function whose body is this call with a different constant
+// is a copy, not an abstraction.
+//
+// ⭐ It routes through the SHARED `encodeModRmDirect`, so the SSE forms inherit the REX and
+// ModR/M bytes the GPR forms already use, and there is no parallel XMM encoder in this file.
+// That is what the one-enum design buys, and `regNumber`'s low-nibble mask is what pays for it.
+//
+// The ModR/M reg field is the DESTINATION and r/m the SOURCE — the `r, r/m` mapping `imul`
+// uses, NOT the `r/m, r` mapping of `mov`/`sub`/`cmp`. (`ucomisd lhs, rhs` reads rather than
+// writes its "dest", but the FIELD mapping is identical, which is why it shares this encoder.)
+//
+// ⚠ `wide` is REX.W, and for SSE it is NOT an operand-size selector — the mandatory prefix has
+// already chosen scalar-double. It is `true` for exactly the two CONVERTS, where REX.W selects
+// the 64-bit GPR half, and `false` everywhere else; passing `true` for an `addsd` would emit a
+// pointless REX and stop the bytes matching an assembler's.
+function encodeSseRegReg(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, wide bool)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: opcode, regField: dest, rmField: src, wide: wide, ssePrefix: prefix)
+end 'encodeSseRegReg'
+
+// `movq dest, src` (66 REX.W 0F 7E /r) — `dest` a GPR, `src` an XMM, same 64 bits.
+//
+// It cannot ride `encodeSseRegReg` for ONE reason, and it is not `roundsd`'s: the byte sequence is an
+// ordinary two-byte SSE form, but its ModR/M fields are the `r/m, r` STORE mapping (reg = the XMM
+// SOURCE, r/m = the GPR DEST) where `encodeSseRegReg` hard-codes `r, r/m`. Passing the operands
+// pre-swapped through that helper would put the inversion at the CALL SITE, where it reads as a bug
+// and where a later editor would "fix" it; stating it once here, next to the opcode that owns it, is
+// the same division `OpcodeMovsdRmReg`'s "reg field = SOURCE" comment already makes for the store form.
+//
+// Everything else is shared: the REX byte (REX.W required — without it this is `movd`, a 32-bit
+// transfer that would silently drop a float's high half, i.e. its entire exponent and sign) and the
+// ModR/M byte come from the same primitives every instruction in this file uses.
+function encodeMovqGprXmm(code ByteArray, dest X64Register, src X64Register)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeMovqRmXmm, regField: src, rmField: dest, wide: true, ssePrefix: SseMandatoryPrefix.packedDouble)
+end 'encodeMovqGprXmm'
+
+// `roundsd dest, src, imm8` (66 0F 3A 0B /r ib) — the ONE instruction here that `encodeSseRegReg`
+// cannot assemble, for the two reasons `OpcodeRoundsd`'s comment gives in full: a THREE-byte opcode
+// (a second escape byte the shared assembler emits no notion of) and a TRAILING imm8.
+//
+// It still spells nothing twice. The REX byte and the ModR/M byte come from the SAME primitives
+// every other instruction in this file uses (`emitRex`, `emitModRmRegReg`), so the REX.R/REX.B
+// register-extension rules and the reg/rm field mapping are stated exactly once for the whole
+// backend; only the two bytes that are genuinely `roundsd`'s — its extra escape and its immediate —
+// are written here.
+//
+// The ModR/M reg field is the DESTINATION and r/m the SOURCE (the `r, r/m` mapping, like every SSE
+// form). ⚠ NO REX.W: both operands are XMM, and the mandatory 66 has already selected the form —
+// REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
+function encodeRoundsdRegReg(code ByteArray, dest X64Register, src X64Register, mode FloatRoundMode)
+	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+	emitRex(code, wide: false, regField: dest, rmField: src)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeThreeByteEscape3A)
+	code.push(OpcodeRoundsd)
+	emitModRmRegReg(code, regField: dest, rmField: src)
+	code.push(roundsdImm8(mode))
+end 'encodeRoundsdRegReg'
+
+// `abs(x)` for an f64 already in `reg`: shift the sign bit out and shift the rest back
+// (`OpcodeGrp14ShiftQImm8`'s comment carries the argument). IN PLACE, on one register — the op is
+// two-address, so the allocator has already put the source there.
+//
+// It is the ONE encoder in this file that emits TWO instructions, and that is the shape the dialect
+// deliberately chose: two Target ops would define one vreg twice, which the SSA the allocator runs on
+// forbids. See `TargetOp.absF64RegReg`.
+function encodeAbsF64Reg(code ByteArray, reg X64Register)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
+end 'encodeAbsF64Reg'
+
+// The ONE register `encodeNegF64Reg` builds its sign mask in. xmm5: caller-saved under BOTH ABIs the compiler
+// emits for (Win64 preserves xmm6–15, SysV nothing), so the prologue never saves it on this account, and
+// the LAST float argument register, so it displaces the fewest live values. It is ALLOCATABLE, which is
+// why `TargetOp.negF64RegReg` declares it on `implicitDefs` — the fill ladder's bargain, not the jump
+// table's — and `assertEncoderScratchMasks` holds that literal equal to `x64NegF64ScratchMask()` below.
+let NegF64MaskReg = X64Register.xmm5
+
+// The negate's clobber, as the allocator's currency — the ONE statement of which register the mask
+// build destroys (`TargetOp.negF64RegReg`'s inline literal is checked against it).
+export function x64NegF64ScratchMask() returns RegMask
+	return regMaskOf(NegF64MaskReg)
+end 'x64NegF64ScratchMask'
+
+// `-x` for an f64 already in `reg`: flip the sign bit. IN PLACE, on one register — the op is
+// two-address, so the allocator has already put the source there — against a mask built in
+// `NegF64MaskReg`: `pcmpeqd m, m` (all ones), `psllq m, 63` (bit 63 alone, both lanes), `xorpd reg, m`.
+// Why a mask register rather than an `.rdata` constant, or a shift trick
+// like `abs`'s, is recorded in full on `TargetOp.negF64RegReg`. It is the second encoder in this file
+// that emits more than one instruction, for the SSA reason `encodeAbsF64Reg` gives.
+function encodeNegF64Reg(code ByteArray, reg X64Register)
+	assertOperandOffEncoderScratch(reg, scratch: x64NegF64ScratchMask(), opName: "negF64RegReg")
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePcmpeqd, dest: NegF64MaskReg, src: NegF64MaskReg, wide: false)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: NegF64MaskReg, count: SignBitPosition)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: reg, src: NegF64MaskReg, wide: false)
+end 'encodeNegF64Reg'
+
+// ⭐ **ONE GUARD FOR EVERY ENCODER IN THIS FILE THAT OWNS FIXED REGISTERS** — the jump table's r10/r11 and
+// the f64 negate's xmm5 — because they share one hazard: a colored operand that landed on a register the
+// encoder clobbers would be destroyed before it is read. `TargetOp`'s `implicitDefs` forbids exactly this
+// through `forbidOperandsFromImplicit`, and `assertEncoderScratchMasks` holds that literal equal to
+// `scratch`, so a violation here is an ALLOCATOR bug, never a user program's. `opName` is carried because
+// a union case cannot name itself, and the panic must send the reader to the right declaration.
+function assertOperandOffEncoderScratch(reg X64Register, scratch RegMask, opName String)
+	if regMaskContains(scratch, regNum: reg.rawValue as RegNum) 'aliasesScratch'
+		panic("{opName}: an operand was colored to {registerName(reg)}, a register its encoder clobbers (scratch mask {scratch}) — `TargetOp.{opName}`'s implicitDefs must forbid its operands those registers (`forbidOperandsFromImplicit`)")
+	end 'aliasesScratch'
+end 'assertOperandOffEncoderScratch'
+
+// One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
+// instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
+// `encodeModRmExtDirect` (which forces REX.W and emits no mandatory prefix, no escape and no immediate).
+//
+// It still spells nothing twice: the mandatory prefix, the REX byte and the ModR/M byte come from the
+// same primitives every other instruction here uses, so the prefix ORDER and the REX.B rule for
+// xmm8-15 are stated once for the whole backend. `regField` is the base `rax` for
+// `encodeModRmExtDirect`'s reason — the `/ext` reg field is an opcode extension 0..7 and never needs
+// REX.R — while REX.B still extends the r/m register. ⚠ NO REX.W: the mandatory 66 has already chosen
+// the form, and REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
+function encodeSseShiftQRegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeGrp14ShiftQImm8)
+	emitModRmExt(code, ext: ext, rmField: reg)
+	code.push(count)
+end 'encodeSseShiftQRegImm8'
+
+// `roundsd`'s imm8 for a rounding mode — the ONE place the target-neutral `FloatRoundMode` becomes
+// x86 bits, which is what lets the isel state the rounding once for both native targets.
+function roundsdImm8(mode FloatRoundMode) returns MachineWord
+	return match mode 'm'
+		nearestTiesToEven gives RoundsdImm8Nearest
+		towardNegative gives RoundsdImm8Down
+		towardPositive gives RoundsdImm8Up
+	end 'm'
+end 'roundsdImm8'
+
+// `movsd destXmm, [base + disp]` (F2 0F 10 /r) — the XMM twin of `encodeLoadRegBaseDisp`,
+// through the SAME `[base + disp]` assembler, so the rsp-SIB and rbp-disp8 traps are spelled
+// once for both register files rather than once per file.
+//
+// ⚠ NO REX.W. The F2 prefix already selects scalar-double; REX.W adds nothing and would only
+// lengthen the encoding. With `wide: false`, `emitRex` emits NO prefix at all unless a
+// register is extended — which is what makes `movsd xmm0, [rax]` its correct 4 bytes.
+//
+// ⚠ THE MEMORY FORM ZEROES BITS 64-127 of the destination, where the register-to-register form
+// MERGES them. Nothing in the compiler reads an XMM's upper half — every XMM value is a scalar f64 — so this
+// is the right instruction both for a value SPILL (whose slot is 8 bytes because an f64 is) AND for
+// preserving a CALLEE-SAVED xmm6-15 across a call, which Wave 2 does through the same 8-byte slot
+// ops. Win64 nominally asks a callee to preserve all 128 bits, but that obligation is owed to
+// EXTERNAL callers and the compiler has none; the full argument, and the condition that would invalidate it,
+// is stated once in `X64PrologueEpilogue`'s header.
+//
+// ⚠⚠ BOTH OPERANDS ARE CLASS-GATED, AND THE REASON IS THIS PAIR'S CALLERS, NOT DEFENSIVENESS. They were
+// EXPORTED at Wave 2 so the two hand-assembled GT chunks (X64GtRuntime's context switch and
+// `__gt_morestack`) could preserve XMMs, and those hand off registers straight from an ordered LIST —
+// `calleeSavedXmmOrder`, `argFpRegisters` — with no allocator and no class column between the list and the
+// encoder. A GPR in either list assembles as the XMM sharing its low nibble (`rbx` → `xmm3`) and a GPR in
+// the BASE position would address off the wrong register, both silently. That is exactly the doctrine
+// `requireClass` states, applied to the two functions this commit widened the blast radius of.
+export function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: requireClass(destReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble, index: index, indexScale: indexScale)
+end 'encodeMovsdRegBaseDisp'
+
+// `movsd [base + disp], srcXmm` (F2 0F 11 /r) — the store mirror of `encodeMovsdRegBaseDisp`, class
+// gates included, for the reason stated there. The opcode is the ONLY other difference (0x11 puts the
+// XMM in the reg field as the SOURCE, the same reg-field-is-source shape `mov r/m, r` has).
+export function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: requireClass(srcReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble, index: index, indexScale: indexScale)
+end 'encodeMovsdBaseDispReg'
+
+// `movsd dest, [rip + <.rdata constant>]` — materialize an f64 literal. The float twin of
+// `encodeLeaRegGlobal`, and it files its fixup in the same `RdataRelocation` table with the
+// same end-of-field convention; only the SECTION differs, which is what `RdataRelocKind`
+// discriminates (`ripRelDisp32` is `.rdata`, `dataSectionRipRelDisp32` is `.data`).
+//
+// ⭐ WHY A CONSTANT POOL AND NOT AN IMMEDIATE: there is no `movsd xmm, imm64`. SSE has no
+// immediate form at all — the same hardware fact that makes `foldConstOperands` refuse a float
+// rhs and `lowerBinOpImm`'s `div` arm permanently unreachable. The IEEE bits ARE an integer we
+// hold, but the only ways into an XMM are a load or a `movq` through a GPR, and the load costs
+// no register.
+function encodeMovsdRegRip(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	encodeModRmRipRelative(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: dest, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
+end 'encodeMovsdRegRip'
+
+// ==========================================================================
+// Class-dispatched encoders — the class-agnostic ops
+// ==========================================================================
+//
+// `movRegReg`, `storeSlotReg`, `loadRegSlot` and `xchgRegReg` are class-agnostic CONCEPTS: a
+// move is a move whichever file it names (see TargetOp's SSE band for why the dialect has no
+// float twin of any of them). The op therefore does not say which instruction it is, and these
+// four helpers are where that is decided — from `regClassOf` of the RESOLVED register, which
+// is the only place the answer exists.
+
+// A register-to-register move: `mov` for a GPR pair, `movsd` for an XMM pair.
+//
+// A CROSS-CLASS pair panics rather than picking one. Moving an f64's bits into a GPR is `movq` —
+// a different instruction with different semantics — and it is never asked for HERE: a value's
+// class is fixed by its Std type at birth and phi copies join values of one type, so no MOVE ever
+// spans the boundary. Every op that does span it — the two CONVERTS and the `movqGprXmm` BITCAST —
+// carries its own TargetOp and its own encoder. So a mixed pair here is a coloring bug, and it is
+// exactly the bug that would otherwise emit a `mov` naming a GPR that shares an XMM's low nibble.
+function emitRegRegMove(code ByteArray, dest X64Register, src X64Register)
+	let destClass = registerClass(dest)
+	if destClass != registerClass(src) 'crossClass'
+		panic("x64 emitter: a register-to-register move from {src.name} to {dest.name} crosses register files — a value's class is fixed by its type at birth, so the allocator colored a move's two ends into different files (every cross-class op — the two converts and the `movqGprXmm` bitcast — is its own TargetOp, so a MOVE is never one)")
+	end 'crossClass'
+	match destClass 'c'
+		gpr then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: dest, src: src, wide: true)
+		xmm then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeMovsdRegRm, dest: dest, src: src, wide: false)
+	end 'c'
+end 'emitRegRegMove'
+
+// A 64-bit load from `[base + disp]`, dispatched on the DESTINATION's file. The one place a
+// load picks its instruction — shared by the spill/reload path (`loadRegSlot`, base = rsp) and
+// the data-section band (`loadRegBaseDisp` at word64, base = a global's address).
+//
+// ⭐ ONE encoder serves both BECAUSE A SPILL SLOT IS 8 BYTES AND AN f64 IS 8 BYTES. That is the
+// whole reason floats leave the frame layout untouched, and the reason the splitter needs no
+// float spill op: the slot the allocator already reserves fits the value it already has.
+function emitWord64Load(code ByteArray, dest X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	match registerClass(dest) 'c'
+		gpr then encodeLoadRegBaseDisp(code, destReg: dest, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+		xmm then encodeMovsdRegBaseDisp(code, destReg: dest, base: base, disp: disp, index: index, indexScale: indexScale)
+	end 'c'
+end 'emitWord64Load'
+
+// A 64-bit store to `[base + disp]`, dispatched on the SOURCE's file — `emitWord64Load`'s
+// mirror, shared by `storeSlotReg` and the data-section band's word64 store.
+function emitWord64Store(code ByteArray, base X64Register, disp Imm32, src X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	match registerClass(src) 'c'
+		gpr then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
+		xmm then encodeMovsdBaseDispReg(code, base: base, disp: disp, srcReg: src, index: index, indexScale: indexScale)
+	end 'c'
+end 'emitWord64Store'
+
+// Swap two registers — SSA destruction's cycle-breaker, dispatched on their file.
+//
+// ⭐⭐ A GPR PAIR HAS `xchg`. AN XMM PAIR HAS NOTHING — there is no `xchg xmm, xmm`, at all — so
+// it is swapped with the classic three-way XOR: `xorpd a,b; xorpd b,a; xorpd a,b` leaves a and
+// b exchanged and touches no other register, no flag and no memory.
+//
+// ⭐⭐ WHY NOT A RESERVED SCRATCH + 3 MOVS. The register a reserved xmm costs is not the reason
+// to refuse it — FP pressure here is low, because every float across a call force-spills.
+//
+// THE REASON IS THE FAILURE MODE, and the two are not symmetric:
+//   • This lowering's precondition is `a != b`, and it is established THREE LINES AWAY from the
+//     only code that can violate it: `sequenceParallelCopy` calls `removeSatisfiedMoves` at the
+//     top of every iteration, so the move it then breaks a cycle with cannot have `dst == src`.
+//     It is asserted below regardless, AT the emit site, where it fails LOUD.
+//   • A reserved scratch's precondition is "the allocator never colours a value into xmm15" —
+//     which lives in the ALLOCATOR's pool mask, cannot be checked here (a swap looks identical
+//     whether or not xmm15 holds something live), and fails as SILENT CORRUPTION.
+// A precondition that can be asserted locally beats one that must be trusted across a file
+// boundary, and this codebase's whole idiom is to prefer the loud failure.
+//
+// The performance argument for 3 movs does NOT survive contact, either: it rests on
+// register-to-register `mov`s being renamed at zero latency, which is a GPR property. The FP
+// move would be a `movsd`, which MERGES bits 64-127 and is therefore NOT mov-eliminated and
+// carries a false dependency on its destination. Both shapes are three serial-ish ops, on a
+// path that exists only for a float phi-copy CYCLE.
+//
+// The garbage in bits 64-127 is not a problem and is worth stating: `movsd reg, reg` MERGES (it
+// writes only bits 0-63), so an XMM's upper half holds whatever it last held. The XOR swaps all
+// 128 bits, exchanging that garbage along with the value. Nothing reads it.
+//
+// `xorpd` rather than `xorps`: identical on the bits, but the packed-DOUBLE form keeps the
+// register in the same domain as the `movsd`/`addsd` around it. A domain crossing costs a stall
+// on some microarchitectures; it is never a correctness question.
+//
+// ⚠ THE SELF-SWAP GUARD IS NOT DEFENSIVE PADDING — IT IS THIS LOWERING'S ONE PRECONDITION.
+// `a xor a` is ZERO, so a triple-XOR of a register with ITSELF does not swap it, it DESTROYS
+// it — where an `xchg` would have been a harmless no-op. `sequenceParallelCopy` cannot produce
+// one (see above), so this can only fire if that loop's shape changes; it says so here rather
+// than zeroing a live register at run time.
+function emitRegRegSwap(code ByteArray, a X64Register, b X64Register)
+	let aClass = registerClass(a)
+	if aClass != registerClass(b) 'crossClass'
+		panic("x64 emitter: a register swap between {a.name} and {b.name} crosses register files — a parallel-copy cycle joins values of one type, so this is a coloring bug")
+	end 'crossClass'
+	if a == b 'selfSwap'
+		panic("x64 emitter: a register swap of {a.name} with itself — `sequenceParallelCopy` emits a swap only to break a cycle of length >= 2, and the XMM lowering's triple-XOR would ZERO the register rather than no-op on it")
+	end 'selfSwap'
+	match aClass 'c'
+		gpr then encodeRmRegDirect(code, opcode: OpcodeXchgRmReg, dest: a, src: b, wide: true)
+		xmm then encodeXmmSwap(code, a: a, b: b)
+	end 'c'
+end 'emitRegRegSwap'
+
+// The three `xorpd`s that swap two XMMs — see `emitRegRegSwap` for why this is the lowering.
+function encodeXmmSwap(code ByteArray, a X64Register, b X64Register)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: a, src: b, wide: false)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: b, src: a, wide: false)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: a, src: b, wide: false)
+end 'encodeXmmSwap'
+
+// `cqo` — sign-extend RAX into RDX:RAX (REX.W 99), so the following `idiv` divides the
+// full 128-bit RDX:RAX. No ModR/M — both operands (RAX, RDX) are implicit — so it is
+// just the REX.W prefix (emitted through the shared `emitRex`, which produces exactly
+// 0x48 for a 64-bit op naming no extended register) followed by the one opcode byte.
+function encodeCqo(code ByteArray)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: X64Register.rax)
+	code.push(OpcodeCqo)
+end 'encodeCqo'
+
+// `lea dest, [base + index*scale]` — the 3-operand `+` at scale 1, and EC16's scaled-index address
+// computation at 2/4/8 (REX.W 8D /r + SIB). No flags, and — because dest/base/index are independent —
+// no copy. Both SIB traps belong to the SHARED assembler: an rsp index panics in `x64SibIndex`
+// and an rbp/r13 base is forced to mod=01 by `chooseDispMod`.
+//
+// ⚠ ONE ENCODER FOR ALL FOUR SCALES, not a scale-1 encoder plus a scaled one: they differ in two bits
+// of one byte, which `MemoryIndexScale` already names.
+export function encodeLeaRegBaseIndexScale(code ByteArray, dest X64Register, base X64Register, index X64Register, scale MemoryIndexScale)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeLea, regField: dest, base: base, disp: 0, wide: true, index: x64SibIndex(index), indexScale: scale)
+end 'encodeLeaRegBaseIndexScale'
+
+// `lea dest, [base + disp]` — `a + imm` / `a - imm` (REX.W 8D /r, signed disp). No
+// index, so no REX.X; the shared `[base + disp]` assembler writes the REX, the ModR/M
+// (+ SIB when the base is rsp/r12) and the displacement.
+export function encodeLeaRegRegImm32(code ByteArray, dest X64Register, base X64Register, disp Imm32)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeLea, regField: dest, base: base, disp: disp, wide: true)
+end 'encodeLeaRegRegImm32'
+
+// ModR/M (+ SIB when the base is rsp/r12) + displacement for a `[base + disp]` memory
+// operand. disp8 when it fits a signed byte, else disp32; a zero displacement still
+// needs disp8 for an rbp/r13 base (mod=00 base=101 is RIP-relative, not [rbp]). One
+// place the [base+disp] address form is assembled — no per-op respelling.
+function emitBaseDispModRm(code ByteArray, regField X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	emitBaseDispModRmBits(code, regFieldBits: regLow3(regField), base: base, disp: disp, index: index, indexScale: indexScale)
+end 'emitBaseDispModRm'
+
+// The `[base + disp]` ModR/M (+ SIB + displacement) with the reg field given as RAW BITS — a register's
+// low 3 bits for a memory load/store, or an OPCODE EXTENSION (`/2` for `call r/m64`) for a group-5 memory
+// form. The one home of the rsp-SIB / rbp-disp8 traps, split from the register-taking `emitBaseDispModRm`
+// exactly as `encodeModRmExtDirect` splits the extension form off `encodeModRmDirect`.
+function emitBaseDispModRmBits(code ByteArray, regFieldBits MachineWord, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	let baseBits = regLow3(base)
+	let baseIsRbpR13 = baseBits == RbpR13Low3
+	let modField = chooseDispMod(disp, baseIsRbpR13: baseIsRbpR13)
+
+	// ⭐ AN INDEX FORCES rm=100 (a SIB follows) WHATEVER THE BASE IS — the SIB then carries the real
+	// index — where a bare `[base + disp]` needs one only for an rsp/r12 base, whose own low-3 bits
+	// ARE 100. Both spellings share `chooseDispMod` and `emitTrailingDisp`, so the rbp/r13 zero-disp8
+	// trap is answered once for the whole family (mod=00 with base field 101 means "no base", so an
+	// rbp/r13 base is forced to mod=01 with a zero disp8).
+	if index != X64SibNoIndex 'indexed'
+		code.push(modField or (regFieldBits shl 3) or ModRmRmSibFollows)
+		code.push(sibByte(indexScale, indexBits: regLow3(index), baseBits: baseBits))
+	end 'indexed' else 'noIndex'
+		code.push(modField or (regFieldBits shl 3) or baseBits)
+		if baseBits == ModRmRmSibFollows 'sib'
+			// An rsp/r12 base has low-3 bits 100, which the rm field spends on "a SIB follows" — so the
+			// real base has to move into the SIB, with the index field saying there is none.
+			code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: baseBits))
+		end 'sib'
+	end 'noIndex'
+
+	emitTrailingDisp(code, modField: modField, disp: disp)
+end 'emitBaseDispModRmBits'
+
+// The trailing displacement byte(s) a `[base + disp]` ModR/M needs, keyed by the mod
+// field `chooseDispMod` returned: nothing for mod=00, a signed disp8 for mod=01, a
+// signed disp32 for mod=10 (the only three `chooseDispMod` returns). The one place the
+// rbp/r13 zero-disp8 trap actually emits its byte — shared by BOTH `lea` forms (the
+// `[base + disp]` assembler above and the `[base + index]` encoder).
+function emitTrailingDisp(code ByteArray, modField MachineWord, disp Imm32)
+	if modField == ModRmMod01 'disp8'
+		code.push(imm32Bits(disp) and 0xFF)
+	end 'disp8' else if modField == ModRmMod10 'disp32'
+		writeImm32Signed(code, value: disp)
+	end 'disp32'
+end 'emitTrailingDisp'
+
+// Pick the ModR/M mod field for a `[base + disp]` operand: mod=00 (no disp) only for a
+// zero displacement on a non-rbp/r13 base; mod=01 (disp8) when the disp fits a signed
+// byte; mod=10 (disp32) otherwise.
+function chooseDispMod(disp Imm32, baseIsRbpR13 bool) returns MachineWord
+	if disp == 0 and not baseIsRbpR13 'noDisp'
+		return ModRmMod00
+	end 'noDisp'
+	if disp >= i8.min and disp <= i8.max 'disp8'
+		return ModRmMod01
+	end 'disp8'
+	return ModRmMod10
+end 'chooseDispMod'
+
+// The SIB byte for `[base + disp]` with an rsp/r12 base (rm=100 forces a SIB): scale 1,
+// index field 100 (no index), base in its field.
+// THE SIB BYTE — scale in bits 6-7, index in 3-5, base in 0-2, and the ONE place those three fields
+// are packed. Four call sites spelled it out before EC16: the no-index form an rsp/r12 base forces,
+// the two GS-absolute `[disp32]` forms, and the scaled-index form. Only the last of them ever varies
+// the scale, which is exactly why it is the one a future edit reaches for — and why the other three
+// must not be a separate spelling of the same byte.
+//
+// ⚠ `scale` IS IGNORED BY THE HARDWARE WHEN THERE IS NO INDEX, so the three unindexed callers pass
+// `byOne` — the identity, and the only honest answer for a field that scales nothing.
+function sibByte(scale MemoryIndexScale, indexBits MachineWord, baseBits MachineWord) returns MachineWord
+	return ((memoryIndexScaleShift(scale) as MachineWord) shl SibScaleShift) or (indexBits shl 3) or baseBits
+end 'sibByte'
+
+// `imul dest, src, imm32` — the 3-operand signed multiply (REX.W 69 /r id): reg field
+// the DESTINATION, rm field the SOURCE, then a signed imm32. Reuses the shared
+// register-direct assembly; only the opcode + trailing immediate differ.
+export function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64Register, imm Imm32)
+	encodeModRmDirect(code, twoByteEscape: false, opcode: OpcodeImulRegImm, regField: dest, rmField: src, wide: true)
+	writeImm32Signed(code, value: imm)
+end 'encodeImulRegRegImm32'
+
+// `mov [base + disp], srcReg` — a 64-bit STORE (REX.W 89 /r, the `r/m, r` form: reg field
+// = source, r/m = the memory operand). A spill names `rsp` here; the panic runtime names
+// `rbp` (its frame slots) or a scratch register (a CONTEXT field). The base is a parameter
+// rather than a hardcoded rsp precisely so those are ONE encoder: an rsp base forces a SIB
+// byte and an rbp base forces a disp8, and both traps already live in the shared
+// `[base + disp]` assembler this routes through.
+export function encodeStoreBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+end 'encodeStoreBaseDispReg'
+
+// `mov destReg, [base + disp]` — a LOAD (8B /r, the `r, r/m` form: reg field = dest, r/m =
+// the memory source), the mirror of `encodeStoreBaseDispReg`. `wide` selects REX.W (64-bit)
+// vs 32-bit; the 32-bit form ZERO-EXTENDS into the full register, which is how the runtime
+// reads the DWORD fields it must not sign-extend — an EXCEPTION_RECORD's ExceptionCode
+// (0xC0000094 would otherwise become negative) and the symbol table's i32 columns.
+export function encodeLoadRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, wide bool, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: destReg, base: base, disp: disp, wide: wide, index: index, indexScale: indexScale)
+end 'encodeLoadRegBaseDisp'
+
+// `cmp destReg, [base + disp]` — the LOAD-form 64-bit compare (3B /r, `reg, r/m`: reg field = the register,
+// r/m = the memory operand), so it computes `destReg - [base+disp]` and sets flags in that direction. The GT
+// stack guard (X64GtRuntime) uses it to compare a function's projected rsp against `[gt + stackGuard]` before
+// a `jae`. Always wide (rsp/guard are 64-bit addresses).
+export function encodeCmpRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeCmpRegRm, regField: destReg, base: base, disp: disp, wide: true)
+end 'encodeCmpRegBaseDisp'
+
+// ⭐⭐ **`lock <op> [base + disp], reg` — `encodeLockedMemReg`'s DISPLACED TWIN, and the displacement is the
+// whole difference between them.** That one serves `StdOp.atomicCas`/`atomicRmw`, whose operand is a bare
+// ADDRESS (`AtomicWordDisp` is 0, because those ops carry no field offset at the Std tier). The syscall
+// bracket (`X64GtRuntime.emitGtEnterSyscall`/`emitGtExitSyscall`) names a FIELD of the M struct from
+// hand-assembly, and flattening the offset would cost a `lea` on the hottest bracketed path there is.
+//
+// ⛔ **THE PREFIX IS NOT OPTIONAL HERE AND IS NOT A PARAMETER.** `SchedRuntime.MOffSyscallState` has TWO
+// writers — the machine itself and `__sched_retake`'s compare-and-swap — so an unlocked read-modify-write
+// could lose the thief's mark and leave a machine believing it still owns a processor that has been handed to
+// somebody else. An encoder that could be asked for the unlocked form would be an encoder somebody could ask
+// wrongly; the unlocked `add r/m, r` has no caller in this compiler and is deliberately not spelled.
+//
+// ⭐ It routes through `encodeModRmBaseDisp` for `encodeLockedMemReg`'s stated reason — the rsp/r12 SIB and
+// rbp/r13 zero-disp8 traps come for free, and an address register coloured into rbp would otherwise encode as
+// RIP-RELATIVE and read a constant out of the code stream.
+export function encodeLockedRmwBaseDispReg(code ByteArray, twoByteEscape bool, opcode MachineWord, base X64Register, disp Imm32, reg X64Register)
+	code.push(LockPrefix)
+	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: reg, base: base, disp: disp, wide: true)
+end 'encodeLockedRmwBaseDispReg'
+
+// `mov [base + disp], srcReg8` — an 8-BIT store (88 /r), how the panic runtime's hex
+// formatter writes one ASCII digit into its frame buffer. The REX prefix is FORCED for the
+// AH/CH/DH/BH-vs-SPL/BPL/SIL/DIL trap `encodeModRmBaseDisp` documents.
+export function encodeStoreBaseDispReg8(code ByteArray, base X64Register, disp Imm32, srcReg X64Register, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRm8Reg8, regField: srcReg, base: base, disp: disp, wide: false, forceRex: true, index: index, indexScale: indexScale)
+end 'encodeStoreBaseDispReg8'
+
+// `movzx destReg, byte [base + disp]` — load one byte, zero-extended to 64 bits (REX.W
+// 0F B6 /r). The panic runtime's `strlen` reads a C string a byte at a time through this;
+// zero-extension is what makes the `cmp dest, 0` NUL test correct for a high byte.
+export function encodeMovzxRegByteBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: destReg, base: base, disp: disp, wide: true, index: index, indexScale: indexScale)
+end 'encodeMovzxRegByteBaseDisp'
+
+// --- Intra-CHUNK rel32 resolution ---
+//
+// A function's blocks are laid out contiguously inside its ONE FunctionCodeChunk, so
+// a `jmp`/`jcc` to another block never crosses a chunk boundary and is resolved here
+// — not by `concat` (which only rebases inter-FUNCTION `call`/IAT fixups). This is
+// the M4 analogue of `resolveCallFixups`, keyed by a label id within one chunk instead
+// of by function name across chunks.
+//
+// Two DIFFERENT instruction shapes file fixups here, and they share this table because
+// they share the one property that matters: an x64 rel32 / RIP-relative disp32 is always
+// measured from the END of its 4-byte field, so the same patch arithmetic resolves both.
+//   - `jmp`/`jcc rel32` to a block (`emitFunctionChunk`, keyed by `block.id`)
+//   - `lea r64, [rip + disp32]` to a chunk-local label — how a hand-assembled runtime
+//     function takes the address of a string it laid down at the end of its own chunk
+//     (`X64Runtime`, keyed by ids it mints itself)
+// Each fixup carries its own `PatchSite` so an out-of-reach displacement names the
+// instruction that actually overflowed rather than a generic "block jump".
+
+// One pending chunk-local rel32/disp32 site: the chunk-local offset of its 4-byte field
+// and the label id it targets. `resolveChunkRel32Fixups` patches each once every label's
+// offset is known (a forward jump targets a block emitted later in the chunk).
+type ChunkRel32Fixup
+	export var codeOffset as CodeOffset
+	export var targetLabel as BlockId
+	export var site as PatchSite
+
+	export static function create(codeOffset CodeOffset, targetLabel BlockId, site PatchSite) returns ChunkRel32Fixup
+		return Self{codeOffset: codeOffset, targetLabel: targetLabel, site: site}
+	end 'create'
+end 'ChunkRel32Fixup'
+
+export typealias ChunkRel32FixupArray = Array with ChunkRel32Fixup
+
+// `jcc rel32` / `jmp rel32` with a PLACEHOLDER displacement, each returning the chunk offset of its
+// 4-byte field. The ONE spelling of each instruction's bytes, and the base of all four emitters below.
+//
+// ⚠ **THE PLACEHOLDER IS THE SHARED HALF, AND WHO RESOLVES IT IS THE DIFFERENCE.** A branch to a BLOCK
+// records a `ChunkRel32Fixup` and is patched by `resolveChunkRel32Fixups` once the block layout is known;
+// a branch INSIDE one macro-op's instruction sequence has no block to name — the Std→Target lowerings
+// cannot create blocks at all (see `TargetOp.x64MemFill`) — and is patched by that encoder itself against
+// a byte offset in this same buffer. Both go on to `patchChunkRel32`, so the "measured from the end of the
+// 4-byte field" convention and the ±2 GiB guard are the shared ones rather than a second copy.
+function encodeJccPlaceholder(code ByteArray, cond X64CondCode) returns CodeOffset
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
+	let dispOffset = code.count()
+	writeDword(code, value: 0)
+	return dispOffset
+end 'encodeJccPlaceholder'
+
+function encodeJmpPlaceholder(code ByteArray) returns CodeOffset
+	code.push(OpcodeJmpRel32)
+	let dispOffset = code.count()
+	writeDword(code, value: 0)
+	return dispOffset
+end 'encodeJmpPlaceholder'
+
+// `jmp rel32` to a block. The displacement is left zero and a fixup records its offset;
+// `resolveChunkRel32Fixups` patches it once the target's chunk offset is known.
+export function encodeJmp(code ByteArray, rel32Fixups ChunkRel32FixupArray, targetBlockId BlockId)
+	rel32Fixups.push(ChunkRel32Fixup.create(encodeJmpPlaceholder(code), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
+end 'encodeJmp'
+
+// `jcc rel32` to a block (0F 80+cc). `cond.rawValue` is the condition nibble; the displacement is a
+// fixup like `encodeJmp`'s.
+export function encodeJcc(code ByteArray, rel32Fixups ChunkRel32FixupArray, cond X64CondCode, targetBlockId BlockId)
+	rel32Fixups.push(ChunkRel32Fixup.create(encodeJccPlaceholder(code, cond: cond), targetLabel: targetBlockId, site: PatchSite.x64BlockJumpRel32))
+end 'encodeJcc'
+
+// `jcc rel32` BACKWARD to a byte offset ALREADY EMITTED into this same buffer — a branch whose target
+// needs no fixup, because it is not a BLOCK: the stack probe's page walk and the fill ladder's store loop
+// are each emitted as a unit, so the encoder is still holding its own loop label. `what` names the caller,
+// so an out-of-reach displacement accuses the instruction that actually overflowed.
+function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset, what PatchSite)
+	patchChunkRel32(code, codeOffset: encodeJccPlaceholder(code, cond: cond), targetOffset: targetOffset, what: what)
+end 'encodeJccBackward'
+
+// Point a forward branch recorded by a placeholder emitter at the CURRENT end of `code` — the FORWARD twin
+// of `encodeJccBackward`, and the other half of what a macro-op containing a size dispatch needs.
+function patchLocalForwardBranch(code ByteArray, dispOffset CodeOffset, what PatchSite)
+	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: code.count(), what: what)
+end 'patchLocalForwardBranch'
+
+// --- The dense-match jump table (x64) ---
+
+// The two FIXED scratch registers the jump-table sequence uses. r10 holds the table base then the target
+// address; r11 holds the loaded i32 entry. Both are declared clobbered by `TargetOp.x64JumpTable`'s
+// `implicitDefs`, which is what keeps the biased index off them (via `forbidOperandsFromImplicit`) and any
+// cross-switch value off them (via the liveness clobber census) — see the op's header.
+let JumpTableBaseReg = X64Register.r10
+let JumpTableEntryReg = X64Register.r11
+
+// `movsxd dest, [base + index*4]` (REX.W 63 /r + SIB scale=4) — the jump table's signed i32 slot load.
+// The `lea` above with the `movsxd` opcode and a ×4 scale, through the SAME memory-operand assembler, so
+// the rsp-index and rbp/r13-base traps are answered once for both. The base is always r10 here, so the
+// base trap never fires; the general form keeps the encoder self-contained.
+function encodeMovsxdRegBaseIndexScale4(code ByteArray, dest X64Register, base X64Register, index X64Register)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovsxd, regField: dest, base: base, disp: 0, wide: true, index: x64SibIndex(index), indexScale: MemoryIndexScale.byFour)
+end 'encodeMovsxdRegBaseIndexScale4'
+
+// `jmp r/m64` (FF /4, mod=11) — the jump table's register-indirect branch to the computed target address.
+// The twin of `encodeCallReg` (FF /2) with the jump opcode extension.
+function encodeJmpReg(code ByteArray, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtJmp, rmField: reg)
+end 'encodeJmpReg'
+
+// ⭐ **THE JUMP-TABLE SEQUENCE.** `cmp idx, N` / `jae default` (UNSIGNED, so a wrapped negative index hits
+// the default); `lea r10, [rip + table]`; `movsxd r11, [r10 + idx*4]`; `lea r10, [r10 + r11]` (the `add` as a
+// flag-free `lea`); `jmp r10`. `N` (≤ 4096) fits the `cmp` imm32. The `jae` files a chunk-local rel32 fixup
+// to the default block; the `lea` to the table files an `.rdata` reloc (patched to point at the blob); the
+// per-slot block-address relocations are recorded in `jumpTables` and resolved after the block loop.
+function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, indexReg X64Register, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+	assertOperandOffEncoderScratch(indexReg, scratch: x64JumpTableScratchMask(), opName: "x64JumpTable")
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: indexReg, imm: caseTargets.count() as Imm32)
+	encodeJcc(code, rel32Fixups: rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: defaultTarget)
+	encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: JumpTableBaseReg, label: tableLabel)
+	encodeMovsxdRegBaseIndexScale4(code, dest: JumpTableEntryReg, base: JumpTableBaseReg, index: indexReg)
+	encodeLeaRegBaseIndexScale(code, dest: JumpTableBaseReg, base: JumpTableBaseReg, index: JumpTableEntryReg, scale: MemoryIndexScale.byOne)
+	encodeJmpReg(code, reg: JumpTableBaseReg)
+	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
+end 'encodeX64JumpTable'
+
+// The jump table's clobber, as the allocator's currency — the ONE statement of which registers the sequence
+// destroys: `TargetOp.x64JumpTable`'s inline `implicitDefs` literal is checked against it by
+// `assertEncoderScratchMasks`, and `encodeX64JumpTable` keeps its index operand off it — the encoder would
+// clobber the index with the table base (r10) or the loaded entry (r11) before reading it.
+export function x64JumpTableScratchMask() returns RegMask
+	return regMaskOf(JumpTableBaseReg) or regMaskOf(JumpTableEntryReg)
+end 'x64JumpTableScratchMask'
+
+// --- F1b: the byte-fill SIZE LADDER (x64) ---
+
+// The four FIXED registers `encodeX64MemFill` owns. The ISEL pre-moves the destination into the cursor and
+// the byte count into the count register (`lowerMemFill`); the ladder then writes all four — it advances the
+// cursor, decrements the count, pins the region's END so every arm can anchor a backward store on it, and
+// holds the broadcast fill pattern.
+//
+// ⛔ **rdi AND rcx ARE THE TWO `rep stosq` DEMANDS, AND rax IS ITS IMPLICIT SOURCE** — those three are the
+// instruction's, not a choice. rdx is the free one, and it takes the end.
+//
+// ⚠⚠ **ALL FOUR ARE ALLOCATABLE, SO EVERY CLOBBER MUST BE DECLARED.** rsi/rdi are ARGUMENT registers in
+// this ABI rather than callee-saved ones, so a live value genuinely can be coloured into rdi. The clobbers
+// are declared on `TargetOp.x64MemFill`'s `implicitDefs`, and `assertEncoderScratchMasks` holds that
+// literal equal to `x64MemFillScratchMask()` below, so the two cannot drift apart the way only a comment
+// would have kept them together.
+export let MemFillCursorReg = X64Register.rdi
+export let MemFillCountReg = X64Register.rcx
+let MemFillEndReg = X64Register.rdx
+let MemFillPatternReg = X64Register.rax
+
+// The ladder's clobber, as the allocator's currency. `TargetOp.x64MemFill`'s inline `implicitDefs` literal is
+// checked against this (`assertEncoderScratchMasks`), which is what makes the four `let`s above the ONE statement
+// of which registers the fill destroys.
+export function x64MemFillScratchMask() returns RegMask
+	return regMaskOf(MemFillCursorReg) or regMaskOf(MemFillCountReg) or regMaskOf(MemFillEndReg) or regMaskOf(MemFillPatternReg)
+end 'x64MemFillScratchMask'
+
+// The ladder's band edges, in bytes. Each straight-line band is covered by `edge / 8` overlapping qword
+// stores from EACH end, so the edge and the store count are one number rather than two that could disagree.
+let MemFillQwordBytes = 8  // one qword store — the smallest width the overlap trick can anchor on
+let MemFillTwoQwordBytes = 16
+let MemFillFourQwordBytes = 32
+
+// Bytes per iteration of the bulk store loop (8 qwords), and the lower edge of the loop band.
+let MemFillLoopStride = 64
+
+// Where `rep stosq` starts paying. Its ~20-40 cycles of startup dwarf the 1-8 plain stores a small
+// size-class slot needs, and the dominant caller of this op zeroes exactly such a slot — so the ladder exists
+// precisely to keep short fills away from it. (ERMSB/FSRM improve throughput and short `rep stosb`; they do
+// not remove `rep stosq`'s setup.)
+let MemFillRepThreshold = 256
+let MemFillQwordShift = 3  // log2(MemFillQwordBytes) — bytes → qwords, for `rep stosq`'s count
+
+let RepPrefix = 0xF3
+let OpcodeStosq = 0xAB  // stos m64, RAX (REX.W AB) — store RAX at [RDI], advancing RDI
+
+// `rep stosq` — store RAX into [RDI] and advance, RCX times. The one x64 instruction that IS a memory fill,
+// and the ladder's arm from `MemFillRepThreshold` bytes up. DF is 0 by ABI on entry to and exit from every
+// function and nothing in this backend ever sets it, so the store direction is forward.
+function encodeRepStosq(code ByteArray)
+	code.push(RepPrefix)
+	// REX.W with no extended register — `emitRex`'s `wide` path emits exactly the 0x48 the instruction needs.
+	emitRex(code, wide: true, regField: MemFillPatternReg, rmField: MemFillPatternReg)
+	code.push(OpcodeStosq)
+end 'encodeRepStosq'
+
+// `count` consecutive qword stores of the fill pattern, from `[base + startDisp]` upward.
+function encodeMemFillQwordRun(code ByteArray, base X64Register, startDisp Imm32, count MachineWord)
+	for i in 0 upto count 'stores'
+		// ⚠ The cast brackets the WHOLE sum — `a + b as Imm32` casts only `b`, `as` binding tighter than `+`.
+		// Stated as its own `let` so the reading cannot be mistaken (the arm64 twin says the same).
+		let disp = (startDisp + i * MemFillQwordBytes) as Imm32
+		encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: MemFillPatternReg)
+	end 'stores'
+end 'encodeMemFillQwordRun'
+
+// ⭐ **THE OVERLAP TRICK, WHICH IS WHAT MAKES EVERY STRAIGHT-LINE BAND STRAIGHT-LINE.** For a length known to
+// be at least `spanBytes` and less than twice it, write `spanBytes/8` qwords FORWARD from the cursor and
+// `spanBytes/8` qwords BACKWARD from the end. Together they cover the whole region for ANY length in the
+// band, with the middle written twice — so there is no loop and, crucially, no ragged-tail handling for a
+// length that is not a multiple of 8. Zeroing a byte twice is free; branching to decide whether to is not.
+function encodeMemFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
+	let qwords = spanBytes / MemFillQwordBytes
+	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: qwords)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(spanBytes as Imm32), count: qwords)
+end 'encodeMemFillOverlappingSpan'
+
+// ⭐⭐ **THE FILL LADDER.** Fill `rcx` bytes at `rdi` with `fillByte`, choosing an instruction
+// sequence by SIZE — which is the whole reason `StdOp.memFill` is an op rather than the per-byte Std-IR loop
+// it replaced. The bands are ARCHITECTURE.md's ("The `memzero` the backend must emit"):
+//
+//   < 8       byte loop (rare — only a sub-qword fill reaches it)
+//   8..63     straight-line OVERLAPPING stores, 1/2/4 qwords from each end
+//   64..255   8-qword store loop, then one overlapping 64-byte block
+//   >= 256    `rep stosq`, then one overlapping qword for the 0..7 ragged bytes
+//
+// `rdx` is pinned to the region's END up front, before anything mutates `rdi`/`rcx`, and left alone — that is
+// what lets every arm anchor its backward stores without recomputing anything.
+//
+// A count of 0 falls into the `< 8` arm and exits on its first test, writing nothing.
+function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
+	encodeMovRegImm64(code, dest: MemFillPatternReg, value: memFillPatternWord(fillByte))
+	// end = cursor + count, computed BEFORE the ladder touches either.
+	encodeLeaRegBaseIndexScale(code, dest: MemFillEndReg, base: MemFillCursorReg, index: MemFillCountReg, scale: MemoryIndexScale.byOne)
+
+	// The band dispatch. UNSIGNED throughout — a byte count is a length, never negative, and a signed
+	// compare would send a >= 2^63 count (which no allocation can produce) down the wrong arm rather than
+	// simply being unreachable.
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillQwordBytes)
+	let toByteLoop = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillTwoQwordBytes)
+	let toOneQword = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillFourQwordBytes)
+	let toTwoQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
+	let toFourQwords = encodeJccPlaceholder(code, cond: X64CondCode.below)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillRepThreshold)
+	let toRep = encodeJccPlaceholder(code, cond: X64CondCode.aboveEqual)
+
+	// 64..255: whole 64-byte blocks, then ONE overlapping 64-byte block anchored at the end. The count is
+	// at least 64 on entry, so `[end-64, end)` is always inside the region and needs no remainder test.
+	let loopTop = code.count()
+	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: MemFillLoopStride / MemFillQwordBytes)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: MemFillLoopStride)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: MemFillLoopStride)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
+	encodeJccBackward(code, cond: X64CondCode.aboveEqual, targetOffset: loopTop, what: PatchSite.x64MemFillRel32)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(MemFillLoopStride as Imm32), count: MemFillLoopStride / MemFillQwordBytes)
+	let doneFromLoop = encodeJmpPlaceholder(code)
+
+	// >= 256: `rep stosq` over the whole qword count, then one overlapping qword covering the 0..7 bytes the
+	// qword count truncated away. The count is at least 256 here, so `[end-8, end)` is inside the region.
+	patchLocalForwardBranch(code, dispOffset: toRep, what: PatchSite.x64MemFillRel32)
+	encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: MemFillCountReg, count: MemFillQwordShift)
+	encodeRepStosq(code)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(MemFillQwordBytes as Imm32), count: 1)
+	let doneFromRep = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toFourQwords, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillFourQwordBytes)
+	let doneFromFour = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toTwoQwords, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillTwoQwordBytes)
+	let doneFromTwo = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toOneQword, what: PatchSite.x64MemFillRel32)
+	encodeMemFillOverlappingSpan(code, spanBytes: MemFillQwordBytes)
+	let doneFromOne = encodeJmpPlaceholder(code)
+
+	// 0..7: a byte loop. The overlap trick needs a whole qword to anchor on and there is none here — and
+	// this band is the rare one, reached only by a fill narrower than a word (a two-byte literal's buffer, a
+	// single ranged element's vacated slot).
+	patchLocalForwardBranch(code, dispOffset: toByteLoop, what: PatchSite.x64MemFillRel32)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: 0)
+	let doneFromEmpty = encodeJccPlaceholder(code, cond: X64CondCode.equal)
+	let byteLoopTop = code.count()
+	encodeStoreBaseDispReg8(code, base: MemFillCursorReg, disp: 0, srcReg: MemFillPatternReg)
+	// The cursor advance FIRST: it writes flags, and the count decrement below is what the `jnz` reads.
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: MemFillCursorReg, imm: 1)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: 1)
+	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: byteLoopTop, what: PatchSite.x64MemFillRel32)
+
+	patchLocalForwardBranch(code, dispOffset: doneFromLoop, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromRep, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromFour, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromTwo, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromOne, what: PatchSite.x64MemFillRel32)
+	patchLocalForwardBranch(code, dispOffset: doneFromEmpty, what: PatchSite.x64MemFillRel32)
+end 'encodeX64MemFill'
+
+// The bytes of `lea dest, [rip + disp32]` (REX.W 8D /r, mod=00 rm=101) UP TO — not
+// including — the disp32 field. Split out because its two consumers file their fixup in
+// different tables: a chunk-local label goes in the chunk's rel32 table, a named function
+// in `callFixups` (which concat resolves by name across chunks). The bytes themselves are
+// spelled once, here.
+//
+// REX.B must be CLEAR — in RIP-relative mode rm=101 names no register at all, so `rax` is
+// passed as the rm field purely to keep the bit clear (the same convention the
+// opcode-extension encoders use for their reg field).
+function emitLeaRipRelPrefix(code ByteArray, dest X64Register)
+	encodeModRmRipRelative(code, twoByteEscape: false, opcode: OpcodeLea, regField: dest, wide: true)
+end 'emitLeaRipRelPrefix'
+
+// The bytes of a RIP-relative instruction UP TO — not including — its disp32 field: the
+// mandatory prefix, the REX, the optional escape, the opcode, and the mod=00 rm=101 ModR/M.
+// The THIRD addressing form's assembler, beside `encodeModRmDirect` (register-direct) and
+// `encodeModRmBaseDisp` (`[base + disp]`), and the one place `[rip + disp32]` is spelled.
+//
+// Every caller leaves the disp32 to a fixup, because a RIP-relative displacement is never
+// known at encode time — it names a target in another section or another chunk. What differs
+// between callers is only WHICH TABLE the fixup goes in, which is why the disp32 is theirs to
+// write and not this function's.
+//
+// REX.B must be CLEAR: in RIP-relative mode rm=101 names no register at all, so `rax` is
+// passed as the rm field purely to keep the bit clear — the same convention the
+// opcode-extension encoders use for their reg field.
+function encodeModRmRipRelative(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, wide bool, ssePrefix SseMandatoryPrefix = SseMandatoryPrefix.none)
+	emitSseMandatoryPrefix(code, prefix: ssePrefix)
+	emitRex(code, wide: wide, regField: regField, rmField: X64Register.rax)
+	if twoByteEscape 'esc'
+		code.push(TwoByteOpcodeEscape)
+	end 'esc'
+	code.push(opcode)
+	emitModRmRipRel(code, regFieldBits: regLow3(regField))
+end 'encodeModRmRipRelative'
+
+// `lea dest, [rip + <chunk-local label>]` — the address of a label in THIS chunk (a
+// runtime function's inline string). Resolved by `resolveChunkRel32Fixups`.
+export function encodeLeaRegLabel(code ByteArray, rel32Fixups ChunkRel32FixupArray, dest X64Register, targetLabel BlockId, site PatchSite)
+	emitLeaRipRelPrefix(code, dest: dest)
+	rel32Fixups.push(ChunkRel32Fixup.create(code.count(), targetLabel: targetLabel, site: site))
+	writeDword(code, value: 0)
+end 'encodeLeaRegLabel'
+
+// `lea dest, [rip + <named .text chunk>]` — the runtime address of another chunk, e.g.
+// `mrt_start` (the backtrace's `text_base`) or `__symtable`. It files an ordinary
+// `CallFixup`: a `call rel32`'s displacement and a RIP-relative `lea`'s disp32 use the
+// IDENTICAL end-of-field convention and both name a chunk, so concat's existing by-name
+// resolution patches this with no new relocation kind.
+export function encodeLeaRegFuncAddr(code ByteArray, callFixups CallFixupArray, dest X64Register, targetName ByteArray)
+	emitLeaRipRelPrefix(code, dest: dest)
+	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	writeDword(code, value: 0)
+end 'encodeLeaRegFuncAddr'
+
+// `lea dest, [rip + <.data global>]` — the address of a top-level `var`'s slot (P1.0d.5b).
+// The THIRD consumer of `emitLeaRipRelPrefix`, and it files its fixup in a third table: an
+// `RdataRelocation` of kind `dataSectionRipRelDisp32`, which the PE writer resolves against
+// `.data`'s RVA once section layout is fixed.
+//
+// It cannot ride `encodeLeaRegFuncAddr`'s `CallFixup` path, and the reason is the section, not the
+// instruction: a `CallFixup` names a `.text` CHUNK and concat resolves it by walking the function
+// placements, whereas a global lives in `.data` and its offset comes from `GlobalDataTable`. Same
+// bytes, same end-of-field convention, different table to look the target up in — which is exactly
+// what `RdataRelocKind` discriminates.
+export function encodeLeaRegGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	emitLeaRipRelPrefix(code, dest: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.dataSectionRipRelDisp32))
+	writeDword(code, value: 0)
+end 'encodeLeaRegGlobal'
+
+// `lock inc qword [rip + __cov_image + covCounterOffset(pointId)]` — ONE `--coverage` counter, in one
+// instruction that names no register at all.
+//
+// ⛔⛔ **`inc`, NOT `lock add qword [rip + disp32], 1`, AND THE DIFFERENCE IS NOT COSMETIC.** The `add`
+// form puts an IMMEDIATE after the disp32, so the displacement stops being the last four bytes of the
+// instruction — while every RIP-relative patcher in this tree computes the RIP as "just past the
+// displacement field" (`PeWriter.patchSectionRipRel`, `ElfWriter.patchElfSectionRipRel`). The immediate
+// form would place every counter exactly ONE BYTE HIGH, which is still readable memory: wrong counts on
+// real lines, and no crash to notice it by.
+//
+// ⭐ **THE `lock` IS LOAD-BEARING.** Green threads run on real OS threads, so two of them can increment one
+// counter at once; without the prefix a hot counter simply loses updates.
+//
+// The reg field is `/0` (the group-5 INC extension) and is passed as `rax` for the reason
+// `encodeModRmRipRelative` states — a `rax` reg field is how the opcode-extension encoders spell 0.
+function encodeCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffsets CovPointOffsetArray, pointId CovPointId)
+	// Recorded where the INSTRUCTION starts, before a byte of it exists — the sidecar's coverage record
+	// names the address the counter's code begins at, and a point absent from this channel is ELIMINATED.
+	covOffsets.push(CovPointOffset.create(code.count(), pointId: pointId))
+	code.push(LockPrefix)
+	encodeModRmRipRelative(code, twoByteEscape: false, opcode: OpcodeGroup5, regField: X64Register.rax, wide: true)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: CoverageImageGlobal, kind: RdataRelocKind.dataSectionRipRelDisp32, addend: covCounterOffset(pointId as MxcovPointIndex) as ByteOffset))
+	writeDword(code, value: 0)
+end 'encodeCovInc'
+
+// `lea dest, [rip + <.rdata constant>]` — the address of a String literal's record (P1.2 wave A). The
+// `.rdata` twin of `encodeLeaRegGlobal`: same instruction, same end-of-field convention, and it files
+// the SAME `RdataRelocation` — only the kind differs (`ripRelDisp32` for `.rdata` vs
+// `dataSectionRipRelDisp32` for `.data`), which is exactly what routes the PE writer to measure the
+// disp32 from `.rdata`'s RVA rather than `.data`'s.
+function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	emitLeaRipRelPrefix(code, dest: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
+end 'encodeLeaRegRdata'
+
+// Load `[base + disp]` at the op's width. Both arms REUSE an encoder the spill/reload path
+// already had — `[base+disp]` addressing does not care whether the base is rsp or a global's
+// address — which is the whole reason the review that unified the three drifted `[base+disp]`
+// encoders into `encodeModRmBaseDisp` paid off here.
+//
+// The BYTE arm is `movzx`, not `mov`: a bool must arrive in the register ZERO-EXTENDED, or the
+// upper 56 bits are whatever the register last held and `if flag` tests garbage. It is
+// GPR-only — a one-byte type is never a float — so it asserts the file rather than dispatching
+// on it.
+//
+// ⭐ THE WORD64 ARM IS WHERE AN f64 GLOBAL LOADS, AND IT NEEDED NO NEW WIDTH. `X64AccessWidth`
+// stayed at two cases: the RESOLVED REGISTER'S CLASS already says whether those 64 bits move
+// through `mov` or `movsd`, so a `float64` width would be that same fact written a second time,
+// free to disagree with the first. `word64` is honest — an f64 IS 64 bits — and the shared
+// `emitWord64Load` is the one place the instruction is chosen.
+function emitDataLoad(code ByteArray, dest X64Register, base X64Register, disp Imm32, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	match width 'w'
+		byte then encodeMovzxRegByteBaseDisp(code, destReg: requireClass(dest, class: RegClass.gpr), base: base, disp: disp, index: index, indexScale: indexScale)
+		word64 then emitWord64Load(code, dest: dest, base: base, disp: disp, index: index, indexScale: indexScale)
+	end 'w'
+end 'emitDataLoad'
+
+// Store `src` to `[base + disp]` at the op's width — `emitDataLoad`'s mirror, over the same
+// byte and word64 encoders.
+function emitDataStore(code ByteArray, base X64Register, disp Imm32, src X64Register, width X64AccessWidth, index X64Register = X64SibNoIndex, indexScale MemoryIndexScale = MemoryIndexScale.byOne)
+	match width 'w'
+		byte then encodeStoreBaseDispReg8(code, base: base, disp: disp, srcReg: requireClass(src, class: RegClass.gpr), index: index, indexScale: indexScale)
+		word64 then emitWord64Store(code, base: base, disp: disp, src: src, index: index, indexScale: indexScale)
+	end 'w'
+end 'emitDataStore'
+
+// Patch a chunk-local rel32 field to the chunk-local start offset of its target.
+// The displacement is measured from the END of the 4-byte field (`codeOffset +
+// X64Disp32Width`) — the shared x64 `call`/`jmp`/`jcc` rel32 convention — so this
+// one helper backs BOTH the inter-function call fixups (resolveCallFixups) and the
+// intra-chunk rel32 fixups (resolveChunkRel32Fixups) rather than respelling the
+// displacement math at each. `patchX64Rel32` guards the ±2 GiB reach.
+function patchChunkRel32(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset, what PatchSite)
+	let rel = targetOffset - (codeOffset + X64Disp32Width)
+	patchX64Rel32(code, codeOffset: codeOffset, rel: rel as MachineWord, what: what, targetAddr: targetOffset as MachineWord)
+end 'patchChunkRel32'
+
+// Patch every chunk-local rel32/disp32 to the chunk-local displacement of its target label
+// (a forward jump targets a block emitted later in the chunk; a runtime string label is
+// always emitted after the code that references it).
+export function resolveChunkRel32Fixups(code ByteArray, labelOffsets BlockOffsetTable, rel32Fixups ChunkRel32FixupArray)
+	for fixup in rel32Fixups 'resolve'
+		let targetOffset = try labelOffsets.get(fixup.targetLabel) otherwise panic("resolveChunkRel32Fixups: {fixup.site.name} at chunk offset {fixup.codeOffset} targets label {fixup.targetLabel}, which was never laid out in this chunk")
+		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: fixup.site)
+	end 'resolve'
+end 'resolveChunkRel32Fixups'
+
+// mov reg32, imm32 (B8+rd id). Writing a 32-bit register zero-extends to 64 bits,
+// so this is the compact form for any value that fits u32 (e.g. the literal 42).
+export function encodeMovRegImm32(code ByteArray, dest X64Register, value MachineWord)
+	// REX.B only when `dest` is r8-r15 (the opcode's +rd register — there is no
+	// ModR/M byte). The shared emitRex applies the "emit only when a bit is set"
+	// rule, so no reg needs REX for rax-rdi; a base register in `regField` keeps
+	// REX.R clear (mirrors encodeMovRegImm64, which differs only in REX.W).
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest)
+	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	writeDword(code, value: value)
+end 'encodeMovRegImm32'
+
+// mov reg64, imm64 (REX.W B8+rd io). Reached for a value OUTSIDE the unsigned 32-bit
+// domain — either wider than u32.max or NEGATIVE (the `constMaterializationOp` size
+// choice routes only 0..u32.max to the zero-extending 32-bit form).
+export function encodeMovRegImm64(code ByteArray, dest X64Register, value MachineWord)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: dest)
+	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	writeQword(code, value: value)
+end 'encodeMovRegImm64'
+
+// sub/add rsp, imm — the rsp-only frame adjustment. `ext` picks SUB (prologue) vs
+// ADD (epilogue); the two differ only in the ModR/M opcode-extension. imm8 form
+// when it fits a signed byte, else imm32. Shares the opcode-extension assembly
+// (`encodeModRmExtDirect`) with `neg`; only the trailing immediate width differs.
+//
+// ⚠ THE imm32 IS SIGN-EXTENDED TO 64 BITS, so the widest frame this form can express is
+// `i32.max` — not `u32.max`. Writing the amount through `writeImm32Signed` makes a frame past
+// that a LOUD range panic on the cast; a raw `writeDword` would emit a NEGATIVE immediate and
+// `sub rsp, <negative>` moves rsp UP, handing the function a frame that overlaps its caller's.
+function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
+	if amount <= i8.max 'imm8'
+		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm8, ext: ext, rmField: X64Register.rsp)
+		code.push(amount and 0xFF)
+	end 'imm8' else 'imm32'
+		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: X64Register.rsp)
+		writeImm32Signed(code, value: amount as Imm32)
+	end 'imm32'
+end 'encodeRspAdjust'
+
+// push r64 (50+r). 64-bit operand size is the default in long mode, so NO REX.W —
+// only REX.B when the register is r8–r15 (r12–r15 are the callee-saved regs the
+// prologue pushes). `emitRex` with `wide: false` emits exactly that: nothing for
+// rax–rdi/rbx, `0x41` for an extended register.
+//
+// ⚠⚠ GPR-ONLY, AND THE CHECK IS NOT DEFENSIVE PADDING — **THERE IS NO `push xmm` IN x86-64.** This
+// encoder takes a register's low 3 bits and emits `push r64` unconditionally, so an XMM handed to it
+// assembles as the GPR sharing its low nibble: xmm3 and rbx both encode as 3, and the result is a
+// push of a register nobody named, with no error at any layer. That is precisely the mistake Wave 2
+// invited — the obvious way to make xmm6–15 callee-saved is to add them to `calleeSavedOrder`, which
+// this loop iterates. `requireClass` turns "there is no push xmm" from something a reader has to
+// remember into something the compiler states. (What Wave 2 does instead: frame slots, see
+// X64PrologueEpilogue.)
+export function encodePushReg(code ByteArray, reg X64Register)
+	let gpr = requireClass(reg, class: RegClass.gpr)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
+	code.push(OpcodePushBase + regLow3(gpr))
+end 'encodePushReg'
+
+// pop r64 (58+r) — the exact mirror of `encodePushReg`, class gate included.
+export function encodePopReg(code ByteArray, reg X64Register)
+	let gpr = requireClass(reg, class: RegClass.gpr)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
+	code.push(OpcodePopBase + regLow3(gpr))
+end 'encodePopReg'
+
+// The bytes a stack grows by when its GUARD PAGE is touched, and therefore the largest frame a
+// single `sub rsp` may open. Windows commits a thread stack ONE PAGE AT A TIME, and only when the
+// guard page itself is accessed: a subtraction that carries rsp PAST the guard page never touches
+// it, so the first write below lands on reserved-but-uncommitted memory and the process dies with
+// 0xC0000005. A frame of exactly one page cannot skip it — the deepest address it reaches is
+// `rsp - 4096`, and the guard page starts no lower than that whatever rsp's offset within its own
+// page — so the walk is needed strictly PAST this size, which is why the test below is `>`.
+//
+// It is the x86-64 page size, an ARCHITECTURE fact about the address translation the OS grows
+// stacks in units of. The PE writer's section alignment happens to be the same number for an
+// entirely unrelated reason; tying the two together would be one constant standing for two facts.
+let StackGuardPageBytes = 4096 as StackSize
+
+// The register the page walk borrows. It must hold no live value AT THE PROLOGUE, which rules out
+// every argument register: the prologue runs before a single incoming argument has been captured.
+// r11 carries no argument in EITHER ABI the compiler emits for (Win64 rcx/rdx/r8/r9, SysV
+// rdi/rsi/rdx/rcx/r8/r9), it is caller-saved in both, and `emitGtStackGuard` — emitted immediately
+// BEFORE this, at the same function entry — already clobbers it, so nothing live can be sitting
+// there. RAX is the register this may NOT be: it silently destroys parameter 7 of every function with
+// a frame past a page, which `specs/x64-large-frame-arg7.md` is this file's live guard against.
+let StackProbeScratchReg = X64Register.r11
+
+// prologue: reserve the frame. A zero-size frame emits nothing (a frameless function never carries
+// a prologue op, but the guard keeps the encoder total); a frame within one page is a bare
+// `sub rsp, stackSize`; a LARGER one must walk the pages down (see `encodeStackProbe`).
+//
+// `probeScratchIsFree` is the caller's certificate that `StackProbeScratchReg` holds nothing live
+// here. Only a FUNCTION ENTRY can say yes, and only a function entry has an unbounded frame — the
+// hand-assembled runtime chunks call this MID-STREAM with a fixed, page-sized-at-most reservation
+// while r11 carries a live value (the GT trampoline's function pointer, the syscall shim's
+// currentGt, `__gt_morestack`'s gt). The threshold is what keeps those safe, and the certificate
+// is what turns "they are all small" from a comment that ages into a panic that fires.
+export function encodePrologue(code ByteArray, stackSize StackSize, probeScratchIsFree bool)
+	if stackSize > StackGuardPageBytes 'walk'
+		if not probeScratchIsFree 'noScratch'
+			// Bound to a local because a member access on a module-level `let` inside an
+			// interpolation is an E2010 (`{StackProbeScratchReg.name}` is refused where
+			// `{scratch.name}` parses).
+			let scratch = StackProbeScratchReg
+			panic("encodePrologue: a {stackSize}-byte frame is past the {StackGuardPageBytes}-byte guard page, so it must walk the pages down — but this call site did not certify {scratch.name} free, and the walk has no other register to use. Reserve it in page-sized steps, or free a scratch register at that site and certify it.")
+		end 'noScratch'
+
+		encodeStackProbe(code, stackSize: stackSize)
+		return
+	end 'walk'
+
+	if stackSize > 0 'reserve'
+		encodeRspAdjust(code, ext: Grp1ExtSub, amount: stackSize)
+	end 'reserve'
+end 'encodePrologue'
+
+// Open a frame LARGER than one page by touching every page on the way down, so the guard page is
+// hit in order and the OS commits the stack a page at a time:
+//
+//     mov  r11, rsp          ; r11 = the frame's lowest address
+//     sub  r11, stackSize
+//   walk:
+//     sub  rsp, 4096         ; rsp IS the cursor — no second register to find
+//     mov  [rsp], r11        ; TOUCH. The value is irrelevant; the ACCESS is the point
+//     cmp  rsp, r11
+//     ja   walk
+//     mov  rsp, r11          ; land exactly on the frame base
+//
+// ⭐ WHY rsp WALKS rather than a second scratch register cursored against a limit: a cursor plus a
+// limit is TWO dead
+// registers, and this is emitted INLINE at a function entry where certifying one is already the
+// delicate half. Walking rsp itself needs exactly one, and it pays for itself twice — the final
+// `mov rsp, r11` IS the reservation, so there is no separate `sub rsp, stackSize` to keep in step
+// with the walk.
+//
+// ⚠ The last iteration may touch up to one page BELOW the frame base (the walk overshoots whenever
+// the frame is not a whole number of pages). It is harmless and it is not the bug this code exists
+// to prevent: at the instant of that store rsp
+// points AT the word being written, so nothing else owns it, and the only consequence is that the
+// OS commits one page the function will not use. Skipping a page costs a fault; touching a spare
+// one costs a page.
+//
+// ⚠ EMITTED ON EVERY x64 OS, NOT ONLY WINDOWS. Linux's default guard gap is 256 pages, so a frame
+// of this size is already safe there and this walk is redundant on that lane — but touching pages
+// you are about to write is never WRONG, the encoder has no target OS in hand (threading one down
+// to the byte layer would be a new fact to keep in step for a sequence that costs nothing), and it
+// is exactly what `-fstack-clash-protection` emits for the same instruction stream. The cost is
+// borne only by a function whose frame is past a page, of which the entire spec corpus has three.
+function encodeStackProbe(code ByteArray, stackSize StackSize)
+	// The frame base, computed exactly as `emitGtStackGuard` computes its projected rsp — one
+	// idiom for "rsp minus a frame", not two. The cast bounds the frame at i32.max, which is the
+	// same bound `sub rsp, imm32` carries.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: StackProbeScratchReg, src: X64Register.rsp, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: StackProbeScratchReg, imm: stackSize as Imm32)
+
+	let walkStart = code.count()
+	encodeRspAdjust(code, ext: Grp1ExtSub, amount: StackGuardPageBytes)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
+	// UNSIGNED `ja`: these are addresses, and a stack near the top of the address space would read
+	// as negative under a signed compare.
+	encodeJccBackward(code, cond: X64CondCode.above, targetOffset: walkStart, what: PatchSite.x64StackProbeRel32)
+
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
+end 'encodeStackProbe'
+
+// epilogue: release the frame with `add rsp, stackSize` (mirror of prologue).
+export function encodeEpilogue(code ByteArray, stackSize StackSize)
+	if stackSize > 0 'release'
+		encodeRspAdjust(code, ext: Grp1ExtAdd, amount: stackSize)
+	end 'release'
+end 'encodeEpilogue'
+
+// call rel32 to a named function. The 4-byte displacement is left zero and a
+// CHUNK-LOCAL CallFixup records the disp32 offset; concat rebases it and resolves
+// it to the callee's placement.
+export function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
+	code.push(OpcodeCallRel32)
+	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	writeDword(code, value: 0)
+end 'encodeCallDirect'
+
+// `call r/m64` through a register — group-5 `/2`. The ONE home of the call-through-register
+// byte shape, shared by the `callReg` TargetOp arm (a `callIndirect`'s colored callee) and the
+// GT trampoline chunk, which calls the spawned function through a pointer held in a register.
+// REX.W is ignored for a near call in long mode, so `48 FF D0` decodes as `call rax`.
+export function encodeCallReg(code ByteArray, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: reg)
+end 'encodeCallReg'
+
+// `call qword [base + disp]` through a memory operand — group-5 `/2`, mod=01/10 (P1.7a slice 2a). The
+// memory twin of `encodeCallReg`, and the whole point of the fused witness call: the callee pointer is read
+// from `[witnessAddr + slotOffset]` BY THE CALL and never occupies a register. REX.W is ignored for a near
+// call, so `wide: false` keeps the prefix minimal (only a REX.B for an r8-r15 base); the `/2` extension
+// rides the ModR/M reg field via `emitBaseDispModRmBits`, and `regField: rax` gives REX.R = 0 (an opcode
+// extension needs none), so a base in rax..rdi emits no REX at all (`call [rax+8]` = `FF 50 08`).
+function encodeCallMem(code ByteArray, base X64Register, disp Imm32)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: base)
+	code.push(OpcodeCallIndirect)
+	emitBaseDispModRmBits(code, regFieldBits: Grp5ExtCall, base: base, disp: disp)
+end 'encodeCallMem'
+
+// call [rip+disp32] through an IAT slot. The disp32 is left zero and an IAT
+// Relocation records its offset + slot; the PE writer patches it to the IAT
+// entry's RVA once section layout is fixed.
+export function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
+	code.push(OpcodeCallIndirect)
+	emitModRmRipRel(code, regFieldBits: Grp5ExtCall)
+	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	writeDword(code, value: 0)
+end 'encodeIatCall'
+
+// `mov gs:[disp32], srcReg` (64-bit) — a store to an ABSOLUTE address in the GS segment. On Win64 GS points at
+// the Thread Information Block, so this writes NT_TIB.StackBase (disp 0x08) or StackLimit (disp 0x10) — the GT
+// syscall shim's TIB repoint. Encoding: the GS prefix, REX.W (+REX.R for an r8-r15 source), `89 /r`, a ModR/M
+// of mod=00 reg=src rm=100 (a SIB follows), a SIB of scale=1 index=none base=disp32, then the disp32. It cannot
+// ride `encodeStoreBaseDispReg` (which addresses `[base + disp]`, a register base): the `[disp32]` no-base form
+// needs the SIB with base=101, and the segment override has no home in that encoder. `emitRex`'s `rmField` is
+// `rax` so REX.B stays clear — in this SIB form the base is a disp32, not a register, so REX.B must not be set.
+export function encodeMovGsAbsReg(code ByteArray, disp Imm32, srcReg X64Register)
+	code.push(GsSegmentPrefix)
+	emitRex(code, wide: true, regField: srcReg, rmField: X64Register.rax)
+	code.push(OpcodeMovRmReg)
+	code.push(ModRmMod00 or (regLow3(srcReg) shl 3) or ModRmRmSibFollows)
+	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
+	writeImm32Signed(code, value: disp)
+end 'encodeMovGsAbsReg'
+
+// `mov destReg, gs:[disp32]` (64-bit) — a LOAD from an absolute GS-segment address, the read twin of
+// `encodeMovGsAbsReg`. The GT context switch reads the current NT_TIB StackBase/StackLimit through it to save
+// them into the suspending GT before repointing the TIB at the resumed GT's stack, so the TIB always describes
+// the stack actually executing. Same addressing form as the store (only the direction opcode differs, `89`→
+// `8B`); `emitRex`'s `rmField` is `rax` so REX.B stays clear for the SIB disp32-base with no register base.
+export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32)
+	code.push(GsSegmentPrefix)
+	emitRex(code, wide: true, regField: dest, rmField: X64Register.rax)
+	code.push(OpcodeMovRegRm)
+	code.push(ModRmMod00 or (regLow3(dest) shl 3) or ModRmRmSibFollows)
+	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
+	writeImm32Signed(code, value: disp)
+end 'encodeMovRegGsAbs'
+
+// `mov destReg, seg:[baseReg]` (64-bit) — a LOAD from a segment-relative address held in a REGISTER, which
+// is what makes a TLS slot readable in two loads and no call: the caller has the precomputed
+// `key * 8 + tlsSlotArrayBase` in `baseReg` and this dereferences it. The GT syscall shim and every current-GT
+// read in the scheduler go through it, so it is the hottest instruction the multi-M substrate has.
+//
+// ⭐ **THE SEGMENT IS A PARAMETER RATHER THAN TWO ENCODERS, BECAUSE ONLY THE PREFIX BYTE DIFFERS.** Windows
+// reads `gs:` (the TIB) and Linux `fs:` (the SysV thread pointer); everything below — the REX rules, the
+// rbp/r13 trap, the rsp/r12 SIB — is identical, and a second copy of it is exactly the duplication that lets
+// one lane inherit a fix the other does not.
+//
+// ⚠ **IT DELEGATES ITS ModR/M TO `encodeModRmBaseDisp`, AND THAT IS THE WHOLE OF ITS CORRECTNESS.** A hand-
+// assembled `mod=00 | reg | rm=base` byte encodes `[rbp]` and `[r13]` as RIP-RELATIVE, reading a constant
+// out of the code stream instead of the thread's slot. The shared assembler
+// already answers it for every base (a zero-`disp8` for rbp/r13, a SIB for rsp/r12), so this encoder inherits
+// the fix instead of restating it and the register allocator is left free to colour the operand anywhere.
+//
+// ⚠ The segment prefix must come BEFORE the REX byte — REX is required to be the last prefix — which is why
+// the push order here is not the one `encodeModRmBaseDisp` would produce on its own; the prefix is emitted
+// here and the rest delegated.
+export function encodeMovRegSegBase(code ByteArray, dest X64Register, base X64Register, segment X64ThreadPointerSegment)
+	code.push(segmentPrefixByte(segment))
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
+end 'encodeMovRegSegBase'
+
+// `mov seg:[baseReg], srcReg` (64-bit) — the STORE twin of `encodeMovRegSegBase`, and the only way to WRITE a
+// per-OS-thread slot on x86-64: FS base is not addressable in user mode, so a slot has an address only inside
+// an instruction that carries the override. `mrt_linux_tls_set` and this lane's errno stash are its callers.
+//
+// It delegates its ModR/M for `encodeMovRegSegBase`'s reason — the `[rbp]`/`[r13]` RIP-relative trap — and
+// emits the segment prefix before the REX byte, which REX's "last prefix" rule requires.
+export function encodeMovSegBaseReg(code ByteArray, base X64Register, srcReg X64Register, segment X64ThreadPointerSegment)
+	code.push(segmentPrefixByte(segment))
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRmReg, regField: srcReg, base: base, disp: 0, wide: true)
+end 'encodeMovSegBaseReg'
+
+// A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
+// puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly
+// as it pre-moves a call's arguments), and returns the result in rax. Exported so the Linux entry stub
+// (`BackendDispatch.prependLinuxEntryStub`) and the OS-primitive lowerings emit their syscalls through
+// the one primitive — the twin of `arm64EmitSyscall` (`movz x8`/`svc`).
+//
+// The number rides the shared `encodeMovRegImm32`, whose `writeDword` carries the whole 32-bit value,
+// so every in-use Linux syscall number (all far below u32.max) reaches eax intact; the zero-extending
+// `mov r32` clears the high half exactly as the ABI wants the number to appear in rax.
+export function encodeX64Syscall(code ByteArray, number MachineWord)
+	encodeMovRegImm32(code, dest: X64Register.rax, value: number)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeSyscallSecondByte)
+end 'encodeX64Syscall'
+
+// ==========================================================================
+// F2: the atomics, and the Windows per-thread identity word
+// ==========================================================================
+
+// `lock <op> [addrReg], srcReg` — the ONE byte shape all three x64 atomics share: the LOCK prefix, then
+// an ordinary `r/m64, r64` memory form whose r/m is a bare `[base]`. `cmpxchg` and `xadd` live behind the
+// two-byte escape and `add` does not, which is the whole of `twoByteEscape`.
+//
+// ⭐ It goes through `encodeModRmBaseDisp` rather than assembling its own ModR/M, which is what buys the
+// rsp/r12 SIB and rbp/r13 zero-disp8 traps for free — an address operand coloured into rbp would
+// otherwise encode as RIP-RELATIVE and read a constant from the code stream instead of the word the
+// program named. A displacement of 0 is the only one these ops have: an atomic names an ADDRESS, and
+// `StdOp.atomicCas`/`atomicRmw` carry no field offset (unlike `loadIndirect`/`storeIndirect`).
+//
+// ⚠ **THE LOCK PREFIX IS NOT DECORATION AND IT IS NOT AN OPTIMIZATION TO DROP.** Without it `xadd`/`add`
+// are read-modify-write sequences another core can interleave with, and `cmpxchg`'s compare-and-store is
+// not one indivisible step. On a single-core machine the difference is invisible; the day multi-M lands it
+// is a lost counter or a lost queue node.
+function encodeLockedMemReg(code ByteArray, twoByteEscape bool, opcode MachineWord, addrReg X64Register, srcReg X64Register)
+	code.push(LockPrefix)
+	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: srcReg, base: addrReg, disp: AtomicWordDisp, wide: true)
+end 'encodeLockedMemReg'
+
+// Resolve a colored operand to its physical register. A virtual reg here is an
+// allocator bug (register allocation must run before emission).
+//
+// ⚠⚠ IT ASKS NO QUESTION ABOUT THE REGISTER'S FILE, AND THAT IS WHY IT IS NOT THE DOOR A
+// FIXED-CLASS ENCODER USES. See `resolveGpr` — hand a raw result of this to a GPR-only
+// encoder and an XMM assembles as the GPR sharing its low nibble, silently. Use it directly
+// ONLY where the op is genuinely class-agnostic and the CLASS ITSELF is what is being
+// dispatched on (`emitRegRegMove`, `emitWord64Load`/`Store`, `emitRegRegSwap`).
+function resolvePhysical(vreg TargetVReg) returns X64Register
+	match vreg 'resolve'
+		physical(reg) then return try X64Register.fromRawValue(reg) otherwise panic("x64 emitter: colored register number {reg} is not a valid X64Register — the allocator assigned a register outside the x64 file")
+		virtual(id) then panic("x64 emitter: unresolved virtual register v{id} — register allocation did not color it before emission")
+	end 'resolve'
+end 'resolvePhysical'
+
+// ⚠⚠ THE CLASS-CHECKING DOOR — THE PRICE OF THE ONE-ENUM DESIGN, AND PAYING IT IS NOT OPTIONAL.
+//
+// Every encoder in this file takes a register's low 3 bits and emits an instruction whose
+// OPCODE — not whose operand — decides which file those bits name. `X64Register` deliberately
+// puts `xmm3` at rawValue 19, whose low nibble is 3: the same 3 as `rbx`. So handing
+// `encodeStoreBaseDispReg` an xmm3 assembles `mov [rsp+disp], rbx` — a spill of a register
+// nobody named, with no error at any layer and no crash to find it by, just a wrong answer.
+//
+// Routing every FIXED-CLASS encoder through this turns that entire class of mistake into a
+// LOUD compiler bug naming the op that caused it. The uniformity the one enum buys everywhere
+// above the encoder is paid for here, at the one place where a bare register number is
+// genuinely ambiguous. Class-agnostic ops do not come through here — they dispatch on
+// `registerClass` instead, which is the same fact used rather than asserted.
+function requireClass(reg X64Register, class RegClass) returns X64Register
+	if registerClass(reg) != class 'wrongFile'
+		panic("x64 emitter: {reg.name} is in the {registerClass(reg).name} register file where the {class.name} file is required — this encoding would take its low 3 bits and silently name a register in the wrong file (see TargetOp's SSE band)")
+	end 'wrongFile'
+	return reg
+end 'requireClass'
+
+// Resolve a colored operand to a physical GPR, panicking if it is an XMM.
+function resolveGpr(vreg TargetVReg) returns X64Register
+	return requireClass(resolvePhysical(vreg), class: RegClass.gpr)
+end 'resolveGpr'
+
+// Resolve a colored operand to a physical XMM, panicking if it is a GPR — `resolveGpr`'s
+// mirror, and it exists for the same reason in the other direction: `addsd` would encode
+// `rbx` as `xmm3` just as happily.
+function resolveXmm(vreg TargetVReg) returns X64Register
+	return requireClass(resolvePhysical(vreg), class: RegClass.xmm)
+end 'resolveXmm'
+
+// The `[rsp + disp]` displacement of spill slot `slot`: the function's spill-area base
+// (below which sit shadow space + outgoing args on a caller — `spillSlotBaseDisp`) plus
+// `slot * SpillSlotBytes`. Named so the frame-slot arithmetic is spelled once. The cast is
+// safe: the compiler's frames are far below i32.max, and the splitter caps slot count at valueCount.
+function slotDisplacement(spillBaseDisp StackSize, slot SpillSlot) returns Imm32
+	return (spillBaseDisp + (slot as StackSize) * SpillSlotBytes) as Imm32
+end 'slotDisplacement'
+
+// Encode one TargetOp into `code`, recording call / IAT / block-jump fixups as it
+// goes. `rel32Fixups` collects intra-chunk branch fixups the chunk resolves once
+// every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
+// function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
+// spill/reload slot displacement.
+function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
+	match op 'emit'
+		// `probeScratchIsFree` is certified here and NOWHERE ELSE. Both minters of this op stand at
+		// a function ENTRY — `insertPrologueAtEntry` (X64PrologueEpilogue) and `prependEntryStub`'s
+		// `mrt_start` (BackendDispatch) — so the only live values are the incoming ARGUMENT
+		// registers, and `StackProbeScratchReg` is not one in either ABI. The GT stack guard
+		// emitted immediately above this already clobbers it, which would be a live bug if
+		// anything held it. This is also the ONLY prologue whose frame is unbounded (`mrt_start`'s
+		// is a fixed 0x20).
+		prologue(stackSize) then encodePrologue(code, stackSize: stackSize, probeScratchIsFree: true)
+		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
+		ret then code.push(OpcodeRet)
+		jmp(targetBlockId) then encodeJmp(code, rel32Fixups: rel32Fixups, targetBlockId: targetBlockId)
+		jcc(cond, targetBlockId) then encodeJcc(code, rel32Fixups: rel32Fixups, cond: cond, targetBlockId: targetBlockId)
+		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolveGpr(dest), value: value)
+		movRegImm32(dest, value) then encodeMovRegImm32(code, dest: resolveGpr(dest), value: value)
+		// CLASS-AGNOSTIC: a move is a move whichever file it names, so the instruction is chosen
+		// from the resolved registers rather than from the op (see `emitRegRegMove`).
+		movRegReg(destReg, srcReg) then emitRegRegMove(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg))
+		movReg32Reg32(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolveGpr(destReg), src: resolveGpr(srcReg), wide: false)
+		subRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
+		imulRegReg(dest, _, rhs) then encodeImulRegReg(code, dest: resolveGpr(dest), src: resolveGpr(rhs))
+		negReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNeg, reg: resolveGpr(dest))
+		cmpRegReg(lhsReg, rhsReg) then encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: resolveGpr(lhsReg), src: resolveGpr(rhsReg), wide: true)
+		leaRegRegReg(dest, base, index) then encodeLeaRegBaseIndexScale(code, dest: resolveGpr(dest), base: resolveGpr(base), index: resolveGpr(index), scale: MemoryIndexScale.byOne)
+		leaRegRegImm32(dest, base, disp) then encodeLeaRegRegImm32(code, dest: resolveGpr(dest), base: resolveGpr(base), disp: disp)
+		imulRegRegImm32(dest, src, imm) then encodeImulRegRegImm32(code, dest: resolveGpr(dest), src: resolveGpr(src), imm: imm)
+		cmpRegImm32(reg, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: resolveGpr(reg), imm: imm)
+		// CLASS-AGNOSTIC: `xchg` for a GPR pair, a triple-`xorpd` for an XMM pair — x64 has no
+		// `xchg xmm, xmm` at all (see `emitRegRegSwap`).
+		xchgRegReg(a, b) then emitRegRegSwap(code, a: resolvePhysical(a), b: resolvePhysical(b))
+		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
+		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim (P1.5-B1a′): a GT
+		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
+		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
+		// is correct; a non-GT module lays out no `__sched_tls_teb_offset` to reference, so it stays a bare `iatCall`.
+		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: slotIndex, usesGt: usesGt)
+		cqo then encodeCqo(code)
+		// The two group-3 divides differ in the /ext field and in nothing else — same F7 opcode, same
+		// implicit RDX:RAX pair — which is why one op with a signedness field encodes both.
+		divideReg(divisor, signedness) then encodeGrp3Reg(code, ext: Grp3ExtIdiv if signedness == IntegerSignedness.signed else Grp3ExtDiv, reg: resolveGpr(divisor))
+		pushReg(reg) then encodePushReg(code, reg: requireClass(reg, class: RegClass.gpr))
+		popReg(reg) then encodePopReg(code, reg: requireClass(reg, class: RegClass.gpr))
+		// CLASS-AGNOSTIC: a spill slot is 8 bytes and an f64 is 8 bytes, so the SAME slot the
+		// splitter already reserved holds either, and only the instruction differs.
+		storeSlotReg(slot, srcReg) then emitWord64Store(code, base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot), src: resolvePhysical(srcReg))
+		loadRegSlot(destReg, slot) then emitWord64Load(code, dest: resolvePhysical(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
+		// The two-address word ALU ops. Their `dest` already HOLDS `lhs` by the time the
+		// instruction runs (the allocator either coalesced the two into one register or
+		// materialized `mov dest, lhs`), so — exactly as for `subRegReg` — the encoded
+		// instruction names only `dest` and `rhs`, and `lhs` is deliberately ignored here.
+		andRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeAndRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
+		orRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeOrRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
+		xorRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: resolveGpr(dest), src: resolveGpr(rhs), wide: true)
+		notReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNot, reg: resolveGpr(dest))
+		andRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: resolveGpr(dest), imm: imm)
+		orRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: resolveGpr(dest), imm: imm)
+		xorRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtXor, reg: resolveGpr(dest), imm: imm)
+		shlRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShl, reg: resolveGpr(dest), count: imm)
+		sarRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtSar, reg: resolveGpr(dest), count: imm)
+		shrRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: resolveGpr(dest), count: imm)
+		// The variable-count shifts read their count from CL, which the lowering has already
+		// loaded — so, like the immediate forms, the encoded instruction names only `dest`.
+		shlRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShl, reg: resolveGpr(dest))
+		sarRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtSar, reg: resolveGpr(dest))
+		shrRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShr, reg: resolveGpr(dest))
+		setccReg(dest, cond) then encodeSetccReg(code, dest: resolveGpr(dest), cond: cond)
+		// The data-section band. Each dispatches to an encoder that ALREADY EXISTED — the
+		// `[base+disp]` load/store/movzx forms the spill/reload path uses, here with a global's
+		// address in the base register instead of rsp. No second encoder is minted for them.
+		leaRegGlobal(dest, label) then encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
+		// `base` is ALWAYS a GPR — an address is an integer, and RIP-relative `lea` put it there.
+		// `dest`/`src` are class-dispatched at word64 (an f64 global moves through `movsd`), which
+		// is why they resolve without a class assertion. See `emitDataLoad`.
+		loadRegBaseDisp(dest, base, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolveGpr(base), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width)
+		// --- The SSE band (P1.0d.4) ---
+		//
+		// Every arm resolves through `resolveXmm`/`resolveGpr` rather than `resolvePhysical`: these
+		// are FIXED-CLASS encodings, and a bare register number is ambiguous at exactly this point
+		// (see `requireClass`). The two converts and the bitcast are the dialect's only cross-class
+		// ops, and they are the only arms here naming both doors — which is the class change made
+		// visible.
+		addsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeAddsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		subsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSubsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		mulsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeMulsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		divsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeDivsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		// `ucomisd lhs, rhs` — the reg field is `lhs`, so a following `ja` reads "lhs above rhs".
+		// The 66 prefix, not F2: `ucomisd` is the packed-double-prefixed form.
+		ucomisdRegReg(lhs, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeUcomisd, dest: resolveXmm(lhs), src: resolveXmm(rhs), wide: false)
+		movsdRegRip(dest, label) then encodeMovsdRegRip(code, rdataRelocs: rdataRelocs, dest: resolveXmm(dest), label: label)
+		// REX.W is what makes these the 64-bit converts — the ONE place `wide: true` is correct
+		// for an SSE instruction, because here it selects the GPR half's width rather than an
+		// operand size the mandatory prefix already chose.
+		cvtsi2sdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
+		cvttsd2siRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvttsd2si, dest: resolveGpr(dest), src: resolveXmm(src), wide: true)
+		// The MATH INTRINSICS (P1.0d.4-C). `sqrtsd` is an ordinary two-byte SSE form and rides the
+		// shared `encodeSseRegReg` with only its opcode changed; `roundsd` is three-byte-plus-imm8
+		// and has its own encoder (see `encodeRoundsdRegReg`).
+		sqrtsdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSqrtsd, dest: resolveXmm(dest), src: resolveXmm(src), wide: false)
+		roundsdRegReg(dest, src, mode) then encodeRoundsdRegReg(code, dest: resolveXmm(dest), src: resolveXmm(src), mode: mode)
+		// The BIT REINTERPRETATION. The THIRD arm naming both class doors — and, unlike the two
+		// converts, its ModR/M fields are INVERTED, which `encodeMovqGprXmm` owns so that this arm
+		// can read in the direction the data actually flows.
+		movqGprXmm(dest, src) then encodeMovqGprXmm(code, dest: resolveGpr(dest), src: resolveXmm(src))
+		// The INVERSE reinterpretation, and the arm that shows the pair is asymmetric only in its
+		// ENCODING: this direction's ModR/M fields are the ordinary `r, r/m` mapping, so it rides the
+		// shared `encodeSseRegReg` with `wide: true` — the same `true` the two converts need, and for
+		// the same reason (it selects the GPR half's width, not an operand size the 66 already chose).
+		movqXmmGpr(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeMovqXmmRm, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
+		// ⚠ THE ONE ARM HERE THAT EMITS TWO INSTRUCTIONS, and `src` is deliberately unused: the op is
+		// two-address (a REUSE def — see TargetOperands), so by the time coloring is done `dest` and
+		// `src` ARE the same register and the shifts work on it in place. Naming `src` in the encoding
+		// would be a second, redundant claim about a fact the allocator has already established, and
+		// the two could only ever disagree.
+		absF64RegReg(dest, _) then encodeAbsF64Reg(code, reg: resolveXmm(dest))
+		// The sign-bit FLIP: three instructions, `src` unused for `absF64RegReg`'s reason (a REUSE def —
+		// coloring has already made `dest` and `src` one register).
+		negF64RegReg(dest, _) then encodeNegF64Reg(code, reg: resolveXmm(dest))
+		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
+		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
+		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
+		// `minsd`/`maxsd` are two-address SSE forms like `addsd`, so `lhs` is deliberately unused for the
+		// same reason `absF64RegReg` ignores its `src`: the REUSE def means coloring has already made
+		// `dest` and `lhs` the same register, and naming `lhs` here would be a second claim about a fact
+		// the allocator established. `rhs` is the encoded source — and it is the operand both
+		// instructions return on an unordered compare, which is what makes the NaN behaviour come out
+		// right. Only the opcode BYTE distinguishes them (`minMaxSdOpcode`).
+		minMaxSdRegReg(dest, _, rhs, kind) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: minMaxSdOpcode(kind), dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
+		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`, wave 1), never here — the
+		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
+		// exhaustiveness forced this arm; a panic keeps the ISA boundary loud.
+		arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
+		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
+		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
+		// `jumpTables` (resolved after the block loop). The arm64 jump table never reaches the x64 encoder.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable then panic("emitTargetOp: an arm64 jump table reached the x64 encoder — the arm64 backend encodes `arm64JumpTable`")
+		// F1b: the byte-fill size ladder. Its two operands are already in rdi/rcx (the isel's pre-moves), so
+		// the op carries only the broadcast pattern — see `encodeX64MemFill`.
+		x64MemFill(fillByte) then encodeX64MemFill(code, fillByte: fillByte)
+		arm64MemFill then panic("emitTargetOp: an arm64 fill ladder reached the x64 encoder — the arm64 backend encodes `arm64MemFill`")
+		// P1.5-A1: a function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
+		// `encodeLeaRegFuncAddr`, until now called only by the runtime stubs), and a register-indirect
+		// call (`FF /2`, mod=11 — `call reg`). `encodeModRmExtDirect` emits `REX.W FF /2`; REX.W is IGNORED
+		// for a near call in long mode (the operand size is forced to 64-bit), so `48 FF D0` decodes as
+		// `call rax` and REX.B still selects r8..r15 — the same reg-direct group-5 encoding `iatCall` uses
+		// in its RIP-relative form.
+		leaRegFunc(dest, funcName) then encodeLeaRegFuncAddr(code, callFixups: callFixups, dest: resolveGpr(dest), targetName: funcName)
+		callReg(reg) then encodeCallReg(code, reg: resolveGpr(reg))
+		// x64-linux: a raw `syscall`. The number is the op's immediate (`mov eax, number`); its arguments
+		// were pre-moved into rdi/rsi/rdx/r10/r8/r9 by the OS-primitive lowering, exactly as a call's are.
+		x64Syscall(number) then encodeX64Syscall(code, number: number)
+		// P1.7a slice 2a: the fused witness call's memory-indirect `call qword [baseReg + disp]` — the callee
+		// pointer read from the witness table by the call itself, never virtualized.
+		callMem(baseReg, disp) then encodeCallMem(code, base: resolveGpr(baseReg), disp: disp)
+		// x64 places its own stack arguments through `storeBaseDispReg`/`loadRegBaseDisp` with an rsp/rbp base
+		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
+		// for an x64 program and reaching this encoder is a lowering bug, not a missing encoding.
+		arm64StoreOutgoingArg or
+			arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
+		// x64's own bit reinterpretations are `movqGprXmm`/`movqXmmGpr`, encoded above; neither arm64
+		// `fmov` general↔vector form ever reaches this encoder (`buildBackend` dispatches on
+		// `target.cpu`). ONE arm for the pair — the reason is the ISA, not the direction.
+		arm64FmovGprFp or
+			arm64FmovFpGpr then panic("emitX64TargetOp: an arm64-only general↔vector `fmov` reached the x64 encoder — x64's bit reinterpretations are `movqGprXmm`/`movqXmmGpr`")
+		// `lea destReg, [rsp + slotDisp]` — the ADDRESS of a frame slot, through the SAME
+		// `slotDisplacement` the spill/reload pair above resolve their slots with, so a promoted record and
+		// a spill can never disagree about where slot `k` is.
+		leaRegSlot(destReg, slot) then encodeLeaRegRegImm32(code, dest: resolveGpr(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
+		// F2 — the three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
+		// x86 pins it to RAX, and the isel's `movRegReg rax, expected` put it there (see
+		// `TargetDialect.x64LockCmpxchg`'s implicit pair).
+		x64LockCmpxchg(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		// `lock xadd`'s register operand is BOTH its addend and its result, so the byte shape names `dest` —
+		// which the reuse-def has already put in `src`'s register.
+		x64LockXadd(dest, _, addrReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(dest))
+		x64LockAdd(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		// The TEB self-pointer read IS `encodeMovRegGsAbs` at the self-pointer's offset — the SAME absolute
+		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
+		// bytes (prefix, REX, the no-base SIB) are stated once rather than a second time here.
+		x64TebSelfPointer(dest) then encodeMovRegGsAbs(code, dest: resolveGpr(dest), disp: WindowsTebSelfPointerOffset)
+		x64GsLoadRegBase(dest, base) then encodeMovRegSegBase(code, dest: resolveGpr(dest), base: resolveGpr(base), segment: threadPointerSegment)
+		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
+		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
+		arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
+		// --- EC16: the scaled-index band ---
+		//
+		// ⭐ ALL THREE GO THROUGH THE ENCODERS THE `[base + disp]` BAND ALREADY USES, with the index
+		// riding in the `index`/`indexScale` pair every one of them already takes. So the width
+		// decision, the register-file dispatch (an f64 element loads through `movsd`), the rbp/r13
+		// zero-disp8 trap and the rsp-index panic are all answered ONCE, for the indexed forms and the
+		// unindexed ones together.
+		//
+		// `base` and `index` are ALWAYS GPRs — an address is an integer — while `dest`/`src` are
+		// class-dispatched at word64, exactly as `loadRegBaseDisp`/`storeBaseDispReg` are.
+		leaRegBaseIndexScale(dest, base, index, scale) then encodeLeaRegBaseIndexScale(code, dest: resolveGpr(dest), base: resolveGpr(base), index: resolveGpr(index), scale: scale)
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolveGpr(base), disp: disp, width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
+		arm64AddLsl then panic("emitX64TargetOp: an arm64 shifted-register `add` reached the x64 encoder — x64 spells a scaled-index address as `leaRegBaseIndexScale`")
+		// EC18 — the ONE-operand `imul r/m64` (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src. The same group-3
+		// encoder the two divides use, at a different extension, which is the whole difference between
+		// the four one-operand forms this family has.
+		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
+		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
+		arm64LoadAcquire or
+			arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
+		arm64Smulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `imulHighReg`, which reads RAX and writes RDX:RAX")
+		covInc(pointId) then encodeCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
+	end 'emit'
+end 'emitTargetOp'
+
+// ==========================================================================
+// Per-function chunk emission
+// ==========================================================================
+
+// Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets. The
+// caller (concat) shifts every inter-function fixup (call/IAT) by the chunk's start
+// offset. Intra-function block branches (M4's `jmp`/`jcc`), by contrast, are resolved
+// HERE: a function's blocks are contiguous within its one chunk, so a block branch's
+// rel32 is chunk-local and independent of where concat places the chunk. Each block's
+// chunk-local start offset is recorded as it is emitted, then `resolveChunkRel32Fixups`
+// patches every pending branch (including forward jumps to blocks emitted later).
+// `usesGt` (whether the program carries the GT scheduler) is passed in — it is `RuntimeUsage.usesGt`, the
+// bit `installGtRuntime` was gated on, read once by the caller and never re-derived per function, so this
+// stays O(1) per function. It gates the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`)
+// and the per-function morestack guard below.
+export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var iatRelocs = RelocationArray.create()
+	// The chunk's code -> .data references, filed by `encodeLeaRegGlobal` with CHUNK-LOCAL offsets;
+	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
+	var rdataRelocs = RdataRelocationArray.create()
+	var rel32Fixups = ChunkRel32FixupArray.create()
+	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
+	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
+	var jumpTables = JumpTablePendingArray.create()
+	// Sized from `func.nextBlockId` — the function's ids run 0..nextBlockId-1 — so the table is two
+	// allocations and `place` never reallocates. See BlockKeyedTable for why this is an array and not a Map.
+	var chunkLabelOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
+
+	// The base rsp offset of this function's spill-slot area, computed once (it depends
+	// only on whether the function makes a call — a caller's slots sit ABOVE the Win64
+	// shadow space so a callee never clobbers a spilled value). Every spill/reload adds
+	// `slot * SpillSlotBytes` to it. See spillSlotBaseDisp for the frame-layout rationale.
+	let spillBaseDisp = spillSlotBaseDisp(module, func: func)
+
+	// ⭐ THE GT STACK GUARD (P1.5-B1a′). Emitted at the very START of the entry block — before `push rbp` — for a
+	// USER function of a GT module that reserves a frame, so a green thread whose stack would overflow grows +
+	// relocates it first. It is EXEMPT for the compiler's own SCAFFOLDING: the scheduler core must never trigger
+	// the grower, and their kernel calls are already shimmed onto the system stack (slice 1). ⚠ The exemption is
+	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test handed it to a user function
+	// declared in `stdlib/Builtins.maxon` and SEGFAULTED a green thread; see `isRuntimeFunction`'s header for the
+	// measurement. ⛔ And the question is `skipsGreenThreadStackGuard`, NOT `isRuntimeFunction`: a synthesized
+	// function whose frame depth is the user's data graph (a `__destruct_<T>` cascade) satisfies the second
+	// and NEEDS the guard — see that predicate, which states why provenance and stack behaviour are
+	// different questions. Emitted here at the
+	// byte level (not as a TargetOp), exactly like the syscall shim — so it is invisible to the Target-IR goldens
+	// and verified by the RUN + disassembly instead. `computeGuardFrameBytes` is the SAME frame the prologue
+	// reserves, so the guard projects rsp by exactly what the function consumes.
+	// Only a GT module's non-runtime functions can be guarded, so `computeGuardFrameBytes` (which allocates a
+	// callee-saved scan) is called ONLY for those — a non-GT module (the common case, and the whole scale corpus)
+	// pays nothing here.
+	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func)
+	var guardFrameBytes = 0 as StackSize
+	if mightGuard 'guardFrame'
+		guardFrameBytes = computeGuardFrameBytes(module, func: func)
+	end 'guardFrame'
+	let emitGuard = mightGuard and guardFrameBytes > 0
+	var isFirstBlock = true
+
+	// ⭐ **THE DEBUG-INFO PATH IS ONE BOOL TEST PER OP AND NOTHING ELSE WHEN IT IS OFF.** Hoisted out of
+	// the loop so an ordinary build never reads the span column at all.
+	let captureSpans = module.spans.armed
+	var lineRows = DebugLineRowBuilder.create(captureSpans)
+	// Where this chunk's coverage counters land. Filled by the encoder itself, which is the only thing that
+	// knows where an instruction begins; empty for every build that emits none.
+	var covOffsets = CovPointOffsetArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
+
+		// Record this block's chunk-local start BEFORE emitting its ops, so branches
+		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
+		chunkLabelOffsets.place(block.id, value: code.count())
+
+		if isFirstBlock and emitGuard 'guard'
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), os: target.os)
+		end 'guard'
+		isFirstBlock = false
+
+		for opIdx in block.opRefs 'eachOp'
+			if captureSpans 'aRowMayOpenHere'
+				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
+			end 'aRowMayOpenHere'
+			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
+			emitTargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			if captureSpans 'aRowMayOpenAtTheTerminator'
+				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
+			end 'aRowMayOpenAtTheTerminator'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
+			emitTargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
+		end 'hasTerm'
+	end 'eachBlock'
+
+	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
+
+	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
+	// M3 (floats) / M10 (strings).
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
+	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
+	// empty for an ordinary build because no `covInc` was emitted to fill it.
+	chunk.covPointOffsets = covOffsets
+	if captureSpans 'debugInfo'
+		chunk.lineRows = lineRows.rows
+		chunk.frameSize = x64PrologueFrameBytes(module, func: func)
+		chunk.paramCount = func.paramCount
+	end 'debugInfo'
+	return chunk
+end 'emitFunctionChunk'
+
+// ⭐ **THE FRAME THIS FUNCTION RESERVES, READ OFF THE PROLOGUE OP RATHER THAN DERIVED A SECOND TIME.**
+// `computeGuardFrameBytes` arrives at the same number by recomputing it; two derivations of one fact can
+// come to disagree, and this one is only ever reported, never acted on.
+//
+// ⚠ **IT SCANS THE ENTRY BLOCK RATHER THAN READING INDEX 0** — x64's prologue is PREPENDED in reverse,
+// so the `sub rsp` sits after the frame-pointer setup and the callee-saved pushes. And ABSENT means 0,
+// which is correct rather than a fallback: `insertPrologueAtEntry` emits no `prologue` op at all for a
+// function that reserves nothing.
+function x64PrologueFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let entryRef = try func.blockRefs.get(0) otherwise return 0
+	let entry = try module.blocks.get(entryRef) otherwise return 0
+	for opIdx in entry.opRefs 'eachOp'
+		let reserved = x64OpFrameBytes(try module.ops.get(opIdx) otherwise return 0)
+		if reserved > 0 'thePrologue'
+			return reserved
+		end 'thePrologue'
+	end 'eachOp'
+
+	return 0
+end 'x64PrologueFrameBytes'
+
+// The bytes one op reserves: the `prologue`'s operand, and 0 for everything else. Split out because the
+// scan above needs an answer for every op and `prologue(0)` is never emitted, so 0 says "not it".
+//
+// EXHAUSTIVE by range rather than by `default`, so a variant appended past `arm64Smulh` fails to compile
+// here until it is consciously placed.
+function x64OpFrameBytes(op TargetOp) returns StackSize
+	return match op 'frame'
+		prologue(stackSize) gives stackSize
+		epilogue or
+			ret or
+			jmp or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			subRegReg or
+			imulRegReg or
+			negReg or
+			cmpRegReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			cmpRegImm32 or
+			xchgRegReg or
+			callDirect or
+			iatCall or
+			cqo or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			andRegImm32 or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			leaRegRdata or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg or
+			arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel or
+			leaRegFunc or
+			callReg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			arm64AddLsl or
+			imulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Smulh or
+			covInc gives 0
+	end 'frame'
+end 'x64OpFrameBytes'
+
+// ==========================================================================
+// Concatenation: lay out .text, rebase fixups, resolve intra-module calls
+// ==========================================================================
+
+// The runtime entry point's function name — its `.text` offset becomes the PE
+// AddressOfEntryPoint (see augmentWithRuntime, which lays it out first). Exported
+// so augmentWithRuntime builds a function under the same name the concat looks up.
+export let EntryPointName = b"mrt_start"
+
+// `__symtable` — the backtrace's function-name table — is a FORMAT, not an x64 fact: its layout, its
+// name and its serializer live in `Targets/Shared/BacktraceFormat` because the arm64 panic runtime
+// reads the identical table. Concat below appends it to close `.text`.
+
+// Concatenate every function chunk into the final `.text`, rebase each chunk's
+// CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct
+// calls to rel32, and package the result as a format-neutral CodeResult. Chunk
+// iteration order (which augmentWithRuntime arranges so `mrt_start` is first)
+// fixes the `.text` byte layout.
+export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
+	var code = ByteArray.create()
+	var relocations = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
+	var labelOffsets = FuncLabelOffsetMap.create()
+	var debugSymbols = DebugSymbolArray.create()
+	var rdataRelocations = RdataRelocationArray.create()
+	var jumpTableRelocs = JumpTableRelocArray.create()
+	let captureSpans = targetModule.spans.armed
+	var debugFunctions = DebugFunctionRangeArray.create()
+	var debugLineRows = DebugLineRowArray.create()
+	var covPointOffsets = CovPointOffsetArray.create()
+
+	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
+	// owns the rule and the refusal for both native backends.
+	var labelsLaid = 0 as ChunkLabelCount
+	for chunk in chunks 'eachChunk'
+		let funcStart = code.count()
+		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
+		labelsLaid = labelsLaid + 1
+		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		if captureSpans 'debugInfo'
+			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
+		end 'debugInfo'
+		code.append(chunk.code)
+
+		// Rebase chunk-local fixup offsets to absolute `.text` offsets.
+		for fx in chunk.callFixups 'rebaseCalls'
+			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+		end 'rebaseCalls'
+		for r in chunk.iatRelocs 'rebaseIat'
+			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+		end 'rebaseIat'
+		// A code -> .data reference is rebased exactly as the two above are, and RESOLVED here to
+		// its slot's offset within `.data`. The writer then adds the section's RVA — the only part
+		// of the address the backend cannot know, because sections are not laid out yet.
+		for rr in chunk.rdataRelocs 'rebaseRdata'
+			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			// The chunk-local `rdataOffset` is the ADDEND inside the named object; this resolves the object and
+			// folds the two into the section-relative offset the writer adds an RVA to.
+			reloc.rdataOffset = sectionOffsetOfReloc(globalData, reloc: rr) + rr.rdataOffset
+			rdataRelocations.push(reloc)
+		end 'rebaseRdata'
+		// Rebase each jump-table reloc's per-slot target offsets from chunk-local to whole-`.text` (the crux
+		// step: a block's offset is `funcStart + its chunk-local offset`). The writer patches the `.rdata`
+		// blob against these — the `Arm64FuncAdrpReloc.textOffset` rebase, per slot.
+		for jt in chunk.jumpTableRelocs 'rebaseJumpTables'
+			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
+		end 'rebaseJumpTables'
+	end 'eachChunk'
+
+	// `__symtable` CLOSES `.text`, after the last function chunk — the placement the panic
+	// runtime's `textSize = __symtable - mrt_start` depends on. Appending it here, from the
+	// loop's own output, is what makes that structural: every symbol's offset is known
+	// because the loop just assigned it, and nothing can be laid out after it because
+	// nothing follows. It is registered in `labelOffsets` (so the runtime's `lea rax, [rip
+	// + __symtable]` resolves like any other chunk reference) but deliberately NOT in
+	// `debugSymbols` — it is data, not a function, and an entry for it would let a walk
+	// symbolize a stray return address INTO the table.
+	// ⚠ It is DATA, not a function — which is why it has no chunk and no `debugSymbols` entry — but it does
+	// CLAIM A NAME in this map, so it goes through the same door and is counted like any other label. It is
+	// exempt from being a function, not from being unique: a second claim on `__symtable` would move the
+	// bound `textSize = __symtable - mrt_start` reads, silently mis-sizing every backtrace.
+	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildSymbolTableBytes(debugSymbols))
+
+	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
+
+	let entryOffset = try labelOffsets.get(EntryPointName) otherwise panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' was not laid out — augmentWithRuntime did not run before emission")
+
+	// The panic runtime uses `mrt_start`'s address as `text_base` and symbolizes a frame by
+	// `addr - text_base`, so a function laid out BELOW it would produce a negative offset
+	// and vanish from every backtrace without a word. `augmentWithRuntime` prepends the
+	// stub to guarantee this; the guard is here, at the one place that decides the layout,
+	// because "the entry stub is first" reads like a cosmetic property of a function list.
+	if entryOffset != 0 'entryNotFirst'
+		panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' must be laid out FIRST in .text but is at offset {entryOffset} — the panic runtime takes its address as `text_base` and symbolizes every frame relative to it, so anything below it would silently drop out of all backtraces")
+	end 'entryNotFirst'
+
+	// symdata is still empty — the backtrace's own table already closes `.text` instead. `.rdata` is NOT:
+	// P1.0d.4 fills it with the f64 constant islands `lowerFloatConst` registered, and
+	// `rdataRelocations` carries the code -> .rdata references resolved above alongside the .data
+	// ones. (`.data` itself arrived at P1.0d.5b — see `dataPrelude`.) The IAT relocations remain
+	// for the PE writer to patch. P1.2's strings will register into this same table and need no
+	// new pipeline.
+	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
+	result.debugSymbols = debugSymbols
+	result.dataPrelude = globalData.dataSectionImage()
+	result.jumpTableRelocs = jumpTableRelocs
+	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
+	// golden over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no
+	// `IrFunction` and therefore no IR body to print. See `CodeResult.codeChunks`.
+	result.codeChunks = chunks
+	result.debugFunctions = debugFunctions
+	result.debugLineRows = debugLineRows
+	// ⚠ Folded under the same `captureSpans` gate as the line rows, which is exact rather than lucky:
+	// `--coverage` REQUIRES `--debug-info` (the driver refuses the pair), so a build with counters always
+	// arms the spans.
+	result.covPointOffsets = covPointOffsets
+	return result
+end 'concatX64FunctionChunks'
+
+// The offset of a code→data reference's target WITHIN ITS OWN SECTION. The kind is what says
+// which section that is — the same discriminator the PE writer patches by — so this is the one
+// place the backend maps a relocation kind to the table that can answer for it.
+//
+// `.data` and `.rdata` are two tables with two offset indexes inside one `GlobalDataTable`, and
+// asking the wrong one is not a near miss: both would answer a small integer, and the reference
+// would resolve into the wrong section's bytes. So a kind with no table here PANICS rather than
+// defaulting to either.
+function sectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns ByteOffset
+	return match reloc.kind 'kind'
+		ripRelDisp32 gives globalData.rdataOffsetOf(reloc.rdataLabel)
+		dataSectionRipRelDisp32 gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
+		symdataRipRelDisp32 panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.symtab` reference, and the compiler's backend emits none — symdata grows back at its own milestone")
+		arm64Adr or
+			arm64LdrLiteral or
+			symdataArm64Adr or
+			dataSectionArm64Adr or
+			arm64Adrp or
+			arm64PageOff or
+			dataSectionArm64Adrp or
+			dataSectionArm64PageOff panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 backend")
+	end 'kind'
+end 'sectionOffsetOfReloc'
+
+// Patch every `call rel32` to the rel32 displacement of its named target, via the
+// shared patchChunkRel32 (same "measured from end of field" convention as the
+// intra-function block jumps).
+function resolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
+	for fixup in callFixups 'resolve'
+		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("resolveCallFixups: call to unknown function '{String.from(fixup.targetName)}'")
+		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: PatchSite.x64CallRel32)
+	end 'resolve'
+end 'resolveCallFixups'

@@ -1,0 +1,149 @@
+// Test: a-buffer-field-strides-its-declaring-files-byte
+// --- file: holder.maxon
+export type Holder
+	export var buf as __ManagedMemory
+
+	export static function ofText(t String) returns Holder
+		return Holder{buf: t.toByteArray()}
+	end 'ofText'
+
+	export function first() returns Integer
+		return try self.buf.get(0) otherwise 0
+	end 'first'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+typealias Byte = int(0 to 1000)
+
+function widen(b Byte) returns Integer
+	return b
+end 'widen'
+
+function main() returns ExitCode
+	let h = Holder.ofText("ab")
+	return (h.first() - widen(50)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 47
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.ofText {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.first {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#11:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_cont
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rsi, r10
+  __im_cont:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r8, rax
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "ab"
+    x64.callDirect Holder.ofText
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.first
+    x64.movRegImm32 rax, 50
+  __il_cont:
+    x64.movRegReg r12, r8
+    x64.subRegReg r12, r8, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

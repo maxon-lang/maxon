@@ -1,0 +1,21 @@
+// Compiler/ByteOrdering.maxon — the ordinal byte ordering every table this compiler sorts by shares.
+
+// ⭐ **ONE ORDERING, THREE TABLES, AND THAT IS THE REASON IT LIVES ALONE.** The formatter's file walk, the
+// test report's path column and the debug-info name tables must all order by the same rule; three copies
+// of "compare the shared prefix, shorter name first" agree today, and a divergence between them would be
+// a wrong ORDER at one of the three rather than an error at any of them.
+//
+// ⚠ **THE MEASURE IS BYTES.** The orders these tables need are filesystem- and locale-neutral, and the
+// reference implementations they are compared against compare units rather than collating text.
+export function compareBytesOrdinally(left ByteArray, right ByteArray) returns Ordering
+	let shared = left.count() if left.count() < right.count() else right.count()
+	for i in 0 upto shared 'eachByte'
+		let a = try left.get(i) otherwise panic("compareBytesOrdinally: get OOB at {i} below the shared length {shared}")
+		let b = try right.get(i) otherwise panic("compareBytesOrdinally: get OOB at {i} below the shared length {shared}")
+		if a != b 'differ'
+			return Ordering.lessThan if a < b else Ordering.greaterThan
+		end 'differ'
+	end 'eachByte'
+
+	return left.count().compare(right.count())
+end 'compareBytesOrdinally'

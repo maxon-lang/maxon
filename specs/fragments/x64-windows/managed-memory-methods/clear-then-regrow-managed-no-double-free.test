@@ -1,0 +1,216 @@
+// Test: clear-then-regrow-managed-no-double-free
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	for i in 0 upto 4 'fill'
+		a.push("value-{i} padded out so this string needs a heap allocation")
+	end 'fill'
+	a.clear()
+	try a.managed.setLength(4) otherwise panic("setLength: clear() keeps the capacity the four pushes bought")
+
+	var empties = 0
+	for j in 0 upto 4 'read'
+		let v = try a.get(j) otherwise ""
+		if v.count() == 0 'empty'
+			empties = empties + 1
+		end 'empty'
+	end 'read'
+	return empties as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot1, r8
+    x64.movRegImm32 rbx, 0
+  forhdr#1:
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 rbx, 4
+    x64.jcc greaterEqual, forexit#4
+  fill:
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "value-"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; " padded out so this string needs a heap allocation"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot5
+    x64.loadRegSlot r12, slot4
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot3
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr#1
+  forexit#4:
+    x64.loadRegSlot rbx, slot1
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.clear
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at clear-then-regrow-managed-no-double-free.test:10: setLength: clear() keeps the capacity the four pushes bought\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  forhdr#7:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc greaterEqual, forexit#10
+  read:
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + r12*8 + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#24
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#25
+  __im_slow:
+    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#25:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rdx
+    x64.jmp __im_cont
+  critsplit#24:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rdx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; ""
+    x64.jmp trycont
+  tryok#11:
+    x64.movRegReg rcx, r8
+  trycont:
+    x64.callDirect String.count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit#23
+  empty:
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.jmp forstep#9
+  critsplit#23:
+    x64.movRegReg rax, rbx
+  forstep#9:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr#7
+  forexit#10:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at clear-then-regrow-managed-no-double-free.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

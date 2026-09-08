@@ -1,0 +1,126 @@
+// Test: a-merged-count-is-not-proven-through-a-fallback
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+union Missing implements Error
+	nothing
+end 'Missing'
+
+function firstBit(ok bool) returns Bits throws Missing
+	if not ok 'absent'
+		throw Missing.nothing
+	end 'absent'
+
+	return 3
+end 'firstBit'
+
+function main() returns ExitCode
+	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
+	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
+	var wide = 90 as Num
+	wide = wide + 10
+
+	let n = try firstBit(false) otherwise wide
+
+	if n != 100 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = -4
+	if negative shr n != -1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @firstBit {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  absent:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 3
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 100
+    x64.movRegImm32 rcx, 0
+    x64.callDirect firstBit
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegReg rax, rbx
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc equal, ifcont#5
+  reached:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.sarRegImm8 rsi, rsi, 63
+    x64.movRegReg rcx, rax
+    x64.shlRegCl rdx, rdx
+    x64.movRegReg rdi, rsi
+    x64.notReg rdi, rsi
+    x64.andRegReg rdx, rdx, rdi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ifcont#7
+  shl:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#7:
+    x64.movRegImm rdx, 18446744073709551612
+    x64.movRegReg rcx, rax
+    x64.orRegReg rcx, rax, rsi
+    x64.sarRegCl rdx, rdx
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc equal, ifcont#9
+  shrSign:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

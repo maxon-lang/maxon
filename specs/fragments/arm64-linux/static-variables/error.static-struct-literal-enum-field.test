@@ -1,0 +1,28 @@
+// Test: error.static-struct-literal-enum-field
+typealias Count = int(0 to u64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+type Paint
+	export let c as Color
+	export let n as Count
+
+	static var one = Paint{c: 7, n: 1}
+
+	export static function get() returns Paint
+		return Paint.one
+	end 'get'
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.get()
+	print("{p.n}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:25: cannot assign a value of type 'int' to field 'c' of 'Paint', which holds 'Color'

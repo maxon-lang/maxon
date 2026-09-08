@@ -1,0 +1,15 @@
+// Test: error.clearing-the-source-under-a-live-cursor
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("alpha heap string long enough to require an allocation")
+	xs.push("beta heap string long enough to require an allocation")
+	let cursor = try xs.managed.createCursor() otherwise return 99
+	xs.clear()
+	print("{cursor.current()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:9:5: cannot mutate 'xs' via 'clear' while it is borrowed by 'cursor' (borrowed at line 8)

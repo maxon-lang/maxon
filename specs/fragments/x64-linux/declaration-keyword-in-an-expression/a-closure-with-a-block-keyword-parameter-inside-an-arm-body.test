@@ -1,0 +1,224 @@
+// Test: a-closure-with-a-block-keyword-parameter-inside-an-arm-body
+typealias Idx = int(0 to 100)
+typealias Step = function(Idx) returns Idx
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function apply(f Step, x Idx) returns Idx
+	return f(x)
+end 'apply'
+
+function classify(m Marker, seed Idx) returns Idx
+	var total = match m 'm'
+		function gives apply(function(while Idx) gives 38, x: seed)
+		other gives 0
+	end 'm'
+
+	var i = 0
+	while i < 2 'bump'
+		total = total + 1
+		i = i + 1
+	end 'bump'
+	return total
+end 'classify'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	return (classify(Marker.function, seed: 5) + pick(Victim.found(2))) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-closure-with-a-block-keyword-parameter-inside-an-arm-body.test:10: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk#11:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc lessEqual, __rc_ok#9
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-closure-with-a-block-keyword-parameter-inside-an-arm-body.test:14: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#9:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.leaRegFunc rcx, [rip + classify$closure_0]
+    x64.movRegImm32 rax, 0
+    x64.callDirect apply
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r8, rax
+  matchcont:
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc greaterEqual, whileexit
+  bump:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#13
+  __rc_chk#14:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#12
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-closure-with-a-block-keyword-parameter-inside-an-arm-body.test:25: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#12:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @classify$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-closure-with-a-block-keyword-parameter-inside-an-arm-body.test:16: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 r8, 38
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 5
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#6:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.jmp __il_cont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#7:
+    x64.movRegImm32 rax, 0
+  __il_cont:
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-closure-with-a-block-keyword-parameter-inside-an-arm-body.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}

@@ -1,0 +1,1382 @@
+// The low-level wasm binary encoder — the wasm sibling of PeWriter/MachOWriter, but one
+// tier lower: those render a finished CodeResult into an OS container, while this renders
+// individual wasm instructions and a whole CORE module into the raw bytes the wasm binary
+// format specifies. StdToWasm (agent A2) codes against the API here and NEVER touches a raw
+// opcode byte or a LEB128 immediate — that split is the whole point of this file.
+//
+// SCOPE: the scalar slice (integer/bool AND f64 arithmetic, comparisons, structured control
+// flow, calls). Only the opcodes and sections that slice needs are here — no tables, no data
+// segments, no narrow loads/stores, no bulk memory. Those grow the file when their milestone lands.
+//
+// TWO CONTRACT DEVIATIONS, both forced (see the CONTRACT §3 Seam 1):
+//   • `end()` → `endOp()`. `end` is a reserved block-delimiter keyword (Lexer TokenKind.end),
+//     so no method can be named `end`. The contract's own `returnOp`/`elseClause` names show
+//     its author was already dodging keywords (`return`/`else`); `end` slipped through. Renamed
+//     to `endOp()` to match the `returnOp` convention. A2 calls `body.endOp()`.
+//   • `i64Sub_wrapNeg()` is OMITTED. Its name carries an underscore (forbidden), and it is
+//     explicitly optional in the contract ("or A2 does (0 - x)"). wasm has no integer negate
+//     opcode, so a single instruction cannot express one anyway: A2 materializes `neg` as
+//     `i64Const(0)` BELOW the operand, then `i64Sub()`;
+//     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
+//     order is free); `logicalNot` as `i32Const(1)` then `i32Xor()` — a BIT FLIP, matching the
+//     native backends' `eor #1` / `xor reg, 1`, not the `i32Eqz()` this line used to name (X5
+//     review; the two agree only over a 0/1 operand, so it was a wrong description rather than a
+//     wrong answer). Every primitive that composition needs is
+//     already in the API, so no dedicated helper is warranted.
+//
+// DETERMINISM: everything here iterates ordered arrays (insertion order) and index ranges —
+// no map iteration, no addresses — so the same StdModule yields byte-identical output every
+// run, which the worker-count byte-identity gate and the fragment gate both depend on.
+
+// The wasm spec index space: function/type/local/memory indices, label depths, and page
+// counts are all u32 in the binary format. UNSIGNED, which also makes `shr` on this type a
+// LOGICAL shift (see writeUleb128) — exactly what unsigned LEB128 wants.
+export typealias Wasm32Index = int(0 to u32.max)
+export typealias Wasm32IndexArray = Array with Wasm32Index
+
+// --- LEB128 ---
+// wasm uses two variable-length integer encodings, and mixing them up is a silent
+// instantiate-time failure, not a compile error, so the choice per field is load-bearing:
+//   • ULEB128 (unsigned) for every count / index / size / label depth.
+//   • SLEB128 (signed)   for `i32.const` / `i64.const` immediates. A uleb offset whose final byte
+//     has bit 7 clear but bit 6 set sleb-decodes as NEGATIVE and fails the module's bounds/type
+//     checks.
+
+// A u32 encodes in at most 5 ULEB128 bytes (ceil(32/7) = 5).
+let ulebMaxBytes = 5
+
+// A 64-bit integer encodes in at most 10 SLEB128 bytes (ceil(64/7) = 10).
+let slebMaxBytes = 10
+
+// The 7 payload bits carried by each LEB128 byte, and the continuation bit (bit 7) set on
+// every byte except the last.
+let lebPayloadMask = 0x7F
+let lebContinuationBit = 0x80
+
+// SLEB128's sign bit within a byte's 7-bit payload (bit 6). A group whose sign bit disagrees
+// with the remaining value forces one more byte so the decoder recovers the sign.
+let slebSignBit = 0x40
+
+// Encode an unsigned wasm index/count/size as ULEB128. `value` is unsigned (Wasm32Index),
+// so `value shr 7` is a LOGICAL shift (ShiftSemantics: unsigned left operand ⇒ zero-fill),
+// which is precisely unsigned LEB128's requirement.
+function writeUleb128(buf ByteArray, value Wasm32Index)
+	var v = value
+
+	for _ in 0 upto ulebMaxBytes 'encode'
+		let b = v and lebPayloadMask
+		v = v shr 7
+
+		if v == 0 'last'
+			buf.push(b)
+			return
+		end 'last'
+
+		buf.push(b or lebContinuationBit)
+	end 'encode'
+
+	panic("writeUleb128: {value} did not terminate within {ulebMaxBytes} bytes — outside the u32 index space")
+end 'writeUleb128'
+
+// Encode a signed constant immediate as SLEB128. `value` is signed (ParsedInt), so
+// `v shr 7` is an ARITHMETIC shift (ShiftSemantics: signed left operand ⇒ sign-fill): a
+// negative value converges to -1 and a non-negative one to 0, with the sign preserved. That
+// is exactly what SLEB128 needs, so no manual sign extension is required here.
+function writeSleb128(buf ByteArray, value ParsedInt)
+	var v = value
+
+	for _ in 0 upto slebMaxBytes 'encode'
+		let b = v and lebPayloadMask
+		v = v shr 7
+
+		let signBitSet = (b and slebSignBit) != 0
+		let last = (v == 0 and not signBitSet) or (v == -1 and signBitSet)
+
+		if last 'done'
+			buf.push(b)
+			return
+		end 'done'
+
+		buf.push(b or lebContinuationBit)
+	end 'encode'
+
+	panic("writeSleb128: {value} did not terminate within {slebMaxBytes} bytes — not a 64-bit integer")
+end 'writeSleb128'
+
+// --- Value types ---
+// The wasm value types the scalar slice produces. i32 backs i1/i8..i32; i64 backs i64/u64;
+// f64 backs a Maxon `float`. f32 is declared for completeness but nothing produces one (the
+// language's `float` is f64), so no f32 ALU exists in this file. A2 chooses the width per op.
+export enum WasmValType
+	i32
+	i64
+	f32
+	f64
+end 'WasmValType'
+
+export typealias WasmValTypeArray = Array with WasmValType
+
+// The binary-format encoding of each value type (a single negative-sleb byte in the spec,
+// stored here as its unsigned byte value). Kept as an explicit map rather than enum raw
+// values so the enum stays a plain type list matching the contract.
+let wasmTypeI32 = 0x7F
+let wasmTypeI64 = 0x7E
+let wasmTypeF32 = 0x7D
+let wasmTypeF64 = 0x7C
+
+// The valtype's binary-format encoding, carried as MachineWord — the encoder's integer idiom
+// (`MachOWriter`/`BinaryHelpers` spell binary-format byte values MachineWord; `Byte` is reserved
+// for genuine byte-array elements). `push` narrows it to the byte it always is.
+function valTypeByte(t WasmValType) returns MachineWord
+	return match t 'ty'
+		i32 gives wasmTypeI32
+		i64 gives wasmTypeI64
+		f32 gives wasmTypeF32
+		f64 gives wasmTypeF64
+	end 'ty'
+end 'valTypeByte'
+
+// --- Instruction opcodes ---
+// Named per the wasm spec's mnemonics. Control flow first, then locals, constants, the i32
+// and i64 ALU/compare/conversion bands. `end` (0x0B) closes both a block and a function body.
+let opUnreachable = 0x00
+let opBlock = 0x02
+let opLoop = 0x03
+let opIf = 0x04
+let opElse = 0x05
+let opEnd = 0x0B
+let opBr = 0x0C
+let opBrIf = 0x0D
+let opBrTable = 0x0E
+let opReturn = 0x0F
+let opCall = 0x10
+let opCallIndirect = 0x11
+let opDrop = 0x1A
+
+// The UNTYPED `select` (0x1B) — pops an i32 condition and the two candidate values below it, and
+// pushes the one chosen. It is valid for exactly the NUMERIC types (i32/i64/f32/f64), which is all
+// the scalar slice has; the TYPED form (0x1C, carrying an explicit valtype vector) exists only for
+// reference types, which this backend does not emit. Its one user is the `min` intrinsic
+// (`StdToWasm.emitFloatMin`).
+let opSelect = 0x1B
+
+// The block signature byte shared by block/loop/if. Every scalar-slice construct is a VOID
+// block (values flow through locals, not the operand stack across block boundaries), so the
+// signature is always the empty type 0x40.
+let wasmBlockTypeEmpty = 0x40
+
+let opLocalGet = 0x20
+let opLocalSet = 0x21
+let opLocalTee = 0x22
+
+let opI32Const = 0x41
+let opI64Const = 0x42
+
+// ⚠ NO i32 COMPARE FAMILY: an integer comparison is emitted at the machine word (X5 review — see the
+// i32 ALU note below `i64ExtendI32U`), so only `i32.eqz` — which tests a 0/1 bool, not a number — is
+// reachable at this width.
+let opI32Eqz = 0x45
+
+let opI64Eq = 0x51
+let opI64Ne = 0x52
+let opI64LtS = 0x53
+let opI64GtS = 0x55
+let opI64LeS = 0x57
+let opI64GeS = 0x59
+
+// The UNSIGNED four. `ge_u` predates the others by a rung — the jump table's bounds check reached for it
+// alone — and the ordering-comparison rule needs the whole family, so the comment it carried now sits at
+// its emitter with the others rather than on the constant. They are contiguous in the encoding with their
+// signed twins (`lt_s` 0x53 / `lt_u` 0x54, and so on), which is the encoding's own statement that a
+// comparison's signedness is a property of the INSTRUCTION here rather than of the operands.
+let opI64LtU = 0x54
+let opI64GtU = 0x56
+let opI64LeU = 0x58
+let opI64GeU = 0x5A
+
+// ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
+// DELIBERATE (X5 and its review). `div`/`mod` are the two Std ops with no operand type, and the rest
+// were selected by an operand type whose narrowness describes STORAGE, not arithmetic; this backend
+// computes every integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic
+// is ever emitted. The file's rule is that an opcode is here because the slice needs it; these
+// stopped being needed when the width stopped being guessed. What is left is address arithmetic
+// (`add`/`sub` over an i32 linear-memory address) and `logicalNot`'s bit flip (`xor`).
+let opI32Add = 0x6A
+let opI32Sub = 0x6B
+let opI32Xor = 0x73
+
+let opI64Add = 0x7C
+let opI64Sub = 0x7D
+let opI64Mul = 0x7E
+let opI64DivS = 0x7F
+let opI64DivU = 0x80
+let opI64RemS = 0x81
+let opI64RemU = 0x82
+let opI64And = 0x83
+let opI64Or = 0x84
+let opI64Xor = 0x85
+let opI64Shl = 0x86
+let opI64ShrS = 0x87
+let opI64ShrU = 0x88
+
+let opI32WrapI64 = 0xA7
+let opI64ExtendI32S = 0xAC
+let opI64ExtendI32U = 0xAD
+
+// The f64 band — floats need no runtime, no `.rdata`
+// constant pool and no data section (unlike x64/arm64, which stash a double's bits in `.rdata`
+// and load them): wasm has a native f64.const immediate and a native f64 ALU.
+//
+// `f64.const` (0x44) is FIXED-WIDTH — 8 raw little-endian IEEE-754 bytes, NOT an SLEB128 like the
+// integer consts. Mixing the two up is a silent instantiate-time failure, so the width is
+// load-bearing exactly as the LEB128 choice is.
+let opF64Const = 0x44
+
+// f64 compares (two f64 → i32 bool). wasm carries IEEE-754 unordered semantics natively: each
+// relational predicate is FALSE when either operand is NaN, and `f64.ne` is TRUE — the NaN-safe
+// answer the native backends build by hand (the `ucomisd` parity dance), delivered by one opcode.
+let opF64Eq = 0x61
+let opF64Ne = 0x62
+let opF64Lt = 0x63
+let opF64Gt = 0x64
+let opF64Le = 0x65
+let opF64Ge = 0x66
+
+// f64 ALU (two f64 → f64). Float division is IEEE-754 (inf/nan, never a trap), which is why it
+// rides the pure `binOp` band rather than the trapping integer `div`/`mod` — see StdDialect.
+let opF64Add = 0xA0
+let opF64Sub = 0xA1
+let opF64Mul = 0xA2
+let opF64Div = 0xA3
+
+// int ↔ f64 conversions. `i64.trunc_f64_s` truncates an f64 toward zero to a signed i64 — the
+// `_s`/TRUNCATING form (not a rounding one), which is why it is right for `trunc()`.
+// `f64.convert_i64_s` widens a signed i64 to f64.
+let opI64TruncF64S = 0xB0
+let opF64ConvertI64S = 0xB9
+
+// The MATH INTRINSICS (P1.0d.4-C, `abs` with `specs/abs.md`), f64 → f64 — the whole rung, on wasm, is
+// these five opcodes: wasm has each as a NATIVE instruction, so there is nothing to synthesize and no
+// `.rdata` constant (the native backends need an SSE4.1 `roundsd` and an AArch64 `frint`; wasm needs
+// one byte each).
+//
+// ⚠ `f64.nearest` is round-to-nearest **TIES TO EVEN** — the same rounding x64 `roundsd imm8=0` and
+// arm64 `frintn` do, and what `specs/round.md`'s `round.halfway` case pins (`round(2.5)` is 2). It
+// is NOT C's `round()`.
+//
+// ⚠ `f64.abs` is the one of the five with NO x64 counterpart: SSE2 has no scalar float absolute value,
+// so the x64 backend clears the sign bit itself (`TargetOp.absF64RegReg`). Here it is one byte, as
+// arm64's `fabs` is one word — x64 is the outlier, not wasm.
+let opF64Abs = 0x99
+
+// `f64.neg` (0x9A) — the sign-bit FLIP beside `f64.abs`'s clear, `StdUnaryOpcode.fneg`'s one
+// instruction here. As with `abs`, x64 is the target that has to synthesize it (`TargetOp.negF64RegReg`).
+let opF64Neg = 0x9A
+let opF64Ceil = 0x9B
+let opF64Floor = 0x9C
+let opF64Nearest = 0x9E
+let opF64Sqrt = 0x9F
+
+// The BIT REINTERPRETATION (P1.7a's last slice), f64 → i64 — `float.hash`'s foundation. Unlike
+// `i64.trunc_f64_s` above it converts NOTHING: the same 64 bits arrive on the i64 side, which is
+// exactly what a hash of a float's IEEE-754 pattern needs. wasm gives it natively in one byte where
+// the native backends need a cross-register-file transfer (`movq` / `FMOV Xd, Dn`).
+let opI64ReinterpretF64 = 0xBD
+
+// Its INVERSE, i64 → f64 — the bits of `stdlib/Builtins.maxon`'s one correctly-rounded decimal reader
+// becoming the `float` a program asked for (`__Builtins.bitsToFloat`). ⚠ It is 0xBF and NOT 0xBE: the
+// reinterpret quartet runs `i32.reinterpret_f32` (0xBC), `i64.reinterpret_f64` (0xBD),
+// `f32.reinterpret_i32` (0xBE), `f64.reinterpret_i64` (0xBF), so the neighbouring byte is the 32-bit
+// form of this direction and would validate against an f32 result this backend never produces.
+let opF64ReinterpretI64 = 0xBF
+
+// The memory-access band (the top-level-`var` milestone, then the heap-String one). A load/store
+// carries a MEMARG — an
+// `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
+// serve globals and heap-record fields; the BYTE forms that follow serve a heap String's per-byte
+// access. StdToWasm's `wasmMemAccessType` is the one door mapping a Std type to the width — and to the
+// P1.9 `as`-cast for the narrow integers still beyond the backend.
+let opI64Load = 0x29
+let opF64Load = 0x2B
+let opI64Store = 0x37
+let opF64Store = 0x39
+
+// The NARROW byte forms — the heap-String milestone. A String's bytes are accessed one at a time
+// (`buffer[i]`), so a `loadIndirect`/`storeIndirect` of `u8` lowers here: `i32.load8_u` ZERO-extends
+// the byte into the i32 a byte-width value occupies (see wasmValTypeOf — everything ≤ 32 bits is an
+// i32 local), and `i32.store8` writes the LOW byte of the i32 operand. Only the `u8`/`i1` byte forms
+// join the word forms above, because the shared native `accessWidthFor` door lowers only BYTE
+// (`i1`/`u8`) and WORD (`i64`/`f64`) accesses today — a wider narrow integer needs the `as` cast
+// (P1.9), which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`). The narrower
+// forms grow the file when that cast lands.
+let opI32Load8U = 0x2D
+let opI32Store8 = 0x3A
+
+// `memory.grow` (opcode 0x40) — the wasm slab-allocator primitive.
+// It grows linear memory 0 by the i32 page count on the stack and pushes the PREVIOUS page count, or
+// -1 on failure. The single trailing byte is the memory index (0 — the MVP has exactly one memory).
+// Its whole `osAllocPages` sequence (size→pages rounding, the OOM trap, the page→byte-base shift) is
+// StdToWasm's `emitOsAllocPages`.
+let opMemoryGrow = 0x40
+let wasmMemoryGrowMemZero = 0x00
+
+// The BULK-MEMORY band (F1b). These ride a `0xFC` prefix followed by a ULEB sub-opcode, which is why they
+// are not simply two more single-byte opcodes above.
+//
+// ⚠ The operand shapes in this family DIFFER: `memory.copy` (sub-opcode 10) carries TWO memory indices
+// (dst, src) and `memory.fill` (11) carries ONE. Getting that wrong is a module-VALIDATION failure rather
+// than a silent miscompile — noted here because only `fill` exists today and the neighbour is the trap.
+let opBulkMemoryPrefix = 0xFC
+let opBulkMemoryFill = 11
+let wasmBulkMemoryMemZero = 0x00
+
+// A memarg's `align` is the log2 of the access's byte width — the NATURAL alignment. It is a
+// hint only: it never changes semantics (a wasm load/store is defined at any address, aligned or
+// not) and validation requires only that it not EXCEED the natural alignment, so the natural
+// value is always legal and is the canonical choice. The word forms are 8-byte (word64) accesses,
+// so their hint is 3 (2^3 = 8); a byte access is 1-byte, so its hint is 0 (2^0 = 1).
+let wasmMemAlignByte = 0
+let wasmMemAlignWord64 = 3
+
+// The function-value funcref table (P1.5-A1). `call_indirect` dispatches through a single table of
+// `funcref` at table index 0; `wasmRefTypeFuncref` (0x70) is the table's reference type. Declared here,
+// before WasmBody, so `WasmBody.callIndirect` can name the table index without a forward reference — the
+// table/element SECTIONS themselves are emitted by WasmModuleBuilder below. `wasmElemSegmentActiveFuncref`
+// (0x00) is the active element segment's leading flag: active, table 0, i32.const offset, funcidx-vector
+// payload (the funcref element type is implied — no elemkind byte), the elem twin of
+// `wasmDataSegmentActiveMem0`.
+let wasmRefTypeFuncref = 0x70
+let wasmTableIndexZero = 0
+let wasmElemSegmentActiveFuncref = 0x00
+
+// The element segment fills the funcref table starting at table slot 0, so table[i] == function i (a
+// function's table index then equals its wasm funcIdx — what `funcAddr` materializes).
+let wasmElemTableStartOffset = 0
+
+// --- WasmBody: a function body under construction ---
+// Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
+// the raw instruction stream ONLY — the local declarations and the trailing `end` are framed
+// by WasmModuleBuilder.addFunction, which is the one place that knows a body's locals.
+export type WasmBody
+	var buf as ByteArray
+
+	export static function create() returns WasmBody
+		return Self{buf: ByteArray.create()}
+	end 'create'
+
+	// Structured control flow. block/loop/if open a void-typed region; `beginIf` consumes an
+	// i32 condition from the stack; `elseClause` splits an if; `endOp` closes the innermost
+	// region (the wasm `end` opcode, renamed off the keyword — see the file header).
+	export function beginBlock()
+		self.buf.push(opBlock)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginBlock'
+
+	export function beginLoop()
+		self.buf.push(opLoop)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginLoop'
+
+	export function beginIf()
+		self.buf.push(opIf)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginIf'
+
+	export function elseClause()
+		self.buf.push(opElse)
+	end 'elseClause'
+
+	export function endOp()
+		self.buf.push(opEnd)
+	end 'endOp'
+
+	// Branch out `relativeDepth` enclosing regions. `brIf` branches only if the i32 it
+	// consumes is non-zero; `brTable` is the dispatcher's jump — it consumes an i32 index and
+	// branches to `targets[index]`, or to `defaultTarget` when the index is out of range.
+	export function br(relativeDepth Wasm32Index)
+		self.buf.push(opBr)
+		writeUleb128(self.buf, value: relativeDepth)
+	end 'br'
+
+	export function brIf(relativeDepth Wasm32Index)
+		self.buf.push(opBrIf)
+		writeUleb128(self.buf, value: relativeDepth)
+	end 'brIf'
+
+	export function brTable(targets Wasm32IndexArray, defaultTarget Wasm32Index)
+		self.buf.push(opBrTable)
+		writeUleb128(self.buf, value: targets.count() as Wasm32Index)
+
+		for target in targets 'each'
+			writeUleb128(self.buf, value: target)
+		end 'each'
+
+		writeUleb128(self.buf, value: defaultTarget)
+	end 'brTable'
+
+	export function returnOp()
+		self.buf.push(opReturn)
+	end 'returnOp'
+
+	export function unreachable()
+		self.buf.push(opUnreachable)
+	end 'unreachable'
+
+	export function drop()
+		self.buf.push(opDrop)
+	end 'drop'
+
+	// `select` — pops (condition i32, valueIfFalse, valueIfTrue) and pushes `valueIfTrue` when the
+	// condition is non-zero. Both candidates must already be the SAME numeric type; the caller owns
+	// that (see `StdToWasm.emitFloatMin`, which pushes two f64s).
+	export function select()
+		self.buf.push(opSelect)
+	end 'select'
+
+	export function call(funcIdx Wasm32Index)
+		self.buf.push(opCall)
+		writeUleb128(self.buf, value: funcIdx)
+	end 'call'
+
+	// `call_indirect (type typeIdx) (table 0)` — a call THROUGH a funcref table entry (P1.5-A1). It pops
+	// the i32 table index from the top of the stack, then the arguments below it, and CHECKS the referenced
+	// function's type against `typeIdx` at runtime (a mismatch traps). The immediate is `(type_index,
+	// table_index)`, both ULEB128; the table index is always 0 — the module declares a single funcref table.
+	export function callIndirect(typeIdx Wasm32Index)
+		self.buf.push(opCallIndirect)
+		writeUleb128(self.buf, value: typeIdx)
+		writeUleb128(self.buf, value: wasmTableIndexZero)
+	end 'callIndirect'
+
+	// Locals — the identity register file. Every SSA ValueId is one wasm local; params are
+	// locals 0..paramCount-1, declared locals follow.
+	export function localGet(idx Wasm32Index)
+		self.buf.push(opLocalGet)
+		writeUleb128(self.buf, value: idx)
+	end 'localGet'
+
+	export function localSet(idx Wasm32Index)
+		self.buf.push(opLocalSet)
+		writeUleb128(self.buf, value: idx)
+	end 'localSet'
+
+	export function localTee(idx Wasm32Index)
+		self.buf.push(opLocalTee)
+		writeUleb128(self.buf, value: idx)
+	end 'localTee'
+
+	// Constants carry SIGNED (SLEB128) immediates. i32Const takes the 32-bit Imm32 the Std
+	// tier carries; i64Const takes the full ParsedInt a `const` op holds (i64.min..i64.max).
+	export function i32Const(v Imm32)
+		self.buf.push(opI32Const)
+		writeSleb128(self.buf, value: v as ParsedInt)
+	end 'i32Const'
+
+	export function i64Const(v ParsedInt)
+		self.buf.push(opI64Const)
+		writeSleb128(self.buf, value: v)
+	end 'i64Const'
+
+	// i64 ALU (two i64 → i64).
+	export function i64Add()
+		self.buf.push(opI64Add)
+	end 'i64Add'
+
+	export function i64Sub()
+		self.buf.push(opI64Sub)
+	end 'i64Sub'
+
+	export function i64Mul()
+		self.buf.push(opI64Mul)
+	end 'i64Mul'
+
+	export function i64DivS()
+		self.buf.push(opI64DivS)
+	end 'i64DivS'
+
+	// The UNSIGNED twins. `i64.div_u`/`i64.rem_u` trap on a zero divisor and on nothing else —
+	// there is no INT_MIN/-1 overflow to trap on when both operands read unsigned.
+	export function i64DivU()
+		self.buf.push(opI64DivU)
+	end 'i64DivU'
+
+	export function i64RemS()
+		self.buf.push(opI64RemS)
+	end 'i64RemS'
+
+	export function i64RemU()
+		self.buf.push(opI64RemU)
+	end 'i64RemU'
+
+	export function i64And()
+		self.buf.push(opI64And)
+	end 'i64And'
+
+	export function i64Or()
+		self.buf.push(opI64Or)
+	end 'i64Or'
+
+	export function i64Xor()
+		self.buf.push(opI64Xor)
+	end 'i64Xor'
+
+	export function i64Shl()
+		self.buf.push(opI64Shl)
+	end 'i64Shl'
+
+	export function i64ShrS()
+		self.buf.push(opI64ShrS)
+	end 'i64ShrS'
+
+	export function i64ShrU()
+		self.buf.push(opI64ShrU)
+	end 'i64ShrU'
+
+	// i64 compares (two i64 → i32 bool).
+	export function i64Eq()
+		self.buf.push(opI64Eq)
+	end 'i64Eq'
+
+	export function i64Ne()
+		self.buf.push(opI64Ne)
+	end 'i64Ne'
+
+	export function i64LtS()
+		self.buf.push(opI64LtS)
+	end 'i64LtS'
+
+	export function i64GtS()
+		self.buf.push(opI64GtS)
+	end 'i64GtS'
+
+	export function i64LeS()
+		self.buf.push(opI64LeS)
+	end 'i64LeS'
+
+	export function i64GeS()
+		self.buf.push(opI64GeS)
+	end 'i64GeS'
+
+	// ⭐ THE UNSIGNED FOUR — the family an ordering comparison takes when both operands' declared ranges
+	// say their top bit is a value bit (`TypeRules`' ⭐⭐ THE ORDERING-COMPARISON SIGNEDNESS RULE), and the
+	// exact counterpart of x64's `jb`/`ja` and arm64's `lo`/`hi`. Unlike those two targets, wasm has no
+	// flags: the signedness rides in the OPCODE, so there is nothing here to choose a condition code with
+	// and the whole decision is which of these eight functions the predicate maps to.
+	//
+	// ⚠ `i64.ge_u` HAS A SECOND, OLDER CALLER and it is not this rule: the jump table's unsigned 64-bit
+	// bounds check, where a wrapped-negative biased index reads as a huge unsigned value so `biased u>=
+	// span` routes it to the default exactly as x64's `jae` / arm64's `b.hs` do (a plain `i32.wrap` +
+	// `br_table` would only bound-check the low 32 bits). One encoder, two reasons to want it.
+	export function i64LtU()
+		self.buf.push(opI64LtU)
+	end 'i64LtU'
+
+	export function i64GtU()
+		self.buf.push(opI64GtU)
+	end 'i64GtU'
+
+	export function i64LeU()
+		self.buf.push(opI64LeU)
+	end 'i64LeU'
+
+	export function i64GeU()
+		self.buf.push(opI64GeU)
+	end 'i64GeU'
+
+	// ⚠ NO `i64.eqz` EITHER, and it is the SAME rule as the i32 ALU note above — swept one encoder wider
+	// (X5 review). It was here claiming "for logicalNot and cond materialization on i64 values", and it had
+	// NEITHER consumer: `logicalNot` is an `i32.xor 1` (`StdToWasm.emitLogicalNotExpr`) and a wide condition
+	// reaches `if` through the one coercion door (`pushOperandAt` → `i32.wrap_i64`). An unemittable encoder
+	// whose comment names a caller that does not exist is worse than an absent one — the next reader takes
+	// it for the lowering that is actually used.
+
+	// Width conversions inserted only where wasm's type discipline forces an i64↔i32 boundary
+	// (notably the `$run` entry's `i32.wrap_i64` of main's result).
+	export function i32WrapI64()
+		self.buf.push(opI32WrapI64)
+	end 'i32WrapI64'
+
+	export function i64ExtendI32S()
+		self.buf.push(opI64ExtendI32S)
+	end 'i64ExtendI32S'
+
+	export function i64ExtendI32U()
+		self.buf.push(opI64ExtendI32U)
+	end 'i64ExtendI32U'
+
+	// ⚠ **THE i32 SET IS NOT THE i64 SET'S TWIN — it is only what LINEAR-MEMORY ADDRESS arithmetic and
+	// the 0/1 bool need** (X5 review). An integer OPERATION is emitted at the machine word whatever its
+	// Std operand type says (`StdToWasm.wasmMachineValTypeOf`), so there is no width to pick between: the
+	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `xor` for `logicalNot`'s
+	// bit flip, and `eqz`. The multiply, the bitwise pair, the three shifts and the six compares were
+	// selectable only by a NARROW operand type, and a narrow operand type is a storage class rather
+	// than an arithmetic one — selecting on it truncated `ExitCode * 2` to 32 bits and read an
+	// `ExitCode > 100` as SIGNED. Same rule as the `i32.div_s`/`i32.rem_s` note above: an opcode is
+	// here because the slice needs it.
+	export function i32Add()
+		self.buf.push(opI32Add)
+	end 'i32Add'
+
+	export function i32Sub()
+		self.buf.push(opI32Sub)
+	end 'i32Sub'
+
+	export function i32Xor()
+		self.buf.push(opI32Xor)
+	end 'i32Xor'
+
+	export function i32Eqz()
+		self.buf.push(opI32Eqz)
+	end 'i32Eqz'
+
+	// f64 constant. `v` is the double's IEEE-754 bit pattern reinterpreted as a signed integer
+	// (the ParsedInt a `const` op carries — the SAME value the `.data`/`.rdata` scalar serializer
+	// renders), written as 8 RAW little-endian bytes. Fixed-width, NOT SLEB128: `f64.const` is the
+	// one const opcode whose immediate is not a LEB128.
+	export function f64Const(v ParsedInt)
+		self.buf.push(opF64Const)
+		writeQword(self.buf, value: v as MachineWord)
+	end 'f64Const'
+
+	// f64 ALU (two f64 -> f64).
+	export function f64Add()
+		self.buf.push(opF64Add)
+	end 'f64Add'
+
+	export function f64Sub()
+		self.buf.push(opF64Sub)
+	end 'f64Sub'
+
+	export function f64Mul()
+		self.buf.push(opF64Mul)
+	end 'f64Mul'
+
+	export function f64Div()
+		self.buf.push(opF64Div)
+	end 'f64Div'
+
+	// f64 compares (two f64 -> i32 bool), NaN-safe per IEEE-754 (see the opcode band).
+	export function f64Eq()
+		self.buf.push(opF64Eq)
+	end 'f64Eq'
+
+	export function f64Ne()
+		self.buf.push(opF64Ne)
+	end 'f64Ne'
+
+	export function f64Lt()
+		self.buf.push(opF64Lt)
+	end 'f64Lt'
+
+	export function f64Gt()
+		self.buf.push(opF64Gt)
+	end 'f64Gt'
+
+	export function f64Le()
+		self.buf.push(opF64Le)
+	end 'f64Le'
+
+	export function f64Ge()
+		self.buf.push(opF64Ge)
+	end 'f64Ge'
+
+	// int <-> f64 conversions. `f64ConvertI64S` reads a signed i64 and produces f64 (siToFp);
+	// `i64TruncF64S` reads an f64 and produces a signed i64, TRUNCATING toward zero (fpToSi /
+	// `trunc()`).
+	export function f64ConvertI64S()
+		self.buf.push(opF64ConvertI64S)
+	end 'f64ConvertI64S'
+
+	export function i64TruncF64S()
+		self.buf.push(opI64TruncF64S)
+	end 'i64TruncF64S'
+
+	// The MATH INTRINSICS (one f64 in, one f64 out). `f64Nearest` is TIES TO EVEN — see the opcode
+	// band; it is what `round()` means in this language and it is not C's `round()`. `f64Abs` clears
+	// the IEEE sign bit, which is why it is exact for ±0, ±inf and NaN alike.
+	export function f64Floor()
+		self.buf.push(opF64Floor)
+	end 'f64Floor'
+
+	export function f64Ceil()
+		self.buf.push(opF64Ceil)
+	end 'f64Ceil'
+
+	export function f64Nearest()
+		self.buf.push(opF64Nearest)
+	end 'f64Nearest'
+
+	export function f64Sqrt()
+		self.buf.push(opF64Sqrt)
+	end 'f64Sqrt'
+
+	export function f64Abs()
+		self.buf.push(opF64Abs)
+	end 'f64Abs'
+
+	export function f64Neg()
+		self.buf.push(opF64Neg)
+	end 'f64Neg'
+
+	// The BIT REINTERPRETATION (f64 in, i64 out, same bits) — see the opcode's comment for why it is
+	// beside the conversions and not one of them.
+	export function i64ReinterpretF64()
+		self.buf.push(opI64ReinterpretF64)
+	end 'i64ReinterpretF64'
+
+	// The same reinterpretation inbound (i64 in, f64 out, same bits).
+	export function f64ReinterpretI64()
+		self.buf.push(opF64ReinterpretI64)
+	end 'f64ReinterpretI64'
+
+	// Data-section loads/stores. Each carries a MEMARG (`align` then `offset`, both ULEB); the
+	// dynamic base address is the i32 already on the stack (a load consumes it; a store consumes
+	// it below the value it writes). `offset` is the static displacement folded into the effective
+	// address, and `align` is the op's natural alignment (see `wasmMemAlignWord64`). The load/store
+	// pushing is factored so the four public ops cannot disagree on the memarg layout.
+	function pushMemAccess(opcode MachineWord, align Wasm32Index, offset Wasm32Index)
+		self.buf.push(opcode)
+		writeUleb128(self.buf, value: align)
+		writeUleb128(self.buf, value: offset)
+	end 'pushMemAccess'
+
+	export function i64Load(offset Wasm32Index)
+		self.pushMemAccess(opI64Load, align: wasmMemAlignWord64, offset: offset)
+	end 'i64Load'
+
+	export function f64Load(offset Wasm32Index)
+		self.pushMemAccess(opF64Load, align: wasmMemAlignWord64, offset: offset)
+	end 'f64Load'
+
+	export function i64Store(offset Wasm32Index)
+		self.pushMemAccess(opI64Store, align: wasmMemAlignWord64, offset: offset)
+	end 'i64Store'
+
+	export function f64Store(offset Wasm32Index)
+		self.pushMemAccess(opF64Store, align: wasmMemAlignWord64, offset: offset)
+	end 'f64Store'
+
+	// Narrow byte load/store — the heap-String byte access (`buffer[i]`). `i32.load8_u`
+	// zero-extends the byte into an i32; `i32.store8` writes the low byte of the i32 operand
+	// already on the stack. The byte access's natural alignment log2 is 0 (2^0 = 1).
+	export function i32Load8U(offset Wasm32Index)
+		self.pushMemAccess(opI32Load8U, align: wasmMemAlignByte, offset: offset)
+	end 'i32Load8U'
+
+	export function i32Store8(offset Wasm32Index)
+		self.pushMemAccess(opI32Store8, align: wasmMemAlignByte, offset: offset)
+	end 'i32Store8'
+
+	// `memory.grow(pages)` — grow linear memory 0 by the i32 page count on the stack; pushes the
+	// previous page count, or -1 on OOM. The slab allocator's `osAllocPages` lowering wraps this
+	// with the size→pages rounding and the OOM trap (StdToWasm's `emitOsAllocPages`).
+	export function memoryGrow()
+		self.buf.push(opMemoryGrow)
+		self.buf.push(wasmMemoryGrowMemZero)
+	end 'memoryGrow'
+
+	// `memory.fill(dest, value, length)` — write `length` copies of `value`'s low byte at `dest` in linear
+	// memory 0. All three operands are i32 and already on the stack in that order.
+	//
+	// ⭐⭐ **ONE INSTRUCTION, AND `StdOp.memFill` DELIBERATELY DOES NOT UNROLL SMALL CONSTANT SIZES HERE THE
+	// WAY THE NATIVE BACKENDS DO.** On wasm every `i64.store` is bounds-checked INDEPENDENTLY by the engine,
+	// whereas one `memory.fill` is a single check plus an engine-tuned memset that already special-cases
+	// short lengths. Hand-unrolling would very likely be SLOWER — the opposite of the conclusion x64 and
+	// arm64 reach from the same op, which is why the size ladder is per-target rather than shared.
+	export function memoryFill()
+		self.buf.push(opBulkMemoryPrefix)
+		writeUleb128(self.buf, value: opBulkMemoryFill)
+		self.buf.push(wasmBulkMemoryMemZero)
+	end 'memoryFill'
+
+	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
+	// the complete body around this stream.
+	export function bytes() returns ByteArray
+		return self.buf
+	end 'bytes'
+end 'WasmBody'
+
+// --- Section IDs (canonical order) ---
+// A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
+// subset in this order. Ids 6 (global) and 8 (start) stay unused by this slice; ids 4 (table)
+// and 9 (element) carry the function-value funcref table (P1.5-A1); id 11 (data) carries the
+// top-level-`var` `.data` image.
+//
+// Id 0 is the CUSTOM section, and it is the one exception to the ordering rule: a custom section
+// may appear between any two others, and any number of times. `finish` emits the ONE this backend
+// produces — the "name" section (W3) — last, past the data section, which is where every other
+// producer puts it and where a reader that stops at the last known id will not trip over it.
+let wasmSectionCustom = 0
+let wasmSectionType = 1
+let wasmSectionImport = 2
+let wasmSectionFunction = 3
+let wasmSectionTable = 4
+let wasmSectionMemory = 5
+let wasmSectionExport = 7
+let wasmSectionElement = 9
+let wasmSectionCode = 10
+let wasmSectionData = 11
+
+// --- The "name" custom section (W3) ---
+//
+// ⭐ **IT IS WHAT MAKES A PANIC BACKTRACE READABLE ON THIS TARGET, AND IT IS THE ONLY THING THAT CAN
+// BE.** wasm has no frame-pointer chain, so the panic runtime cannot walk one (see `StdToWasm`'s
+// `appendPanicRuntime`): the frames in a wasm panic report are the HOST's — wasmtime unwinds its own
+// trap and prints one line per wasm frame. Without this section every one of those lines reads
+// `<wasm function 7>`, because a core module carries no function names anywhere else. With it they read
+// `main`, `mrt_start` — the same words `Targets/Shared/BacktraceFormat` gives the two native walkers.
+//
+// Format (WebAssembly Name Section spec): a custom section whose name is `name`, holding subsections in
+// ASCENDING id order — 0 = module name, 1 = a `namemap` of function names, 2 = local names (unused).
+// Each subsection is `id, ULEB byte length, payload`; a `namemap` is a ULEB COUNT of `(funcIdx, name)`
+// PAIRS followed by the pairs themselves.
+let WasmNameSectionName = b"name"
+let wasmNameSubsectionModule = 0
+let wasmNameSubsectionFunction = 1
+
+// The module's own debug name. Cosmetic — it is the `maxon` in wasmtime's `maxon!main` frame line, where
+// an unnamed module reads `<unknown>!main` — and read by nothing this project parses (the runner splits
+// a frame line on `!` and takes the text AFTER it). Emitted because a named module is what a hand-run
+// `wasm-objdump` wants, and it costs eight bytes.
+let WasmModuleDebugName = b"maxon"
+
+// A data segment's leading byte. `0x00` selects the active, memory-0, i32.const-offset form; in
+// the MVP encoding the very same byte reads as the explicit memory index 0, so this one value
+// serves both readings. The segment body that follows is the offset expression (`i32.const
+// <base>` then `end`) and then the ULEB-length-prefixed byte vector.
+let wasmDataSegmentActiveMem0 = 0x00
+
+// The functype form byte that prefixes every `(params) -> (results)` entry in the type section.
+let wasmFunctypeForm = 0x60
+
+// Import/export descriptor kinds. Only functions are imported; functions and the one memory
+// are exported.
+let wasmImportKindFunc = 0x00
+let wasmExportKindFunc = 0x00
+let wasmExportKindMemory = 0x02
+
+// A wasm `limits` flag: 0x00 = a minimum with no maximum. Shared by the memory's page limits and the
+// funcref table's size limits — one and the same `limits` encoding in the binary format.
+let wasmLimitsFlagMin = 0x00
+
+// The single memory a module declares/exports lives at memory index 0.
+let wasmMemoryIndexZero = 0
+
+// The 4 bytes of the module magic, in file order — the ASCII of "\0asm". Spelled as explicit
+// byte values rather than a byte-string literal, because "\x00asm" is ambiguous: the
+// 'a' that follows the \x00 escape is itself a hex digit.
+let wasmMagicByte0 = 0x00
+let wasmMagicByte1 = 0x61
+let wasmMagicByte2 = 0x73
+let wasmMagicByte3 = 0x6D
+
+// The wasm binary format version this encoder emits (little-endian dword).
+let wasmModuleVersion = 1
+
+// Write the module preamble: the "\0asm" magic then the version dword.
+function writeModuleHeader(buf ByteArray)
+	buf.push(wasmMagicByte0)
+	buf.push(wasmMagicByte1)
+	buf.push(wasmMagicByte2)
+	buf.push(wasmMagicByte3)
+	writeDword(buf, value: wasmModuleVersion)
+end 'writeModuleHeader'
+
+// Write a wasm "name": a ULEB128 byte-length prefix followed by the UTF-8 bytes.
+function writeWasmName(buf ByteArray, name ByteArray)
+	writeUleb128(buf, value: name.count() as Wasm32Index)
+	buf.append(name)
+end 'writeWasmName'
+
+// ONE id-tagged, length-prefixed blob: the id byte, then the ULEB128 byte length of the payload, then
+// the payload.
+//
+// ⚠ **THIS IS THE FRAMING AT BOTH LEVELS — a wasm SECTION and a "name"-section SUBSECTION — and it is
+// ONE function because it is ONE wire format**, not two that happen to agree. The name section's
+// subsections reuse the section framing by design (WebAssembly Name Section spec), so a second copy
+// would be this project's signature bug at the byte level: change the length to a fixed width here and
+// the other copy keeps ULEB, with no compile error and no validator complaint — just a custom section
+// that no reader can walk, on every module the compiler emits.
+//
+// The id is deliberately NOT typed apart per level. Both ids are small integers with no type to tell
+// them apart, so a separate subsection writer taking the same `MachineWord` would have caught nothing
+// it claimed to; the levels are kept honest by the two call sites naming their own `wasmSection*` /
+// `wasmNameSubsection*` constants, which is where the distinction actually lives.
+function writeIdTaggedBlob(buf ByteArray, id MachineWord, payload ByteArray)
+	buf.push(id)
+	writeUleb128(buf, value: payload.count() as Wasm32Index)
+	buf.append(payload)
+end 'writeIdTaggedBlob'
+
+// Write a constant OFFSET EXPRESSION — `i32.const <offset>` (SLEB immediate) terminated by `end` — the
+// active-segment offset both a data segment and an element segment carry (each lays its bytes at this
+// linear-memory / table position). One door so the two encoders cannot drift on the expression's shape.
+function writeI32ConstOffsetExpr(buf ByteArray, offset ParsedInt)
+	buf.push(opI32Const)
+	writeSleb128(buf, value: offset)
+	buf.push(opEnd)
+end 'writeI32ConstOffsetExpr'
+
+// Encode one functype: form byte, ULEB128 param count + param valtype bytes, then the same
+// for results. Exported so `StdToWasm.buildIndirectCallTypeIdxMap`/`emitCallIndirect` can key an indirect
+// call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on (P1.5 #78) — one
+// encoder, so the intern-time key and the emit-time lookup key cannot disagree.
+export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
+	var enc = ByteArray.create()
+	enc.push(wasmFunctypeForm)
+
+	writeUleb128(enc, value: params.count() as Wasm32Index)
+	for p in params 'eachParam'
+		enc.push(valTypeByte(p))
+	end 'eachParam'
+
+	writeUleb128(enc, value: results.count() as Wasm32Index)
+	for r in results 'eachResult'
+		enc.push(valTypeByte(r))
+	end 'eachResult'
+
+	return enc
+end 'encodeFuncType'
+
+// Encode a function body's local declarations as run-length `(count, valtype)` groups: adjacent
+// locals of the same type share one group. `localTypes` is the DECLARED locals only (past the
+// params). Two passes are unavoidable — the group count is ULEB128-prefixed, so it must be known
+// before the groups are written — but the corpus of local types is tiny, so building the groups
+// first costs nothing measurable.
+function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
+	var groupCounts = Wasm32IndexArray.create()
+	var groupTypes = WasmValTypeArray.create()
+
+	for t in localTypes 'each'
+		let n = groupTypes.count()
+		var extended = false
+
+		if n > 0 'checkRun'
+			let lastType = try groupTypes.get(n - 1) otherwise panic("writeLocalDecls: groupTypes.get(last) OOB with count {n}")
+
+			if lastType == t 'sameRun'
+				// Primitive read is a copy, so this get/set pair has no borrow conflict.
+				let lastCount = try groupCounts.get(n - 1) otherwise panic("writeLocalDecls: groupCounts.get(last) OOB with count {n}")
+				try groupCounts.set(n - 1, value: (lastCount + 1) as Wasm32Index) otherwise panic("writeLocalDecls: groupCounts.set(last) OOB with count {n}")
+				extended = true
+			end 'sameRun'
+		end 'checkRun'
+
+		if not extended 'newGroup'
+			groupCounts.push(1)
+			groupTypes.push(t)
+		end 'newGroup'
+	end 'each'
+
+	writeUleb128(buf, value: groupTypes.count() as Wasm32Index)
+	for (iter, gt) in groupTypes.withIterator() 'emit'
+		let count = try groupCounts.get(iter.index()) otherwise panic("writeLocalDecls: groupCounts/groupTypes fell out of lockstep at {iter.index()}")
+		writeUleb128(buf, value: count)
+		buf.push(valTypeByte(gt))
+	end 'emit'
+end 'writeLocalDecls'
+
+// One export entry, held until finish() so exports emit in the order A2 declared them (which
+// determinism requires and the component tooling expects: memory before the run function).
+type WasmExport
+	export var name as ByteArray
+	export var kind as MachineWord
+	export var index as Wasm32Index
+
+	static function create(name ByteArray, kind MachineWord, index Wasm32Index) returns WasmExport
+		return Self{name: name, kind: kind, index: index}
+	end 'create'
+end 'WasmExport'
+
+typealias WasmExportArray = Array with WasmExport
+
+// One active data segment: `bytes` laid into linear memory at `base` when the module is
+// instantiated. Held until `finish()` so segments emit in the order A2 declared them, which
+// determinism requires. The scalar-plus-float milestone had ONE (the top-level-`var` `.data`
+// image); the String-literal milestone adds a SECOND (the `.rdata` record/blob image at a
+// higher base), so the builder holds a LIST rather than a single triple.
+type WasmDataSegment
+	export var base as Wasm32Index
+	export var bytes as ByteArray
+
+	static function create(base Wasm32Index, bytes ByteArray) returns WasmDataSegment
+		return Self{base: base, bytes: bytes}
+	end 'create'
+end 'WasmDataSegment'
+
+typealias WasmDataSegmentArray = Array with WasmDataSegment
+
+// Encoded functype bytes → the type index already interned for them, so `internFuncType` dedups in
+// O(1) instead of a linear scan over every interned type. Keyed on the rendered BYTES, exactly like
+// GlobalDataTable's `valueDedup` (same reason: interning N distinct signatures by scanning was O(N²) —
+// one findFirst-over-an-array per defined function). Content-hashed, so two identical signatures share
+// one entry regardless of how they were built.
+typealias FuncTypeDedupMap = Map with (ByteArray, Wasm32Index)
+
+// --- WasmModuleBuilder: assembles a complete CORE wasm module ---
+// FUNCTION INDEX SPACE (the contract A2 mirrors): imports take indices 0..importCount-1 in
+// addImportFunc call order; defined functions take importCount, importCount+1, … in addFunction
+// call order. So A2 must add ALL imports before ANY function — addFunction returns the index it
+// assigned, computed from the import count at that moment.
+export type WasmModuleBuilder
+	// Interned functype encodings, position = type index. Deduplicated so identical signatures
+	// share one entry; `funcTypeDedup` keys the encoded bytes → index so the dedup is O(1), not a
+	// scan of every prior entry per interned type.
+	var funcTypes as ByteArrayArray
+
+	// Encoded functype bytes → their interned type index (the dedup index for `funcTypes`).
+	var funcTypeDedup as FuncTypeDedupMap
+
+	// Imports, in call order: parallel columns of module name, field name, and type index.
+	var importModules as ByteArrayArray
+	var importFields as ByteArrayArray
+	var importTypeIndices as Wasm32IndexArray
+
+	// Defined functions, in call order: the type index and the FRAMED body (local decls +
+	// instruction bytes + trailing `end`) of each.
+	var funcTypeIndices as Wasm32IndexArray
+	var funcBodies as ByteArrayArray
+
+	// ⭐ **ONE DEBUG NAME PER FUNCTION, AT POSITION == ITS FUNCTION INDEX** — the "name" section's
+	// `namemap`, collected as the functions are added rather than reconstructed afterwards.
+	//
+	// ⚠ **THE NAMEMAP'S PAIR COUNT IS NOT AN ARITHMETIC GUESS.** A formula such as
+	// `namedWasiImports + funcCount + syntheticNamedFuncs` writes the count down twice — once as the
+	// formula, once as the pairs actually emitted — with nothing making them agree, and an over-count
+	// makes a strict parser (Binaryen's `wasm-opt`) read past the subsection to EOF. Here the count
+	// IS `funcDebugNames.count()`, so the two cannot differ: there is one name per `addImportFunc` /
+	// `addFunction`, and the pairs emitted ARE the array walked.
+	//
+	// The index-space contract (all imports before any defined function) is what lets ONE array serve
+	// both bands, and `requireDebugNameSlot` asserts it at every add rather than trusting it.
+	var funcDebugNames as ByteArrayArray
+
+	// Exports, in declaration order.
+	var exportEntries as WasmExportArray
+
+	// The single linear memory, declared/exported by exportMemory.
+	var hasMemory as bool
+	var memoryMinPages as Wasm32Index
+
+	// The active `.data`/`.rdata` segments, in declaration order. Each is copied verbatim into
+	// linear memory at its own `base` at instantiation. Empty for a program with no top-level
+	// `var` and no String literal, which emits no data section at all. The caller sizes the
+	// memory (`exportMemory`'s `minPages`) to cover the highest `base + bytes.count()`.
+	var dataSegments as WasmDataSegmentArray
+
+	// Whether the module declares the function-value funcref table + element segment (P1.5-A1). Set by
+	// `enableFuncrefTable` when the Std module contains an indirect call; the table then covers EVERY
+	// function so a function's table index equals its wasm funcIdx. False keeps a program with no function
+	// value byte-identical — no table (id 4) and no element (id 9) section at all.
+	var funcrefTable as bool
+
+	export static function create() returns WasmModuleBuilder
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), funcDebugNames: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
+	end 'create'
+
+	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
+	// the encoded bytes: this runs once per DEFINED FUNCTION, so a scan of every prior interned type
+	// here made interning N functions with D distinct signatures O(N·D) — up to O(N²) when signatures
+	// vary — a findFirst-over-an-array in a per-function loop. The map returns the FIRST-interned
+	// index for identical bytes, exactly as the scan did, so the emitted type section is byte-identical.
+	export function internFuncType(params WasmValTypeArray, results WasmValTypeArray) returns Wasm32Index
+		let enc = encodeFuncType(params, results: results)
+
+		return try self.funcTypeDedup.get(enc) otherwise 'fresh'
+			let idx = self.funcTypes.count() as Wasm32Index
+			self.funcTypes.push(enc)
+			self.funcTypeDedup.upsert(enc, value: idx)
+			return idx
+		end 'fresh'
+	end 'internFuncType'
+
+	// Add an imported function, returning its function index (imports precede all defined
+	// functions in the index space). `debugName` is what a backtrace frame in this import reads as —
+	// an import has a module/field pair, but those are the WIT interface's spelling, not a name a
+	// stack trace can print, so it carries its own short alias.
+	export function addImportFunc(moduleName ByteArray, fieldName ByteArray, typeIdx Wasm32Index, debugName ByteArray) returns Wasm32Index
+		let idx = self.importModules.count() as Wasm32Index
+		self.requireDebugNameSlot(idx, what: fieldName)
+		self.importModules.push(moduleName)
+		self.importFields.push(fieldName)
+		self.importTypeIndices.push(typeIdx)
+		self.funcDebugNames.push(debugName)
+		return idx
+	end 'addImportFunc'
+
+	// Add a defined function, returning its function index. `body` is WasmBody.bytes() (raw
+	// instructions); this frames it with the local declarations and the trailing `end`. `debugName` is
+	// the name the "name" section gives this index — for a module function its own `IrFunction.name`, so
+	// a backtrace frame reads the source's word for it.
+	export function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray, debugName ByteArray) returns Wasm32Index
+		let funcIdx = (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
+		self.requireDebugNameSlot(funcIdx, what: debugName)
+
+		var framed = ByteArray.create()
+		writeLocalDecls(framed, localTypes: localTypes)
+		framed.append(body)
+		framed.push(opEnd)
+
+		self.funcTypeIndices.push(typeIdx)
+		self.funcBodies.push(framed)
+		self.funcDebugNames.push(debugName)
+		return funcIdx
+	end 'addFunction'
+
+	// The one assumption `funcDebugNames` rests on, checked instead of trusted: a name pushed for
+	// function `funcIdx` must land AT position `funcIdx`. That holds only while every import precedes
+	// every defined function — the index-space contract this type's header states — so an `addImportFunc`
+	// after an `addFunction` would put every subsequent name against the wrong index and every backtrace
+	// frame would print a neighbouring function's name. There is no shape of that mistake a wasm
+	// validator would catch: the module stays perfectly well-formed and only the diagnostic lies.
+	function requireDebugNameSlot(funcIdx Wasm32Index, what ByteArray)
+		if self.funcDebugNames.count() != funcIdx 'slotDrift'
+			panic("WasmModuleBuilder: adding '{String.from(what)}' as function index {funcIdx}, but {self.funcDebugNames.count()} debug names have been collected — an import was added after a defined function, so the name section would name every later function wrongly")
+		end 'slotDrift'
+	end 'requireDebugNameSlot'
+
+	export function exportFunc(name ByteArray, funcIdx Wasm32Index)
+		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindFunc, index: funcIdx))
+	end 'exportFunc'
+
+	// Declare the module's single memory with `minPages` initial pages and export it under
+	// `name` (memory index 0).
+	export function exportMemory(name ByteArray, minPages Wasm32Index)
+		self.hasMemory = true
+		self.memoryMinPages = minPages
+		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindMemory, index: wasmMemoryIndexZero))
+	end 'exportMemory'
+
+	// Record one active data segment: `bytes` are laid into linear memory at `base` when the
+	// module is instantiated. Called once per non-empty image (the top-level-`var` `.data`, then
+	// the String-literal `.rdata`); each caller guards its own emptiness, so a recorded segment
+	// always carries bytes.
+	export function addDataSegment(base Wasm32Index, bytes ByteArray)
+		self.dataSegments.push(WasmDataSegment.create(base, bytes: bytes))
+	end 'addDataSegment'
+
+	// Declare that the module needs the function-value funcref table + element segment (P1.5-A1). Called once
+	// by `buildWasmCoreModule` when the Std module contains an indirect call OR a `.rdata` slot naming a
+	// function — a witness-table method slot or a layout descriptor's `destroyFunc@40`/`copyFunc@32`, which
+	// hold a TABLE INDEX on this target (`StdToWasm.bakeFuncTableIndexRelocs`, P1.7a slice 2b-iv-B) and so need
+	// the table to exist even when no op in the module is itself an indirect call. The table is sized to
+	// hold every function and the element segment lists them in index order (`emitTableSection` /
+	// `emitElementSection`), so table[i] == function i and a function's table index equals its wasm funcIdx.
+	export function enableFuncrefTable()
+		self.funcrefTable = true
+	end 'enableFuncrefTable'
+
+	// The module's total function count — imports (indices 0..importCount-1) followed by defined functions.
+	// The size the funcref table must reach for every function's index to be a valid slot, and the length
+	// of the element segment that fills it.
+	function totalFunctionCount() returns Wasm32Index
+		return (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
+	end 'totalFunctionCount'
+
+	// Emit the finished CORE module: preamble + sections in canonical id order. Empty sections
+	// are omitted (a wasm module names only the sections it uses) — the data section when the
+	// program has no top-level `var`, every other section being non-empty in practice.
+	export function finish() returns ByteArray
+		var module = ByteArray.create()
+		writeModuleHeader(module)
+
+		self.emitTypeSection(module)
+		self.emitImportSection(module)
+		self.emitFunctionSection(module)
+		self.emitTableSection(module)
+		self.emitMemorySection(module)
+		self.emitExportSection(module)
+		self.emitElementSection(module)
+		self.emitCodeSection(module)
+		self.emitDataSection(module)
+		self.emitNameSection(module)
+
+		return module
+	end 'finish'
+
+	function emitTypeSection(module ByteArray)
+		if self.funcTypes.count() == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: self.funcTypes.count() as Wasm32Index)
+		for t in self.funcTypes 'each'
+			contents.append(t)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionType, payload: contents)
+	end 'emitTypeSection'
+
+	function emitImportSection(module ByteArray)
+		let importCount = self.importModules.count()
+		if importCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: importCount as Wasm32Index)
+		for (iter, moduleName) in self.importModules.withIterator() 'each'
+			let fieldName = try self.importFields.get(iter.index()) otherwise panic("emitImportSection: importFields out of lockstep with importModules at {iter.index()}")
+			let typeIdx = try self.importTypeIndices.get(iter.index()) otherwise panic("emitImportSection: importTypeIndices out of lockstep at {iter.index()}")
+
+			writeWasmName(contents, name: moduleName)
+			writeWasmName(contents, name: fieldName)
+			contents.push(wasmImportKindFunc)
+			writeUleb128(contents, value: typeIdx)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionImport, payload: contents)
+	end 'emitImportSection'
+
+	function emitFunctionSection(module ByteArray)
+		let funcCount = self.funcTypeIndices.count()
+		if funcCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: funcCount as Wasm32Index)
+		for typeIdx in self.funcTypeIndices 'each'
+			writeUleb128(contents, value: typeIdx)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionFunction, payload: contents)
+	end 'emitFunctionSection'
+
+	// The funcref table (id 4) the function-value feature needs: ONE table of `funcref`, sized to hold
+	// EVERY function (imports + defined), so any function's index is a valid table slot. Emitted only when
+	// the module uses function values (`enableFuncrefTable`); a program with no indirect call declares no
+	// table and stays byte-identical. `emitElementSection` populates it.
+	function emitTableSection(module ByteArray)
+		if not self.funcrefTable 'none'
+			return
+		end 'none'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmRefTypeFuncref)
+		contents.push(wasmLimitsFlagMin)
+		writeUleb128(contents, value: self.totalFunctionCount())
+
+		writeIdTaggedBlob(module, id: wasmSectionTable, payload: contents)
+	end 'emitTableSection'
+
+	// The active element segment (id 9) that fills the funcref table: ONE segment at table offset 0 listing
+	// every function index in order, so table[i] == function i. That makes a function's table index equal
+	// its wasm funcIdx — exactly what `funcAddr` materializes — and satisfies wasm's rule that a function
+	// used as a value appear in an element segment. Emitted only alongside the table.
+	function emitElementSection(module ByteArray)
+		if not self.funcrefTable 'none'
+			return
+		end 'none'
+
+		let funcCount = self.totalFunctionCount()
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmElemSegmentActiveFuncref)
+		writeI32ConstOffsetExpr(contents, offset: wasmElemTableStartOffset)
+		writeUleb128(contents, value: funcCount)
+		for funcIdx in 0 upto funcCount 'each'
+			writeUleb128(contents, value: funcIdx as Wasm32Index)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionElement, payload: contents)
+	end 'emitElementSection'
+
+	function emitMemorySection(module ByteArray)
+		if not self.hasMemory 'none'
+			return
+		end 'none'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmLimitsFlagMin)
+		writeUleb128(contents, value: self.memoryMinPages)
+
+		writeIdTaggedBlob(module, id: wasmSectionMemory, payload: contents)
+	end 'emitMemorySection'
+
+	function emitExportSection(module ByteArray)
+		let exportCount = self.exportEntries.count()
+		if exportCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: exportCount as Wasm32Index)
+		for entry in self.exportEntries 'each'
+			writeWasmName(contents, name: entry.name)
+			contents.push(entry.kind)
+			writeUleb128(contents, value: entry.index)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionExport, payload: contents)
+	end 'emitExportSection'
+
+	function emitCodeSection(module ByteArray)
+		let funcCount = self.funcBodies.count()
+		if funcCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: funcCount as Wasm32Index)
+		for body in self.funcBodies 'each'
+			writeUleb128(contents, value: body.count() as Wasm32Index)
+			contents.append(body)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionCode, payload: contents)
+	end 'emitCodeSection'
+
+	// The data section: a count, then each segment (the flag/memory-0 byte, an `i32.const <base>`
+	// offset expression — SLEB immediate, terminated by `end` — then the ULEB-length-prefixed byte
+	// vector). Omitted entirely when there is no segment — an empty section would only bloat the
+	// module.
+	function emitDataSection(module ByteArray)
+		let segmentCount = self.dataSegments.count()
+		if segmentCount == 0 'none'
+			return
+		end 'none'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: segmentCount as Wasm32Index)
+		for segment in self.dataSegments 'each'
+			contents.push(wasmDataSegmentActiveMem0)
+			writeI32ConstOffsetExpr(contents, offset: segment.base as ParsedInt)
+			writeUleb128(contents, value: segment.bytes.count() as Wasm32Index)
+			contents.append(segment.bytes)
+		end 'each'
+
+		writeIdTaggedBlob(module, id: wasmSectionData, payload: contents)
+	end 'emitDataSection'
+
+	// The "name" custom section — the module's debug name and one name per function, in index order.
+	// See the constants above for why it exists and for the format.
+	//
+	// Emitted unconditionally: every module has functions, and this is the only source of the words a
+	// panic backtrace prints on this target. Both subsections are written in ascending id order, each
+	// LENGTH-PREFIXED, which is what lets a reader that does not know a subsection id skip it.
+	function emitNameSection(module ByteArray)
+		var contents = ByteArray.create()
+		writeWasmName(contents, name: WasmNameSectionName)
+
+		var moduleNamePayload = ByteArray.create()
+		writeWasmName(moduleNamePayload, name: WasmModuleDebugName)
+		writeIdTaggedBlob(contents, id: wasmNameSubsectionModule, payload: moduleNamePayload)
+
+		// The namemap: a count of PAIRS, then each `(funcIdx, name)`. The count is the array's own —
+		// see `funcDebugNames` for why it is not an arithmetic sum of the bands.
+		var namemap = ByteArray.create()
+		writeUleb128(namemap, value: self.funcDebugNames.count() as Wasm32Index)
+		for (iter, name) in self.funcDebugNames.withIterator() 'eachName'
+			writeUleb128(namemap, value: iter.index() as Wasm32Index)
+			writeWasmName(namemap, name: name)
+		end 'eachName'
+		writeIdTaggedBlob(contents, id: wasmNameSubsectionFunction, payload: namemap)
+
+		writeIdTaggedBlob(module, id: wasmSectionCustom, payload: contents)
+	end 'emitNameSection'
+end 'WasmModuleBuilder'

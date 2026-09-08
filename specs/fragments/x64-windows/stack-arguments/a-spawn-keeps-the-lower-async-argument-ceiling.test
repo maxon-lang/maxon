@@ -1,0 +1,17 @@
+// Test: a-spawn-keeps-the-lower-async-argument-ceiling
+typealias Integer = int(i64.min to i64.max)
+
+function wide7(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer) returns bool
+	return a + b + c + d + e + f + g > 0
+end 'wide7'
+
+function main() returns ExitCode
+	let p = async wide7(1, b: 2, c: 4, d: 8, e: 16, f: 32, g: 64)
+	if await p 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:16: Unsupported: `async wide7(…)` passes 7 arguments — more than the 6 a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments

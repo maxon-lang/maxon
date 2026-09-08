@@ -1,0 +1,1712 @@
+// THE 4-digit error-code registry. Authored here — add a case, then write the code that emits it.
+//
+// A duplicate NAME does not compile and `ErrorCode.Foo` does not compile unless this enum declares
+// it, so both are structural. A duplicate NUMBER is neither, and `Testing/ErrorCodeSelfTest.maxon`
+// refuses one on every `spec-test`.
+
+// Error codes grouped by compilation stage:
+// 1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx code emitter,
+// 6xxx PE writer, 9xxx internal.
+export enum ErrorCode
+	// A string literal reached end-of-line or end-of-file with no closing quote.
+	lexerUnterminatedString = "E1002"
+	// A backslash escape in a string or character literal names no known escape.
+	lexerInvalidEscape = "E1004"
+	// A literal brace appears unescaped in a string literal. A '{' opens interpolation, so write '\{' to embed a literal brace.
+	lexerUnescapedBrace = "E1006"
+	// A block comment reached end-of-file with no closing delimiter.
+	lexerUnterminatedBlockComment = "E1007"
+	// The lexer reached end-of-file in the middle of a token.
+	lexerUnexpectedEof = "E1008"
+	// A '#' compiler directive names a directive the lexer does not know.
+	lexerUnknownDirective = "E1009"
+
+	// The parser met a token that cannot appear at this point in the grammar.
+	parserUnexpectedToken = "E2001"
+	// A type was required here and the token stream had something else.
+	// The compiler emits it for the two shapes where a name IS present but is not a
+	// usable type: a bare sized type as a typealias RHS (`typealias I = i64`),
+	// and an `as` cast target that names a typealias the reading file cannot
+	// see. A cast target no declaration binds ANYWHERE is E3011 instead, which
+	// is sharper than a blanket E2003 -- see
+	// specs/cast-target-type-resolution.md.
+	// It also covers the shape where NO name is present and none can be
+	// inferred: a closure parameter past the first in a container `map`'s
+	// transform (`nums.map(function(a, b) gives a + b)`). That position types
+	// ONE parameter, by the arity the transform is declared at, so a later
+	// untyped one has nothing to take a type from -- see
+	// specs/closure-param-type-inference.md. An untyped parameter in a
+	// position that offers nothing at all is E2015 instead, which names the one
+	// construct that does infer.
+	parserExpectedType = "E2003"
+	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: five distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; and a top-level binding's initializer does not fold to a compile-time constant.
+	parserExpressionError = "E2004"
+	// The parser reached end-of-file with a construct still open.
+	parserUnexpectedEof = "E2007"
+	// A block's 'end' label does not match the label its header opened.
+	parserMismatchedEndLabel = "E2008"
+	// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
+	parserExpectedToken = "E2010"
+	// An integer literal does not fit the range of its type.
+	parserLiteralOverflow = "E2011"
+	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
+	parserCircularDependency = "E2012"
+	// An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
+	assignToImmutable = "E2013"
+	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.
+	duplicateParameter = "E2014"
+	// The source uses a language construct this compiler does not implement yet.
+	parserUnsupportedFeature = "E2015"
+	// A character literal is malformed (empty, or holding more than one character).
+	parserInvalidCharacterLiteral = "E2016"
+	// A match arm falls through to the next arm while the enclosing function still owes a return.
+	matchFallthroughWithReturn = "E2025"
+	// A match does not cover every case of its scrutinee and has no default arm.
+	matchNotExhaustive = "E2026"
+	// Two match arms test the same pattern; the second can never run.
+	matchDuplicatePattern = "E2027"
+	// A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
+	// a match arm or postfix-ternary's two arms produce different types,
+	// or a ternary condition is not bool. Thrown at parse time so it wins over the
+	// body-finish unused-variable check (E3012).
+	matchTypeMismatch = "E2028"
+	// A match's 'default' arm is not the last arm.
+	matchDefaultNotLast = "E2029"
+	// A match arm opens a block but gives it no block label.
+	matchMissingBlockId = "E2042"
+	// A match arm's block label does not match the label its arm opened.
+	matchMismatchedBlockId = "E2043"
+	// A top-level constant's initializer is not a compile-time constant.
+	parserNonConstantInitializer = "E2045"
+	// A match over an enum may only carry a 'default' arm if that arm throws.
+	matchDefaultEnumMustThrow = "E2046"
+	// 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
+	controlOutsideLoop = "E2047"
+	// 'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant.
+	// `break 'lab'` / `continue 'lab'` where `lab` names the
+	// innermost enclosing loop (with no intervening match for `break`). The
+	// label is redundant -- unlabeled `break`/`continue` already targets
+	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+	labelTargetsOwnLoop = "E2048"
+	// A match arm's body is a block-opening statement. Each arm body must be a single statement.
+	// Phase 9 Stage 0: a match arm body cannot be a block-opening
+	// statement (`if` / `while` / `for` / `match` / block-form `try`).
+	// Each arm body is a single statement; block-form constructs would
+	// allocate persistent slots that leak on every error path through
+	// the match.
+	matchBlockStatement = "E2049"
+	// An 'otherwise' block form declares no error binding.
+	// TWO messages on one code: a block-form
+	// `try 'l' ... end 'l'` with NO `otherwise` handler at all, and one whose
+	// handler declares no `(e)`. The author's mistake is one thing -- an
+	// incomplete handler -- told apart only by how far they got.
+	otherwiseBlockMissingBinding = "E2050"
+	// A declaration uses a name reserved by the compiler.
+	reservedIdentifier = "E2051"
+	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
+	// a call site labeled its first argument (`f(name: value, ...)`).
+	// The first argument is positional-only; only the second and subsequent
+	// arguments may be labeled.
+	callFirstArgNamed = "E2052"
+	// A call leaves a second-or-later argument unlabeled. Every argument after the first must carry its 'name:' label.
+	callArgMissingLabel = "E2053"
+	// A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
+	// 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
+	// not a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed
+	// 'a shl 63' -- the MAXIMUM LEFT shift, a wrong answer with the opposite sign.
+	// Maxon follows Go: the count must be non-negative; a constant one is this compile
+	// error, and one that only appears at RUN TIME panics.
+	// WARNING -- a count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined
+	// shift that moves every bit out ('x shl 64' == 0), because Go puts no upper limit
+	// on a shift count. This code briefly rejected it, which OVER-rejects a correct
+	// program. The compiler SATURATES such a count instead of masking it.
+	// A PARSE-time check, positioned at the count as WRITTEN. It asks the CONSTANT
+	// FOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a
+	// check that only looked for a bare literal token missed its own motivating example.
+	shiftCountNegative = "E2054"
+	// A 'Base with Args' instantiation names a 'Base' that declares no type parameters --
+	// a non-generic type, or a name that is not a generic 'type' at all. Reports as
+	// "Type 'X' has no associated types".
+	genericBaseNotGeneric = "E2055"
+	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
+	// where 'type Pair uses A, B' expects two (P1.6-A).
+	genericArityMismatch = "E2056"
+	// A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
+	// confined to those files by ONE rule checked in ONE place, so which declarations a build
+	// carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
+	// body for. The message names the fix: rename the file, or move the declaration.
+	parserTestOutsideTestFile = "E2058"
+	// A `test` declaration's name is the empty character literal (`test ''`). The name is the
+	// test's whole identity -- it is what the reporter prints and what `end ''` must match -- and
+	// an empty one names nothing. Refused at the declaration rather than at the report, where an
+	// unnamed failure would be the least useful place to discover it.
+	parserTestEmptyName = "E2059"
+	// '__line__' or '__file__' appeared somewhere other than a function parameter's default
+	// value -- in an ordinary expression, or as a struct FIELD default, which is a different
+	// thing despite the shared '= <expr>' spelling.
+	// These two are a CALLING CONVENTION, not a reflection facility: each expands at the CALL
+	// SITE, and a parameter default is the only position that has a call site to expand
+	// against. A field default expands at a struct literal and an ordinary expression expands
+	// nowhere, so neither has an answer to give.
+	// Raised at TWO grammar positions, from one rule: the expression position catches it when
+	// the token is evaluated, and the field-default position catches it when the tokens are
+	// CAPTURED. The capture-side check is not merely a better error location -- without it a
+	// field default nobody triggers is never expanded, and the misuse would go undiagnosed.
+	parserCallerLocationOutsideDefault = "E2060"
+	// A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',
+	// 'Array with float' -- where the ranged-typealias rule requires a declared domain
+	// ('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule
+	// every other type position already enforces, reaching the one position that never did.
+	// 'bool' is DELIBERATELY ADMITTED and is not this error: it is already a constrained type with
+	// nothing to range. So are 'String', a user 'type'/'enum', a type PARAMETER, a nested instance
+	// and a ranged alias -- this names ONLY the two bare numeric keywords.
+	// Distinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves
+	// to a real type that is forbidden in this position.
+	// Distinct from E2062: a bare 'float' is BOTH a bare primitive and a float, and E2062 claims it,
+	// because THIS code's advice ("declare a ranged typealias") is true for 'int' and a trap for
+	// 'float'. So this code only ever names 'int'.
+	genericBarePrimitiveArg = "E2061"
+	// A generic type argument resolves to 'float' -- bare ('Box with float') or through a ranged
+	// float typealias ('typealias Real = float(...)' then 'Box with Real'). The compiler DICTIONARY-PASSES
+	// rather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a
+	// float value is born in a floating-point register and has no way to travel through it. Reaching
+	// the backend, it panicked on the x64 emitter's cross-register-file assertion.
+	// It is a compiler limitation, not a language rule, and
+	// the message says so rather than naming a workaround -- there is none at this milestone.
+	// It is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias
+	// advice, which would direct the reader into the very panic this refusal exists to close.
+	genericFloatTypeArg = "E2062"
+	// A '#if' / '#else' / '#endif' region is structurally unbalanced: a '#if' still open at end of
+	// file, or an '#endif' / '#else' with no '#if' to close.
+	// Accepting them is a wrong-answer generator, not a leniency: an unterminated '#if' silently
+	// SWALLOWS the rest of the file, so every declaration after it vanishes and the only symptom is
+	// an unrelated 'undefined' further on. The compiler refuses, naming the position of the directive that
+	// has no partner.
+	directiveUnbalanced = "E2063"
+	// A '#if' condition names a conditional-compilation predicate that does not exist -- anything
+	// other than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.
+	// Distinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a
+	// bad token); this names a known directive whose CONDITION calls an unknown function.
+	// An unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it
+	// evaluates to FALSE, letting a condition name a platform this
+	// compiler does not target without becoming a build failure.
+	// Names ONLY the unknown-name fault. A condition the grammar cannot READ at all -- a missing
+	// ')', an operator with no right-hand side, text trailing the condition -- is E2065; it used to
+	// share this code, and 'your predicate name is unknown' is the wrong advice for a missing paren.
+	directiveUnknownPredicate = "E2064"
+	// A '#if' condition the directive grammar has no production for. Two shapes reach it: the
+	// condition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare
+	// 'true' where a predicate call belongs, a condition that runs off the end of the file), or the
+	// condition parses but TEXT FOLLOWS IT on the same line.
+	// Split out of E2064, which names a different fault: there the condition reads fine and the
+	// function it calls does not exist, and the fix is to correct a NAME. Here there is nothing to
+	// look up. One code answering both told a reader with an unbalanced paren that their predicate
+	// name was unknown.
+	// The trailing text is REFUSED rather than discarded. Accepting it is a wrong-answer generator:
+	// the tokens after the condition are emitted into the program as code,
+	// so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
+	// region is dead and the junk is skipped along with it. A condition ends at its own newline.
+	directiveMalformedCondition = "E2065"
+	// A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface
+	// declares 'uses' names -- 'type Holder implements One with (Integer, Float)' against
+	// 'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean
+	// (measured, exit 42): a typo nothing reported.
+	// DELIBERATELY ASYMMETRIC, and the asymmetry IS the rule. The same surplus written WITHOUT
+	// parentheses is still ignored, because the two spellings are not the same claim: parentheses
+	// make the list explicit, so its LENGTH is something the author asserted and can be wrong
+	// about, while unparenthesized the length is decided by the interface's 'uses' arity and a
+	// trailing comma legitimately belongs to the outer 'implements' list. Exactly 'arity' items are
+	// consumed in the unparenthesized form, and 'surplus-conformance-argument-is-ignored' pins it.
+	// NOT E2056 GenericArityMismatch, which is a different construct with a different rule. That
+	// one is a generic INSTANTIATION ('Pair with Integer' as a type reference) and its arity is
+	// SYMMETRIC -- too few is the same error as too many. Here too FEW is a different diagnostic
+	// entirely (E3016, naming the first UNBOUND associated type, raised whole-program by
+	// ConformanceCheck), and too many is refused only in one of the two spellings. One code over
+	// two rules that agree on neither symmetry nor spelling would document neither.
+	// It is NOT raised when the interface name resolves to nothing: a name no file declares has no
+	// arity to be surplus of, and the program's real error is E3015 'implements unknown interface'.
+	conformanceWithArgSurplus = "E2066"
+	// A call to a bare compiler BUILTIN labels one of its arguments -- 'min(3.0, b: 5.0)'.
+	// A builtin's arguments are ALL POSITIONAL, at every index, because a 'name:' label names a
+	// PARAMETER OF A DECLARATION and a builtin has no declaration to have parameters. Nothing
+	// downstream could check such a label either: a builtin emits no call op, so it never reaches
+	// the slotting that validates a label against a callee's parameter names.
+	// NOT E2052/E2053, and that is the whole reason this code exists rather than reusing one of
+	// them. Both of those state the ORDINARY call rule -- 'only the second and later arguments
+	// take name: labels' -- which is FALSE for a builtin at every position. Reusing E2052 here
+	// would answer a labelled second argument with a sentence saying second arguments may be
+	// labelled.
+	// It fires only for callees whose arguments this compiler decides are positional, and that
+	// decision is stated in exactly ONE place, 'Parser.argLabelRuleForCallee'. TWO disjoint families
+	// answer that way, for the same reason and by different tests: the MATH intrinsics
+	// ('calleeTakesPositionalArgsOnly'), each of which IS a machine instruction; and every
+	// '__Builtins.'-qualified callee ('isBuiltinsIntrinsicCallee'), which the stdlib WRAPS and never
+	// declares. Neither will ever acquire a declaration to take labels from. It covers the arity-1
+	// members as well as the arity-2 ones, because the same wrong noun would otherwise survive one
+	// door over: 'abs(x: 1.0)' would keep answering E2052, whose sentence invites the nonsense fix
+	// 'abs(1.0, x: ...)'.
+	// It is NOT 'every builtin'. The bare builtins that are NOT in that roster stay on the ordinary
+	// E2052/E2053 rule -- today 'spawnReadLine' and the seven 'subp*'
+	// streaming-subprocess builtins. Every one is a STAND-IN for a stdlib declaration that will have
+	// real, labellable parameters -- 'subpWriteLine(h, line: s)' already LABELS its second argument
+	// on purpose, written the way the eventual method call will be written.
+	// ⛔ DO NOT TRUST THAT LIST; READ 'Parser.parseCallNamed's CHAIN. This sentence is a PROSE COPY
+	// of a roster and it has been wrong twice: it said TWELVE and named the two UAX #29 classifiers
+	// after BATCH2 slice 6 retired them, and it went on naming 'print' after W35 retired that one
+	// onto 'stdlib/Print.maxon'. It carries no count now for exactly that reason. The set that DOES
+	// bind is stated in one place, 'Parser.calleeTakesPositionalArgsOnly'; everything else the chain
+	// recognizes is the complement of it, and a builtin RETIRED onto a stdlib declaration leaves the
+	// chain entirely and takes the ordinary declared-call rules with it.
+	// ⚠ AND THE SET THAT BINDS IS NO LONGER THAT ROSTER ALONE. Since the '__Builtins.' half joined,
+	// 'Parser.argLabelRuleForCallee' is the one place to read; 'calleeTakesPositionalArgsOnly' is
+	// one of its two arms, not the whole answer. The '__Builtins.' arm is a QUALIFIER test and not a
+	// roster, deliberately: the label regime is chosen while the argument list is still being parsed,
+	// so a '__Builtins.' name this compiler does not implement parses positionally and meets E3004,
+	// rather than a label complaint standing in front of the true diagnostic.
+	builtinArgNamed = "E2067"
+	// A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the
+	// number grammar does not admit.
+	// IT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to
+	// assert a malformed literal was UNREACHABLE from source, on the ground that Lexer.scanNumber
+	// only ever hands over digits, '_', '.', 'e'/'E' and an exponent sign -- so a rejection could
+	// only mean the lexer and the number reader had diverged, a compiler defect rather than a
+	// program's. That premise was FALSE: the lexer's trailing-byte rule appended a SECOND '.' to a
+	// token that already carried a fraction, so '1.5.3' reached the reader as '1.5.' and CRASHED
+	// the compiler. A parser must be able to answer 'that literal is not well-formed' with a
+	// position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
+	// surface.
+	parserMalformedNumericLiteral = "E2068"
+	// A 'Vector with ...' does not state a usable element COUNT before its element type:
+	// 'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a
+	// count too large for the compiler to fold into a buffer allocation.
+	// A Vector's SIZE IS PART OF ITS TYPE ('Vector with 3 Int' and 'Vector with 4 Int' are
+	// different types), which is why the count is required rather than defaulted: there is no
+	// size a sizeless spelling could mean, and a default would silently give two declarations
+	// one type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count
+	// is a value, is consumed before the type-argument list is read, and a 'Vector with 3'
+	// missing its element type IS the E2056 that code names.
+	// It has a code of its own so the one rule has one message wherever the spelling is met.
+	vectorSizeMalformed = "E2069"
+	// A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.
+	// Each intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:
+	// 'ucdByteAt' reads '__ucd_bmp', one byte per BMP codepoint, and 'ucdI64At' reads
+	// '__ucd_supp', an array of 8-byte packed range entries. Reading either with the other's
+	// stride cannot produce an answer -- only a wrong one -- so the pairing is refused rather
+	// than assumed, and the message names the table the intrinsic DOES read.
+	// ⚠ IT IS A SECURITY GUARD AND NOT A TYPO CHECK, which is why it is a refusal at the label
+	// token rather than a link failure later. The label becomes a FILE NAME under the stdlib
+	// directory, so an unchecked one is a PATH TRAVERSAL. A '__ucd_' PREFIX check does not close
+	// it: '__ucd_../../x' carries the prefix and still escapes. A ROSTER of the tables the
+	// compiler actually owns is what closes it.
+	// NOT E2010: a label that is not a string LITERAL at all is refused at the token by the
+	// ordinary 'expected a string literal' rule, because that is a shape the parser can state
+	// without knowing which intrinsic it is reading for.
+	ucdTableLabelUnknown = "E2070"
+	// A qualified read names a member the type does not declare -- `Config.MIN_SIZE` where
+	// `Config` declares only `MAX_SIZE`. The base is a type the AUTHOR declared, so the type
+	// has a static roster to answer from and the honest sentence is about that roster. Blamed at
+	// the MEMBER token, which is the name that is missing.
+	// Without it the form falls to its last-resort reading as a SIZED NUMERIC BOUND (`u64.max`)
+	// and is refused E2010 -- "Expected 'min or max' but got 'MIN_SIZE'", a demand the author
+	// never made, in words for a base this program does not have; and for `Box.min`, whose member
+	// spells a bound, on the BASE token, blaming a name that resolves perfectly well.
+	// THE GATE IS "the base names a declared STRUCT", deliberately not "the base is not a sized
+	// type name". A ranged ALIAS base keeps the bound reading -- specs/type-name-collision.md
+	// pins `Status.big` against an alias as E2010 -- and an UNDECLARED base has no roster, so the
+	// noun "type" would be false of it. Both still report as a malformed bound, which is a true
+	// statement about each; narrowing them further needs a base-kind-aware noun.
+	// The runnable oracle answers the same programs E3018 "Type 'Config' has no static member
+	// 'MIN_SIZE'" -- one subject, each compiler in its own house spelling.
+	unknownStaticMember = "E2073"
+
+	// The program declares no 'main' function.
+	noMainFunction = "E3001"
+	// 'main' declares a return type other than ExitCode.
+	mainWrongReturnType = "E3002"
+	// A call names a function that does not exist -- a typo, or a callee not visible from here.
+	callUnknownFunction = "E3004"
+	// A value's type does not match the type required at this position.
+	typeMismatch = "E3005"
+	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
+	// a duplicate definition or a local-vs-self-field shadow. Two
+	// shapes share the code: (a) two function definitions with the same
+	// name and signature -- fires from `reportDuplicateFunction` in the
+	// parser for same-file duplicates and from the project-level main
+	// registration for cross-file `main` collisions; (b) a local
+	// declaration inside an instance method whose name collides with a
+	// `self.field` (the local would silently shadow the field);
+	// (c) two top-level `let`/`var` declarations of one name in a file --
+	// fires from `isRedeclaredBinding` at the real parse;
+	// a `let` and a `var` share one storage key, so kind is irrelevant. The
+	// top-level twin of (a); (d) a TYPE name claimed by two declarations --
+	// `type` / `enum` / `union` / `interface` / `typealias` all file one name
+	// in one whole-program namespace, and a fixed resolution cascade used to
+	// pick the winner silently. Fires from `commitTypeNameDecls` in the compiler at the
+	// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
+	// declaration of the name, whichever keyword introduced either of them --
+	// UNLESS THE TWO DECLARATIONS CANNOT SEE EACH OTHER, which is the whole
+	// rule (`typeNamePairMayCoexist` in the compiler). Three ways that holds: two
+	// `typealias` declarations in different files, whatever their FORMS (each
+	// alias form is scoped, and an ambiguity between two an author could both
+	// name is E3063 at the reference rather than a refusal of the
+	// declarations); a nominal declaration against a FILE-PRIVATE alias in
+	// another file; and a pair drawn from two LAYERS -- a `stdlib/`
+	// declaration and a user one are never both in scope. What still collides
+	// is one FILE declaring a name twice, two NOMINAL declarations, and a
+	// nominal declaration against an alias that is exported or `module`-visible
+	// from another file in the same layer. A pair of typealiases that does
+	// collide is E3061 rather than this code; (e) a name claimed
+	// twice in the COMPILED type namespace -- a generic instantiation has no
+	// source name, so the compiler joins its base to its arguments (`Box with
+	// String` -> `Box_String`) and derives every per-type symbol from that
+	// string, which a declared `type Box_String` derives its own from too.
+	// Fires from `checkTypeSymbolNamespace` in the compiler, whole-program, after the
+	// instantiations are interned. Two INSTANTIATIONS can claim one compiled
+	// name as well, `_` being a legal name character and the join therefore
+	// not injective. A `typealias` is not a claimant here: it mints no symbol
+	// of its own.
+	duplicateDefinition = "E3006"
+	// A call cannot pick a unique overload: two or more candidates match it indistinguishably.
+	// call site cannot pick a unique overload because multiple
+	// variants have indistinguishable signatures at this call. Emitted when
+	// two overloads share the same parameter types and the caller doesn't
+	// disambiguate with named arguments.
+	semanticAmbiguousOverload = "E3007"
+	// A symbol is referenced from another file but is not declared 'export'.
+	symbolNotExported = "E3008"
+	// A conversion that cannot be proven safe: an explicit cast whose source range does
+	// not fit the destination (`256 as Byte`), an explicit cast that is lossy or
+	// meaningless (`5.0 as int`, `true as int`), or the SAME lossy conversion reached
+	// IMPLICITLY, where a value meets a declared type it cannot reach without loss
+	// (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one
+	// fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`.
+	// The implicit half was a WRONG ANSWER until P1.0d.4 -- specs/type-casting.md
+	// rejected `5.0 as int` while specs/implicit-type-conversion.md silently truncated
+	// the identical conversion at a call argument.
+	semanticUnsafeCast = "E3009"
+	// A cast names the value's own typealias, so it converts nothing.
+	semanticUnneededCast = "E3010"
+	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
+	unknownType = "E3011"
+	// A local binding is declared and never read.
+	semanticUnusedVariable = "E3012"
+	// A value-returning function can reach its end without returning, or a 'return' in it carries no value.
+	missingReturn = "E3013"
+	// A field not declared 'export' is read or written from outside its own type.
+	// The gate is the TYPE, not the FILE, and it covers WRITES as well as reads:
+	// `type B` touching `type A`'s unexported field is E3014 in the same file, and
+	// `v.private = 42` reports it exactly as `return v.private` does.
+	// Initialization is exempt: every field, exported or not, may be named in a
+	// struct literal, because the type itself determines what fields exist and
+	// visibility only governs access AFTER construction (specs/export-var-fields.md).
+	unexportedFieldAccess = "E3014"
+	// An 'implements' clause names an interface that does not exist.
+	semanticUnknownInterface = "E3015"
+	// A type claims to implement an interface but does not define all of its members.
+	semanticPartialInterfaceImpl = "E3016"
+	// A generic argument violates the 'where' constraint declared on the type parameter.
+	semanticWhereConstraintViolation = "E3017"
+	// A field access names a field the type does not have.
+	semanticUnknownField = "E3018"
+	// An immutable ('let') binding is passed to a parameter the callee mutates, or a mutating method is called on it.
+	// a mutating method (push/pop/set/append/...) or a parameter-mutating
+	// function is called on an immutable (`let`-bound) receiver/argument. The
+	// receiver's data would be modified through a binding the user declared
+	// immutable. Emitted by the Maxon-tier borrow/mutation check.
+	semanticImmutableRefToMutatingParam = "E3019"
+	// An enum declares the same case name twice.
+	enumDuplicateCase = "E3030"
+	// Two enum cases declare the same raw value.
+	enumDuplicateRawValue = "E3031"
+	// An enum case's raw value has a type other than the enum's declared raw-value type.
+	enumRawValueTypeMismatch = "E3032"
+	// A match arm names a case the scrutinee's enum does not have.
+	enumUnknownCase = "E3034"
+	// A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
+	// a match-arm payload-binding pattern (`case(x, y)`) supplies
+	// the wrong number of bindings for the case's declared payload. Emitted
+	// by `parseCaseBindingPattern` when an arity check can be performed at
+	// parse time, or deferred to TypeResolution when the case's owning
+	// union isn't yet known.
+	enumWrongBindingCount = "E3035"
+	// A call passes a different number of arguments than the callee declares parameters.
+	callArgCountMismatch = "E3036"
+	// A call's 'name:' label names no parameter of the callee.
+	callUnknownArgLabel = "E3037"
+	// Two arguments of one call target the same parameter.
+	callDuplicateArg = "E3038"
+	// 'main' is declared 'throws'. There is no caller left to handle the error.
+	mainCannotThrow = "E3054"
+	// 'try' is applied to a call that cannot throw.
+	tryRequiresThrowingFunction = "E3055"
+	// A throwing call is made without 'try'.
+	throwingFunctionRequiresTry = "E3057"
+	// 'otherwise' is written without a 'try'.
+	otherwiseRequiresTry = "E3058"
+	// An 'otherwise' handler's value has a type other than the 'try' expression's type.
+	// It carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE
+	// POSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the
+	// `try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which
+	// discards a result that does not exist) is refused here as well.
+	// NOT E3124, which is the opposite mismatch -- a value produced and dropped.
+	errorTypeMismatch = "E3059"
+	// Two typealiases in scope declare the same name.
+	// Two `typealias` declarations of one name in DIFFERENT files are legal,
+	// whatever their forms: every alias form is scoped, a non-exported one is
+	// file-local (specs/duplicate-typealias.md), and an ambiguity between two
+	// an author could both name is a property of the USE -- E3063 at the
+	// reference -- rather than a refusal of the declarations. What this code
+	// refuses is ONE FILE declaring the name twice, which no qualification
+	// could disambiguate. The compiler raises it from `commitTypeNameDecls` when BOTH
+	// declarations are typealiases; a colliding pair involving a
+	// `type`/`enum`/`union`/`interface` is E3006 instead.
+	semanticDuplicateTypeAlias = "E3061"
+	// A typealias is declared and never used.
+	// "Used" means the NAME appears in a type position in its OWN declaring
+	// file. An exported alias is exempt (one file cannot see another's uses),
+	// and being implicitly inferable from a bare `[...]` literal is not a use.
+	semanticUnusedTypeAlias = "E3062"
+	// a bare-name type reference has more than one reachable
+	// typealias definition under directory-as-module rules. The user must
+	// write the directory-qualified form (`dir.Name`) to disambiguate.
+	// Mirrors E3095 (functions) but operates on the typealias registry.
+	semanticAmbiguousTypeAlias = "E3063"
+	// a pure-function call's result was discarded. Pure callees must
+	// have their result used -- neither bare `foo()` nor `_ = foo()` is
+	// permitted. Fires from `checkDiscardedResults`, whose other arm is E3065:
+	// one verdict, split on whether the callee had another reason to run.
+	// The compiler raises it from FOUR statement doors -- a bare `foo()` line, `_ = foo()`,
+	// a tuple assignment whose every target is `_` (`(_, _) = makePair(10, b: 32)`,
+	// `specs/tuple-assign.md`), and a discarded MATH INTRINSIC (`round(10)` as a
+	// statement) -- which differ only in who answers the purity question. An intrinsic
+	// needs no summary: the roster is machine instructions, so the statement is provably
+	// dead. A DECLARED callee is judged by the whole-program effect summary, unless it is
+	// CHAINABLE (first parameter the receiver, return type the receiver's own), which the
+	// language lets a caller drop freely. A container read the parser lowered straight to
+	// a runtime entry is judged by that entry's read-only roster and reported under the
+	// member the author wrote (`Array.first`, never `__managed_first`).
+	// The bare-call door covers every CALL-STATEMENT spelling, not only `foo()`: a method
+	// (`arr.count()`), a field chain (`b.ops.count()`), a static member and a
+	// namespace-qualified free call all take none of what they produced. Each is anchored
+	// on the CALLED NAME -- the last name of the chain the `(` follows.
+	// The summary CLOSES OVER a witness dispatch rather than reading it as an effect: a
+	// constrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are
+	// every declared member wearing the requirement's name whose body this program reached.
+	semanticDiscardedPureResult = "E3064"
+	// an impure-function call's result was discarded without the
+	// explicit `_ =` opt-in. The impure-call result still has to flow into
+	// either a binding (`let r = foo()`) or an explicit discard
+	// (`_ = foo()`). Fires from `checkDiscardedResults`.
+	// THE OTHER ARM OF E3064's VERDICT: one pass asks the effect summary once and
+	// splits on the answer, so a callee is never both. What selects between them is the
+	// site's `DiscardDoor` -- E3065 fires at a BARE STATEMENT only, because `_ = f()`
+	// and `(_, _) = f()` ARE the opt-in the message asks for, and a `try ... otherwise`
+	// statement is an accepted discard of its own.
+	// The compiler reaches it only for a DECLARED callee. The summary answers "not provably
+	// effect-free" for everything it cannot see, and that answer is SILENCE under E3064
+	// but a REFUSAL under E3065 -- so a lowered runtime entry, whose read-only roster is
+	// a whitelist rather than a proof of effect, earns neither.
+	semanticDiscardedImpureResult = "E3065"
+	// A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
+	// a `union` value was compared with `==` / `!=`. Unions carry no
+	// synthesized equality -- a new case can't be added without every match site
+	// being forced to handle it, so the only way to inspect a union is `match`.
+	// Enums (which auto-implement Equatable) are unaffected. Stdlib source is
+	// exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution.
+	semanticEnumNotComparable = "E3066"
+	// a textual self-assignment (`x = x`, `p.x = p.x`) or a
+	// discard-assignment whose RHS isn't a function call (`_ = 42`). The
+	// former has no effect; the latter is the historic shape for opting out
+	// of a "discarded result" warning, but a non-call RHS makes the discard
+	// nonsensical.
+	// The two shapes are raised from two doors, because they are answerable at
+	// different moments. The SELF-ASSIGNMENT half is
+	// `Parser.rejectDegenerateAssignment`, purely textual: a place chain assigned
+	// to itself token for token, asked from `parseStatement` before the dispatch,
+	// when no op has been emitted. The DISCARD half is `Parser.parseAssignment`'s
+	// `_` arm, which asks whether ANY op the statement emitted calls or suspends
+	// (`Parser.statementCallsOrAwaits`). So `_ = 42`, `_ = c.name`, `_ = a + b`
+	// and `_ = round(1.5)` are refused, while `_ = f()`, `_ = (f())` and
+	// `_ = try stack.pop() otherwise 0` are not.
+	// ANY op rather than the LAST op: a last-op rule cannot follow a value a
+	// DIVERGING `try ... otherwise panic(...)` fork laundered, and would refuse
+	// 54 statements of that shape (52 in `maxon-bin/`, 2 in `stdlib/`).
+	// `_ = async f()` and `_ = await p` ride the same widening: a spawn owns a
+	// green thread and an await consumes one, so both are effects, and
+	// `async-promise-drop.md` is about exactly that spelling.
+	// `_ = someBinding`, a BARE name resolving to a live binding, is ADMITTED: it
+	// is E3012's only spelling for acknowledging a binding without using it --
+	// deleting it from a spawned-never-awaited promise reports "unused variable",
+	// so refusing it would make E3012 and E3067 jointly unsatisfiable for one
+	// program.
+	// A `void` right-hand side never reaches the door at all: `E2004: Function
+	// 'push' does not return a value` is reported from the expression instead.
+	// That refusal is the EXPRESSION parser's; no program in the tree writes the
+	// shape.
+	// `x = (x)` is admitted (parenthesized: different tokens); `self.n = self.n`
+	// and `a.b.c = a.b.c` are refused. The decision is made BEFORE name resolution
+	// and the mutability check, so an immutable or undeclared target reports this
+	// code rather than "cannot assign to immutable variable" or undefined-variable.
+	semanticSelfAssignment = "E3067"
+	// The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
+	// the `is` / `is not` reference-identity operator was applied to a
+	// primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
+	// meaning for reference types (structs are heap pointers); primitives are
+	// values with no object identity.
+	// It is raised in the PARSER (`Parser.emitReferenceIdentity`), where the
+	// operand tags are already known -- the same tier every other operand rule is
+	// stated at -- rather than in a later type pass. It refuses a wider
+	// operand set than the word "primitive" alone suggests, and the reasons
+	// are not all the same reason. An enum case and an opaque type parameter
+	// are VALUES with no object anywhere. A `union` box and a function value
+	// genuinely ARE one-word addresses, and are refused because no spec on
+	// any of the three compilers pins an identity reading for them and both
+	// references refuse them by the same "is the operand a struct value?"
+	// test -- so admitting either would be the compiler inventing a semantics, not
+	// porting one. An existential is a FAT pointer, so a one-word compare
+	// would silently ignore its witness half. Widening the admitted set
+	// yields a POINTER COMPARE, never a type error, so a tag added without a
+	// reading is a wrong answer rather than a missing one. See
+	// `TypeRules.tagHasReferenceIdentity`.
+	refIdentityOnPrimitive = "E3068"
+	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
+	// while a reference into its backing buffer is still live (e.g.
+	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
+	// and dangle the outstanding reference. Emitted by the Maxon-tier
+	// `runMaxonBorrowCheck` pass.
+	semanticBorrowConflict = "E3070"
+	// a statement appears in the same straight-line block body
+	// immediately after a `return`, `throw`, `panic(...)`, `break` or
+	// `continue`. The trailing statement is unreachable -- control never falls
+	// through a block-terminating statement -- so it is dead code. Emitted by
+	// the parser's statement-list loop when a terminator is not the last
+	// statement of its block. Control-flow that creates separate blocks
+	// (a `return` inside an `if`, with code after the `if`) does NOT trigger
+	// this: that following code is reachable on the else path.
+	// It is a CORRECTNESS rule and not only a lint: a block's
+	// terminator lives in a slot `setTerminator` overwrites, so an accepted
+	// statement that terminates the block itself (an `if`, `while`, `for`,
+	// `match`) silently REPLACES the `return`/`break` already there. The rule
+	// covers `break`/`continue` as well as `return`/`throw`/`panic`,
+	// which `specs/break.md` pins.
+	semanticUnreachableCode = "E3071"
+	// a struct-literal names a compiler builtin managed type
+	// (`__ManagedFile`, `__ManagedMemory`, `__ManagedDirectory`, ...). These
+	// carry an opaque runtime handle and must be obtained through their static
+	// factory methods (e.g. `__ManagedFile.openRead`), never built directly.
+	// Emitted by the parser at the struct-literal site.
+	semanticBuiltinTypeConstruction = "E3072"
+	// an `async f()` call targets a function that never yields (contains
+	// no await / I/O stub call, transitively). `async` is only for I/O-concurrent
+	// work -- a non-yielding callee would run to completion synchronously on the
+	// spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
+	asyncNonYielding = "E3073"
+	// A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively
+	// calling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so
+	// subprocess cannot exist on that target -- rather than silently throwing
+	// 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call
+	// with `#if not os(Wasi)` to exclude it from the wasm build.
+	// Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code
+	// into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
+	semanticSubprocessUnsupportedTarget = "E3074"
+	// A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
+	// is already known at the arm, so the bare case name suffices.
+	matchQualifiedCaseName = "E3075"
+	// a struct literal (`Type{...}`) is written outside the type's own
+	// methods. Construction is restricted to the type's own methods / static
+	// factories so invariants can be enforced at the single construction point;
+	// external callers must go through a `static function create(...)`. Exempt:
+	// `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction
+	// through a typealias visible at the site (inner alias of the current
+	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+	semanticConstructorRestriction = "E3076"
+	// a local declared with `var` is never reassigned, so it should
+	// be a `let`. Detected after type resolution by
+	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
+	// per-function reassigned-var set). E3012 (unused variable) takes
+	// precedence -- an unused `var` reports as unused, not as should-be-let.
+	// It is decided at the declaring function's `end` (`reportVarShouldBeLet`)
+	// off the same candidate list E3012 walks, reading a per-function name set
+	// (`mutabilityExercisedNames`) that seven doors record into, and REPORTED
+	// past the backend so a body with any other diagnostic never also reports
+	// this one. A MOVE-OUT counts as a use of mutability: the keyword decides
+	// move-vs-alias, so advising `let` would silently turn a move into an alias.
+	semanticVarShouldBeLet = "E3077"
+	// `var b = a` (or `var b = a.field`) where the source `a` is an
+	// immutable (`let`) binding of a reference type (struct / enum /
+	// function). Copying an immutable reference-type binding into a mutable
+	// one would alias the same heap value through a writable name; the user
+	// must either keep `b` immutable (`let`) or take an independent copy via
+	// `clone()`. Value-typed sources (int/float/bool/byte) are independent
+	// copies and are allowed. Detected after type resolution by
+	// `checkVarFromImmutableForEntry`.
+	semanticVarFromImmutable = "E3078"
+	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
+	semanticMatchDiscardedBindings = "E3081"
+	// a labeled control-flow block (`if`/`else`/`while`/`for`) has no
+	// statements between its header and matching `end`. Refused so dead
+	// control-flow can't sneak past a refactor; emitted
+	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
+	// statements were consumed.
+	semanticEmptyBlock = "E3082"
+	// a block-form `try 'label' ... end` body contains no throwing
+	// calls (no bare throwing call/methodCall, no routed `throw`). The
+	// construct exists to funnel multiple throwing calls into one handler;
+	// a body that can never fail has no error to route, so the `otherwise`
+	// handler is dead.
+	tryBlockNoThrows = "E3083"
+	// the `otherwise (e) 'label' ... end` handler of a block-form
+	// try must contain a `match` on the error binding `e`. Without it, the
+	// synthesized (possibly union) error value is never inspected and the
+	// handler cannot dispatch on which error occurred.
+	tryBlockBindingNotMatched = "E3084"
+	// a bare case-name pattern in a match on a synthesized error
+	// union is shared by two or more union members, so it is ambiguous --
+	// the user must qualify it as `EnumName.case`.
+	unionMatchPatternAmbiguous = "E3085"
+	// a struct literal omits a field that has no default value, is not a
+	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
+	// in a static factory) was not proven definitely assigned via `self.field =
+	// expr` on every control-flow path to the literal. Emitted from the parser's
+	// struct-literal field-init checks and the post-body definite-assignment
+	// dataflow pass.
+	semanticFieldNotInitialized = "E3086"
+	// an `if x.contains(k)` whose then-block immediately performs
+	// `try x.get(k) otherwise ...` on the same receiver/key pair does the
+	// lookup twice. The compiler asks the user to rewrite as `if let v =
+	// try x.get(k) ... 'lbl'` (or `if var`) so a single lookup serves both
+	// the membership test and the value bind.
+	redundantContainsGet = "E3087"
+	// A 'module'-visible symbol is accessed from outside its declaring directory subtree.
+	// Symbol declared with the `module` keyword (visible to the declaring directory
+	// subtree only) but accessed from outside that subtree.
+	symbolNotInModuleScope = "E3088"
+	// A typealias chain refers back to itself.
+	semanticTypeResolutionCycle = "E3091"
+	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, make it 'module', or say 'public' if it is API surface.
+	// an `export` (global) decl is never referenced from any file
+	// outside its declaring file. The decl could be file-private (drop the
+	// modifier) or `module`-visible. Applies to functions, types, enums,
+	// typealiases, top-level constants, top-level vars, and exported struct
+	// fields. Emitted by `checkUnusedExports` after all files have been
+	// parsed and type-resolved.
+	// A `public` declaration is EXEMPT. `export` says "other files may see
+	// this, and I expect this program to use it"; `public` says "this is API
+	// surface", so "no caller in this compilation" is not a finding about it.
+	// That distinction is what makes this diagnostic answerable at all: see
+	// `Visibility` in maxon-bin/Compiler/Project.maxon.
+	semanticUnusedExportedSymbol = "E3092"
+	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module', or 'public' if it is API surface.
+	// an `export` (global) decl is referenced only from files inside
+	// its declaring directory subtree. The decl could be downgraded to
+	// `module`-visible. Emitted by `checkUnusedExports`.
+	semanticExportableAsModule = "E3093"
+	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
+	// a `module` decl is never referenced from any file other than
+	// the one it was declared in. The decl could be file-private (drop the
+	// `module` modifier). Emitted by `checkUnusedExports`.
+	semanticUnusedModuleSymbol = "E3094"
+	// A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
+	// a bare-name function call has more than one reachable
+	// definition under directory-as-module rules. The user must write the
+	// directory-qualified form (`dir.name()`) to disambiguate. Emitted by
+	// the cross-file fallback in `qualifyCalleeForContextWithType` when
+	// `methodNameIndex` returns multiple distinct visible candidates.
+	semanticAmbiguousCrossFileCall = "E3095"
+	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+	// `.rawValue` accessor. Such a comparison is checking which case a value
+	// is, which must be done on the value itself (`value == Type.case` for a
+	// payload-free case, or `match value` for a union variant -- so adding a
+	// case forces every site to handle it instead of silently slipping
+	// through). Comparing the derived string/int accessor bypasses that.
+	semanticEnumAccessorComparison = "E3097"
+	// A promise is stored in a Promise type that does not name the error its thunk throws.
+	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
+	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
+	// Storing a promise in the wrong one is refused here -- including, in particular, storing
+	// a THROWING promise in a `Promise with T`, which is what used to erase the error type.
+	// That erasure was the root of a family of bugs, all of which this refusal (plus the
+	// two-parameter form that makes it avoidable) turns into impossibilities:
+	// - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
+	// promise handle typed `int`;
+	// - an associated-value error's payload had no static type to mm_decref, so it LEAKED
+	// (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
+	// - propagation (a bare `try await p` inside a `throws` function) had no error type to
+	// check the enclosing function's `throws` against, so a thunk throwing A could be
+	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
+	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
+	promiseErrorTypeMismatch = "E3098"
+	// A closure that CAPTURES, ESCAPING the frame its captures point into.
+	// THE RULE: a closure that captures may not escape its defining frame.
+	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
+	// fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
+	// through a capture see later mutations of the captured variable. The environment is
+	// therefore only meaningful while that frame is alive. Let the closure outlive the
+	// frame and every captured read dereferences a dead frame -- the classic upward-funarg
+	// problem. It compiles clean and dies at runtime, so it is refused where the mistake
+	// is still legible rather than left to fault inside emitted code the author never wrote.
+	// The routes refused are every store the parser can see WITHOUT interprocedural
+	// analysis:
+	// - RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and
+	// the reason this exists). Returning a closure an OUTER frame built is fine and is
+	// allowed: that environment points into a frame that is still alive.
+	// - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
+	// element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
+	// looks like a plain local but is an alias INTO the enum's heap box, so assigning
+	// through it writes back). Each is one 8-byte slot holding the code pointer alone,
+	// and each is heap memory outliving every frame, so the store drops the environment;
+	// the call then passes env=0 and the first captured read dereferences null.
+	// DELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a
+	// CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
+	// bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
+	// that store the value is a *parameter*, and whether it carries an environment is a fact
+	// about the CALLER -- deciding it needs a per-parameter escape summary propagated over
+	// the call graph, i.e. escape analysis proper. That is out of scope and stays a runtime
+	// nil-deref. Passing a capturing closure DOWN to a callee that only
+	// CALLS it is perfectly safe and must keep working.
+	// A NON-capturing closure is unaffected and must keep working -- it lowers to a plain
+	// MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
+	// CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
+	// or passes keyed by a struct field is built from.
+	// What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
+	// capture, so a closure's environment outlives the frame that built it. That is a real
+	// language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
+	// by-reference capture semantics the closure specs currently pin. The compiler schedules it at
+	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
+	capturingClosureEscapes = "E3099"
+	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
+	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
+	// language already has everywhere else. A second await would take a second +1 on a payload the
+	// thunk only ever owned once, and the two releases underflow the refcount and free it twice
+	// ("mm_decref: refcount underflow (already zero)"). It is not an error-handling bug and does
+	// not need a throwing thunk: a plain `async` returning a String double-frees identically.
+	// So the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --
+	// two awaits of the same promise in mutually exclusive branches are each the only await on
+	// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
+	promiseAlreadyAwaited = "E3100"
+	// A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot
+	// express `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the
+	// binding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`
+	// has no ErrorFlag, unlike `StdTryCallOp`.
+	// Before this check the call was not merely unchecked, it was WRONG. The callee took the error
+	// return (ordinal in RDX, `xor rax, rax` in RAX); the indirect caller read RAX and ignored RDX,
+	// so the throw vanished and the caller received 0 -- the dummy -- as a normal result. `try` was
+	// bypassed entirely by round-tripping the function through a value.
+	// Refused rather than supported, on evidence: no spec and no stdlib file ever wanted a throwing
+	// function value. Adding `throws` to the function-type grammar plus an indirect try-call ABI is a
+	// FEATURE, and would be built for nobody. If a real need appears, that is the shape -- and this
+	// code is what says so.
+	throwingFunctionAsValue = "E3101"
+	// A binding is READ after its owned heap value was MOVED OUT of it. Under the compiler's static
+	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
+	// `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to
+	// the destination, and the source is left moved-from. A later read of the source is refused --
+	// it would read a value another binding now owns and will drop, and dropping it twice is a
+	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding).
+	useAfterMove = "E3102"
+	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
+	// divisor that folded to 0, or the float `a / 0.0` and `a / -0.0` -- both of which give an
+	// infinity). Unlike a possibly-zero divisor -- which is a throwing operation handled with
+	// `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a bug, rejected
+	// at compile time.
+	semanticDivisionByZero = "E3103"
+	// A construct is reached by a program compiled for a target whose backend has not lowered the
+	// runtime entry it needs. Which host facility each entry needs and which targets provide it are
+	// the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so
+	// `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock
+	// intrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused
+	// at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
+	// Distinct from E3074, the subprocess-specific WASI rejection: that one says subprocess can NEVER
+	// exist on wasm32-wasi -- a permanent property of the
+	// platform -- while this one says the target has not lowered the entry, a statement about this
+	// compiler's progress.
+	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
+	// and no line -- a compiler crash where a diagnostic was owed.
+	targetUnsupportedConstruct = "E3104"
+	// Two FILES declare the same ranged typealias name over DIFFERENT underlying primitives -- one
+	// `int`, the other `float`. Two files declaring one name over two RANGES is legal and stays so
+	// (a non-exported typealias is file-local: `specs/duplicate-typealias.md`), because the range is
+	// resolved and enforced per declaring file. The underlying PRIMITIVE is not: the readers that
+	// have no file to ask from -- type resolution of a struct field, union payload classification
+	// reached from the emitted runtime, generic type-argument and conformance-signature
+	// canonicalization -- all read it through one bare-name door, so a name whose declarations
+	// disagree about int-vs-float has no answer that door can give. It is refused at the SECOND
+	// file's declaration rather than answered arbitrarily.
+	// Before it, the parser resolved such a name file-scoped while those readers resolved it
+	// last-wins, and the disagreement reached the backends: the x64 emitter panicked on an xmm
+	// value in a gpr slot, wasm emitted a module its own validator rejected, and a struct field
+	// typed by the alias silently compiled to the wrong width.
+	semanticTypeAliasUnderlyingConflict = "E3105"
+	// `Array.resize` is called on an array whose ELEMENT TYPE IS MANAGED -- a struct, a `String`,
+	// a nested container, a boxed union. Such an element lives in the buffer as a refcounted
+	// POINTER, so the zeroed slots `resize` exposes are NULL: an absence, not a value. Maxon has
+	// no default constructor, so there is nothing correct to put there, and the array it hands
+	// back is one whose `count()` does not agree with its `get()` -- `count()` says N while
+	// `get(0)` throws. Refused at the call site, naming the element type.
+	// The refusal covers the WHOLE call and not only its growing half, because which half a
+	// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
+	// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element
+	// the type cannot invent -- `push(value)` appends one, `growFilled(newLength, value:)` grows to
+	// a length in one call -- and shrinking needs no element at all, so `truncate(newLength)` stays
+	// available for every element type. All three are stdlib/Array.maxon's, and BOTH compilers compile
+	// that file -- The compiler loads all of stdlib/ -- so the cures are the same
+	// on both. the compiler's message text still names only `push`, which understates the other two.
+	// It is refused only where the element type is KNOWN. An element that is still an unbound
+	// type parameter is not: one generic body serves every instantiation, and the deliberately
+	// sparse slot tables in `stdlib/Map.maxon` and `stdlib/Set.maxon` are built exactly that way
+	// -- they track occupancy in a parallel `states` column and never read a slot they did not
+	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
+	// and it stays available.
+	semanticArrayResizeManagedElement = "E3106"
+	// Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
+	// two names -- the prose one the reporter prints, and the mangled `__test_<sanitized>` one that
+	// reaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to
+	// `_`, so `adds two` and `adds-two` collide even though they read differently.
+	// The message names BOTH prose names and the symbol they share, because the collision is
+	// invisible in either name alone.
+	// Refusing it is independently worth doing: two tests with the same DISPLAY name are
+	// unreportable -- a reader of the report cannot tell which one failed -- so this rejects the
+	// identical-prose case for its own reason, not merely as a symbol-table accident.
+	semanticDuplicateTestName = "E3107"
+	// The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose
+	// ELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That
+	// setter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can
+	// write into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element
+	// that is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface
+	// exists to support. For a MANAGED element it opens a hole, because that region carries no
+	// OWNERSHIP: `__managed_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
+	// `length` without destroying the occupant, and a grow or a copy-on-write detach copies only
+	// the live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a
+	// `setLength` publishes it, and is leaked outright if one never comes.
+	// Refused rather than fixed, and the choice is deliberate. Making ownership follow the staged
+	// slot would put a destructor gate on every managed `push` -- a hot path -- and would make the
+	// `[length, capacity)`-reads-ZERO invariant conditional, which five separate array operations
+	// currently rely on. Refusing costs none of that, and costs no capability: `[0, length)` is
+	// exactly what the ARRAY surface's own `set(index, value:)` covers, which is length-bounded,
+	// owns what it stores, and is unaffected. So the message names it.
+	// Refused at the call site, naming the element type, and only where that type is KNOWN. It
+	// needs no carve-out for an unbound type parameter: `.managed` is unreachable through a shared
+	// generic body at all (a field access through it is refused one step earlier), so every site
+	// this rule can see has a concrete element.
+	semanticBufferSetManagedElement = "E3109"
+	// The BUFFER surface's RAW BYTE access -- `arr.managed.setByte(offset, value:)` or
+	// `arr.managed.byteAt(offset)` -- is used on an array whose ELEMENT TYPE IS MANAGED: a struct,
+	// a `String`, a nested container, a boxed union.
+	// A managed element does not live in the buffer as DATA. It lives there as a POINTER to a heap
+	// allocation, so the bytes those two members address are the bytes of an ADDRESS. Reading one
+	// hands a fragment of a heap address back to the program as though it were a value -- a silent
+	// wrong answer, and an information disclosure. Writing one corrupts the pointer in place, and
+	// the element it named is then unreachable and unreleasable.
+	// This is NOT the reason E3109 refuses `managed.set`, and the two must not be collapsed. That
+	// one is about OWNERSHIP of a staged element and applies only past the published length, so it
+	// has a harmless half and an exact replacement. This one is about the element's REPRESENTATION,
+	// so it holds at EVERY offset, published or staged, and there is no bound that would rescue it
+	// and no other spelling that does the same thing. Byte access to a managed element is not a
+	// thing a correct program wants.
+	// `byteAt` is refused alongside `setByte` rather than after it. It returns a value, so it
+	// corrupts nothing and trips no leak gate -- it is precisely the half that stays green forever
+	// if only the writer is fixed.
+	// TRIVIAL elements are untouched, which is the whole point of the rule being about the element
+	// type: `__ManagedMemory.create` can only ever yield a trivial element, so the byte-level
+	// staging the buffer surface exists for -- string building, a NUL terminator written at the
+	// length boundary -- is unaffected.
+	semanticBufferByteAccessManagedElement = "E3110"
+	// One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT
+	// members for it. A conforming type has exactly one witness table per interface and exactly one
+	// address per method slot, so an interface has to be conformed to exactly ONE way; two routes
+	// that substitute a requirement differently want two addresses in one slot.
+	// Both routes are ordinary source. `implements Conv with Whole, Conv with Real` names one
+	// interface twice and binds its associated type differently each time; and
+	// `implements Child with Whole, Parent with Real`, where `Child extends Parent` re-declares the
+	// same `uses` name, reaches `Parent` twice while naming no interface twice at all -- which is
+	// why the condition is detected where the two selections MEET rather than by a rule about the
+	// shape of the `implements` clause.
+	// It takes two overloads of the member's name to be reachable. With one member per name the
+	// second route simply fails to match and the type is refused as a partial implementation
+	// (E3016) instead; the overload set is what lets both routes succeed and disagree.
+	// The message names both selected members' SIGNATURES rather than their registration names --
+	// `convert#Real` is a key this compiler mints, not something an author wrote.
+	semanticConflictingInterfaceConformance = "E3111"
+	// A user program declares a type name that a stdlib module ALSO declares, and that
+	// same spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument
+	// label. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both
+	// declarations can coexist, and that rename is applied uniformly to the stdlib file's identifier
+	// tokens, which is what makes it reach every spelling of the type at once. A member is the one
+	// spelling that is also reachable from USER code, whose tokens are never rewritten, so the two
+	// sides would disagree about one name and the member would silently stop resolving. Refused
+	// rather than risked; rename the type in the user program.
+	stdlibShadowedNameIsAlsoAMember = "E3112"
+	// A function's `throws` clause names something that is not a declared enum or union.
+	// The error-flag ABI carries a caught error as `ordinal + ErrorFlagOrdinalBias` for a payload-free
+	// enum and as a heap BOX POINTER for a payload-carrying union, and which of the two it is comes
+	// off the DECLARED clause at the catch site while the throw site derives it from the value it
+	// actually throws. A clause naming anything with no declared cases -- an INTERFACE (`throws Error`),
+	// a struct, or a name that resolves to nothing at all -- leaves those two derivations free to
+	// disagree: `throws Error` throwing a payload-carrying union was decoded as an ordinal and the box
+	// was never released (exit 101, a leak, in BOTH compilers before this check existed).
+	// It is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's: a requirement
+	// whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
+	// through the witness ABI, and is guarded separately by E3016.
+	throwsTypeNotAnErrorEnum = "E3113"
+	// A method call on a constrained type parameter names something that MORE THAN ONE of the
+	// requirements its `where` constraints supply could be. An interface and its `extends` parents
+	// may each declare the name, and two constraints on one parameter may each declare it too --
+	// and those are DISTINCT requirements occupying DISTINCT witness-table slots, so "they are both
+	// called `label` and both take one argument" does not make them interchangeable: two same-named,
+	// same-arity requirements may differ in RESULT type, and are then met by two different members
+	// and two different addresses.
+	// DISTINCT means declared by two different interfaces. One requirement reached through two
+	// constraints -- `where T is Left and Right` where both `extends Root` -- is NOT this code: the
+	// accepted member is filed under (conformer, DECLARING interface, method name), so both routes
+	// stamp their slot from one filing and bind one address. Counting those two routes as two
+	// claimants was a false reject whose message named a requirement as its own rival.
+	// A witness dispatch compiles ONE slot offset into the calling function, so there is nothing to
+	// choose by and nothing a later pass could repair. Taking the first candidate is what the search
+	// did before this code existed, and it is a silent wrong function pointer rather than a
+	// diagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.
+	// The message names BOTH claimants by their DECLARING interface, since that is the interface the
+	// author has to change; the cure is to rename one requirement or to drop one constraint.
+	semanticAmbiguousWitnessDispatch = "E3114"
+	// A method call on a constrained type parameter names a method that the parameter's `where`
+	// constraints supply SEVERAL requirements for, and the call's argument count matches none of
+	// them.
+	// It is E3036's case (an arity mismatch) at a call site where E3036 cannot be written: that code
+	// names ONE callee and ONE expected count, and here there are several, none of which is the one
+	// the author meant. Blaming an arbitrary candidate would print a true sentence about the wrong
+	// requirement -- the exact failure `interface Derived extends Base` produced before the
+	// requirement list became transitive, when `Derived.label` was reported to expect one argument
+	// on a call to an inherited zero-argument `label()`.
+	// With exactly ONE requirement of the name there is nothing to select between and the arity is
+	// reported by E3036 as it always was, so this code is reached only where a choice genuinely
+	// existed.
+	semanticNoWitnessRequirementForArgCount = "E3115"
+	// A method call on a VALUE of a constrained type parameter names a requirement its `where`
+	// constraints declare `static`. A `static` member has no receiver, so there is nothing for the
+	// call to dispatch on; a `static` member is called on a concrete type, which is exactly what a
+	// `where` constraint does not name.
+	// The resolver matched a requirement by NAME alone, so it bound the static's witness slot and
+	// prepended a receiver the callee has no parameter for. That is an ABI disagreement inside a
+	// slot, not a near-miss: x64 compiled clean and answered correctly only because the spurious
+	// receiver landed in an argument register a zero-parameter callee never reads, while wasm's
+	// `call_indirect` -- which checks the declared functype against the target's own -- trapped
+	// `indirect call type mismatch` at runtime.
+	// Neither neighbouring message could carry it. E3036 states an argument COUNT, which is what the
+	// same call shape gets on a CONCRETE receiver and is about the wrong thing; E2015's "no `where`
+	// constraint declares a method" would be FALSE, since the constraint declares it and only its
+	// receiver kind is wrong.
+	// The OPERATOR form of the same hole takes E3005 instead, and deliberately: there the question is
+	// "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
+	// author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
+	semanticStaticRequirementNotDispatchable = "E3116"
+	// A construct that fills an `Array with Byte` with RAW BYTES, one byte per ELEMENT, is written in
+	// a file whose `Byte` does not admit every byte value 0 through 255. Two constructs reach it, and
+	// both write bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` /
+	// `.bytes()`, whose runtime fill blits the receiver's UTF-8) and `__ManagedFile.read`, which blits
+	// a file's contents into a caller's buffer.
+	// A raw byte is any of 256 values. An element declared `int(0 to 100)` promises every value of
+	// every `Array with Byte` in the program is at most 100, and a raw fill breaks that promise with
+	// no place to put a check: the fill is one runtime blit, not a run of stores the compiler can
+	// narrow one at a time. MEASURED before the rule existed: `takes("ss".toByteArray())` into
+	// `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`. Silent.
+	// A THIRD construct reached this code at A4a and no longer does: the buffer surface's `setByte`,
+	// which addresses a byte OFFSET rather than an element and therefore asks E3118's slot question at
+	// every stride. "Admits every byte" is that question's ONE-BYTE instance and nothing more general,
+	// which is why the two are separate codes rather than one widened rule -- see E3118.
+	// It is a PER-TYPE rule and its A3r sibling is PER-VALUE, which is why the two are separate rules
+	// rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
+	// accepting `b"abc"` under `int(0 to 100)`; there is nothing here to inspect, so the only honest
+	// question is about the element.
+	// Retyping the byte view onto the compiler's own `__ManagedByte` element instead was the obvious
+	// cure and is WRONG: `emitArrayCreateOp` stamps the view's `element_size@24` from the very
+	// instance it is typed as, so a wide `Byte` gives a genuinely stride-2 record the runtime fills at
+	// that stride (MEASURED correct). A stride-1 `__ManagedByte` view would then be refused by
+	// `byteBufferBoundaryAdmits`'s stride test at every declared byte-array position, turning a
+	// program that answers correctly today into a compile error.
+	// The raw byte READER is deliberately untouched. `byteAt` yields a plain unranged `int`, never the
+	// element, so a byte read back is honest whatever `Byte` was declared to be. Unlike E3110's pair,
+	// only the write puts a value into a slot the array surface reads through the element's range.
+	// Neither of the two remaining sites needs a STRIDE precondition, and that is what makes them the
+	// right two for this question: the byte view's fill is element-wise at whatever stride the element
+	// declares, and `__ManagedFile.read`'s argument gate has already established that its buffer is
+	// byte-packed. A rule that grew a stride test here would stop asking on exactly the element it
+	// least trusts -- a `Byte` whose bounds cannot be read takes the MACHINE WORD
+	// (`rangedAliasStorageBytes`), so the byte view would stop looking byte-packed and slip the rule.
+	rawByteFillNarrowElement = "E3117"
+	// The buffer surface's raw-byte writer (`arr.managed.setByte(offset, value)`) is written on an
+	// array whose ELEMENT does not admit every bit pattern of its own storage SLOT.
+	// `setByte` addresses a byte OFFSET, so on a record that strides more than one byte it writes a
+	// FRAGMENT of an element -- and what the ARRAY surface reads back afterwards is an arbitrary
+	// unsigned value of the element's whole slot, because the shared element load zero-extends
+	// (`ManagedMemoryRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
+	// every one of those, and it is the SAME question at every stride.
+	// MEASURED before the rule existed, each a value read back through an accessor whose declared type
+	// cannot hold it: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)` -- a TWO-byte slot --
+	// read back 57089; `setByte(0, 223)` under `int(-5 to 5)`, which keeps the machine word because
+	// `rangedAliasStorageBytes` is the unsigned ladder, read back 223; `setByte(0, 223)` on a `bool`
+	// element made a value for which both it and its negation were true while `v == true` was false;
+	// and on an ENUM element -- a tag in the narrowest slot its raw values need, one byte for a
+	// two-case enum since enum-narrow-storage -- the program compiled and then HUNG,
+	// matching an ordinal no arm names.
+	// It is deliberately NOT a widening of E3117. That code asks whether the element admits every
+	// BYTE, which is this question's answer at a ONE-byte slot and at no other width: asked at a wider
+	// slot it refuses a correct `Array with Int` (MEASURED at A4a, which had to be pulled back), and
+	// asked here at a one-byte slot it would give the identical verdict this code already gives. So
+	// `setByte` moved wholly to this rule and E3117 kept the two fills that are byte-per-element by
+	// contract. Its one-byte arm ASKS `rangeHoldsEveryByte` rather than re-spelling it, so what a byte
+	// is stays written down once.
+	// The ADMITTING direction must be a proof, which is why an element with no value set the compiler
+	// can compare -- a `bool`, an `ExitCode`, an enum's ordinal, a float alias, an opaque `T`, a
+	// function pointer -- is refused rather than guessed at. That is `rangeHoldsEveryByte`'s own
+	// conservative argument, one quantifier out.
+	// `ExitCode` looked like the closest call and is not: it reaches an `Array` instance as a NAMED
+	// leaf, so `undeclaredNamedElementSlot` gives it the MACHINE WORD, and a domain of at
+	// widest 0 to u32.max (PLATFORM-DEPENDENT below that -- 0 to 255 on Linux, macOS and WASI)
+	// cannot cover an eight-byte slot on any reading. The measured 3741319169 is 223 at byte 3 of
+	// that word.
+	// The one element with NO value set that is still admitted is the `Byte` a `b"..."` literal mints
+	// for itself in a program declaring no such alias: its slot is one byte by construction
+	// (`undeclaredNamedElementSlot`) and there is no declared range for a raw byte to fall
+	// outside of, which is exactly the case E3117 returns on.
+	// `byteAt` is untouched for E3117's reason: it yields a plain unranged `int`, never the element.
+	rawByteWriteSlotDomain = "E3118"
+	// Two conformers of one interface bind an associated type to DIFFERENT TYPES, and that associated type is
+	// written as a PARAMETER or RETURN type of a requirement the program actually DISPATCHES.
+	// Under dictionary passing an interface's method bodies are compiled ONCE for every conformer, with no
+	// per-conformer specialization. So the shared body is compiled against exactly one of those bindings, and
+	// every other conformer's impl is handed bits it reads as something else.
+	// MEASURED before the rule existed, on one call site reached with both conformers:
+	// * `with float` beside `with Integer` -- x64-windows compiled clean and answered 1 where the program
+	// computes 51, the float conformer's argument read out of the wrong register file, while wasm32-wasi
+	// trapped `indirect call type mismatch`;
+	// * `with String` beside `with Integer` -- x64-windows SEGFAULTED (exit 139) and wasm silently answered
+	// 20, the `int` actual read as a String pointer;
+	// * `with Integer` beside `with Score = int(0 to 100)`, actual 5000 -- one conformer answered 5000 and
+	// the other RANGE-PANICKED at run time.
+	// It is refused on EVERY target for that reason: the register targets are the half that fails quietly.
+	// ⚠ THE RULE COMPARES THE BOUND TYPE, NOT ITS ABI CLASS, AND THE NARROWER LINE WAS MEASURABLY WRONG. The
+	// first cut asked only whether two bindings TRAVEL the same way, on the reasoning that a call's calling
+	// convention is all a shared body commits to. The last two cases above are both the SAME ABI class -- a
+	// String and an int are both machine words, two ranged aliases are both machine words -- and both are wrong
+	// answers. A dispatched requirement's associated type has exactly one legal binding across the program.
+	// It fires only where the associated type REACHES a call, and only where a call is actually made. A program
+	// whose every call is statically resolved has no shared body and no witness table to be wrong about:
+	// MEASURED, two conformers of different classes with every call direct ran correctly (51) and must not be
+	// refused. The compiler is whole-program, so which slots are dispatched is read off the emitted ops.
+	// ⚠ THE UNIT IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME, AND THIS ENTRY SAID "a requirement
+	// the program actually DISPATCHES" WHILE THE CODE ASKED ONLY WHETHER THE INTERFACE WAS. The fold has
+	// exactly two consumers and both are keyed on the op's own `(interfaceDeclIndex, methodIndex)` pair:
+	// `LowerMaxonToStd.witnessFormalType` resolves the FORMALS of the requirement a `witnessCall` names, and
+	// the parser types that same requirement's RESULT. A slot no call jumps through has neither, so it
+	// constrains nothing. MEASURED: `interface Tally { take(e Element) returns Integer; label() returns
+	// Integer }` with two conformers binding `Element` differently and `label()` as the program's only
+	// dispatch was REFUSED, and runs correctly (51) once the gate is the slot.
+	associatedTypeAbiDisagreement = "E3119"
+	// An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
+	// conformers bind it to something a witness call cannot carry there. TWO clauses, and they fail in
+	// different POSITIONS:
+	// * a FAT POINTER -- an interface-typed binding -- anywhere at all, PARAMETER or return, because a
+	// witness call carries one machine word per argument and one per result, so the second word of the
+	// `(value, witness)` pair is dropped and the impl reads a witness that was never passed. MEASURED:
+	// exit 139 on x64-windows and a trap on wasm, through a PARAMETER, which a return-only rule could
+	// not see. It reached the ABI because the WIDTH question was being read off the OWNERSHIP door
+	// (`declaredNameIsManaged` answers `false` for an interface, which is true and is not the question).
+	// * anything that is not an UNMANAGED MACHINE WORD in the RETURN position specifically.
+	// The rest of this entry is that second clause.
+	// A dispatch's ARGUMENT types are settled where the call is emitted, so an associated PARAMETER is fine:
+	// the lowering resolves the binding and coerces the actual to it. A RESULT is not. Its type flows on into
+	// the program -- which instruction `m.make() + 11` picks, and whether the returned value is OWNED and
+	// released -- and that is decided by the PARSER, from the interface's own rendered spelling, which names
+	// the associated type and can never name what a conformer bound it to. There is no whole-program
+	// conformance registry mid-parse (`project.conformances` is filled at merge, after every file has parsed),
+	// so the front end has nothing to ask.
+	// MEASURED before the rule existed:
+	// * `with float` -- x64-windows compiled clean and answered 35 where the program computes 31, the f64
+	// read out of the integer return register, while wasm32-wasi trapped;
+	// * `with String` and `with Point` -- both ran to completion and exited 101, the LEAK gate, on x64 AND
+	// wasm. The same interface with the return SPELLED `String` instead of associated is clean, which
+	// attributes the leak exactly to this path.
+	// ⚠ "MACHINE WORD" ALONE WAS THE WRONG PREDICATE, AND THE SECOND MEASUREMENT IS WHY. A `String` and a
+	// struct pointer ARE machine words; what the parser gets wrong for them is the OWNERSHIP, not the width.
+	// The conjunct is therefore an UNMANAGED machine word, and what "managed" means is
+	// `ProgramSignatures.declaredNameIsManaged` -- the same answer a struct field's drop routing takes, asked
+	// rather than re-listed so this does not become a fifth cascade over those registries.
+	// ⚠ A GENERIC INSTANCE IS ADMITTED BY NEITHER, AND THAT COST A LEAK. A `Box with Integer` is a machine
+	// word and is managed -- but a conformance records it as the compiler's own CANONICAL name
+	// (`Box_Integer`), which `genericAliases` is not keyed by, so `declaredFormOf` matched nothing and the
+	// ownership door answered `false`. MEASURED: `with IntBox` and `with IntArr` both exited 101 on both
+	// targets. That door answers for canonical instance names now.
+	// It is NARROW: `int`, a ranged typealias and a payload-free enum are admitted, so the shapes that compile
+	// today keep compiling. Closing the refusal needs the binding to reach the PARSER, which is a whole-program
+	// conformance sweep in the declaration index (`interfaceDeclSites`' shape, one declaration kind over).
+	associatedTypeReturnNotMachineWord = "E3120"
+	// A `float` value is passed where an INTERFACE type is declared, so it would have to be boxed into an
+	// existential's fat pointer.
+	// That pointer's value half is a general-purpose MACHINE WORD -- it is what a dispatch hands the impl as
+	// its receiver, and every conformer's `self` is read out of an integer register. A float lives in a
+	// floating-point register, so widening one means a cross-register-file move that no `TargetOp` performs:
+	// a move's two ends are colored into one file by construction, and the two converts and the `movqGprXmm`
+	// bitcast are each their own op.
+	// MEASURED before the rule: `use(c Comparable, other Comparable)` called with `2.5` compiled all the way
+	// to the x64 emitter and PANICKED there -- `a register-to-register move from xmm0 to rcx crosses register
+	// files` -- with no source position and no way for the author to see what in the program caused it.
+	// It is the same fact E2062 states for a type ARGUMENT (`a type parameter is an opaque 8-byte
+	// general-purpose slot under the compiler's dictionary-passing, and a float value travels in a floating-point
+	// register, so it has no way through`), one widening position over: dictionary passing gives a type
+	// parameter and an existential the same opaque slot, so it gives them the same limit. Closing it needs the
+	// value half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a
+	// representation change and not a check.
+	floatWidenedToExistential = "E3121"
+	// A function value bound as a container `map`'s transform declares a different number of parameters
+	// than the position calls it with. `map`'s transform is `function(Element) returns Element`
+	// (`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --
+	// and the runtime walk calls it with exactly one argument plus the uniform `__env` slot.
+	// A transform declaring a further parameter reads a value nobody passed:
+	// `nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever
+	// the second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`
+	// type-checks the callee's signature and `__managed_map` traps with "indirect call type mismatch". One
+	// target of four could see it, which is what makes the shape undefined rather than unspecified.
+	// NOT E3036, which states that "a call passes a different number of arguments than the callee declares
+	// parameters": there is NO call at this span. The author bound a function VALUE to a position, and the
+	// call that would go wrong is one the compiler makes inside `__managed_map`, over a source line the author
+	// never wrote -- so E3036's sentence would be false about the program in front of them.
+	// NOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an
+	// assignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position
+	// deliberately requires less: the transform's parameter TYPES are not checked here, so "the two function
+	// types must agree" would be false as a statement of what this position demands.
+	transformArityMismatch = "E3122"
+	// `if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a
+	// value test -- the then branch runs whenever the call did not throw -- so the result it produces is
+	// silently dropped and the form reads as though it were being tested. `if try json.getBool(node,
+	// key: "enabled")` reads as "if enabled" and means "if the key exists and is a bool", which is true
+	// when the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)
+	// returns bool` whose SUCCESS path returns `false` still took the branch.
+	// ONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so
+	// `if try` is legal only when the callee returns nothing -- "run this, branch on whether it worked".
+	// An IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:
+	// `_` is E3064 there as everywhere, because a pure call whose result nobody wants is the wrong call.
+	// NOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a
+	// different cure, and this one fires only once that question has already been answered.
+	ifTryDiscardsResult = "E3124"
+	// A use site wrote `I with <Args>` -- the existential `I`, held with its associated types bound --
+	// and one of those arguments is not what the program's conformers bind that associated type to.
+	// An interface this program DISPATCHES through has exactly ONE binding per associated type, which
+	// is E3119's rule and is forced by dictionary-passing: the shared body is compiled once, against
+	// one type, and every other conformer reinterprets those bits. Producing an existential IS such a
+	// dispatch. So the binding is a function of the interface NAME and the conformances are where the
+	// program states it -- a use site does not CHOOSE one, it restates the one already settled.
+	// Refused rather than ignored: The compiler does not carry the arguments on the existential (there is one
+	// answer, in the conformances, and a copy on the type would be a second), so an unchecked claim
+	// would have no effect at all and would read as though it did.
+	interfaceInstantiationBindingDisagreement = "E3125"
+	// A use site wrote `I with <Args>` naming an INTERFACE for one of the associated types, which HOLDS
+	// that position at that interface -- every value of it is a two-word `(value, witness)` widened from
+	// whatever each conformer bound the position to -- and one conformer's binding does not implement it.
+	// The witness half is loaded from a slot of the conformer's own table holding the nested table
+	// `__witness_<binding>.<heldAt>`, and a binding that does not conform mints no such table, so the slot
+	// would name a symbol nothing emits.
+	// It is the held position's twin of E3017: a `where` constraint checks a TYPE ARGUMENT against the
+	// interface a generic demands, and a holding checks every CONFORMER'S BINDING against the interface
+	// the program means to hold the position at. Both are "this type must implement that interface";
+	// they differ in which party supplies the type, so they are two codes rather than one.
+	heldAssociatedTypeBindingNotConforming = "E3126"
+	// A concrete value is WIDENED into a parameterized existential -- `I with <Args>` -- whose argument at
+	// some associated position is not what that value's own conformance binds the position to.
+	// It is E3125's rule moved to the one place it can still be asked once a use site is allowed to CHOOSE.
+	// E3125 compares a written argument against the single binding the conformances settled, and that
+	// comparison is exactly right while the argument is CONCRETE. It is wrong when the argument is the
+	// enclosing generic's own TYPE PARAMETER: `typealias TakerOfT = Taker with T` inside `type Box uses T`
+	// says nothing about the program and something about each INSTANTIATION, so comparing `T` against
+	// `Integer` refused a correct program. Such a claim is therefore DEFERRED by E3125 -- and a deferral
+	// owes a discharge, which is this code.
+	// The discharge is at the WIDENING because that is where a concrete conformer and a site's claim first
+	// meet: the arguments ride the signature (`FuncSignature.paramExistentialSites` /
+	// `returnExistentialSites`), are substituted through the call's own generic instance, and the site's
+	// argument at each position is compared -- RAW, for E3125's measured reason -- against what THIS
+	// conformer binds there (`conformerAssociatedBinding`).
+	// Without it the deferral is E3119's own recorded hazard one indirection later: a dispatch through the
+	// widened value is emitted against the type the SITE claims and lands in an impl written for the type
+	// the CONFORMER bound. E3119's header records what that costs -- `with String` beside `with Integer`
+	// SEGFAULTED (exit 139), `with float` answered 31 where the program computes 51, and a ranged binding
+	// RANGE-PANICKED -- and none of those three is visible to E3119 here, because a program can reach this
+	// with exactly ONE conformer and no whole-program disagreement at all.
+	// ⚠ AN UNRESOLVABLE CLAIM IS REFUSED, NOT ADMITTED, AND THAT IS THE RETURN POSITION. A `return` is
+	// checked once against the shared body's DECLARATION view, where the enclosing generic's parameter is
+	// still opaque and there is no call instance to substitute it through. There is no answer to give, so
+	// the same code refuses and names the position that CAN be resolved -- the same cure E3120 offers for
+	// the same reason one door over.
+	existentialWideningBindingDisagreement = "E3127"
+	// A method that satisfies an interface requirement for a GENERIC conforming type reads one of the
+	// hidden dictionary parameters its declaration reserves -- its type parameter's layout descriptor
+	// (`sizeof(T)`, an opaque `Array` build, a borrowed `T` returned or stored), or the witness table of a
+	// `where` constraint it dispatches through.
+	// A generic conformer shares ONE witness table across every instantiation: `Array with Int` and
+	// `Array with String` both reduce to the conformer `Array` and both dispatch through
+	// `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`). That reduction is what lets one
+	// compiled impl and one table serve every element type, and its premise is that the impls are
+	// INDEPENDENT of the type argument -- `Array.hash`/`Array.equals` hash and compare the backing buffer's
+	// raw bytes and never touch an element.
+	// A dispatch through such a table therefore has no instantiation to take a dictionary from: the caller
+	// holds a table address and a slot index, and the two conformers sharing the slot disagree about what
+	// the dictionary would even say. The adapter that adjusts the impl's arity for the slot
+	// (`LowerMaxonToStd.appendWitnessAdapterDictionary`) therefore passes a NULL dictionary, and this check
+	// is what makes that sound instead of a wild jump through a null table.
+	// Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
+	// the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
+	// on wasm.
+	// THE CURE IS A PER-INSTANCE WITNESS TABLE, AND THE COMPILER EMITS ONE (G19). Where a table is minted for a
+	// CONCRETE instance of a conformer whose impls carry a dictionary, it is keyed by that instance
+	// (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
+	// element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
+	// What this code now refuses is the residue: a table demanded where there is NO concrete instance to
+	// key it by -- a conformer with no instantiation in hand at all.
+	// THE PARAMETRIC ARGUMENT NO LONGER REACHES IT (BATCH43), and it used to be the shape the corpus hit.
+	// `stdlib/Array.maxon`'s `ArrayIterator with Element`, built by `Array.withIterator()` inside a body still
+	// generic in `Element`, was sent here because `witnessTableInstanceFor` reduces a non-concrete instance to
+	// the shared table and the shared table's adapter then hands the impl a null dictionary. That is the right
+	// refusal about the TABLE asked one mechanism away from the call the author wrote: the question a witness
+	// ARGUMENT poses is whether the CALLEE reads it. `LowerMaxonToStd.materializeWitnessArg` now passes a zero
+	// for such an argument and `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with
+	// E3132 where something does.
+	semanticSharedConformanceReadsDictionary = "E3128"
+	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
+	// `or`-arm binds a slot some case the arm covers does not hold as that type.
+	// An arm's payload bindings are loaded ONCE, unconditionally, at the head of the arm BODY, and every
+	// alternative of an `or`-arm branches to that one body. Two consequences, and this code carries both:
+	// the bindings must be a BIJECTION (one name per slot, one slot per name), because the load is a list
+	// walk and the scope install is keyed by NAME and overwrites; and every case the arm covers must
+	// present each bound slot as that binding's own type, because the load runs on all their paths.
+	// A union's cases share one payload offset (`EnumLayout.payloadSlotOffset`), so `stay or walk(dir)`
+	// is well defined: `stay` declares no slot 0, and a narrow case's unused slots are ZERO-FILLED at
+	// construction (`Parser.emitEnumBox`'s `zeroFill` loop, whose header states the fill is MANDATORY --
+	// the union cloner preserves it by blitting the whole box). So the binding reads 0 on the `stay`
+	// path. That is the shape `specs/match-enum-or-pattern.md` pins, and this check admits it -- but only
+	// where 0 is PROVABLY a value of the binding's own type, which is `Parser.zeroInhabitsPayloadType`,
+	// a question about the SLOT and deliberately not `payloadClassIsManaged` (a question about whether
+	// the DECLARATION view owes a heap drop, which fails open on a function pointer and on a type
+	// parameter).
+	// The shapes it refuses are silent wrong answers rather than compile errors:
+	// - a bound slot another covered case declares with a DIFFERENT type (`speak(msg String) or
+	// walk(dir Integer)`, binding `dir`) read the String record POINTER as an integer and printed it
+	// -- no crash, no diagnostic, silently wrong.
+	// - a binding whose type does not admit 0, on a slot a covered case leaves empty: a String
+	// (`stay or speak(msg String)`) dereferenced null, 0xC0000005; a FUNCTION-typed payload
+	// (`idle or run(op)`, `specs/first-class-functions.md`'s own `Action` union) called through
+	// address 0, 0xC0000005; a ranged alias excluding zero (`int(1 to 10)`) bound 0, outside its own
+	// declared domain.
+	// - the SAME SLOT bound by two alternatives (`shout(msg) or speak(msg)`), which emits two loads and
+	// two acquisitions against one slot: on a sole-owned scrutinee the first MOVED the String out and
+	// nulled the slot, the second read the slot it had just emptied, and the arm body held null --
+	// 0xC0000005 again. Bind the slot on one alternative and name the other cases bare
+	// (`shout or speak(msg)`), which is legal and MEASURED correct on every alternative.
+	// - the SAME NAME bound at two DIFFERENT slots (`walk(dir) or run(_, dir)`), which passes every slot
+	// test and is then decided by `Scope.install`, keyed by name and last-wins: the arm read slot 1 on
+	// the `walk` path, printing 0 where 7 was stored. The same hole existed one construct over for a
+	// single case's own list (`walk(x, x)`), so ONE check over the arm's finished binding list serves
+	// both doors.
+	// It is the `and fallthrough` rule one construct over
+	// (`Parser.rejectFallthroughIntoBindingArm`), which refuses a related hazard for a related reason: an
+	// arm body reached from a case that does not hold what its bindings destructure.
+	// The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
+	matchArmPayloadBindingConflict = "E3129"
+	// A payload-free `enum` declares a member named after a requirement of a conformance the COMPILER
+	// grants it -- `hash` or `equals` -- with a signature that does not implement that requirement.
+	// An enum without associated values conforms to `Hashable` and `Equatable` by declaration alone
+	// (`specs/enum-hashable.md`), with no `implements` clause anywhere. So nothing an author writes asks
+	// for the conformance, and nothing was validating a member that collides with one of its names --
+	// unlike a `type X implements Hashable`, whose every requirement `checkConformance` matches (E3016).
+	// The member is not dead: it WINS, at both doors. `e.hash()` resolves to it as an ordinary method
+	// call, and `ProgramSignatures.enumConformanceImplName` stamps it into the enum's
+	// `__witness_<Enum>.Hashable` slot so a `Map`/`Set` keyed by that enum hashes through it too --
+	// which is the point (the two doors must reach ONE body, or a map and a direct call disagree about
+	// one enum). What this code adds is the requirement the grant never stated.
+	// Without it, an enum declaring `hash() returns String` is stamped into a slot the probe calls as
+	// `returns` i64, so a String record POINTER is used as a hash and then leaked -- `map.get` answers 0
+	// and the process exits 101.
+	// The cure is to make the member match the requirement it is named after, or to rename it. The
+	// compiler's own implementation is used for every enum that declares neither.
+	semanticGrantedConformanceMemberMismatch = "E3130"
+	// An `as` names a GENERIC INSTANCE as its cast target -- `col as RegNumColumn`. Every other cast this
+	// compiler performs is a RETAGGING or a scalar conversion of one value; a container is neither, because
+	// its elements have a storage layout of their own and the two layouts need not agree. `Array with
+	// int(0 to u64.max)` strides EIGHT bytes per element and `Array with int(0 to 63)` strides ONE
+	// (`rangedAliasStorageBytes`), so retagging one as the other hands every later read a stride the buffer
+	// was not written at -- the silent wrong answer `specs/bytearray-element-size.md` measures at
+	// length. Converting instead would mean allocating a second buffer and copying every element through a
+	// range check, which is a real operation and not something an `as` should perform in silence.
+	// The compiler used to ACCEPT this spelling and do nothing at all: the value kept its original type and the
+	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
+	// Build the container with the element type you need, or convert it element by element.
+	castTargetIsAContainer = "E3131"
+	// A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
+	// at that constraint is a generic instance written over the CALLING body's own type parameters, the
+	// conformance behind it has impls that carry a hidden dictionary -- and the callee READS that witness
+	// parameter.
+	// Such an instance has no table. A witness table is `.rdata`, and the slots of a dictionary-carrying
+	// conformance point at adapters that must supply the instantiation's layout descriptor, its fixed element
+	// count and its own constraint witnesses; for `ArrayIterator with Element` inside a body still generic in
+	// `Element` every one of those is a run-time fact of the ENCLOSING FRAME, and no static blob can carry it.
+	// E3128 is the same wall one mechanism down, reached from the table rather than from the argument.
+	// Where the callee never READS the parameter the call passes a zero and this check is what makes that
+	// sound rather than a guess -- exactly as `LowerMaxonToStd.appendNullAdapterDictionary` passes a null
+	// dictionary and `requireWitnessSlotImplIgnoresDictionary` proves the impl reads none of it. The test is
+	// USE and not read-of-a-particular-kind: a witness that is dispatched through, forwarded to another
+	// dictionary-passing callee, or merely stored is equally a value the caller cannot supply.
+	// `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is the shape that passes the check --
+	// `WithIterIterator.create` returns a bare `Self` struct literal and dispatches nothing, while the
+	// `current()`/`advance()` a for-loop then drives are reached from a CONCRETE instance that mints a real
+	// per-instance table.
+	// The cure is to reach the constrained method through a concrete instance -- bind the enclosing body's
+	// type parameter before the constrained type is built -- or to make the conformance's impls independent
+	// of their type argument so no dictionary is needed at all.
+	semanticParametricConstraintWitnessRead = "E3132"
+	// A `where` constraint BINDS the constrained interface's associated types --
+	// `where Source is Iterator with Element` -- and the type argument supplied at an instantiation
+	// conforms to that interface while binding one of those positions to a different type.
+	// The binding is not decoration. Inside the shared generic body the receiver of a witness dispatch
+	// is a value of a type PARAMETER, which carries nothing about what the conformance behind it bound,
+	// so the constraint's binding is what types the dispatch's RESULT
+	// (`Parser.associatedReturnThroughConstraintBinding`) and its associated FORMALS
+	// (`LowerMaxonToStd.associatedFormalType`) -- and it is what lets E3119 stop asking every conformer
+	// of that interface to agree about the position, because this dispatch SETTLED it.
+	// One body is compiled against that answer and every instantiation reuses it, so a conformer binding
+	// the position otherwise has its bits read as the wrong type. That is E3119's own recorded failure --
+	// `with String` beside `with Integer` SEGFAULTED (exit 139), `with float` answered 31 where the
+	// program computes 51, and a ranged binding RANGE-PANICKED -- reached one indirection later.
+	// It is the `where`-clause twin of E3127, which asks the same question of a value WIDENED into a
+	// parameterized existential, and it is checked at the same moment E3017 is: the instantiation site,
+	// where the type argument and the constraint first meet.
+	// The cure is to bind the constraint to what the conformer declares, or to supply a type argument
+	// whose conformance binds what the constraint states.
+	semanticWhereConstraintBindingDisagreement = "E3133"
+	// `spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that
+	// returns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it.
+	// The cases are: nothing declares the type; the type is declared but nothing declares the member; the
+	// member is an INSTANCE method (a `spawn` calls the factory directly, so there is no service yet for a
+	// message to reach); or the member is a static that returns something else, which has produced no state
+	// for the message loop to own.
+	// A bare `spawn f()` over a free function is refused here too, and deliberately: there is no
+	// unstructured green thread in this language. The unit of concurrency is a service, whose message
+	// surface the compiler can check.
+	// The cure is to name a static factory of the type you mean to start.
+	semanticServiceNotASpawnTarget = "E3134"
+	// A message of a service declares a parameter whose value cannot cross to another green thread.
+	// A send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps
+	// reference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a
+	// send that left two threads holding one box would corrupt the heap rather than merely be slow.
+	// Four shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
+	// a captured environment block, which is a box with a second referent by construction. A value held at
+	// an interface type is a fat pointer whose witness half is read-only data and whose value half is
+	// released through `__drop_existential`, a pair the request union's payload cascade cannot carry. An
+	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
+	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
+	// from the method it names: whether a type is a service is a whole-program property, and the site that
+	// decided it is the one worth naming.
+	// The cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the
+	// parameter from the message and reach the value another way.
+	semanticServiceValueNotTransferable = "E3135"
+	// A member was called on a service HANDLE that is not one of the service's messages.
+	// A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
+	// synthesized request union each. That is the isolation boundary, and it is also what makes self-send
+	// deadlock unspellable rather than diagnosed: a private helper is not on the handle, so a call to one from
+	// inside a message body can only ever be a DIRECT call on the service's own state.
+	// Two shapes reach it, and the message tells them apart because the cures differ. The member may be
+	// DECLARED on the service type and merely not exported -- a private helper, or a `static`, which has no
+	// receiver and so can never be a message -- in which case `export` makes it one, or the value can be
+	// reached through a plain (unspawned) value of the type. Or nothing declares it at all, which is an
+	// ordinary misspelling.
+	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
+	// the type, and saying otherwise would read as a typo.
+	semanticServiceNotAMessage = "E3136"
+	// An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
+	// would end up holding a second reference to it -- on another green thread.
+	// A service is a green thread with a mailbox, and the language guarantees one green thread per box: that
+	// is what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that
+	// aliased service state would put one box in two green threads' hands, which corrupts the heap rather
+	// than merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.
+	// What is refused is a return this frame does not solely own: a field read yields a BORROW, and so does
+	// `self`. An ordinary function promotes such a return by taking a reference (`__mm_retain`), and that
+	// promotion is exactly what would make the second namer. What passes is a value this frame MINTED -- a
+	// fresh record, an interpolation, a `.clone()` -- or a call result the compiler can prove fresh; and a
+	// scalar, which owns nothing at all.
+	// The cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely
+	// asked for a copy, and a copy is the only thing that can cross.
+	// The diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
+	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
+	// different file from the method the rule fires on.
+	semanticServiceReplyAliasesState = "E3137"
+	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
+	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
+	// A send MOVES: the service becomes the argument's one owner, and the sending frame gives up the
+	// reference it held. That is what keeps reference counting PLAIN rather than atomic -- the language
+	// guarantees one green thread per box -- so an argument this frame still shares with something else
+	// would put one box in two green threads' hands, which corrupts the heap rather than merely being slow.
+	// Three shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its
+	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value a
+	// closure captured, one pushed into a container, one handed to another consuming call. The second is a
+	// BORROWED aggregate this frame does not own at all -- a struct read out of a field, an element, or a
+	// parameter -- for which there is no owning copy the send could take instead. (A borrowed `String` is
+	// not in this class: a byte record has a cheap owning copy, so the send promotes it and the source stays
+	// readable.)
+	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
+	// makes costs visible; or restructuring so the value is freshly built at the send.
+	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
+	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
+	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
+	// a reference where a move would give one up -- and a move hands the record over WHOLE, leaving that
+	// second owner behind on this green thread with a plain refcount racing the service's. No compile-time
+	// tier can settle it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
+	// `push(Cell.create())` build the same TYPE. So the graph is proved where the counts are -- at run time,
+	// immediately before the move, by a synthesized per-type walk. A reachable record with a second owner
+	// ABORTS the process (exit 96) on the sending green thread, before anything is enqueued; an immortal
+	// `.rdata` literal passes with no count to check; a shared copy-on-write BUFFER is detached, exactly as
+	// a write to it would detach it.
+	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
+	// shared: a value held at an interface type (a witness table names a destructor and no walk), an opaque
+	// type parameter (the site cannot see its slots), a record no declaration in scope describes, and any
+	// graph reaching a type with no per-type cascade -- an OS handle, or a base-struct-less generic
+	// instance. Containers, records with managed fields and unions with managed payloads all cross.
+	semanticServiceArgumentNotUnique = "E3138"
+	// Two or more services can await replies from each other, so a message of each could be blocked waiting
+	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
+	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
+	// exists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary
+	// functions, so a message that calls a helper that awaits still contributes the edge.
+	// ONLY BLOCKING EDGES COUNT. A fire-and-forget send is not an edge, because a non-blocking send cannot
+	// participate in a wait cycle -- which is what keeps peer-to-peer messaging legal, and is the whole of
+	// why the rule is not crippling.
+	// Why acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,
+	// the service lowest in it awaits nobody and so always makes progress, and by induction every blocked
+	// caller eventually resumes. There is no configuration in which everyone is waiting.
+	// A SELF-EDGE is a cycle too, and it is the one users hit most: a `Worker` whose message awaits a reply
+	// from another `Worker` is refused even though two distinct instances would not actually deadlock. Edges
+	// are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the
+	// instances apart and must be conservative -- the guarantee is deadlock freedom.
+	// The cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`
+	// clauses, or send it as a statement and do not await it) and have the peer reply with a separate
+	// message, or split the role into two types.
+	semanticServiceCallCycle = "E3139"
+	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
+	// cannot carry back to a sender.
+	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO
+	// words: the value, and one error word.
+	// The VALUE word is one machine word the awaiter reads back verbatim, so it holds what a green thread's
+	// result register holds: an integer, a `bool`, a `String`, a struct, a service handle. A `float` comes
+	// back in a floating-point register the cell has no slot for; a value held at an interface type or an
+	// opaque type parameter is a pair whose second half is released through a companion the cell does not
+	// carry.
+	// The ERROR word holds the FUSED ORDINAL of a two-member dispatch line -- `ServiceError` (what the
+	// transport can fail with, whatever the message declares) beneath the message's own error type -- which
+	// is what lets `match e` tell a stopped service apart from a handler that threw, using the same
+	// tag-interval dispatch every other `match` uses. A payload-free `enum` fits that line exactly, because
+	// its flag IS an ordinal. A payload-carrying `union`'s flag is a heap BOX POINTER instead, and a
+	// float-backed enum's tags are IEEE-754 bit patterns that can span more of the i64 range than the line
+	// has left above `ServiceError`'s own slice.
+	// It fires at the `spawn` rather than at a send, as every service diagnostic does, and for a reason of
+	// its own beyond the usual one: the dispatch loop the compiler synthesizes completes a reply for every
+	// reply-bearing message of the type, so a message the cell cannot carry would put a wrong-width store
+	// into a body the service really runs, whether or not the program ever sends that message.
+	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
+	// `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
+	semanticServiceReplyNotCarriable = "E3140"
+	// A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting
+	// it consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a
+	// promise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when
+	// the read is consumed, or the container's element walk reclaims a thread the consume already reclaimed.
+	// This refuses the reads that CANNOT NAME the slot they came from, because a move with nowhere to
+	// record its source cannot be finished. A cursor's `current`/`peek` and a list node's `value()` are the
+	// cases: each hands back an element without naming an index into the container, so nothing can be
+	// vacated when the promise is later awaited.
+	// The cure is a read that names its slot -- `get(i)`, `first()`, or `for ... in` -- or a move-out
+	// (`pop`, `remove`), whose result the caller owns outright.
+	// It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
+	// promise. It is about there being no way to say which slot stopped owning it.
+	semanticPromiseCannotBeBorrowed = "E3141"
+	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has
+	// exactly one owner at every instant, so `await` and `.cancel()` CONSUME it -- the runtime reclaims
+	// the thread's struct there. Any later use of a name that still spells that promise reads a struct
+	// already back on the scheduler's free list.
+	// Poisoning follows the VALUE, not the text: an alias (`let q = p`) names the same thread, so
+	// consuming through either name consumes it for both -- and a NON-consuming read of the alias
+	// (`q.inner`) is refused here even though no second consume exists for the linearity pass to find.
+	// Re-arming the binding from a fresh `async` spawn mints a new thread and revives the name.
+	// This is the parser-time, value-keyed half of the rule. E3100 is the flow-sensitive backstop for a
+	// second consume that this half cannot see -- across a loop back edge, where one lexical `await`
+	// consumes one thread on every iteration.
+	semanticPromiseAlreadyConsumed = "E3142"
+	// A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message
+	// reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
+	// thread, and a module `var` is one word every one of them shares.
+	// THE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule
+	// with one cure and one reachability question; only the diagnostic's subject clause differs.
+	// A WRITE is an arithmetic failure rather than a crash, which is why it cannot be a run-time check:
+	// `total = total + by` is a load, an add and a store two Ms can interleave, nothing traps, nothing
+	// leaks, and the program merely answers a number that is sometimes too small. MEASURED at
+	// MAXON_MAX_PROCS=16 over 1200 sends, ten runs: five lost an update and every one exited 0.
+	// A READ is worse. The write that changes the slot RELEASES the record it was holding, so a green
+	// thread that has already loaded the pointer reads on into freed memory -- a use-after-free, not a
+	// stale word. MEASURED: 12 services spinning on `label.count()` while `main` reassigned an
+	// INTERPOLATED string 4000 times read 8 of 8 clean at one processor and 20 of 20 EXIT 139 at sixteen,
+	// several panicking inside `utf8DecodeAt` with "value outside typealias 'Codepoint'".
+	// THE RULE IS ABOUT WHO TOUCHES IT, not about globals as such. A write to `self.<field>` is legal -- a
+	// service's fields are reached by one green thread, which is the whole point of putting state there. A
+	// read of a module-level `let` is legal and is the escape hatch every configuration constant takes: it
+	// is written once before any green thread exists, so no store can free anything under a reader. And a
+	// plain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere
+	// does not make the rest of the program concurrent.
+	// REACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes
+	// the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
+	// the shape an author would have spotted anyway, while the race does not care which frame the store
+	// instruction sits in.
+	// An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function in the
+	// program as message-reachable, which is this rule's refusing direction: unlike E3139 -- where a missed
+	// edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
+	// The cure is always available and is always the same for both directions: keep the value in a field of
+	// `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
+	// owns, so the value is handled by one green thread at every instant.
+	// The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
+	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
+	// type is a service is a whole-program property whose cause may be in another file.
+	semanticSharedGlobalAccessFromGreenThread = "E3143"
+	// A union case's payload argument carries a `name:` label naming no payload of that case --
+	// `TwoParts.values(10, z: 20)` where the case declares `a` and `b`.
+	// NOT E3018, which is about a FIELD: a payload is a positional slot of one case, not a member of
+	// the union, and a message calling it a field names a thing the program does not have. The two
+	// mistakes also have different cures -- a field typo is fixed against the type, a payload label
+	// against the CASE -- so the diagnostic names the case rather than the union alone.
+	semanticUnknownPayloadName = "E3144"
+	// A message whose reply is typed at a GENERIC service's own type parameter is sent through a handle that
+	// no longer says which instantiation it was started at.
+	// A generic service has ONE `<T>.handle` companion, whatever it is instantiated at -- one union and one
+	// handle struct per service, never a pair per instantiation -- so which instantiation a handle belongs to
+	// is carried on its TYPE. `<T>.handle with <Args>` is a generic instantiation like any other and can be
+	// written; the BARE `<T>.handle` is the base, which fixes nothing, so a slot spelled that way has dropped
+	// the very fact the reply needs.
+	// That matters for exactly one shape. A reply typed at the type parameter is produced inside the handler,
+	// where the instantiation's layout descriptor says what the type parameter is; the awaiting frame has only
+	// the handle, so a handle that names no instantiation gives the awaited value no type any member,
+	// conversion or `otherwise` branch can be checked against.
+	// Every OTHER message through such a handle is unaffected and stays legal: a reply typed at a concrete
+	// type, and a message with no reply at all, need nothing from the instantiation.
+	// The cure is to spell the instantiation -- a `typealias` over `<T>.handle with <Args>` carries the
+	// reply's type through a parameter, a struct field or an array element -- or to send the message where the
+	// binding the `spawn` produced is, which carries it already.
+	semanticServiceReplyInstanceUnknown = "E3145"
+	// A match arm over an enum, union or error union writes a RANGE of cases -- `add to mul`,
+	// `red upto blue`. An arm names its cases explicitly: an `or`-chain, one case per line.
+	// A range covered the cases whose DECLARATION POSITION fell in its span, so a case appended
+	// inside that span was absorbed silently and exhaustiveness never fired -- the arm handled a
+	// case nobody had decided about. Naming each case is what makes E2026 point at every match
+	// site when an enum grows.
+	// Raised as soon as `to`/`upto` is seen, BEFORE the upper bound is resolved, so `red to nope`
+	// reports this rather than E3034: the range is the mistake, not the name.
+	// SCALAR range patterns are unaffected -- `1 to 10`, `'a' to 'z'`, `min upto 0` are values in
+	// an ordered domain, where a new value between the bounds cannot appear behind the author's
+	// back. So is the ranged type alias `int(0 to 100)`.
+	matchEnumCaseRange = "E3146"
+	// A match arm's `or`-chain packs two alternatives onto one line. Every alternative takes its
+	// own line, the chain continuing after a trailing `or`:
+	// call or
+	// literal or
+	// ret then break 'op'
+	// One case per line is what keeps an arm readable once cases are named rather than ranged --
+	// an arm may cover twenty of them -- and it makes adding or removing one a one-line diff.
+	// A single-alternative arm has no chain and is unaffected.
+	matchOrChainNeedsOwnLine = "E3147"
+	// `bits(n)` was written with a width the language does not have -- `bits(5)`, `bits(0)`,
+	// `bits(128)`.
+	// The legal widths are 1, 2, 4, 8, 16, 32 and 64, and they are not an arbitrary list: they are
+	// exactly the widths a slot or a sub-byte packed field can hold. 8/16/32/64 are the 1/2/4/8-byte
+	// slots the storage ladder produces; 1/2/4 are the packed widths that DIVIDE a byte, so a field
+	// never straddles one. A width outside that set has nowhere to be stored.
+	// NOT E3005, which is about a VALUE outside a range: this is a range that cannot be declared.
+	semanticIllegalBitWidth = "E3148"
+
+	// A field access could not be lowered: the base is not a struct, or the field has no slot.
+	invalidFieldAccess = "E4006"
+	// a type definition contains a reference cycle -- it transitively
+	// contains itself through struct fields, union associated values, or
+	// container element types. Maxon's ownership model requires acyclic type
+	// graphs for deterministic destruction, so recursive type references are
+	// rejected. Emitted by the type-cycle check after type resolution.
+	irTypeCycle = "E4014"
+	// a declaration in the source took a function name that belongs to the compiler.
+	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may
+	// carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
+	// THERE, so what E2051 refuses is not what this refuses. ONE rule, and the compiler
+	// can enforce it at the two places it USES such a name, since the full roster of
+	// names it owns is not enumerable (the dynamic families are built from the program's
+	// own type names).
+	// (1) The name is also a function the compiler EMITS into this program, and a program
+	// cannot hold two functions of one name. Detected where the collision first becomes
+	// visible -- a name index over the module's functions -- and told apart from an
+	// installer that ran twice by PROVENANCE, since a synthesized function carries no
+	// `sourceFilePath` and a parsed one always does.
+	// (2) The name is one the reachability prune ROOTS unconditionally, so the
+	// declaration is resurrected into a program that installs no runtime under that name
+	// -- with no body, because the pre-elimination passes skipped the one they were told
+	// was unreachable. Refused whether or not the compiler emits its own copy HERE, so
+	// the rule is about the name and not about which runtime floor a given program
+	// happens to carry.
+	declarationTakesCompilerOwnedName = "E4015"
+	// the error enum a builtin runtime family throws is DECLARED in `stdlib/Builtins.maxon`
+	// (`__ManagedMemoryError`, `__ManagedFileError`, `__ManagedDirectoryError`), and this checkout's
+	// declaration disagrees with the ordinals the compiler's runtime transcribes as literals -- either
+	// the enum is not declared at all (the module was not loaded), or a case it declares sits at a
+	// different position than the runtime throws it at. The case ORDER is the wire format: a throwing
+	// runtime returns `ordinal + bias` as its error flag and a handler arm is selected from it, so a
+	// disagreement routes every handler arm to the wrong case SILENTLY. Reported rather than panicked
+	// because the declaration is now a property of a FILE on disk: `stdlib/Builtins.maxon` may be
+	// edited, while the two families the compiler still SYNTHESIZES (`__ArrayError`,
+	// `__DivisionByZeroError`) keep the panic, since only the compiler's own source can make those
+	// disagree.
+	builtinErrorEnumMismatch = "E4016"
+
+	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
+	registerPressure = "E5001"
+	// `--coverage` was combined with `--no-debug-info`. The instrumented binary's counters are
+	// anonymous numbers: what each one counts lives in the `.mxdbg` sidecar's coverage-point
+	// table, which `--no-debug-info` suppresses. Emitting them anyway would produce a `.mxcov`
+	// data file nothing could ever interpret, so the combination is refused rather than silently
+	// dropping either half.
+	codeEmitterCoverageNeedsDebugInfo = "E5003"
+
+	// The previous build output at this path could not be removed before the build began, so this
+	// build cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)
+	// or read-only. Refused up front rather than at the write, because the write is logged and
+	// swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
+	// which is the exact confident-wrong-answer this deletion exists to prevent.
+	// The message names the LIKELY cause as well as the mechanical one: in practice the holder is a
+	// spec-test or a build of this same tree that has not exited yet, and the compiler cannot
+	// identify it (that would need RestartManager/NtQuerySystemInformation, imported nowhere here).
+	// It also states that the previous binary SURVIVED -- this is the one branch where a failed build
+	// leaves an output behind, so a `;`-chained build-then-test runs the stale one. The wait-or-kill
+	// deadline it quotes is `WedgeWatchdogMs` (maxon-bin/Testing/SpecWorkerPool.maxon), read from
+	// the constant so the message and the watchdog cannot disagree.
+	binaryOutputNotReplaceable = "E6002"
+	// The backend reported no failure, yet nothing exists at the output path after the write. The
+	// build removed that path before compiling, so its ABSENCE afterwards means the writer did not
+	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
+	// report success.
+	binaryOutputNotWritten = "E6003"
+
+	// A member is used that the program plainly DECLARES, but the compiler's whole-program declaration index
+	// does not carry it -- the declaration sweep read the declaration's head, failed to read its return type,
+	// and dropped the signature.
+	// That tolerance is deliberate and it is for MALFORMED SOURCE: a return type the sweep cannot read is the
+	// real parse's to report, with a position, and a sweep that could veto would reject a correct program the
+	// moment it failed to recognize something the parser accepts. What it must NOT absorb is a failure the
+	// real parse never re-raises -- a return type the DEFERRED whole-program folds could not canonicalize
+	// while the registries those folds fill were still being filled. The declaration then simply stops
+	// existing, and the first thing to notice is a USE of it, refused as though nothing had been written.
+	// MEASURED: `stdlib/helpers/sort/pdqsort.maxon` declares `partition` returning `(SortIndex, bool)` inside
+	// an `extension Array`, with `SortIndex` declared by a SIBLING `extension Array` in another file. On any
+	// directory walk that folded pdqsort first, the tuple element canonicalized to the unresolved
+	// `Array.SortIndex`, the element-name join refused the separator, and the method vanished -- reported as
+	// `E2015 ... `Array` member 'partition'` at the CALL, 138 lines below a declaration that was plainly
+	// there. This code is what that program says now: the member IS declared, at the position named, and the
+	// index lost it.
+	// It is a COMPILER BUG wherever it fires. The position is the USE, because that is where the compile
+	// stops; the declaration's own file, line and column are named in the message, because that is what has
+	// to be read to fix it.
+	internalDroppedSignature = "E9002"
+end 'ErrorCode'

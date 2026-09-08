@@ -1,0 +1,107 @@
+// Test: module-let-empty-map-and-set-cost-no-allocation
+typealias Key = int(0 to 1000)
+typealias KeyMap = Map with (Key, Key)
+typealias KeySet = Set with Key
+
+let Empty = KeyMap.create()
+let Seen = KeySet.create()
+
+function main() returns ExitCode
+	return (Empty.count() as ExitCode) + (Seen.count() as ExitCode)
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __struct_rec_0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 32]
+    arm64.cmp x19, 0
+    arm64.b.lt __il_slow#14
+  __rc_chk#13:
+    arm64.movImm x3, 4611686018427387904
+    arm64.cmp x19, x3
+    arm64.b.le __il_cont#10
+  __il_slow#14:
+    arm64.bl Map.count
+    arm64.movRegReg x19, x0
+  __il_cont#10:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at module-let-empty-map-and-set-cost-no-allocation.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.leaRdata x0, __struct_rec_1
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
+    arm64.cmp x3, 0
+    arm64.b.lt __il_slow#19
+  __rc_chk#18:
+    arm64.movImm x4, 4611686018427387904
+    arm64.cmp x3, x4
+    arm64.b.le __rc_ok#17
+  __il_slow#19:
+    arm64.bl Set.count
+    arm64.b __il_cont#15
+  __rc_ok#17:
+    arm64.movRegReg x0, x3
+  __il_cont#15:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at module-let-empty-map-and-set-cost-no-allocation.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#4:
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at module-let-empty-map-and-set-cost-no-allocation.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#7:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

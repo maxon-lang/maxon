@@ -1,0 +1,270 @@
+// Test: matching-ranged-element-still-works
+typealias Small = int(0 to 100)
+typealias SmallCol = Array with Small
+
+function bump(col SmallCol, by Small)
+	let old = try col.get(0) otherwise panic("get")
+	try col.set(0, value: old + by) otherwise panic("set")
+end 'bump'
+
+function main() returns ExitCode
+	var a = SmallCol.create()
+	a.push(40)
+	bump(a, by: 2)
+	return try a.get(0) otherwise panic("get")
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#6
+  __rc_chk#7:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc lessEqual, __rc_ok#5
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at matching-ranged-element-still-works.test:5: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#5:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#15
+  __im_word#13:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#17:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride#15:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#12
+  __im_byte#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#18:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#11
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#11
+  __im_slow#12:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#11:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at matching-ranged-element-still-works.test:6: get\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRegReg rax, rax, r12
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#9
+  __rc_chk#10:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __rc_ok#8
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at matching-ranged-element-still-works.test:7: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#8:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride#24
+  __im_word#22:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#21
+  __im_owned#25:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#21
+  __im_bounds#26:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __im_slow#21
+  __im_buffer#27:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#21
+  __im_viewed#28:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#21
+  __im_store#29:
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#20
+  __im_stride#24:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, __im_slow#21
+  __im_byte#23:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#21
+  __im_owned#30:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#21
+  __im_bounds#31:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __im_slow#21
+  __im_buffer#32:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#21
+  __im_viewed#33:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#21
+  __im_store#34:
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#20
+  __im_slow#21:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r10
+  __im_cont#20:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at matching-ranged-element-still-works.test:7: set\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect bump
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#9:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#12
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#13:
+    x64.movRegReg r12, rax
+    x64.jmp __im_cont
+  critsplit#12:
+    x64.movRegReg r12, rax
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r10
+  __im_cont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at matching-ranged-element-still-works.test:14: get\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

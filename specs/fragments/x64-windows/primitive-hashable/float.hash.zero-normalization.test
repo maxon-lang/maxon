@@ -1,0 +1,34 @@
+// Test: float.hash.zero-normalization
+function main() returns ExitCode
+	let pos = 0.0
+	let neg = -0.0
+	let h1 = pos.hash()
+	let h2 = neg.hash()
+	if h1 == h2 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont#7:
+    x64.movRegImm32 rax, 0
+  negzero:
+    x64.movRegImm32 rcx, 0
+  __il_cont:
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, ifcont#2
+  eq:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

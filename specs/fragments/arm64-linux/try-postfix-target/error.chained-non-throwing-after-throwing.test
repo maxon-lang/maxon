@@ -1,0 +1,21 @@
+// Test: error.chained-non-throwing-after-throwing
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function th() returns IntArray throws MyError
+	var arr = IntArray.create()
+	arr.push(10)
+	return arr
+end 'th'
+
+function main() returns ExitCode
+	let n = try th().count() otherwise return 9
+	return n
+end 'main'
+---
+CompilerError:
+error E3055: <fragment>:16:10: try requires a throwing function: this builtin call cannot fail

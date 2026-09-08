@@ -1,0 +1,193 @@
+// Test: dispatch.negative-extreme
+typealias N = int(i64.min to i64.max)
+
+function band(x N) returns N
+	return match x 'c'
+		min to -100 gives 1
+		-99 to -1 gives 2
+		0 gives 3
+		1 to 100 gives 4
+		101 to max gives 5
+		default gives 9
+	end 'c'
+end 'band'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if band(-5000) == 1 'a'
+		n = n + 1
+	end 'a'
+	if band(-100) == 1 'b'
+		n = n + 1
+	end 'b'
+	if band(-99) == 2 'c'
+		n = n + 1
+	end 'c'
+	if band(-1) == 2 'd'
+		n = n + 1
+	end 'd'
+	if band(0) == 3 'e'
+		n = n + 1
+	end 'e'
+	if band(1) == 4 'f'
+		n = n + 1
+	end 'f'
+	if band(100) == 4 'g'
+		n = n + 1
+	end 'g'
+	if band(101) == 5 'h'
+		n = n + 1
+	end 'h'
+	if band(999999) == 5 'i'
+		n = n + 1
+	end 'i'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+func @band {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, matchhi
+  matchlo:
+    x64.cmpRegImm32 rcx, -100
+    x64.jcc greater, matchnext#9
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext#9:
+    x64.cmpRegImm32 rcx, -99
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, -1
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matchdefault
+  matcharm#2:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchhi:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext#10
+  matcharm#3:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchnext#10:
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 100
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matchnext#11
+  matcharm#4:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matchnext#11:
+    x64.cmpRegImm32 rcx, 101
+    x64.jcc less, matchdefault
+  matcharm#5:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  matchdefault:
+    x64.movRegImm32 r8, 9
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm rcx, 18446744073709546616
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont#2
+  a:
+    x64.movRegImm32 rbx, 1
+  ifcont#2:
+    x64.movRegImm rcx, 18446744073709551516
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont#4
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#4:
+    x64.movRegImm rcx, 18446744073709551517
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, ifcont#6
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#6:
+    x64.movRegImm rcx, 18446744073709551615
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, ifcont#8
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#8:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 3
+    x64.jcc notEqual, ifcont#10
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#10:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 4
+    x64.jcc notEqual, ifcont#12
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#12:
+    x64.movRegImm32 rcx, 100
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 4
+    x64.jcc notEqual, ifcont#14
+  g:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#14:
+    x64.movRegImm32 rcx, 101
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 5
+    x64.jcc notEqual, ifcont#16
+  h:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont#16:
+    x64.movRegImm32 rcx, 999999
+    x64.callDirect band
+    x64.cmpRegImm32 r8, 5
+    x64.jcc notEqual, critsplit
+  i:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont#18
+  critsplit:
+    x64.movRegReg r8, rbx
+  ifcont#18:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.negative-extreme.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

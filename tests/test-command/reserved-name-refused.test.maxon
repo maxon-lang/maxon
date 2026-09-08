@@ -1,0 +1,34 @@
+// reserved-name-refused.test.maxon — An author may not declare a reserved `__` name, and `test` must refuse it exactly as
+// `build` does — even though half the staged file's bytes are this compiler's.
+//
+// ⛔⛔ **TWO SPAWNING TESTS LIVE HERE, AND THAT IS A CORRECTNESS RULE RATHER THAN AN EXCEPTION TO THE
+// ONE-PER-FILE ONE.** Both name the SAME fixture, and `maxon test` shards by FILE and runs the shards
+// CONCURRENTLY while every spawned run PURGES and re-stages `<fixture>/.maxon/test/staged/`. Split across
+// two files they are two processes racing on one directory — MEASURED as exactly that: a flake that hit
+// twice in ~27 runs, which is a 1-in-14 red on a gate with no diagnosis attached. In one file they are
+// one process and run in order, so the race cannot happen.
+//
+// ⚠ Two spawns is ~2.6s of the 5s per-PROCESS deadline that `fixtures.test.maxon`'s header prices. A
+// THIRD here would be pushing it: give a new spawning case its own fixture and its own file, as the
+// eight beside this one do.
+
+let ReservedNameCase = "reserved-name-refused"
+
+test 'reserved-name-refused refuses an author declaring a __ name'
+	try checkFixture("reserved-name-refused")
+end 'reserved-name-refused refuses an author declaring a __ name'
+
+// assertion belongs where stderr is readable, which is here.
+//
+// ⭐ **ONE POSITIVE ASSERTION, AND IT DISCRIMINATES ON ITS OWN.** The needle is the case directory
+// IMMEDIATELY followed by the file name; in the staged spelling those two are separated by
+// `/.maxon/test/staged/`, so nothing about the staged path can satisfy it. The obvious companion — assert
+// the word `staged` is absent — was written and then removed on purpose: it would have been a second
+// spelling of `TestCommand.StagedTreeDirName`, in a file that cannot import it, guarding a NEGATIVE. Renaming
+// that directory would leave this test hunting for a word nothing emits, passing forever and proving
+// nothing, with no compile error anywhere. A check that can rot into a silent pass is worse than the one
+// it was doubling.
+test 'a compile error names the author file, not the staged copy'
+	let run = runFixture(ReservedNameCase)
+	try Expect.contains(run.stderr, needle: "{ReservedNameCase}{FilePath.separator()}sneaky.test.maxon:", message: "a compile error under `{TestedCommandName}` must name the author's own file at the path they can open, not the staged copy the next run deletes. It said: {run.stderr}")
+end 'a compile error names the author file, not the staged copy'

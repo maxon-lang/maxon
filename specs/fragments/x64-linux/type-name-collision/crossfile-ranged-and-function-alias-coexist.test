@@ -1,0 +1,93 @@
+// Test: crossfile-ranged-and-function-alias-coexist
+// --- file: a.maxon
+typealias Handler = int(0 to 10)
+
+export function useA() returns Handler
+	return 5 as Handler
+end 'useA'
+
+// --- file: b.maxon
+typealias Handler = function() returns Integer
+
+export function useB(h Handler) returns ExitCode
+	return h() as ExitCode
+end 'useB'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function zero() returns Integer
+	return 0
+end 'zero'
+
+function main() returns ExitCode
+	return useA() + useB(zero)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 5
+---
+func @useB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at b.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @zero {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_cont:
+    x64.leaRegFunc rcx, [rip + __fnref_zero]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect useB
+    x64.leaRegRegImm32 r8, r8, 5
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

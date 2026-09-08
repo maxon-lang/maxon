@@ -1,0 +1,56 @@
+// cursor-boundary.test.maxon — hover and `textDocument/definition` resolve ONE cursor position, and this
+// is what says so.
+//
+// ⭐⭐ **A CARET AT A TOKEN BOUNDARY TOUCHES TWO TOKENS, AND THE TWO METHODS ONCE DISAGREED ABOUT WHICH
+// ONE IT NAMES.** MEASURED against the server, caret one past `name`: in `let z = name///note` definition
+// jumped to `name` while hover answered NOTHING, and in `let z = name#if os(Windows)` hover described the
+// `#if`. An editor that jumps somewhere it will not describe is the defect.
+//
+// ⭐ The cure was one resolver, not two agreeing ones — `LspSymbols.lspTokenAtCursor`. The rule it
+// settles: an identifier ENDING at the offset beats a token BEGINNING there. Half-open containment counts
+// `offset == start` as "inside", which is the caret at a token's LEFT edge rather than within it, so
+// containment-first is what made hover describe the directive the author had just typed past. Strict
+// containment and ending-at-an-identifier are mutually exclusive, so this boundary is the ONLY position
+// the two rules ever decide differently — which is why nothing else in the suite exposed it.
+//
+// See `LspClient.maxon` for why every session is released before anything is asserted.
+
+// `name` is followed IMMEDIATELY by a `///` comment, so the offset one past `name` is also the comment
+// token's first byte. Only a fixture like this puts two SPANNED tokens on one offset — a punctuator
+// carries no span, which is why the ordinary `arr.` case never exposed the disagreement.
+function boundaryDocCommentFixture() returns String
+	return String.from(b"let name = 1
+let z = name///note")
+end 'boundaryDocCommentFixture'
+
+// The same boundary against a KEYWORD rather than prose: the case that made hover describe a
+// conditional-compilation directive where the author was pointing at a name.
+function boundaryDirectiveFixture() returns String
+	return String.from(b"let name = 1
+let z = name#if os(Windows)
+#endif")
+end 'boundaryDirectiveFixture'
+
+// One past the `e` of `name` on the second line — `let z = name` is twelve characters.
+//          111111111122
+// 0123456789012345678901
+// let z = name///note
+let BoundaryCursorLine = 1 as LspCoordinate
+let BoundaryCursorCharacter = 12 as LspCoordinate
+
+// The line `let name = 1` declares it.
+let BoundaryDeclarationLine = 0 as LspCoordinate
+
+test 'hover and definition name the same token at a boundary'
+	try boundaryBothNameTheDeclaration(boundaryDocCommentFixture(), what: "a `///` comment")
+	try boundaryBothNameTheDeclaration(boundaryDirectiveFixture(), what: "a `#if` directive")
+end 'hover and definition name the same token at a boundary'
+
+function boundaryBothNameTheDeclaration(source String, what String) throws TestFailure
+	try expectDefinitionAt(source, line: BoundaryCursorLine, character: BoundaryCursorCharacter, startLine: BoundaryDeclarationLine, note: "definition at the end of `name`, where {what} begins, must reach the declaration of `name`.")
+
+	let rendering = try hoverRendering(source, line: BoundaryCursorLine, character: BoundaryCursorCharacter)
+	let declaration = "let name = 1"
+
+	try Expect.contains(rendering, needle: declaration, message: "hover at the end of `name`, where {what} begins, described something else. Definition jumps to `name` from this very position, so a hover describing anything else is an editor jumping somewhere it will not describe.")
+end 'boundaryBothNameTheDeclaration'

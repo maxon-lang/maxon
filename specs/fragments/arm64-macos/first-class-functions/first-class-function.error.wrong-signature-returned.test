@@ -1,0 +1,20 @@
+// Test: first-class-function.error.wrong-signature-returned
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(n Integer) returns Integer
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function pick() returns UnaryOp
+	return add
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick()
+	return f(4) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'

@@ -1,0 +1,227 @@
+// WasmComponent — the wasm target's object writer (`writeWasm`, the `wasi` arm of
+// `writeExecutable`): it turns the backend's emitted CORE module into a runnable WASI-Preview2
+// COMPONENT on disk, plus the vendored-tool location helpers that step needs.
+//
+// The backend (`buildWasmBackend` → StdToWasm) emits a core module that imports the raw Preview2
+// interface funcs (`wasi:cli/exit`) and exports `wasi:cli/run`. wasmtime runs COMPONENTS, not bare
+// core modules, so those bytes are staged to a scratch file here and put through `wasm-tools
+// component embed` (which records the `maxon:app/command` world, so the component model knows which
+// interfaces the core lifts/lowers) and then `component new`, whose output is renamed onto the build's
+// output path. There is no asyncify pass — that is async-only, and there is no `async` here yet.
+//
+// `findFileUpward` / `hostWasmToolCandidates` are the general vendored-binary locators, exported so
+// any other vendored-tool lookup (e.g. the spec-test runner's `wasmtime`) can reuse the SAME upward
+// walk instead of growing a second copy — a divergent search is how two callers end up disagreeing
+// about which vendored binary is "the" one.
+
+// One candidate path expressed as its ordered path segments; `findFileUpward` joins each onto the
+// level it is probing. An Array-of-Arrays so a caller can offer several spellings of the same file
+// (e.g. `.exe` vs extensionless) and take the first that exists.
+export typealias StringArrayArray = Array with StringArray
+
+// How many parent levels up from the cwd `findFileUpward` climbs before giving up. Ten is deep enough
+// to reach the repo root (which holds `vendor/`) from any build or spec-test working directory the
+// compiler runs in.
+let VendorSearchDepth = 10
+
+// Walk up from the current working directory (at most `VendorSearchDepth` parent levels, stopping at
+// the filesystem root) and return the first candidate that exists. Each entry of `candidateSegments` is the
+// path-segment list for one candidate, joined onto the level's directory in order — so the join stays
+// per-segment and cross-platform. Returns an empty FilePath when nothing matches at any level (the
+// not-found sentinel callers check with `.isEmpty()`).
+export function findFileUpward(candidateSegments StringArrayArray) returns FilePath
+	var dir = Directory.currentPath()
+	for _ in 0 upto VendorSearchDepth 'search'
+		for segments in candidateSegments 'eachCandidate'
+			// ⚠ `var candidate = dir` MOVES the search loop's directory out of it — a bare-local read is a
+			// move whether or not it is in a loop body, and moving a value declared outside the loop is
+			// E2015. The first segment is joined onto `dir` as a RECEIVER instead, which borrows it, and the
+			// owned path that join mints is what the rest of the segments extend.
+			let firstSegment = try segments.get(0) otherwise panic("findFileUpward: a candidate names no path segments — every candidate is at least one segment below the level's directory, and an empty one would test the directory itself")
+			var candidate = dir.join(firstSegment)
+			for i in 1 upto segments.count() 'join'
+				let segment = try segments.get(i) otherwise panic("findFileUpward: segments.get OOB at {i} inside its own count()")
+				candidate = candidate.join(segment)
+			end 'join'
+			if File.exists(candidate) 'found'
+				return candidate
+			end 'found'
+		end 'eachCandidate'
+		// dir.parent() returns no value at the filesystem root; bail out empty.
+		let parentDir = try dir.parent() otherwise return FilePath from ""
+		dir = parentDir
+	end 'search'
+	return FilePath from ""
+end 'findFileUpward'
+
+// The directory every vendored tool lives under, relative to the checkout root.
+let VendorDirSegment = "vendor"
+
+// ⭐ **THE HOST-ORDERED `.exe` / EXTENSIONLESS PAIR FOR ONE BINARY, over an arbitrary directory and
+// stem.** The spelling this host can exec comes first, gated on `detectHostTarget()` (resolved per host
+// at the compiler's own build), so a directory holding another platform's build by the same stem can
+// never be exec'd here and faulted on.
+//
+// ⚠ **THAT ORDERING RULE IS THE WHOLE CONTENT OF THIS FUNCTION, AND IT IS WHAT A SECOND COPY WOULD COME
+// TO DISAGREE ABOUT.** It stays parameterized on the DIRECTORY rather than hard-wired to `vendor/`,
+// because the rule is about the HOST and not about where a binary happens to live.
+function hostBinaryCandidates(dirSegments StringArray, stem String) returns StringArrayArray
+	var exe = StringArray.create()
+	var noExt = StringArray.create()
+	for segment in dirSegments 'eachSegment'
+		exe.push(segment)
+		noExt.push(segment)
+	end 'eachSegment'
+	exe.push("{stem}.exe")
+	noExt.push(stem)
+
+	var candidates = StringArrayArray.create()
+	if detectHostTarget().os == Os.windows 'winHost'
+		candidates.push(exe)
+		candidates.push(noExt)
+	end 'winHost' else 'nativeHost'
+		candidates.push(noExt)
+		candidates.push(exe)
+	end 'nativeHost'
+
+	return candidates
+end 'hostBinaryCandidates'
+
+// A vendored tool's candidates: `vendor/<tool>/<tool>[.exe]`. `tool` is the vendor subdir, which equals
+// the tool's basename (e.g. "wasm-tools" → `vendor/wasm-tools/wasm-tools`).
+export function hostWasmToolCandidates(tool String) returns StringArrayArray
+	var dir = StringArray.create()
+	dir.push(VendorDirSegment)
+	dir.push(tool)
+
+	return hostBinaryCandidates(dir, stem: tool)
+end 'hostWasmToolCandidates'
+
+// Find the vendored `wasm-tools` (used to wrap the emitted core module into a WASI Preview2
+// component), preferring the binary that matches the host OS. Returns an empty FilePath if not found.
+function findWasmToolsPath() returns FilePath
+	return findFileUpward(hostWasmToolCandidates("wasm-tools"))
+end 'findWasmToolsPath'
+
+// Locate the vendored WASI WIT package directory (`vendor/wasi-wit`). We search for the `world.wit`
+// file via the same upward walk, then return its PARENT directory — `wasm-tools component embed`
+// wants the package root, not the file. Returns an empty FilePath if not found.
+function findWasmWitDir() returns FilePath
+	var candidates = StringArrayArray.create()
+
+	var full = StringArray.create()
+	full.push("vendor")
+	full.push("wasi-wit")
+	full.push("world.wit")
+	candidates.push(full)
+
+	let witFile = findFileUpward(candidates)
+	if witFile.isEmpty() 'missing'
+		return FilePath from ""
+	end 'missing'
+	return try witFile.parent() otherwise return FilePath from ""
+end 'findWasmWitDir'
+
+// The three scratch files a component build passes through, named off the output so they share its
+// (writable) directory: the emitted CORE module, the same module with the world's metadata EMBEDDED,
+// and the finished COMPONENT before it is published. Named rather than spelled inline because the
+// whole point of them is that none is `outputPath`.
+let WasmCoreExtension = ".core.wasm"
+let WasmEmbedExtension = ".embed.wasm"
+let WasmComponentExtension = ".component.wasm"
+
+// Emit the wasm backend's output: write the CORE module to a scratch file, post-process it into a
+// WASI Preview2 component (`wasm-tools component embed` then `component new`), and PUBLISH that with
+// a single rename onto `outputPath`. `component embed` records the `maxon:app/command` world so the
+// component model knows which interfaces the core module lifts/lowers; `component new` produces the
+// final component wasmtime runs. The `cli-exit-with-code` feature must be enabled at embed time
+// because the `wasi:cli/exit` import is gated `@unstable(cli-exit-with-code)` in the WIT. A missing
+// tool or a tool failure PANICS with the tool's own stderr — an unrecoverable environment/emitter
+// fault, surfaced verbatim so the reason is not swallowed.
+//
+// ⚠ **NOTHING IS WRITTEN TO `outputPath` UNTIL THERE IS A FINISHED COMPONENT TO PUT THERE.** This
+// used to emit the core module straight to `outputPath` and wrap it IN PLACE, which meant a missing
+// or failing `wasm-tools` left a BARE CORE MODULE at the output path. That is worse than a stale
+// binary — it is a WRONG one, not a component at all — and it fails at RUN time with `unknown
+// import: wasi:cli/exit…`, a complaint about the program that says nothing about the toolchain fault
+// that actually happened. Publishing by rename is the same discipline the stdlib cache uses
+// (`File.rename` replaces the destination in one step), and it is what lets
+// `Compiler.requireOutputWritten` read the mere PRESENCE of `outputPath` as proof of a finished
+// build on this target exactly as it does on the other three.
+export function writeWasm(outputPath FilePath, coreModule ByteArray)
+	let wasmToolsExe = findWasmToolsPath()
+	if wasmToolsExe.isEmpty() 'missingTool'
+		panic("writeWasm: wasm-tools not found in vendor/wasm-tools/ — required to wrap the wasm core module into a Preview2 component")
+	end 'missingTool'
+
+	let witDir = findWasmWitDir()
+	if witDir.isEmpty() 'missingWit'
+		panic("writeWasm: WASI WIT package not found at vendor/wasi-wit/ — required to wrap the wasm core module into a Preview2 component")
+	end 'missingWit'
+
+	let corePath = outputPath.changeExtension(WasmCoreExtension)
+	let embedPath = outputPath.changeExtension(WasmEmbedExtension)
+	let componentPath = outputPath.changeExtension(WasmComponentExtension)
+	let cwd = Directory.currentPath()
+
+	// A failed core write returns without wrapping: `outputPath` stays empty, and
+	// `Compiler.requireOutputWritten` turns that absence into the build's failure. Wrapping a file
+	// that was never written would panic inside wasm-tools with a much less useful message.
+	try File.writeBinary(corePath, content: coreModule) otherwise 'coreWriteFailed'
+		logError(LogCategory.binary, message: function() gives "Failed to write wasm core module: {corePath}")
+		return
+	end 'coreWriteFailed'
+
+	var embedArgs = StringArray.create()
+	embedArgs.push("component")
+	embedArgs.push("embed")
+	embedArgs.push(witDir.toString())
+	embedArgs.push(corePath.toString())
+	embedArgs.push("-o")
+	embedArgs.push(embedPath.toString())
+	embedArgs.push("--world")
+	embedArgs.push("maxon:app/command")
+	embedArgs.push("--features")
+	embedArgs.push("cli-exit-with-code")
+	let embedResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: embedArgs, workingDirectory: cwd) otherwise (err) 'embedRunFail'
+		panic("writeWasm: failed to run wasm-tools component embed: {err.displayReason()}")
+	end 'embedRunFail'
+	if not embedResult.succeeded() 'embedFailed'
+		panic("writeWasm: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
+	end 'embedFailed'
+
+	var newArgs = StringArray.create()
+	newArgs.push("component")
+	newArgs.push("new")
+	newArgs.push(embedPath.toString())
+	newArgs.push("-o")
+	newArgs.push(componentPath.toString())
+	let newResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: newArgs, workingDirectory: cwd) otherwise (err) 'newRunFail'
+		panic("writeWasm: failed to run wasm-tools component new: {err.displayReason()}")
+	end 'newRunFail'
+	if not newResult.succeeded() 'newFailed'
+		panic("writeWasm: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
+	end 'newFailed'
+
+	// THE PUBLICATION. Everything above wrote scratch files; this one step makes the output exist.
+	//
+	// A rename can fail from EITHER end and the two want opposite investigations, so the message says
+	// which end rather than asserting one. MEASURED: with a `wasm-tools` stand-in that exits 0 and
+	// writes nothing, `component new` "succeeded" and the rename then failed — reported as
+	// "it is locked or read-only", which sent the reader hunting for a lock on a file the toolchain
+	// had simply never produced.
+	try File.rename(componentPath, to: outputPath) otherwise 'publishFailed'
+		if not File.exists(componentPath) 'noComponent'
+			panic("writeWasm: wasm-tools component new exited 0 but produced no component at {componentPath}, so there is nothing to publish as {outputPath}")
+		end 'noComponent'
+
+		panic("writeWasm: could not publish the finished component {componentPath} as {outputPath} — the output path is locked or read-only")
+	end 'publishFailed'
+
+	// The two intermediates have served their purpose — remove them rather than leave a `.core.wasm`
+	// and a `.embed.wasm` beside every output (the spec runner's `cleanup` deletes the `.wasm`, not
+	// these). A delete failure is ignored: litter is not worth failing a successful compile over, and
+	// the panic paths above deliberately leave both for post-mortem inspection.
+	try File.delete(embedPath) otherwise ignore
+	try File.delete(corePath) otherwise ignore
+end 'writeWasm'

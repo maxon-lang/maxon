@@ -1,0 +1,20 @@
+// Test: error.struct-literal-field-store-across-aliases
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 16)
+
+type Holder
+	export var w as Wide
+
+	static function create(n Narrow) returns Self
+		return Self{w: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(5)
+	print("{h.w}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:9:15: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide'

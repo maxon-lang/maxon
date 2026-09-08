@@ -1,0 +1,176 @@
+// Test: call-arg-parallel-copy
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 33
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#30
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#31
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#31:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#30:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "0"
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rcx, r8
+  trycont#3:
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegImm32 rcx, rax, 11
+  __il_cont#21:
+    x64.leaRegRegImm32 rdx, rax, 22
+  __il_cont#20:
+    x64.leaRegRegImm32 rsi, rax, 33
+  __il_cont#19:
+    x64.leaRegRegImm32 rdi, rax, 44
+  __il_cont#18:
+    x64.leaRegRegImm32 r8, rax, 55
+  __il_cont#17:
+    x64.leaRegRegImm32 rax, rax, 66
+  __il_body#28:
+    x64.movRegReg r9, rax
+    x64.xorRegReg r9, rax, r8
+    x64.movRegReg r10, rdi
+    x64.xorRegReg r10, rdi, rsi
+    x64.leaRegRegReg r9, r9, r10
+    x64.movRegReg r10, rdx
+    x64.xorRegReg r10, rdx, rcx
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.leaRegRegReg r9, r9, r10
+  __il_body#29:
+    x64.movRegReg r10, rsi
+    x64.xorRegReg r10, rsi, rcx
+    x64.movRegReg r11, rdx
+    x64.xorRegReg r11, rdx, rax
+    x64.leaRegRegReg r10, r10, r11
+    x64.movRegReg r11, rdi
+    x64.xorRegReg r11, rdi, r8
+    x64.leaRegRegImm32 r11, r11, 1
+    x64.leaRegRegReg r10, r10, r11
+  __il_cont#14:
+    x64.leaRegRegReg r9, r9, r10
+    x64.leaRegRegReg rcx, r9, rcx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, rdi
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg r12, rcx, rax
+    x64.andRegImm32 r12, r12, 127
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at call-arg-parallel-copy.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

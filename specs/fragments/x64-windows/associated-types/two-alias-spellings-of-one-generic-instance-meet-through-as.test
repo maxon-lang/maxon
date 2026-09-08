@@ -1,0 +1,85 @@
+// Test: two-alias-spellings-of-one-generic-instance-meet-through-as
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias AlsoIntArray = Array with Integer
+
+interface Bag
+	function take(xs IntArray) returns Integer
+end 'Bag'
+
+type Sack implements Bag
+	let n as Integer
+
+	function take(xs IntArray) returns Integer
+		return n + xs.count()
+	end 'take'
+
+	static function create() returns Self
+		return Self{n: 41}
+	end 'create'
+end 'Sack'
+
+function main() returns ExitCode
+	let s = Sack.create()
+	var f = AlsoIntArray.create()
+	f.push(7)
+	return s.take(f as IntArray) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.leaRegSlot rbx, slot0
+    x64.movRegImm32 rax, 41
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.leaRegRegReg rbx, rax, rcx
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at two-alias-spellings-of-one-generic-instance-meet-through-as.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

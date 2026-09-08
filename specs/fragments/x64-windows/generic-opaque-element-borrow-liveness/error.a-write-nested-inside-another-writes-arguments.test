@@ -1,0 +1,12 @@
+// Test: error.a-write-nested-inside-another-writes-arguments
+function main() returns ExitCode
+	var xs = ["alpha value long enough for a heap record", "beta value long enough for a heap record"]
+	var ys = ["gamma value long enough for a heap record"]
+	let borrowed = try xs.get(0) otherwise panic("oob")
+	try xs.set(1, value: try ys.pop() otherwise "z") otherwise panic("oob")
+	print("{borrowed}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:6:9: cannot mutate 'xs' via 'set' while it is borrowed by 'borrowed' (borrowed at line 5)

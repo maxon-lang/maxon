@@ -1,0 +1,664 @@
+// Runtime/ProfileRuntime.maxon — the host surface a SAMPLING PROFILER needs, from the side that watches
+// another process rather than its own.
+//
+// ⭐ **WHAT IT SERVES.** `maxon-bin/Profile/` is ordinary Maxon calling `__Builtins.profile*`; every one of
+// those lowers to an entry point here, and each entry is a thin Std graph over `StdOp.osHostSample` — the
+// one op whose `ProfileHostCall` roster names the thirteen host services. Everything ABOVE these entries —
+// the tick schedule, the thread table, the frame walk, the aggregation, the report — is plain Maxon in the
+// profiler, exactly as the FILETIME arithmetic stays out of `osReadWallClock`.
+//
+// ⛔ **THERE IS NO PUBLIC `stdlib/` FACE AND THERE MUST NOT BE.** Nothing in the language wants to suspend
+// another process's threads.
+//
+// ⚠ **THE LANES THAT SERVE THIS ARE `TargetFacilities.processSampling`'s, and a call site on any other is
+// refused** with E3104, matched on the `__prof_` PREFIX — so an entry point added here later is gated by
+// construction rather than by memory. That row names a CPU as well as an OS: the register file arrives as a
+// `CONTEXT`, whose RIP/RSP/RBP displacements are x64's.
+//
+// ⭐⭐ **THE SCRATCH REGIONS ARE PAGES, NOT MANAGED BUFFERS, AND THAT IS WHAT MAKES `GetThreadContext`
+// WORK.** A `CONTEXT` carries XMM state and the API REJECTS a pointer that is not 16-byte aligned; a managed
+// byte buffer promises nothing about its alignment, so a hand-rolled fixup would be the "fails on one
+// machine and not another" shape. `osAllocPages` answers a page boundary, which is 16-byte aligned by
+// construction — and the same call gives the 64 KB stack window its own reservation.
+
+// The `__prof_` prefix that identifies EVERY sampling entry point — the one test `scanRuntimeUsage` reads to
+// set `usesProcessSampling`, and the one `TargetFacilities` reads for E3104.
+let ProfileRuntimePrefix = b"__prof_"
+
+// The process handle and the thread walk over it.
+export let ProfileOpenTargetName = b"__prof_open_target"
+export let ProfileNextThreadName = b"__prof_next_thread"
+export let ProfileThreadIdName = b"__prof_thread_id"
+export let ProfileThreadCyclesName = b"__prof_thread_cycles"
+
+// The whole suspended window, as ONE entry point — see `buildProfileSample`.
+export let ProfileSampleName = b"__prof_sample"
+
+// The tick.
+export let ProfileTimerCreateName = b"__prof_timer_create"
+export let ProfileTimerWaitName = b"__prof_timer_wait"
+
+// The module map that names a foreign leaf.
+export let ProfileModuleSnapshotName = b"__prof_module_snapshot"
+export let ProfileModuleFirstName = b"__prof_module_first"
+export let ProfileModuleNextName = b"__prof_module_next"
+
+// Handles and raw memory. The accessors are entry points rather than surface syntax because Maxon has no raw
+// dereference: `readWord` is one `loadIndirect` at an address the language cannot otherwise name, which is
+// `__shm_read_word`'s position one family over.
+export let ProfileCloseName = b"__prof_close"
+export let ProfileScratchAllocName = b"__prof_scratch_alloc"
+export let ProfileScratchFreeName = b"__prof_scratch_free"
+export let ProfileReadWordName = b"__prof_read_word"
+export let ProfileWriteWordName = b"__prof_write_word"
+
+// ⭐ **THE CLOCK THE TICK'S DEADLINE IS ARITHMETIC ON, AND IT IS THE ONE `SetWaitableTimer` READS.** A
+// waitable timer's positive due time is an absolute FILETIME — 100 ns intervals since 1601 — so a deadline
+// computed from any other counter would arm the timer at a moment that is not the one it names.
+export let ProfileNowFileTimeName = b"__prof_now_filetime"
+
+// ⭐ **WHAT THE PROFILER ASKS THE TARGET PROCESS FOR, AND NOTHING MORE.** `PROCESS_QUERY_INFORMATION` is what
+// the thread walk and the region query need; `PROCESS_VM_READ` is what copying a stack window needs.
+let ProcessQueryInformation = 0x0400
+let ProcessVmRead = 0x0010
+let ProcessSampleAccess = ProcessQueryInformation or ProcessVmRead
+
+// The access every enumerated thread handle arrives carrying — suspend/resume, read the context, and read
+// the cycle counter. Exactly the four things this engine does to a thread. It is asked of the WALK rather
+// than of a separate open, which is why there is no `OpenThread` service on the roster.
+let ThreadSuspendResume = 0x0002
+let ThreadGetContext = 0x0008
+let ThreadQueryInformation = 0x0040
+let ThreadQueryLimitedInformation = 0x0800
+let ThreadSampleAccess = ThreadSuspendResume or ThreadGetContext or ThreadQueryInformation or ThreadQueryLimitedInformation
+
+// `NtGetNextThread` ends a walk with `STATUS_NO_MORE_ENTRIES`, so anything but success stops it — a genuine
+// failure and running out of threads are one answer to the caller.
+let NtStatusSuccess = 0
+
+// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` and the access a timer is created with.
+//
+// ⛔⛔ **THE HIGH-RESOLUTION FLAG IS MANDATORY AND A SLEEP LOOP CANNOT REPLACE IT.** `SchedRuntime`'s poll
+// measured a nominal one-millisecond `Sleep` returning on the scheduler's tick at ~35 ms; a sampler driven
+// that way collects a few dozen readings a second while reporting a kilohertz, which is the lying instrument
+// this whole feature refuses to be.
+let CreateWaitableTimerHighResolution = 0x00000002
+let TimerAllAccess = 0x1F0003
+
+// `TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32` — the module list of ONE process. Unlike the thread flag, this
+// pair honours the process id it is handed, so the walk costs the target's ~10 modules rather than the box's.
+let SnapModule = 0x00000008
+let SnapModule32 = 0x00000010
+let ModuleSnapshotFlags = SnapModule or SnapModule32
+
+// ⚠⚠ **THE WIN32 LAYOUT CONSTANTS BELOW ARE PRIVATE, AND THE FEW THE PROFILER ALSO READS ARE NOT HERE
+// AT ALL.** This file compiles on EVERY lane; `maxon-bin/Profile/` is gated to the one lane that can
+// sample, so an `export` here whose only reader is over there is an export with no reader anywhere else —
+// E3092, and only at the self-compile. What both sides need is `module`-visible from the root instead
+// (`ProfileSampleContract.maxon`), which is the one place a gated-out directory and this one can share a
+// number rather than each restate it.
+
+// `sizeof(MEMORY_BASIC_INFORMATION)` on x64: BaseAddress, AllocationBase, AllocationProtect + PartitionId,
+// RegionSize, and the State/Protect/Type triple with its tail padding.
+let MemoryBasicInformationBytes = 48
+
+// `CONTEXT.ContextFlags`, and the two families `GetThreadContext` is asked to fill: CONTEXT_CONTROL supplies
+// RIP and RSP, CONTEXT_INTEGER supplies RBP.
+//
+// ⚠ **WRITTEN AS A WHOLE WORD, WHICH ALSO ZEROES `MxCsr` AT 0x34 — and that is correct rather than
+// tolerated:** every field of a `CONTEXT` but this one is an OUTPUT, so the only input the API reads is the
+// flags word itself.
+let ContextFlagsOffset = 0x30
+let ContextControl = 0x00100001
+let ContextInteger = 0x00100002
+let ContextSampleFlags = ContextControl or ContextInteger
+
+// Win32's FALSE, which `GetThreadContext`, `ReadProcessMemory` and the two module walks all answer with.
+let Win32False = 0
+
+// `VirtualQueryEx` answers the number of bytes it wrote, so zero is its failure.
+let RegionQueryFailed = 0
+
+// The `MEMORY_BASIC_INFORMATION` displacements only this file touches; the allocation base, which the
+// profiler reads back, is `ProfileRegionAllocationBaseOffset`.
+let MbiBaseAddressOffset = 0
+let MbiRegionSizeOffset = 24
+
+// `__prof_sample`'s own frame: the answer it is accumulating, the byte count it is about to ask for, and
+// `ReadProcessMemory`'s out-param. Three words, because the graph has no block arguments to carry them —
+// every failure edge converges on ONE resume block, and a value that crossed those edges would need a
+// parameter on it.
+let SampleScratchBytes = 24 as StackSize
+let SampleResultSlot = 0 as SpillSlot
+let SampleWantSlot = 1 as SpillSlot
+let SampleReadSlot = 2 as SpillSlot
+
+// The single-word frames the three out-param entries need.
+let OneWordScratchBytes = 8 as StackSize
+let OutWordSlot = 0 as SpillSlot
+
+// ⭐ **DOES THIS CALLEE SAMPLE ANOTHER THREAD?** The `__prof_`-only test, read by `scanRuntimeUsage` and by
+// `TargetFacilities.calleeHostFacility`. A PREFIX rather than a sixteen-way `or`, for
+// `isSharedMemoryRuntimeCallee`'s reason: a seventeenth entry point is then covered by construction instead of
+// having to be remembered at two sites.
+export function isProfileRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ProfileRuntimePrefix)
+end 'isProfileRuntimeCallee'
+
+// One `osHostSample`, with all six words marshalled. The op's arity is fixed at its widest member's, so a
+// narrower service is handed zeros for the operands it does not read — see `StdOp.osHostSample`.
+function emitHostSample(module StdModule, block IrBlock, service ProfileHostCall, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, a4 ValueId, a5 ValueId, ids ValueMinter) returns ValueId
+	let answer = ids.mint()
+	module.appendOp(block, op: StdOp.osHostSample(answer, service: service, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3, a4Id: a4, a5Id: a5))
+
+	return answer
+end 'emitHostSample'
+
+// `__prof_open_target(pid) -> HANDLE | 0` — `OpenProcess`, which answers NULL for a process that has already
+// gone, and that 0 is what the profiler tests.
+function buildProfileOpenTarget(module StdModule)
+	var func = IrFunction.createFromStd(ProfileOpenTargetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let pid = 0 as ValueId
+
+	let access = emitConst(module, block: entry, value: ProcessSampleAccess, ids: ids)
+	let noInherit = emitConst(module, block: entry, value: 0, ids: ids)
+	let handle = emitHostSample(module, block: entry, service: ProfileHostCall.openProcess, a0: access, a1: noInherit, a2: pid, a3: noInherit, a4: noInherit, a5: noInherit, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(handle))
+
+	module.functions.push(func)
+end 'buildProfileOpenTarget'
+
+// ⭐ `__prof_next_thread(proc, cursor) -> HANDLE | 0` — one step of the TARGET's own thread list.
+//
+// ⛔ **IT IS `NtGetNextThread` AND NOT A TOOLHELP SNAPSHOT, WHICH IS A COST ARGUMENT WITH A MEASUREMENT
+// BEHIND IT.** `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, …)` IGNORES the process id it is handed and
+// snapshots every thread on the machine, so learning six thread ids costs whatever the whole box is doing —
+// the worst property an instrument can have. The walk hands back a handle already carrying the access asked
+// for, which is why there is no thread-open service on the roster.
+//
+// The handle arrives through an out-param and the return is an NTSTATUS, so the two are swapped here: a
+// caller wants the handle, and every non-success status — including running out of threads — is one 0.
+function buildProfileNextThread(module StdModule)
+	var func = IrFunction.createFromStd(ProfileNextThreadName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var walked = module.addBlock(func, label: b"pfnthok")
+	var ended = module.addBlock(func, label: b"pfnthend")
+
+	emitParams(module, block: entry, count: 2)
+	let proc = 0 as ValueId
+	let cursor = 1 as ValueId
+
+	func.stackSize = OneWordScratchBytes
+	let outPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(outPtr, slot: OutWordSlot))
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: outPtr, offset: 0, value: zero)
+
+	let access = emitConst(module, block: entry, value: ThreadSampleAccess, ids: ids)
+	let status = emitHostSample(module, block: entry, service: ProfileHostCall.nextThread, a0: proc, a1: cursor, a2: access, a3: zero, a4: zero, a5: outPtr, ids: ids)
+	let success = emitConst(module, block: entry, value: NtStatusSuccess, ids: ids)
+	let walkedOn = emitCmp(module, block: entry, a: status, b: success, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(walkedOn, thenBlockId: walked.id, elseBlockId: ended.id))
+
+	let handle = emitLoadField(module, block: walked, record: outPtr, offset: 0, ids: ids)
+	module.setTerminator(walked, op: StdOp.ret(handle))
+
+	emitConstReturn(module, block: ended, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildProfileNextThread'
+
+// `__prof_thread_id(threadHandle) -> DWORD` — which thread a walked handle names, so the profiler can tell
+// one it already tracks from one that has just appeared.
+function buildProfileThreadId(module StdModule)
+	var func = IrFunction.createFromStd(ProfileThreadIdName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let id = emitHostSample(module, block: entry, service: ProfileHostCall.threadId, a0: handle, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(id))
+
+	module.functions.push(func)
+end 'buildProfileThreadId'
+
+// ⭐⭐ **`__prof_thread_cycles(threadHandle) -> ticks` — WHAT MAKES THIS A CPU PROFILER RATHER THAN A
+// WALL-CLOCK ONE.** An idle scheduler worker is parked in a timed wait and burns no cycles; sampling it
+// anyway would attribute a share of the profile to a thread that did not run, and on a mostly-idle program
+// that share is most of the profile. A thread whose count has not moved is skipped ENTIRELY — never even
+// suspended, so measuring an idle worker does not perturb it.
+//
+// ⚠ **THE OUT-PARAM IS SEEDED WITH ZERO, WHICH IS ALSO THE ANSWER FOR A THREAD THAT HAS GONE.** The BOOL
+// `QueryThreadCycleTime` returns is not this op's to hand back, and it does not need to be: a stale reading
+// and a zero both compare EQUAL to the previous tick's, which is the "it did not run" branch — and a thread
+// that really has exited is dropped at the next `__prof_sample`, whose suspend refuses.
+function buildProfileThreadCycles(module StdModule)
+	var func = IrFunction.createFromStd(ProfileThreadCyclesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+
+	func.stackSize = OneWordScratchBytes
+	let outPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(outPtr, slot: OutWordSlot))
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: outPtr, offset: 0, value: zero)
+
+	module.appendOp(entry, op: StdOp.osThreadCpuTicks(handle, outPtrId: outPtr))
+	let ticks = emitLoadField(module, block: entry, record: outPtr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(ticks))
+
+	module.functions.push(func)
+end 'buildProfileThreadCycles'
+
+// ⭐⭐⭐ **`__prof_sample(proc, thread, ctxPtr, mbiPtr, windowPtr, windowCap) -> bytesCopied | -1` — THE ONLY
+// PLACE A THREAD IS EVER SUSPENDED, AND THE PLACE THE RESUME RULE BECOMES STRUCTURAL.**
+//
+// ⛔⛔ **EVERY EDGE OUT OF THE SUSPENDED REGION CONVERGES ON ONE RESUME BLOCK, WHICH DOMINATES THE SINGLE
+// RETURN.** A failed context read, a region query that misses, a stack that copies nothing and a partial
+// copy all branch there; the ONLY path that skips it is the one where `SuspendThread` itself failed, and
+// that path is correct precisely because nothing was suspended. There is no early return between the two,
+// and the graph makes one unwritable rather than forbidding one — a sampler that can leave a thread
+// suspended is a deadlock generator, and a language-level `finally` exists only because a language-level
+// `return` can jump past it.
+//
+// ⭐ **THE ANSWER TELLS THREE THINGS APART, because they mean three different things upstream.**
+// `ProfileSampleThreadGone` is a thread that has exited and must be dropped rather than counted;
+// `ProfileSampleNoRegisters` is a real sample with nothing in it; `0` is a leaf whose chain could not be
+// walked, which still attributes SELF time to a real function. The frame slot carries that answer across
+// the edges because the convergence above leaves nowhere else to put it.
+//
+// ⚠ **`mbiPtr`'s ALLOCATION BASE IS CLEARED BEFORE THE QUERY**, so a miss reads back as 0 rather than as
+// whatever the previous sample left there — a stack identity taken from a stale word would merge two
+// unrelated threads' samples into one row.
+function buildProfileSample(module StdModule)
+	var func = IrFunction.createFromStd(ProfileSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(6)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var readContext = module.addBlock(func, label: b"pfsctx")
+	var queryRegion = module.addBlock(func, label: b"pfsq")
+	var measureWindow = module.addBlock(func, label: b"pfsm")
+	var capWindow = module.addBlock(func, label: b"pfscap")
+	var capped = module.addBlock(func, label: b"pfsclamp")
+	var copyStack = module.addBlock(func, label: b"pfscopy")
+	var partialCopy = module.addBlock(func, label: b"pfspart")
+	var resume = module.addBlock(func, label: b"pfsres")
+	var answer = module.addBlock(func, label: b"pfsret")
+
+	emitParams(module, block: entry, count: 6)
+	let proc = 0 as ValueId
+	let thread = 1 as ValueId
+	let ctxPtr = 2 as ValueId
+	let mbiPtr = 3 as ValueId
+	let windowPtr = 4 as ValueId
+	let windowCap = 5 as ValueId
+
+	func.stackSize = SampleScratchBytes
+	let resultPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(resultPtr, slot: SampleResultSlot))
+	let wantPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(wantPtr, slot: SampleWantSlot))
+	let readPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(readPtr, slot: SampleReadSlot))
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let threadGone = emitConst(module, block: entry, value: ProfileSampleThreadGone, ids: ids)
+	emitStoreField(module, block: entry, record: resultPtr, offset: 0, value: threadGone)
+	emitStoreField(module, block: entry, record: mbiPtr, offset: ProfileRegionAllocationBaseOffset, value: zero)
+
+	let suspended = emitHostSample(module, block: entry, service: ProfileHostCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let nothingSuspended = emitCmp(module, block: entry, a: suspended, b: threadGone, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(nothingSuspended, thenBlockId: answer.id, elseBlockId: readContext.id))
+
+	// The thread IS suspended from here on, so the answer stops being "it is gone" and becomes "this instant
+	// is unreadable" — which `queryRegion` below replaces with a byte count once the registers are in hand.
+	let unreadable = emitConst(module, block: readContext, value: ProfileSampleNoRegisters, ids: ids)
+	emitStoreField(module, block: readContext, record: resultPtr, offset: 0, value: unreadable)
+	let sampleFlags = emitConst(module, block: readContext, value: ContextSampleFlags, ids: ids)
+	emitStoreField(module, block: readContext, record: ctxPtr, offset: ContextFlagsOffset, value: sampleFlags)
+	let gotContext = emitHostSample(module, block: readContext, service: ProfileHostCall.threadContext, a0: thread, a1: ctxPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	let noContext = emitConst(module, block: readContext, value: Win32False, ids: ids)
+	let contextFailed = emitCmp(module, block: readContext, a: gotContext, b: noContext, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(readContext, op: StdOp.condBranch(contextFailed, thenBlockId: resume.id, elseBlockId: queryRegion.id))
+
+	// The registers ARE read from here on, so the answer becomes a byte count — zero until a copy succeeds.
+	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
+	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: ProfileContextRspOffset, ids: ids)
+	let mbiBytes = emitConst(module, block: queryRegion, value: MemoryBasicInformationBytes, ids: ids)
+	let queried = emitHostSample(module, block: queryRegion, service: ProfileHostCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
+	let queryMiss = emitConst(module, block: queryRegion, value: RegionQueryFailed, ids: ids)
+	let regionMissing = emitCmp(module, block: queryRegion, a: queried, b: queryMiss, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(queryRegion, op: StdOp.condBranch(regionMissing, thenBlockId: resume.id, elseBlockId: measureWindow.id))
+
+	// How much of the region above the stack pointer is readable, clamped to the window. Both comparisons are
+	// UNSIGNED: these are addresses, and a signed `>` reads a high-half pointer as negative.
+	let regionBase = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiBaseAddressOffset, ids: ids)
+	let regionSize = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: MbiRegionSizeOffset, ids: ids)
+	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
+	let available = emitBin(module, block: measureWindow, a: regionEnd, b: stackPointer, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: measureWindow, record: wantPtr, offset: 0, value: available)
+	let aboveTheStackPointer = emitCmp(module, block: measureWindow, a: regionEnd, b: stackPointer, pred: StdCmpPred.gt, ids: ids, operandType: StdType.u64)
+	module.setTerminator(measureWindow, op: StdOp.condBranch(aboveTheStackPointer, thenBlockId: capWindow.id, elseBlockId: resume.id))
+
+	let overTheWindow = emitCmp(module, block: capWindow, a: available, b: windowCap, pred: StdCmpPred.gt, ids: ids, operandType: StdType.u64)
+	module.setTerminator(capWindow, op: StdOp.condBranch(overTheWindow, thenBlockId: capped.id, elseBlockId: copyStack.id))
+
+	emitStoreField(module, block: capped, record: wantPtr, offset: 0, value: windowCap)
+	module.setTerminator(capped, op: StdOp.branch(copyStack.id))
+
+	// A PARTIAL copy is still a walkable PREFIX — a stack running into its guard page yields its readable
+	// frames rather than nothing — so the failure edge takes the byte count the API wrote rather than zero.
+	let want = emitLoadField(module, block: copyStack, record: wantPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: zero)
+	let copied = emitHostSample(module, block: copyStack, service: ProfileHostCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
+	emitStoreField(module, block: copyStack, record: resultPtr, offset: 0, value: want)
+	let copyFalse = emitConst(module, block: copyStack, value: Win32False, ids: ids)
+	let copyFailed = emitCmp(module, block: copyStack, a: copied, b: copyFalse, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(copyStack, op: StdOp.condBranch(copyFailed, thenBlockId: partialCopy.id, elseBlockId: resume.id))
+
+	let partial = emitLoadField(module, block: partialCopy, record: readPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: partialCopy, record: resultPtr, offset: 0, value: partial)
+	module.setTerminator(partialCopy, op: StdOp.branch(resume.id))
+
+	// ⭐ THE RESUME. Unconditional, and reached from every edge out of the suspended region.
+	let resumeZero = emitConst(module, block: resume, value: 0, ids: ids)
+	_ = emitHostSample(module, block: resume, service: ProfileHostCall.resumeThread, a0: thread, a1: resumeZero, a2: resumeZero, a3: resumeZero, a4: resumeZero, a5: resumeZero, ids: ids)
+	module.setTerminator(resume, op: StdOp.branch(answer.id))
+
+	let result = emitLoadField(module, block: answer, record: resultPtr, offset: 0, ids: ids)
+	module.setTerminator(answer, op: StdOp.ret(result))
+
+	module.functions.push(func)
+end 'buildProfileSample'
+
+// `__prof_timer_create() -> HANDLE | 0` — the tick's own timer, asked for at HIGH RESOLUTION and falling
+// back to the ordinary one on a host that predates the flag. Even the ordinary waitable timer beats a sleep,
+// whose resolution is the system tick.
+function buildProfileTimerCreate(module StdModule)
+	var func = IrFunction.createFromStd(ProfileTimerCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var coarse = module.addBlock(func, label: b"pftcoarse")
+	var made = module.addBlock(func, label: b"pftmade")
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let access = emitConst(module, block: entry, value: TimerAllAccess, ids: ids)
+	let highResolution = emitConst(module, block: entry, value: CreateWaitableTimerHighResolution, ids: ids)
+	let fine = emitHostSample(module, block: entry, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: highResolution, a3: access, a4: zero, a5: zero, ids: ids)
+	let noTimer = emitCmp(module, block: entry, a: fine, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noTimer, thenBlockId: coarse.id, elseBlockId: made.id))
+
+	let plain = emitHostSample(module, block: coarse, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: zero, a3: access, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(coarse, op: StdOp.ret(plain))
+
+	module.setTerminator(made, op: StdOp.ret(fine))
+
+	module.functions.push(func)
+end 'buildProfileTimerCreate'
+
+// ⭐⭐ **`__prof_timer_wait(timer, dueTime100ns)` — ARM AN ABSOLUTE DEADLINE AND WAIT ON IT.**
+//
+// ⛔ **THE DEADLINE IS ABSOLUTE AND MUST STAY SO.** A relative interval repays a stall as a BURST of
+// back-to-back samples, and fifty readings twenty microseconds apart are one reading wearing fifty numbers.
+// `SetWaitableTimer` reads a POSITIVE due time as an absolute FILETIME, which is why the caller does the
+// deadline arithmetic and this only arms what it is handed.
+//
+// The due time arrives BY VALUE and is stored into this call's own frame, because the API takes a pointer to
+// a `LARGE_INTEGER` and the caller has no way to name an address.
+function buildProfileTimerWait(module StdModule)
+	var func = IrFunction.createFromStd(ProfileTimerWaitName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var armed = module.addBlock(func, label: b"pftwarmed")
+	var unarmed = module.addBlock(func, label: b"pftwnone")
+
+	emitParams(module, block: entry, count: 2)
+	let timer = 0 as ValueId
+	let dueTime = 1 as ValueId
+
+	func.stackSize = OneWordScratchBytes
+	let duePtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(duePtr, slot: OutWordSlot))
+	emitStoreField(module, block: entry, record: duePtr, offset: 0, value: dueTime)
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let set = emitHostSample(module, block: entry, service: ProfileHostCall.setAbsoluteTimer, a0: timer, a1: duePtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+
+	// ⛔ **AN UNARMED TIMER IS NEVER WAITED ON.** The wait below is INFINITE, so a `SetWaitableTimer` that
+	// refused would hang the whole tool on a handle nothing will ever signal — the caller's tick simply
+	// costs nothing instead, which its own deadline arithmetic already survives.
+	let refused = emitConst(module, block: entry, value: Win32False, ids: ids)
+	let notArmed = emitCmp(module, block: entry, a: set, b: refused, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(notArmed, thenBlockId: unarmed.id, elseBlockId: armed.id))
+
+	let forever = emitConst(module, block: armed, value: WaitInfinite, ids: ids)
+	let waited = ids.mint()
+	module.appendOp(armed, op: StdOp.osWaitHandle(waited, handleId: timer, timeoutMsId: forever))
+	module.setTerminator(armed, op: StdOp.retVoid)
+
+	module.setTerminator(unarmed, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildProfileTimerWait'
+
+// `__prof_module_snapshot(pid) -> HANDLE` — the target's OWN loaded modules.
+//
+// ⚠ Unlike the thread flag, `TH32CS_SNAPMODULE` HONOURS the process id, so this walks the target's ~10
+// modules rather than the machine's. Taken ONCE at attach: a Maxon program loads nothing at run time, so
+// re-enumerating per sample would put a process-wide query on the sampling path to catch a case that does
+// not arise.
+function buildProfileModuleSnapshot(module StdModule)
+	var func = IrFunction.createFromStd(ProfileModuleSnapshotName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let pid = 0 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let flags = emitConst(module, block: entry, value: ModuleSnapshotFlags, ids: ids)
+	let snapshot = emitHostSample(module, block: entry, service: ProfileHostCall.moduleSnapshot, a0: flags, a1: pid, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(snapshot))
+
+	module.functions.push(func)
+end 'buildProfileModuleSnapshot'
+
+// `__prof_module_first(snapshot, entryPtr) -> BOOL`. The `dwSize` the API refuses a record without is the
+// CALLER's to write, because the caller is what reserved the record and therefore is the one place its size
+// is stated (`ProfileSampler.ProfileModuleEntryBytes`).
+function buildProfileModuleFirst(module StdModule)
+	var func = IrFunction.createFromStd(ProfileModuleFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let snapshot = 0 as ValueId
+	let entryPtr = 1 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let found = emitHostSample(module, block: entry, service: ProfileHostCall.moduleFirst, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(found))
+
+	module.functions.push(func)
+end 'buildProfileModuleFirst'
+
+// `__prof_module_next(snapshot, entryPtr) -> BOOL` — the walk's later steps, over a record `Module32FirstW`
+// has already sized.
+function buildProfileModuleNext(module StdModule)
+	var func = IrFunction.createFromStd(ProfileModuleNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let snapshot = 0 as ValueId
+	let entryPtr = 1 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let found = emitHostSample(module, block: entry, service: ProfileHostCall.moduleNext, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(found))
+
+	module.functions.push(func)
+end 'buildProfileModuleNext'
+
+// `__prof_close(handle)` — a zero handle is a no-op, so a failed open flows through here untested.
+function buildProfileClose(module StdModule)
+	var func = IrFunction.createFromStd(ProfileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var live = module.addBlock(func, label: b"pfclive")
+	var nothing = module.addBlock(func, label: b"pfcnone")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let noHandle = emitCmp(module, block: entry, a: handle, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noHandle, thenBlockId: nothing.id, elseBlockId: live.id))
+
+	module.appendOp(live, op: StdOp.osCloseHandle(handle))
+	module.setTerminator(live, op: StdOp.retVoid)
+
+	module.setTerminator(nothing, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildProfileClose'
+
+// ⭐ `__prof_scratch_alloc(bytes) -> base` — the CONTEXT record, the region-query record, the module record
+// and the stack window, each its own reservation.
+//
+// The pages come back COMMITTED and therefore zero-filled and page-aligned, which is what satisfies
+// `GetThreadContext`'s 16-byte requirement without a hand-rolled fixup.
+function buildProfileScratchAlloc(module StdModule)
+	var func = IrFunction.createFromStd(ProfileScratchAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let bytes = 0 as ValueId
+
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(base, sizeId: bytes))
+	module.setTerminator(entry, op: StdOp.ret(base))
+
+	module.functions.push(func)
+end 'buildProfileScratchAlloc'
+
+function buildProfileScratchFree(module StdModule)
+	var func = IrFunction.createFromStd(ProfileScratchFreeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let base = 0 as ValueId
+	let bytes = 1 as ValueId
+
+	module.appendOp(entry, op: StdOp.osFreePages(base, sizeId: bytes))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildProfileScratchFree'
+
+// ⭐ `__prof_read_word(base, offset) -> word` and `__prof_write_word(base, offset, value)`.
+//
+// The offset is BYTES and is never scaled: what these read is a Win32 record whose layout neither tier owns,
+// so an accessor that multiplied by eight would put every field access one stride away. The bound is the
+// caller's — a scratch region's extent is a fact the PROFILER holds, and these are not given it.
+function buildProfileReadWord(module StdModule)
+	var func = IrFunction.createFromStd(ProfileReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let base = 0 as ValueId
+	let offset = 1 as ValueId
+
+	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let word = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: addr, offset: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.ret(word))
+
+	module.functions.push(func)
+end 'buildProfileReadWord'
+
+function buildProfileWriteWord(module StdModule)
+	var func = IrFunction.createFromStd(ProfileWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 3)
+	let base = 0 as ValueId
+	let offset = 1 as ValueId
+	let value = 2 as ValueId
+
+	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(entry, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildProfileWriteWord'
+
+// `__prof_now_filetime() -> ticks` — `GetSystemTimeAsFileTime` through the one op that reads the host's
+// calendar into a caller-owned word. It is in THIS family rather than reached through `__clock_now_unix_s`
+// because that entry divides its reading down to whole SECONDS, and a kilohertz deadline needs every digit.
+function buildProfileNowFileTime(module StdModule)
+	var func = IrFunction.createFromStd(ProfileNowFileTimeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	func.stackSize = OneWordScratchBytes
+	let ticksPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(ticksPtr, slot: OutWordSlot))
+	module.appendOp(entry, op: StdOp.osReadWallClock(ticksPtr))
+	let ticks = emitLoadField(module, block: entry, record: ticksPtr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(ticks))
+
+	module.functions.push(func)
+end 'buildProfileNowFileTime'
+
+export function installProfileRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesProcessSampling 'noSampling'
+		return
+	end 'noSampling'
+
+	buildProfileOpenTarget(module)
+	buildProfileNextThread(module)
+	buildProfileThreadId(module)
+	buildProfileThreadCycles(module)
+	buildProfileSample(module)
+	buildProfileTimerCreate(module)
+	buildProfileTimerWait(module)
+	buildProfileNowFileTime(module)
+	buildProfileModuleSnapshot(module)
+	buildProfileModuleFirst(module)
+	buildProfileModuleNext(module)
+	buildProfileClose(module)
+	buildProfileScratchAlloc(module)
+	buildProfileScratchFree(module)
+	buildProfileReadWord(module)
+	buildProfileWriteWord(module)
+end 'installProfileRuntime'

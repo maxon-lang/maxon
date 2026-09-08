@@ -1,0 +1,186 @@
+// Test: a-durable-store-of-a-let-map-copies-it
+typealias Key = int(0 to 1000)
+typealias KeyMap = Map with (Key, Key)
+typealias MapBox = Array with KeyMap
+
+let Shared = KeyMap.create()
+
+function main() returns ExitCode
+	var box = MapBox.create()
+	box.push(Shared)
+	var held = try box.get(0) otherwise KeyMap.create()
+	held.upsert(7, value: 7)
+	return ((held.count() as ExitCode) * 10) + (Shared.count() as ExitCode)
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Map_Key_Key]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.leaRegFunc rdx, [rip + __clone_Map_Key_Key]
+    x64.callDirect __mm_own_deep
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#27
+  __im_empty:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit#28
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  critsplit#28:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#27:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __layout_Map_Key_Key]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+  trycont:
+    x64.movRegImm32 rdx, 7
+    x64.movRegImm32 rax, 7
+    x64.leaRegRdata r9, [rip + __layout_Map_Key_Key]
+    x64.leaRegRdata rsi, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, r12
+    x64.callDirect Map.upsert
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 32]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#21
+  __rc_chk#20:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#19
+  __il_slow#21:
+    x64.movRegReg rcx, r12
+    x64.callDirect Map.count
+    x64.jmp __il_cont#17
+  __rc_ok#19:
+    x64.movRegReg r8, rcx
+  __il_cont#17:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at a-durable-store-of-a-let-map-copies-it.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.imulRegRegImm32 r13, r8, 10
+    x64.leaRegRdata rcx, [rip + __struct_rec_0]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 32]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __il_slow#26
+  __rc_chk#25:
+    x64.movRegImm rdi, 4611686018427387904
+    x64.cmpRegReg rsi, rdi
+    x64.jcc lessEqual, __rc_ok#24
+  __il_slow#26:
+    x64.callDirect Map.count
+    x64.jmp __il_cont#22
+  __rc_ok#24:
+    x64.movRegReg r8, rsi
+  __il_cont#22:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at a-durable-store-of-a-let-map-copies-it.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.leaRegRegReg r13, r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Map_Key_Key
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#11
+  __rc_chk#12:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc lessEqual, __rc_ok#10
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at a-durable-store-of-a-let-map-copies-it.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#10:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

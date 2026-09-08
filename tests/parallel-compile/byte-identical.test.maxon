@@ -1,0 +1,26 @@
+// byte-identical.test.maxon — the executable the allocator emits does not depend on how many workers
+// allocated it. One staged copy, compiled twice, and BOTH builds are given the SAME output path, which
+// is the confound this case has to control rather than vary: the output basename reaches the emitted
+// image (see `builtExecutable`), so a pair of builds written to two names differs for a reason that has
+// nothing to do with the pool. The pinned image is kept aside between the runs, leaving the processor
+// count as the only difference between the two builds compared.
+//
+// Two compiles in one file is the budget `test-command/reserved-name-refused.test.maxon` prices against
+// the 5,000 ms deadline; a third case here would need its own file.
+
+test 'the executable is byte-identical at one processor and at the default'
+	let staged = stagedProgram("pool-program", caseLabel: "byte-identical")
+	let noArguments = StringArray.create()
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
+	try Expect.equal(pinnedExit, expected: 0, message: "the pool program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+
+	let pinnedImage = retainImage(staged)
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
+	let defaultExit = defaultRun.exitCode() as AssertedInt
+	try Expect.equal(defaultExit, expected: 0, message: "the pool program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+
+	try requireIdenticalBytes(pinnedImage, second: builtExecutable(staged))
+end 'the executable is byte-identical at one processor and at the default'

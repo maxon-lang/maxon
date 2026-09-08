@@ -1,0 +1,65 @@
+// Test: a-commutative-pair-is-one-expression-and-a-subtraction-is-not
+typealias Word = int(i64.min to i64.max)
+
+function sums(a Word, b Word) returns Word
+	return (a + b) + (b + a)
+end 'sums'
+
+function differences(a Word, b Word) returns Word
+	return (a - b) * 10 + (b - a)
+end 'differences'
+
+function main() returns ExitCode
+	var total = 0
+	for i in 0 upto 4 'feed'
+		total = total + sums(i, b: i + 3) + differences(i, b: i + 3)
+	end 'feed'
+	// `sums` is `4i + 6`; `differences` is `-30 + 3`, and it is `-33` rather than `-27` exactly when
+	// `b - a` has been rewritten to `a - b`.
+	if total != -60 'wrongTotal'
+		return 1
+	end 'wrongTotal'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.leaRegRegImm32 rdx, rcx, 3
+  __il_body#9:
+    x64.leaRegRegReg rsi, rcx, rdx
+    x64.leaRegRegReg rsi, rsi, rsi
+  __il_cont#8:
+    x64.leaRegRegReg rax, rax, rsi
+  __il_body#10:
+    x64.movRegReg rsi, rcx
+    x64.subRegReg rsi, rcx, rdx
+    x64.imulRegRegImm32 rsi, rsi, 10
+    x64.subRegReg rdx, rdx, rcx
+    x64.leaRegRegReg rdx, rsi, rdx
+  __il_cont#7:
+    x64.leaRegRegReg rax, rax, rdx
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, -60
+    x64.jcc equal, ifcont
+  wrongTotal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

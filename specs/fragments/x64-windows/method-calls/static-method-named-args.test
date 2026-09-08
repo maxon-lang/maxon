@@ -1,0 +1,42 @@
+// Test: static-method-named-args
+
+typealias Integer = int(i64.min to i64.max)
+
+type Factory
+	static function create(x Integer, y Integer) returns Integer
+		return x * 10 + y
+	end 'create'
+end 'Factory'
+
+function main() returns ExitCode
+	return Factory.create(4, y: 2)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 r8, 42
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegImm32 rax, 42
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at static-method-named-args.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

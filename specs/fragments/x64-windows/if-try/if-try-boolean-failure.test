@@ -1,0 +1,78 @@
+// Test: if-try-boolean-failure
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function runStep(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+end 'runStep'
+
+function main() returns ExitCode
+	var result = 0
+	if try runStep(false) 'check'
+		result = 1
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+func @runStep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+    x64.callDirect runStep
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifelse
+  check:
+    x64.movRegImm32 r8, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegReg r8, rbx
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at if-try-boolean-failure.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

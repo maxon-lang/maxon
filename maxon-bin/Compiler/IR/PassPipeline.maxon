@@ -1,0 +1,528 @@
+// PassPipeline — the stateful driver for a compilation. It owns the evolving IR
+// modules (one per tier), the scheduled pass list, and a `dispatch` that runs each
+// pass by reading one module field and writing the next. Callers build a
+// PassPipeline, push the passes they want via `addPass`/`addPasses`, and call
+// `run()`.
+//
+// Pipeline phases (3-level IR: Maxon → Std → Target):
+//   Phase 2  Maxon-level  : resolveTypes, semanticCheck  (operate on maxonModule)
+//   Phase 3  Maxon → Std  : lowerMaxonToStd              (maxonModule → stdModule)
+//   Phase 7  Std → Target : handled directly by the backend (not pipeline passes)
+//
+// PHI RESOLUTION moved OUT of the pipeline at M5: the register allocator consumes
+// `blockArgs`/`branchEdges` DIRECTLY and does SSA destruction after coloring, so
+// the M4b `eliminatePhis` Std pass is retired (it eagerly inserted edge copies and
+// cleared the phi model before the backend, which the biased colorer needs intact).
+//
+// There is NO MIR tier — see StdDialect's header. Instruction scheduling,
+// coalescing and the desugaring `lowerToMachineForm` performs are Std-tier
+// passes scheduled here.
+//
+// THIN for maxon M1: only the passes the `return 42` slice needs are
+// scheduled, and only `lowerMaxonToStd` does real work. resolveTypes /
+// semanticCheck are SCHEDULED PLACEHOLDERS whose bodies are a Chunk C deliverable
+// (TypeResolution + SemanticCheck) — present now so the pipeline SHAPE is stable
+// and Chunk C fills in bodies rather than rewiring the pipeline. The Std-tier
+// optimization passes (mem2reg/canonicalize/cse/…), the Own-tier passes, and
+// `lowerToMachineForm` GROW in at their milestones (M3+ / M6). Error gating
+// (`hasErrors` → throw) and per-pass IR-compaction/dump grow in with the Project +
+// diagnostics (Chunk C).
+
+// One arm per scheduled pass. Payload-free today; kept a `union` (not an enum)
+// to leave room for passes that carry configuration payloads.
+union PassKind
+	// Phase 2: Maxon-level. Chunk C bodies (placeholders in M1).
+	resolveTypes
+	semanticCheck
+	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER `semanticCheck`
+	// and therefore reached only on a project with no diagnostics at all — which is what supplies its
+	// structural gate for free (see UnusedExportCheck's header).
+	checkUnusedExports
+	// Phase 3: Maxon → Std.
+	lowerMaxonToStd
+	// Phase 3.4: Std → Std ranged-typealias narrowing guards (P1.9). Turns the parser's recorded
+	// range-check sites into compile-time E3005s and runtime panic guards. It runs right after the
+	// lowering (value ids are freshest and unrenumbered) and BEFORE `foldConstOperands`, which then
+	// folds each guard's bound `const` into the `cmp`'s immediate. Appended after `lowerMaxonToStd` so
+	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
+	// block-arg/const passes exactly.
+	insertRangeChecks
+	// Phase 3.44: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
+	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
+	//
+	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
+	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
+	// (`RangeCheckSite.stdOpPos`), and this pass SPLITS blocks and removes an op from one — so a site
+	// recorded past a split point would land in a block that no longer holds it, or trip `guardSiteAt`'s
+	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
+	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
+	//
+	// ⭐⭐ **AND SINCE EC17 IT RUNS BEFORE `inlineLeaves`, WHICH IS THE WHOLE OF THAT ROW.** `__managed_count`
+	// is the one primitive this pass rewrites IN PLACE — into a single `loadIndirect` — and every accessor
+	// whose body is that one call (`Array.isEmpty`, `Parser.advance`, `String.byteLength`) is therefore NOT
+	// a leaf until it has run. Ordered the other way the leaf inliner met a body holding a call and refused
+	// it, one pass before the call stopped existing: MEASURED on the self-compile, `Array.isEmpty` kept
+	// **209** call sites, `Parser.advance` **106** and `String.byteLength` **92**.
+	//
+	// ⭐ **THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
+	// MEASUREMENT.** This pass rewrites only bodies holding a `__managed_*` CALL, and a leaf holds no call
+	// BY RULE (`InlineLeaves.LeafOpRole.calling` refuses the callee outright) — so no body this pass can
+	// touch is one the leaf inliner would have accepted, and the eligible set can only grow. MEASURED
+	// anyway, because a proof about two passes is worth checking: on the self-compile the leaf inliner's
+	// eligible callees go **469 → 530** and its sites **4,138 → 4,921**, while THIS pass's own expansion
+	// count is unchanged to the digit at **6,032 across 9,494 functions** — leaf splicing never duplicated
+	// a managed primitive, in either order, and nothing the leaf inliner used to reach became unreachable.
+	//
+	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
+	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in
+	// the loops this pass makes hotter. It also runs before `pruneDeadBlockArgs`, which then drops the
+	// continuation result arg of a void `set` nothing reads.
+	inlineManagedPrimitives
+	// Phase 3.45: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
+	// callee where it is — and, for a leaf whose ranged-parameter guard can panic, leaving one slow arm
+	// per site that re-issues the original call so the panic still comes out of the callee's own frame.
+	//
+	// ⚠ **IT RUNS AFTER `insertRangeChecks` FOR THAT PASS'S OWN REASON, RESTATED HERE ONLY AS A
+	// POINTER**: a range-check site is a `(blockId, stdOpPos)` coordinate in the space `lowerMaxonToStd`
+	// left the block in, and this pass SPLITS blocks and removes ops from them. It also needs the guards
+	// to already EXIST — the panic rule is about a callee whose entry guard panics, and before
+	// `insertRangeChecks` no callee has one, so every ranged-parameter leaf would look store-free and
+	// panic-free and be copied WITH its guard emitted later into the callee alone.
+	//
+	// ⭐⭐ **AND SINCE EC17 IT RUNS AFTER `inlineManagedPrimitives`, WHICH IS WHAT MAKES THE
+	// COUNT-BACKED ACCESSORS LEAVES AT ALL** — see that pass's entry above for the measurement, and for
+	// why the move cannot cost this one a callee.
+	//
+	// ⛔ **A SECOND ROUND WAS THE OTHER SHAPE EC17 WEIGHED, AND IT IS NOT WHAT LANDED.** Running this pass
+	// again after the managed rewrite buys the same callees AND two things the row did not ask for. The
+	// `__il_slow` arms this pass mints hold *the very call the splice moved*, so a second round re-expands
+	// them — a fresh copy of a panicking leaf's body at every such site, for no call removed. And
+	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
+	// inlined into, which is the cascade `LeafPlan`'s header refuses on purpose and which
+	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. Both would need suppressing
+	// machinery; the reorder needs none, and one round stays one round.
+	//
+	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
+	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
+	inlineLeaves
+	// Phase 3.5: Std → Std machine-form rewrites.
+	//
+	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
+	// ASSIGNS (so the parser carries a phi for it) but whose phi has no reader. It runs FIRST of the Std passes because a dead phi is
+	// SELF-SUSTAINING — its back edge keeps it live around the whole loop — so it inflates
+	// the register allocator's maxlive and can raise a FALSE E5001; and because dropping
+	// its edge args is what lets `foldConstOperands`'s const DCE (below) then drop a
+	// `const` whose only reader was that edge.
+	//
+	// `elimTrivialBlockArgs` folds away the phis that CARRY NOTHING — one whose every
+	// incoming value, self-references discounted, is the same value. Those are the phis the
+	// parser's token scan OVER-approximates into existence: a `var`/`let` declared inside the
+	// loop that shadows an outer var of the same name reads as an assignment to the outer one.
+	// They are not dead (something reads them), so `pruneDeadBlockArgs` leaves
+	// them; but a PHI is exactly what the cold-spill splitter may not spill, so an idle `var`
+	// across a loop was pinned in a register where an idle `let` was spilled for free — and
+	// past the pool, a FALSE E5001. It runs after the prune (which is cheaper and removes the
+	// self-sustaining dead phis first) and before `foldConstOperands`, whose const DCE can then
+	// drop a `const` whose only reader was a folded phi's edge.
+	//
+	// `foldConstants` EVALUATES `const <op> const`, replacing the arithmetic with the answer and
+	// turning a `condBranch` on a known constant into an unconditional `branch`. It runs AFTER BOTH
+	// INLINERS, which is the whole reason it is a Std pass rather than a parser one: `2 + 3 * 4` is
+	// already settled at parse time, and what is NOT is the constant a literal argument makes of a
+	// callee's parameter. It runs BEFORE `foldConstOperands` so a constant it could not fold — one
+	// operand live — still reaches the operand rewrite and becomes an immediate there.
+	//
+	// `foldConstOperands` moves a const operand into an immediate so the literal never
+	// needs a register.
+	//
+	// `commonSubexpressionElimination` (EC13) replaces a PURE computation whose operator and operands a
+	// block has already evaluated with a read of that earlier result — `x * 31 + y` written three times
+	// becomes one `imul`/`lea` pair instead of three into three simultaneously-live registers. It runs
+	// LAST of the arithmetic passes, and ⭐ **after `foldConstOperands` is load-bearing rather than
+	// merely permitted**: the lowering mints a separate `const` op per literal occurrence (there is no
+	// constant interning), so until that pass has moved each literal INTO the op that reads it, three
+	// copies of one expression are three ops over three different value ids and no expression
+	// comparison can call them equal. It also benefits from that pass's move 1, which puts a
+	// commutative op's constant on the rhs.
+	//
+	// `loopInvariantCodeMotion` (EC14) moves a computation whose answer cannot change across a loop's
+	// iterations into the block that runs once before it — the array length and buffer base the anchor
+	// loop reloaded per element. It runs AFTER CSE: CSE has already collapsed a repeated invariant
+	// expression to ONE op, so this pass moves one instruction and
+	// lengthens one live range instead of three. It hoists LOADS as well as arithmetic, and the two
+	// safety rules that licence that (the loop writes no memory; the load was going to execute anyway)
+	// are the whole content of its header.
+	//
+	// `strengthReduceDivision` (EC18) replaces `x / K` and `x mod K`, for a constant `K`, with a
+	// multiply-and-shift sequence — an `idiv` is 20–40 cycles and the sequence is five or six ALU ops.
+	// ⭐ **ITS POSITION IS DECIDED BY THE THREE PASSES AFTER IT, EACH OF WHICH READS THE SEQUENCE AS
+	// ARITHMETIC IT CAN IMPROVE, AND BY THE ONE BEFORE IT.** After `foldConstants`, which is what MAKES
+	// the divisor a bare `const` in the first place: the checked-division expansion divides by
+	// `divisor or errorFlag`, and only after the fold has evaluated that guard away is there a constant
+	// here to see. Before `foldConstOperands`, so every shift count and the multiply-back become
+	// IMMEDIATES; before `commonSubexpressionElimination`, which is what collapses the quotient chain of
+	// `n / 10` and the one inside `n mod 10` into a single computation wherever a program writes both —
+	// the shape of every decimal renderer, and one no isel-tier rewrite could ever reach, because two
+	// `idiv`s are `isPure: false` and can never be CSE'd; and before `loopInvariantCodeMotion`, which can
+	// now hoist a reduced quotient out of a loop where an `idiv` could not leave one.
+	pruneDeadBlockArgs
+	elimTrivialBlockArgs
+	foldConstants
+	strengthReduceDivision
+	foldConstOperands
+	commonSubexpressionElimination
+	loopInvariantCodeMotion
+	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
+	//
+	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
+	// promotion decides on the SHAPE of the code, so it must see the final shape:
+	// `pruneDeadBlockArgs`/`elimTrivialBlockArgs` remove the phis the parser over-approximated into
+	// existence, and a record reaching a phi is refused — so running before them would refuse
+	// promotions on merges that do not survive. `insertRangeChecks` may SPLIT a constructor's block to
+	// hang a guard off it, and a multi-block body is not a record constructor — so running before it
+	// would recognize a constructor the guard is about to invalidate.
+	//
+	// WHOLE-MODULE (see `classifyPass`): a call site cannot be judged without the callee's summary.
+	promoteStackRecords
+	// Phase 3.7: Std → Std VALUE-TUPLE RETURN CONVENTION (`ValueTupleReturn`).
+	//
+	// ⭐ **AFTER THE PROMOTION, AND FOR THE SAME REASON THE PROMOTION IS LAST**: both decide on the FINAL
+	// shape of the code, and a record the promotion has already turned into frame storage is no longer a
+	// call this pass can see — so the two cannot both claim one site. Whole-module, like its neighbour: a
+	// callee's return convention and its call sites are one decision.
+	valueTupleReturn
+end 'PassKind'
+
+export typealias PassKindArray = Array with PassKind
+
+// Whether a pass runs over the whole module at once or can fan out per function.
+// `perFunction` passes are intra-function only (no pass reaches into another
+// function's blocks); they will run through the per-function fan-out driver
+// added at M5. `wholeModule` passes need call-graph / cross-function visibility.
+// ⚠ Not exported: the classification is recorded and read inside this pipeline alone (its fan-out reader is
+// still to come), and `checkUnusedExports` (E3092) refuses an export nothing reads.
+enum PassClassification
+	wholeModule
+	perFunction
+end 'PassClassification'
+
+// Map a pass to its fan-out classification. resolveTypes / semanticCheck are
+// whole-module (they need the full declaration set); the lowering is
+// intra-function and becomes the first fan-out target at M5. NOTE: M1's `run()`
+// runs EVERY pass whole-module regardless — this classification is recorded for
+// the M5 fan-out driver, not yet acted on (per PLAN.md: classification present
+// but trivial at M1).
+function classifyPass(pass PassKind) returns PassClassification
+	return match pass 'classify'
+		resolveTypes gives PassClassification.wholeModule
+		semanticCheck gives PassClassification.wholeModule
+		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
+		checkUnusedExports gives PassClassification.wholeModule
+		lowerMaxonToStd gives PassClassification.perFunction
+		insertRangeChecks gives PassClassification.perFunction
+		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
+		// nothing about the callee's body is consulted — the body is not even in the module yet.
+		inlineManagedPrimitives gives PassClassification.perFunction
+		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
+		// contains, and a caller cannot be judged without every callee it names in view.
+		inlineLeaves gives PassClassification.wholeModule
+		pruneDeadBlockArgs gives PassClassification.perFunction
+		elimTrivialBlockArgs gives PassClassification.perFunction
+		foldConstants gives PassClassification.perFunction
+		foldConstOperands gives PassClassification.perFunction
+		// Intra-function by construction: an expression is compared only against ones computed in blocks
+		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
+		strengthReduceDivision gives PassClassification.perFunction
+		commonSubexpressionElimination gives PassClassification.perFunction
+		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
+		// inside one function, and nothing about a callee is consulted.
+		loopInvariantCodeMotion gives PassClassification.perFunction
+		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
+		// convention are all facts about the CALL GRAPH, and a call site cannot be judged without the
+		// callee's row.
+		promoteStackRecords gives PassClassification.wholeModule
+		valueTupleReturn gives PassClassification.wholeModule
+	end 'classify'
+end 'classifyPass'
+
+// The wall-clock phase each pass is billed to. EXHAUSTIVE by construction: a new
+// PassKind fails to compile until it names its phase, so a pass cannot be added and
+// silently go unmeasured — which is the whole point of the attribution (see
+// CompileTimings' header). The mapping is 1:1 today and is expected to stay so; a
+// pass grouping several phases would defeat the table's purpose.
+function compilePhaseOfPass(pass PassKind) returns CompilePhase
+	return match pass 'phase'
+		resolveTypes gives CompilePhase.resolveTypes
+		semanticCheck gives CompilePhase.semanticCheck
+		checkUnusedExports gives CompilePhase.checkUnusedExports
+		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
+		insertRangeChecks gives CompilePhase.insertRangeChecks
+		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
+		inlineLeaves gives CompilePhase.inlineLeaves
+		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
+		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
+		foldConstants gives CompilePhase.foldConstants
+		foldConstOperands gives CompilePhase.foldConstOperands
+		strengthReduceDivision gives CompilePhase.strengthReduceDivision
+		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
+		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
+		promoteStackRecords gives CompilePhase.promoteStackRecords
+		valueTupleReturn gives CompilePhase.valueTupleReturn
+	end 'phase'
+end 'compilePhaseOfPass'
+
+// Human-readable pass name for logging (union has no `.name`, unlike an enum).
+function passKindToString(pass PassKind) returns String
+	return match pass 'name'
+		resolveTypes gives "resolveTypes"
+		semanticCheck gives "semanticCheck"
+		checkUnusedExports gives "checkUnusedExports"
+		lowerMaxonToStd gives "lowerMaxonToStd"
+		insertRangeChecks gives "insertRangeChecks"
+		inlineManagedPrimitives gives "inlineManagedPrimitives"
+		inlineLeaves gives "inlineLeaves"
+		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
+		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
+		foldConstants gives "foldConstants"
+		foldConstOperands gives "foldConstOperands"
+		strengthReduceDivision gives "strengthReduceDivision"
+		commonSubexpressionElimination gives "commonSubexpressionElimination"
+		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
+		promoteStackRecords gives "promoteStackRecords"
+		valueTupleReturn gives "valueTupleReturn"
+	end 'name'
+end 'passKindToString'
+
+// ⭐⭐ **THE PIPELINE IS SCHEDULED IN TWO STAGES, AND THE SEAM BETWEEN THEM IS A HARD IR BOUNDARY, NOT A
+// CONVENIENCE.** Everything up to and including `semanticCheck` operates on the MAXON module and may still
+// rewrite it; `lowerMaxonToStd` and everything after it operate on the Std one. The driver derives the
+// program's RUNTIME NEEDS and lays out `.data` in the seam, because that derivation is a walk of the FINAL
+// Maxon module and both of its neighbours' positions are forced:
+//
+//   • it must run AFTER `semanticCheck`, because `promoteArgsNeedingAWritableRecord` inserts `__str_clone` /
+//     `__str_retain` / `__str_decref` calls there, and a runtime entry the scan walked past is one nothing
+//     installs — an unresolved relocation;
+//   • it must run BEFORE `lowerMaxonToStd`, and that is not a preference. **MEASURED:** the lowering pushes
+//     the SAME `IrFunction` objects into the Std module (`transferFuncs`) and then `stdModule.addBlock`s
+//     onto their shared `blockRefs`, so after it runs a Maxon function's block refs name STD blocks — a
+//     Maxon-module walk then panics on `blockRef … not in module.blocks`, which is exactly what a scan
+//     placed below the whole pipeline did, on seven cases.
+//
+// The Std-tier passes GROW into the SECOND stage, appended after `lowerMaxonToStd`: the optimizations
+// (mem2reg/canonicalize/cse/… at M3+), the Own-tier refcount passes (M6), and `lowerToMachineForm` (M6).
+// Phase 7 (target lowering /
+// regalloc / prologue-epilogue) stays backend-direct: it produces a CodeResult, which is not an IR module
+// and so does not fit the module-field dispatch model.
+//
+// No `project` is threaded here: a coverage point is minted in the PARSER, above every fold, so by the
+// time a pass list exists the instrumentation is already in the IR.
+export function buildMaxonTierPasses() returns PassKindArray
+	var passes = PassKindArray.create()
+	passes.push(PassKind.resolveTypes)
+	passes.push(PassKind.semanticCheck)
+	passes.push(PassKind.checkUnusedExports)
+	return passes
+end 'buildMaxonTierPasses'
+
+// The second stage — see `buildMaxonTierPasses` for what the seam between them is for.
+export function buildLoweringPasses() returns PassKindArray
+	var passes = PassKindArray.create()
+	passes.push(PassKind.lowerMaxonToStd)
+	passes.push(PassKind.insertRangeChecks)
+	passes.push(PassKind.inlineManagedPrimitives)
+	passes.push(PassKind.inlineLeaves)
+	passes.push(PassKind.pruneDeadBlockArgs)
+	passes.push(PassKind.elimTrivialBlockArgs)
+	passes.push(PassKind.foldConstants)
+	passes.push(PassKind.strengthReduceDivision)
+	passes.push(PassKind.foldConstOperands)
+	passes.push(PassKind.commonSubexpressionElimination)
+	passes.push(PassKind.loopInvariantCodeMotion)
+	passes.push(PassKind.promoteStackRecords)
+	passes.push(PassKind.valueTupleReturn)
+	return passes
+end 'buildLoweringPasses'
+
+// The pipeline owns the IR modules across their successive phases. It starts with
+// `maxonModule` populated by the parser (Chunk C); the lowering pass reads one
+// field and populates the next. Unpopulated fields hold empty modules so a read
+// never traps. Pass methods read/write `self`'s fields directly — new
+// cross-cutting state becomes a new field, not a signature change.
+//
+// It owns NO target module: the pipeline's last tier is Std, and the backend is
+// driven backend-direct (`buildBackend` returns a CodeResult, which is not an IR
+// module). A `targetModule` field here would be write-once-read-never — the same
+// vestigial-tier residue the `mirModule` field was.
+export type PassPipeline
+	// The project owns the shared state the Maxon-tier passes read/write
+	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and since P1.6-B1 the
+	// lowering does too — it materialises a `sizeof(T)` receiver's layout descriptor from the project's
+	// struct/generic-instance registries; every pass dispatches uniformly through `self` regardless.
+	export var project as Project
+	export var maxonModule as MaxonModule
+	export var stdModule as StdModule
+	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113, A1s-throwsbox):
+	// `Parser.throwsTypeIsBoxedUnion` — the catch-site DECODE that decides whether an error flag is an ordinal
+	// or a box pointer — resolves a `throws` clause through `ProgramSignatures.enumOf`, so the check that a
+	// clause names something classifiable has to ask THAT registry and not the `Project.enumTypes` authority
+	// beside it. The two are fed identically today (one `createEnumRegistry`, the same declarations); asking
+	// the other one and calling it "the decode's registry" would be this project's signature bug — one fact
+	// written down twice — waiting for the day they diverge.
+	//
+	// It is a FIELD rather than an argument threaded through `dispatch` because that is this type's stated
+	// arrangement for cross-cutting state, and because the query is memoized: `compileToCodeResult` has
+	// already forced it, so binding it here costs a reference and no work.
+	export var signatures as ProgramSignatures
+	// ⭐ **THE CHECKED NAME INDEX, BUILT ONCE FOR BOTH STAGES.** It is a FIELD rather than a `run`-local
+	// because the pipeline is now RUN TWICE — the Maxon-tier stage, then the lowering stage, with the
+	// runtime-needs derivation in the seam (`buildMaxonTierPasses`) — and one index is exactly what its own
+	// header claims: the Maxon function array is frozen across the whole pipeline, so a second build would
+	// re-derive an identical answer and re-run its duplicate refusal at a point nothing can have changed.
+	export var funcNames as FunctionNameIndex
+	// ⭐⭐ **DOES THIS PROGRAM RUN GREEN THREADS?** — the one fact `promoteStackRecords` cannot derive from
+	// the Std module, and the one that decides whether STACK PROMOTION is legal at all in this compile.
+	//
+	// A green thread's stack GROWS BY RELOCATION: `__gt_morestack` allocates a larger region, COPIES the
+	// old stack onto it, rebases rsp and walks the saved-rbp chain adding the offset — and then FREES the
+	// old pages (X64GtRuntime, "copy the stack + rebase the live rbp + WALK the saved-rbp chain"). Every
+	// frame-relative access survives that, because rsp and rbp are exactly what it fixes. A frame ADDRESS
+	// materialized into a REGISTER does not: nothing enumerates the registers, so a promoted record's
+	// pointer held across a call whose prologue guard fires morestack would afterwards point into freed
+	// pages. `TargetOp.leaRegSlot` is the FIRST op in the compiler that materializes one, so this hazard is
+	// exactly as old as stack promotion.
+	//
+	// The bit is `RuntimeUsage.usesGt` — the SAME authority that decides whether the scheduler is installed
+	// at all, rather than a second guess at "does this program use async" derived from the op stream.
+	// Written in the seam between the two pipeline stages (`Compiler.compileToCodeResult`), which is where
+	// `scanRuntimeUsage` has just answered it and before any Std pass runs.
+	export var usesGreenThreads as bool
+
+	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
+	// (E4015 / `refuseDuplicateFunctionName`). The gate used to be `run`'s; with two runs it belongs to the
+	// one construction they share, and the driver wraps it in the same `refuseCompile` it wraps `run` in.
+	// Nothing is refused later than before: the index was already built ahead of `resolveTypes`, which is
+	// still the first pass to report anything.
+	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline throws CompileError
+		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE (A2l).** Three passes derive a name-keyed map
+		// from this module's function array — `semanticCheck`'s throws map and escape summary, and
+		// `lowerMaxonToStd`'s layout-descriptor set — and each used to hand-roll its own bare `upsert` loop.
+		// Two of them ran BEFORE the pass that built the checking index, so they were right by ORDERING and
+		// could not say so; the third had no index in front of it at all.
+		//
+		// It is built HERE, and once, because the Maxon function array is FROZEN across this pipeline: every
+		// synthesizer that appends to it (`installManagedGlobalInit` is the last) has run in
+		// `compileToCodeResult` before the pipeline is even constructed, `resolveTypes` rewrites signature
+		// FIELDS in place without touching the array, and `lowerMaxonToStd` pushes into the STD module it
+		// produces. So one index describes the array every pass below will walk — which is what lets each of
+		// them take the index instead of the module, and stop resting on a guarantee none of them stated.
+		//
+		// It replaces `buildParamMutationSummary`'s build rather than adding one, so the duplicate refusal
+		// simply moves EARLIER — ahead of `resolveTypes` instead of the middle of `semanticCheck`.
+		//
+		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** Its SIZE is no
+		// longer written down here, because it is now a row: `phase:pipelineNameIndex` in `--metrics`, read
+		// off the compile being asked about instead of remembered from one. What is worth keeping is the
+		// SHAPE, which a single row cannot show — MEASURED at A2l's review (2026-07-31, by temporarily
+		// billing this statement to the always-empty `emitIr` slot and reading the scale corpus): rung 0 at
+		// 47 allocations, rung 5 at 79, i.e. **×1.68 across a 32× ladder**. That is the MAP's geometric
+		// buffer growth rather than a per-entry cost, which is why it does not track the program.
+		//
+		// **It cannot go inside a pass's bracket, so it has one of its own.** `dispatch` opens one bracket
+		// PER PASS, while this exists before any of them and is read by several, so billing it to one would
+		// make that pass's row mean two things — the defect `CompileTimings`' header exists to prevent.
+		//
+		// ⭐ **AND THE PHASE IS NAMED `pipelineNameIndex`, NOT `nameIndex`, BECAUSE A ROW MUST NOT CLAIM MORE
+		// THAN IT BRACKETS.** There are THREE Maxon-tier `FunctionNameIndex.create` calls; this is one of
+		// them, and a row spelled `nameIndex` would under-report the mechanism threefold. That objection is
+		// what kept this statement unbracketed until A2n, and it is answered by the NAME rather than by
+		// leaving the cost in a remainder that `ScaleTestRunner` reads and discards. The other two —
+		// `ConformanceCheck.checkConformance`'s and `deriveStdlibFacts`' — are now inside
+		// `CompilePhase.checkDeclarations` and `CompilePhase.deriveRuntimeNeeds`, billed to the passes whose
+		// own cost they are.
+		let nameIndexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.pipelineNameIndex)
+		let funcNames = try FunctionNameIndex.create(maxonModule.functions, project: project)
+		recordPhase(project, phase: CompilePhase.pipelineNameIndex, probe: nameIndexProbe)
+
+		return Self{
+			project: project,
+			maxonModule: maxonModule,
+			stdModule: StdModule.create(),
+			signatures: signatures,
+			funcNames: funcNames,
+			usesGreenThreads: false
+		}
+	end 'create'
+
+	// Run `passes` in order, gating on diagnostics after each: once a
+	// pass reports an error (semanticCheck's E3001/E3002), the pipeline throws
+	// rather than lower an invalid module (e.g. one with no `main` for the entry
+	// stub to call). The driver catches this, prints the diagnostics, and exits
+	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
+	//
+	// The schedule is an ARGUMENT rather than accumulated state because the driver runs the pipeline in two
+	// stages and each stage is one list — see `buildMaxonTierPasses` for what sits between them.
+	export function run(passes PassKindArray) throws CompileError
+		for pass in passes 'eachPass'
+			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
+			try self.dispatch(pass)
+			if projectHasErrors(self.project) 'errorGate'
+				throw CompileError.compileError
+			end 'errorGate'
+		end 'eachPass'
+	end 'run'
+
+	// One arm per PassKind. Each reads the incoming module off `self`, runs the
+	// standalone pass algorithm, and writes the result back. The pass algorithms
+	// stay free functions (reusable outside the pipeline); dispatch just wires
+	// them up. resolveTypes/semanticCheck operate on the Maxon module + project;
+	// lowerMaxonToStd produces the next tier's module.
+	//
+	// Measurement lives at THIS choke point rather than inside each pass body: every pass
+	// runs through here, so no pass can be scheduled and go unmeasured, and the passes
+	// stay free functions that know nothing about the clock or the allocator. No pass
+	// calls another, so the phases are disjoint with nothing to subtract.
+	// The name index comes off `self` rather than riding a parameter: it is the PIPELINE's, built once for
+	// both stages, and threading it would have made a per-run copy of a fact the type already owns.
+	function dispatch(pass PassKind) throws CompileError
+		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
+
+		match pass 'dispatch'
+			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
+			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
+			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
+			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
+			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
+			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
+			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
+			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
+			// The whole module, and no start index: see `foldConstants`' own header for why the appended
+			// runtime band has nothing for it to fold.
+			foldConstants then foldConstants(self.stdModule)
+			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
+			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
+			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
+			// From function 0 — the whole module, which is everything that EXISTS at this point. Like
+			// `foldConstOperands`, this pass's other caller is `Compiler.compileToCodeResult`, which runs it
+			// over the band the runtime installs append below the pipeline; see the pass's own header for
+			// which divisions live there and why they are worth a second run.
+			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
+			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
+			// The whole module, and no start index: like `foldConstants`, its other caller would be the
+			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
+			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
+			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
+			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
+			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
+		end 'dispatch'
+
+		// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a
+		// source op points the cursor at it; left pointed, the runtime installers below the pipeline would
+		// stamp thousands of emitted ops with the last statement a pass happened to touch. Cleared HERE,
+		// where every pass returns through, rather than at each pass's own exits — which is the same reason
+		// the measurement above sits here.
+		self.stdModule.spans.current = NoSpanId
+
+		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)
+	end 'dispatch'
+end 'PassPipeline'

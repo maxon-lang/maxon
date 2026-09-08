@@ -1,0 +1,88 @@
+// Test: the-growable-arrays-buffer-still-changes-its-length
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	try a.managed.setLength(2) otherwise ignore
+	try a.managed.remove(0) otherwise ignore
+	let afterRemove = a.managed.length()
+	a.managed.clear()
+	return ((afterRemove * 10) + a.managed.length()) as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#3
+  trycont#3:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_remove
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#6
+  trycont#6:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_clear
+    x64.imulRegRegImm32 rax, r12, 10
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRegReg r12, rax, rcx
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-growable-arrays-buffer-still-changes-its-length.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

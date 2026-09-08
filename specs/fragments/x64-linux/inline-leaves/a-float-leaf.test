@@ -1,0 +1,38 @@
+// Test: a-float-leaf
+function scale(x Real) returns Real
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	return trunc(scale(21.0))
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movsdRegRip xmm0, [rip + __fconst_42]
+  __il_cont:
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-float-leaf.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

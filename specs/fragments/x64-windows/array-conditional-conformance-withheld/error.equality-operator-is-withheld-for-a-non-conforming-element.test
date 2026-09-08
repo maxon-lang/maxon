@@ -1,0 +1,26 @@
+// Test: error.equality-operator-is-withheld-for-a-non-conforming-element
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+typealias OpaqueArr = Array with Opaque
+
+function main() returns ExitCode
+	var a = OpaqueArr.create()
+	a.push(Opaque.create(1))
+	var b = OpaqueArr.create()
+	b.push(Opaque.create(1))
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+---
+CompilerError:
+error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals' is available as a conditional extension where Element is Hashable and Equatable, but 'Opaque' does not implement 'Hashable')

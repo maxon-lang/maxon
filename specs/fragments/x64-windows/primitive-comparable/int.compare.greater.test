@@ -1,0 +1,43 @@
+// Test: int.compare.greater
+function main() returns ExitCode
+	let a = 20
+	let b = 10
+	let result = a.compare(b)
+	match result 'check'
+		lessThan then return 1
+		equalTo then return 1
+		greaterThan then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  gt:
+    x64.movRegImm32 rax, 2
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#5
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext#5:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#6
+  matcharm#2:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext#6:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead
+  matcharm#3:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

@@ -1,0 +1,142 @@
+// Test: six-div-results-live-across-the-call
+typealias Positive = int(1 to i64.max)
+
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
+	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
+end 'digits6'
+
+function divsAcross(p Integer) returns Integer
+	let n1 = p + 100
+	let n2 = p + 45
+	let n3 = p + 23
+	let d1 = (p + 12) as Positive
+	let d2 = (p + 7) as Positive
+	let d3 = (p + 9) as Positive
+	let q1 = n1 / d1
+	let q2 = n1 mod d1
+	let q3 = n2 / d2
+	let q4 = n2 mod d2
+	let q5 = n3 / d3
+	let q6 = n3 mod d3
+	let r = digits6(q1, p2: q2, p3: q3, p4: q4, p5: q5, p6: q6)
+	return r + q1 * 100000 + q2 * 10000 + q3 * 1000 + q4 * 100 + q5 * 10 + q6
+end 'divsAcross'
+
+function main() returns ExitCode
+	let v = divsAcross(0)
+	if v == 1692650 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @divsAcross {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRegImm32 rsi, rcx, 100
+    x64.leaRegRegImm32 rdi, rcx, 45
+    x64.leaRegRegImm32 r8, rcx, 23
+    x64.leaRegRegImm32 r9, rcx, 12
+    x64.cmpRegImm32 r9, 1
+    x64.jcc greaterEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at six-div-results-live-across-the-call.test:12: Range check failed: value outside typealias 'Positive'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.cmpRegImm32 r10, 1
+    x64.jcc greaterEqual, __rc_ok#3
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at six-div-results-live-across-the-call.test:13: Range check failed: value outside typealias 'Positive'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#3:
+    x64.leaRegRegImm32 rcx, rcx, 9
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc greaterEqual, __rc_ok#5
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at six-div-results-live-across-the-call.test:14: Range check failed: value outside typealias 'Positive'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#5:
+    x64.movRegReg rax, rsi
+    x64.cqo
+    x64.idivReg r9
+    x64.movRegReg r11, rax
+    x64.movRegReg rax, rsi
+    x64.cqo
+    x64.idivReg r9
+    x64.movRegReg rsi, rdx
+    x64.movRegReg rax, rdi
+    x64.cqo
+    x64.idivReg r10
+    x64.movRegReg r9, rax
+    x64.movRegReg rax, rdi
+    x64.cqo
+    x64.idivReg r10
+    x64.movRegReg rdi, rdx
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg r10, rax
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+  __il_body:
+    x64.imulRegRegImm32 rax, r11, 100000
+    x64.imulRegRegImm32 rcx, rsi, 10000
+    x64.leaRegRegReg rsi, rax, rcx
+    x64.imulRegRegImm32 r8, r9, 1000
+    x64.leaRegRegReg rsi, rsi, r8
+    x64.imulRegRegImm32 rdi, rdi, 100
+    x64.leaRegRegReg rsi, rsi, rdi
+    x64.imulRegRegImm32 r9, r10, 10
+    x64.leaRegRegReg rsi, rsi, r9
+    x64.leaRegRegReg rsi, rsi, rdx
+  __il_cont:
+    x64.leaRegRegReg rax, rsi, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg r8, rax, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect divsAcross
+    x64.cmpRegImm32 r8, 1692650
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

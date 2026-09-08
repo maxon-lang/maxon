@@ -1,0 +1,186 @@
+// Test: dispatch.negative-extreme
+typealias N = int(i64.min to i64.max)
+
+function band(x N) returns N
+	return match x 'c'
+		min to -100 gives 1
+		-99 to -1 gives 2
+		0 gives 3
+		1 to 100 gives 4
+		101 to max gives 5
+		default gives 9
+	end 'c'
+end 'band'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if band(-5000) == 1 'a'
+		n = n + 1
+	end 'a'
+	if band(-100) == 1 'b'
+		n = n + 1
+	end 'b'
+	if band(-99) == 2 'c'
+		n = n + 1
+	end 'c'
+	if band(-1) == 2 'd'
+		n = n + 1
+	end 'd'
+	if band(0) == 3 'e'
+		n = n + 1
+	end 'e'
+	if band(1) == 4 'f'
+		n = n + 1
+	end 'f'
+	if band(100) == 4 'g'
+		n = n + 1
+	end 'g'
+	if band(101) == 5 'h'
+		n = n + 1
+	end 'h'
+	if band(999999) == 5 'i'
+		n = n + 1
+	end 'i'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+func @band {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ge matchhi
+  matchlo:
+    arm64.cmp x0, -100
+    arm64.b.gt matchnext#9
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext#9:
+    arm64.cmp x0, -99
+    arm64.cset x1, ge
+    arm64.cmp x0, -1
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchdefault
+  matcharm#2:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchhi:
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#10
+  matcharm#3:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matchnext#10:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 100
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbz x1, matchnext#11
+  matcharm#4:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matchnext#11:
+    arm64.cmp x0, 101
+    arm64.b.lt matchdefault
+  matcharm#5:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matchdefault:
+    arm64.movImm x0, 9
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 18446744073709546616
+    arm64.bl band
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.movImm x0, 18446744073709551516
+    arm64.bl band
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#4
+  b:
+    arm64.add x19, x19, 1
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551517
+    arm64.bl band
+    arm64.cmp x0, 2
+    arm64.b.ne ifcont#6
+  c:
+    arm64.add x19, x19, 1
+  ifcont#6:
+    arm64.movImm x0, 18446744073709551615
+    arm64.bl band
+    arm64.cmp x0, 2
+    arm64.b.ne ifcont#8
+  d:
+    arm64.add x19, x19, 1
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.bl band
+    arm64.cmp x0, 3
+    arm64.b.ne ifcont#10
+  e:
+    arm64.add x19, x19, 1
+  ifcont#10:
+    arm64.movImm x0, 1
+    arm64.bl band
+    arm64.cmp x0, 4
+    arm64.b.ne ifcont#12
+  f:
+    arm64.add x19, x19, 1
+  ifcont#12:
+    arm64.movImm x0, 100
+    arm64.bl band
+    arm64.cmp x0, 4
+    arm64.b.ne ifcont#14
+  g:
+    arm64.add x19, x19, 1
+  ifcont#14:
+    arm64.movImm x0, 101
+    arm64.bl band
+    arm64.cmp x0, 5
+    arm64.b.ne ifcont#16
+  h:
+    arm64.add x19, x19, 1
+  ifcont#16:
+    arm64.movImm x0, 999999
+    arm64.bl band
+    arm64.cmp x0, 5
+    arm64.b.ne critsplit
+  i:
+    arm64.add x0, x19, 1
+    arm64.b ifcont#18
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#18:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.negative-extreme.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

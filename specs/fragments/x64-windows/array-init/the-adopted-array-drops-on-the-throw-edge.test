@@ -1,0 +1,172 @@
+// Test: the-adopted-array-drops-on-the-throw-edge
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function adoptThenThrow(fail bool) returns Integer throws Boom
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	try mm.setLength(2) otherwise panic("setLength failed")
+	let a = ByteArray.init(mm)
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+	return a.count()
+end 'adoptThenThrow'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 8 'spin'
+		total = total + (try adoptThenThrow(true) otherwise 1)
+		total = total + (try adoptThenThrow(false) otherwise 9)
+		i = i + 1
+	end 'spin'
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 24
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @adoptThenThrow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 4
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_mem_create
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:10: create failed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:11: setLength failed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  boom:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 r12, 8
+    x64.jcc greaterEqual, whileexit
+  spin:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect adoptThenThrow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 1
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegImm32 rcx, 0
+    x64.callDirect adoptThenThrow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rax, 9
+    x64.jmp trycont#9
+  tryok#7:
+    x64.movRegReg rax, r8
+  trycont#9:
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

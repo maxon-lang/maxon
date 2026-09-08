@@ -1,0 +1,112 @@
+// Test: isEmpty-transitions
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+
+	if arr.isEmpty() == false 'e1'
+		return 1
+	end 'e1'
+
+	arr.push(42)
+
+	if arr.isEmpty() == true 'e2'
+		return 2
+	end 'e2'
+
+	_ = try arr.pop() otherwise 0
+
+	if arr.isEmpty() == false 'e3'
+		return 3
+	end 'e3'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#10:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont#2
+  e1:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x1, 42
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#12:
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#4
+  e2:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.leaRdata x1, __layout_Array_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Array.pop
+    arm64.cmp x9, 0
+    arm64.b.ne __il_body#15
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#14:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont#9
+  e3:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#9:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

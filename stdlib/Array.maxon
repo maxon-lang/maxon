@@ -1,0 +1,734 @@
+/// Dynamic array with automatic growth and element access by index.
+/// @category Collections
+// Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
+
+// ArrayError - errors for indexed collection operations
+public enum ArrayError implements Error
+	indexOutOfBounds  // the index was outside [0, count())
+	emptySlot  // the index was INSIDE [0, count()) and the slot there was never filled
+end 'ArrayError'
+
+// The backing `__ManagedMemory` takes lengths and indices as a SIGNED `BufferCoordinate`
+// (Internals.maxon), so an array holds at most `i64.max` elements and no index names a slot above it.
+// The upper bound is not tighter than that because a caller's own `reserve(n)` sets the capacity, and
+// nothing in this type bounds `n` further.
+//
+// ⚠ **THE UPPER BOUND IS `u64.max` WHERE THE BACKING STORE STOPS AT `i64.max`, AND THAT COSTS
+// NOTHING.** A quantity's door is guarded at every range — `bits(64)` is the spelling that opts out —
+// and for any value such a door admits the two bounds are indistinguishable: both refuse a signed
+// negative, both store 8 bytes, and signed and unsigned ordering agree bit for bit across
+// `0 … i64.max`. That an array cannot exceed `i64.max` elements is a fact about the backing
+// coordinate, which `BufferCoordinate` states, rather than one this alias has to restate.
+typealias ElementIndex = int(0 to u64.max)
+
+// ⚠ **WHAT `__ManagedMemory.capacity()` REPORTS IS NOT AN `ElementIndex`, AND IT NEVER WAS.** A buffer this
+// record does not OWN — a literal's static image, or another record's buffer this one is a view of —
+// answers a NEGATIVE FLAG rather than a number of slots. `specs/arrays.md`'s
+// `slice-capacity-is-a-view-until-written` pins **-1** for a slice, deliberately: it is the one
+// place the copy-on-write sharing is observable, and an eager copy would report a positive capacity from
+// the moment it was made. A byte-string literal's buffer answers **-2**.
+//
+// So this is the alias for "a capacity, or the flag saying there is not one", and it is FULL-RANGE SIGNED
+// ON PURPOSE — the sentinel is not guarded away. Declaring these doors `ElementIndex` panicked
+// `grownCapacity` at its own entry the instant a program inserted into a literal-backed array (6 spec cases,
+// measured). The narrowest HONEST range for a value that carries a sentinel is the one that admits it, and
+// `ElementIndex` stays honest by not being asked to.
+typealias ReportedCapacity = int(i64.min to i64.max)
+
+// THE GROWTH POLICY AN `Array` GROWS BY — Go's `nextslicecap`, not plain doubling.
+//
+// ⚠ IT IS NOT THE ONLY ONE IN THE TREE, AND SAYING SO ONCE IS CHEAPER THAN THE NEXT PERSON
+// DISCOVERING IT. A `String` does NOT grow by this. `String.append` goes through the
+// `__ManagedMemory.append` BUILTIN, served by `stdlib/Internals.maxon`'s `__managed_mem_append`,
+// which grows by `max(required + 1, capacity·2, 64)` — plain doubling, in bytes.
+//
+// So: an `Array` eases, a `String` doubles, and an edit HERE does not reach a `String`. Unifying them
+// is real work with a real measured cost of its own (a String is not an int column, and nobody has
+// seen that number yet) — it is not a refactor to smuggle in on the side.
+//
+// Doubling is right while a buffer is SMALL and wasteful once it is BIG: a 2× step leaves behind up to
+// a whole buffer's worth of capacity nobody asked for, and at a million elements that slack is the
+// dominant term in the process's peak footprint. A flat 1.25× is wrong the other way — it re-copies a
+// small buffer to death on the way up from four elements. Go takes both: DOUBLE below
+// `GrowthThreshold` elements, then EASE toward 1.25× above it. The easing formula is continuous rather
+// than a cliff: the ratio at capacity c is exactly `1.25 + 0.75·GrowthThreshold/c`, so it still DOUBLES
+// at the threshold, is 1.4375× at 4× it, 1.30× at 15× it, and 1.253× by 64K elements.
+//
+// THE TRADE, stated plainly, because it IS a trade: a buffer grown to N elements by ratio r allocates
+// N·r/(r−1) elements over its life and holds at most r·N of them at any one instant. That is 2N
+// allocated / 100% slack held at 2×, against 5N allocated / 25% slack held at 1.25×. This policy
+// therefore allocates MORE bytes in total and keeps FEWER of them live — churn traded for footprint.
+//
+// ⚠ AND THE CHURN IS NOT A CONSTANT — IT RISES WITH BUFFER SIZE, WHICH BENDS THE SCALE-TEST'S BYTE
+// COLUMN. Read that column knowing this, because the column is the compiler's quadratic detector and
+// this policy puts a bend in it that is NOT a quadratic.
+//
+// Under doubling, `r` is 2 at every size, so the bytes a buffer allocates over its life are a FLAT 2·N
+// — the same multiple whatever N is. Here `r` is a function of the capacity, so that multiple RISES
+// with the final size: ×2.0 at the threshold, ×2.5 at 1,232 elements, ×3.7 at 5,334, approaching ×5 as
+// the ratio approaches 1.25. The scale ladder DOUBLES the program every rung, so buffers get bigger
+// every rung, so the multiple climbs every rung — and a phase whose bytes are perfectly LINEAR in the
+// program reads ABOVE ×2.00 per doubling while it climbs. Measured on phases this policy did not touch
+// a line of: `phase:sugarGate` went from a dead-flat ×1.99 to ×2.11, `regalloc:blockOrder` ×1.99 to
+// ×2.13. Nothing about them got slower. It saturates (the multiple stops at 5), so it is a TRANSIENT
+// bend and not a superlinearity — but the ladder's six rungs sit inside the transition, so a reading of
+// ×2.1 on a linear phase is the expected cost of this policy and NOT a new quadratic to hunt. A reading
+// well past that still is.
+let GrowthThreshold = 256 as ElementIndex
+
+// The floor a growing buffer starts from, so that a few-element accumulation does not bounce its way
+// up through 1 → 2 → 3.
+let MinimumCapacity = 4 as ElementIndex
+
+// The capacity a buffer of `current` capacity must grow to in order to hold `required` elements. This
+// is the POLICY, not a should-I-grow test: callers ask only when `required > current`, and what comes
+// back is never less than either.
+function grownCapacity(current ReportedCapacity, required ElementIndex) returns ElementIndex
+	let doubled = current + current
+
+	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
+	// taken at face value. Geometric slack heaped on top of an already-large ask is pure waste.
+	//
+	// It hands back ZERO slack, though, where the old doubling policy always landed on `capacity·2ᵏ`
+	// and so gave an oversized ask up to a full double of headroom. A buffer that is `append`ed to and
+	// then PUSHED to therefore re-grows immediately, and that costs real bytes (measured at +2% of the
+	// whole compile; `phase:writeExe`, which is almost all appends, more than doubled its byte volume).
+	// Go has this same branch and does not pay for it, because `mallocgc` rounds the allocation up to a
+	// SIZE CLASS and the slice takes the rounded capacity. Our slab rounds too — the block handed back
+	// is already bigger than this — but `__ManagedMemory` records the capacity ASKED FOR rather than the
+	// one GRANTED, so that headroom is bought and then thrown away. Recovering it means having the
+	// allocator report its granted size; until then this branch is honest about being a little wasteful.
+	if (required as ReportedCapacity) > doubled 'takeTheAskAsGiven'
+		return atLeastMinimum(required)
+	end 'takeTheAskAsGiven'
+
+	if current < GrowthThreshold 'stillSmall'
+		return atLeastMinimum(doubled as ElementIndex)
+	end 'stillSmall'
+
+	// Ease from 2× toward 1.25×. One pass covers a `push` (which asks for a single element more than it
+	// has); the loop repeats only when `required` lands between one eased step and a full double.
+	var capacity = current
+	while capacity < (required as ReportedCapacity) 'ease'
+		capacity = capacity + (capacity + 3 * GrowthThreshold) / 4
+	end 'ease'
+	return capacity
+end 'grownCapacity'
+
+function atLeastMinimum(capacity ElementIndex) returns ElementIndex
+	if capacity < MinimumCapacity 'raise'
+		return MinimumCapacity
+	end 'raise'
+	return capacity
+end 'atLeastMinimum'
+
+public type Array uses Element implements BuiltinArrayLiteral, Iterable with (Element, ArrayIter), Cloneable
+	typealias ElementMemory = __ManagedMemory with Element
+	public var managed as ElementMemory  // Compiler-managed opaque array storage
+
+	// =========================================================================
+	// Builtin initialization (compiler special-case)
+	// =========================================================================
+
+	// Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
+	public static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	// =========================================================================
+	// Static Constructors
+	// =========================================================================
+
+	typealias ElementIterator = Iterator with Element
+	typealias ElementIterable = Iterable with (Element, ElementIterator)
+
+	/// Create an empty array
+	public static function create() returns Self
+		return Self{}
+	end 'create'
+
+	/// Create an array by collecting all elements from an iterable
+	public static function from (source ElementIterable) returns Self
+		var result = Self{}
+		for item in source 'collect'
+			result.push(item)
+		end 'collect'
+		return result
+	end 'from'
+
+	// =========================================================================
+	// Properties
+	// =========================================================================
+
+	/// Create a second array over the same elements — the backing storage is SHARED copy-on-write, detached on the first write to either array or when one of them is moved to another green thread
+	public function clone() returns Self
+		let len = managed.length()
+		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
+			panic("Array.clone: slice OOB — 0..len is always valid")
+		end 'sliceErr'
+		return Self{managed: newManaged}
+	end 'clone'
+
+	/// Get the number of elements in the array
+	public function count() returns ElementIndex
+		return managed.length()
+	end 'count'
+
+	/// The number of element slots the buffer holds — or a NEGATIVE flag when the buffer is not this
+	/// record's to grow, which is a view's answer until its first write gives it a private one. See
+	/// `ReportedCapacity`, which is why this is not an `ElementIndex`.
+	public function capacity() returns ReportedCapacity
+		return managed.capacity()
+	end 'capacity'
+
+	/// Check if array is empty
+	public function isEmpty() returns bool
+		return managed.length() == 0
+	end 'isEmpty'
+
+	/// Get first element. Throws `indexOutOfBounds` when the array is empty, `emptySlot` when slot 0
+	/// is in range but was never filled. Goes through `get` so the two answers stay ONE decision.
+	public function first() returns Element throws ArrayError
+		return try get(0)
+	end 'first'
+
+	/// Get last element, throws if empty. The emptiness test is here rather than left to `get`
+	/// because `ElementIndex` starts at 0: `len - 1` on an empty array is not an index at all.
+	public function last() returns Element throws ArrayError
+		let len = managed.length()
+		if len == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return try get(len - 1)
+	end 'last'
+
+	// =========================================================================
+	// Element Access
+	// =========================================================================
+
+	/// Which of `ArrayError`'s two failures the element access at `index` just had.
+	///
+	/// They are NOT interchangeable, and every read here used to answer `indexOutOfBounds` for both
+	/// — so "you never filled this slot" arrived spelled "you asked past the end", and a caller that
+	/// repeated that sent its reader to check a bound which was never wrong. `emptySlot` sat in the
+	/// enum from the beginning with nothing ever throwing it. (Measured: a column of ints became a
+	/// column of structs and the first read died reporting an index that was perfectly in range.)
+	///
+	/// It is decided from the LIVE RANGE — the same `managed.length()` the builtin decided on, not a
+	/// second copy of its rule — because the two failures are complementary there: `managed.get`
+	/// refuses an index at or past `length`, and reports every index BELOW it that holds nothing as
+	/// an empty slot. So an index inside the live range names a slot, and a failure on it can only
+	/// be that the slot was never filled.
+	///
+	/// The thrown cause is not read back instead because `otherwise (cause)` on a `__ManagedMemory`
+	/// builtin binds the raw wire flag as an `int`: switching on it here would put a third copy of an
+	/// ordinal map into the stdlib.
+	function accessFailure(index ElementIndex) returns ArrayError
+		if isOutsideLiveRange(index) 'outsideLiveRange'
+			return ArrayError.indexOutOfBounds
+		end 'outsideLiveRange'
+		return ArrayError.emptySlot
+	end 'accessFailure'
+
+	/// Is `index` at or past `count()`? The one home of the bound the two element accessors share:
+	/// `accessFailure` reads it to name a READ's failure, and `set` throws on it outright, because
+	/// `set`'s builtin does not refuse the same indices this type does.
+	///
+	/// ⚠ THIS ASKS ONLY THE PAST-THE-END QUESTION. `ElementIndex` is a CHECKED unsigned quantity, so a
+	/// negative never reaches the body: a foldable one is E3005 at compile time and a laundered one
+	/// panics `Range check failed` at the door — this function's own entry, or the CALL where a
+	/// compiler serves the member inline. An `index < 0` disjunct here would be dead, and a dead
+	/// disjunct is not a guard.
+	function isOutsideLiveRange(index ElementIndex) returns bool
+		return index >= managed.length()
+	end 'isOutsideLiveRange'
+
+	/// Get element at index. Throws `indexOutOfBounds` when `index` is at or past `count()`, and
+	/// `emptySlot` when it is inside and the slot was never filled — see `accessFailure`.
+	public function get(index ElementIndex) returns Element throws ArrayError
+		return try managed.get(index) otherwise throw accessFailure(index)
+	end 'get'
+
+	/// Set element at index. Throws `indexOutOfBounds` for an index at or past `count()` — an `Array` is
+	/// bounded by its LIVE LENGTH, where `__ManagedMemory.set` underneath is bounded by CAPACITY (⚖ user
+	/// ruling 2026-07-30, recorded at `ManagedMemoryRuntime.ManagedMemSetName`: the buffer's wider bound is what makes
+	/// the stage-then-publish idiom `setLength`'s contract prescribes writable).
+	///
+	/// ⛔ SO THE GUARD HERE IS NOT BELT-AND-BRACES, IT IS THE WHOLE OF THE ARRAY'S BOUND, AND WITHOUT IT
+	/// THIS BODY LEAKS. Forwarding straight to `managed.set` writes any slot below the CAPACITY: a
+	/// reserved-but-not-live slot takes the value, `count()` never moves, and for a MANAGED element the
+	/// record lands outside `[0, length)` — which is exactly the range the element-destroy walk covers, so
+	/// nothing ever releases it. MEASURED with this guard absent, on `push` one string / `reserve(8)` /
+	/// `set(2, …)`: the program stores into the reserved slot, `count()` stays 1, and the run ends in
+	/// a leak — **exit 101**. `specs/arrays.md`'s `set-past-the-live-length-is-refused` is the case.
+	public function set(index ElementIndex, value Element) throws ArrayError
+		if isOutsideLiveRange(index) 'outsideLiveRange'
+			throw ArrayError.indexOutOfBounds
+		end 'outsideLiveRange'
+
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Array.set: managed.set refused an index inside the live range, which is always within the capacity")
+		end 'setErr'
+	end 'set'
+
+	// =========================================================================
+	// Slicing
+	// =========================================================================
+
+	/// Create a new array from elements [start, endIndex).
+	/// Throws ArrayError.indexOutOfBounds if start > endIndex, endIndex > count, or start > count.
+	/// Strict validation — no clamping. Delegates to the builtin which performs the actual bounds
+	/// check and throws on violation; this wrapper re-throws as ArrayError for API cleanliness.
+	public function slice(start ElementIndex, endIndex ElementIndex) returns Self throws ArrayError
+		let newManaged = try managed.slice(start, endIndex) otherwise throw ArrayError.indexOutOfBounds
+		return Self{managed: newManaged}
+	end 'slice'
+
+	// =========================================================================
+	// Mutating Operations
+	// =========================================================================
+
+	/// Ensure capacity for at least requiredLen elements, growing if needed
+	function ensureCapacity(requiredLen ElementIndex)
+		let cap = managed.capacity()
+		if requiredLen > cap 'grow'
+			try managed.grow(grownCapacity(cap, required: requiredLen)) otherwise 'growErr'
+				panic("Array.ensureCapacity: grow failed — grownCapacity never returns below the current capacity")
+			end 'growErr'
+		end 'grow'
+	end 'ensureCapacity'
+
+	/// Append element to end
+	public function push(value Element)
+		let len = managed.length()
+		ensureCapacity(len + 1)
+		try managed.set(len, value) otherwise 'setErr'
+			panic("Array.push: set OOB — capacity just ensured for len+1")
+		end 'setErr'
+		try managed.setLength(len + 1) otherwise 'lenErr'
+			panic("Array.push: setLength OOB — just ensured capacity for len+1")
+		end 'lenErr'
+	end 'push'
+
+	/// Append all elements from another array
+	public function append(other Self)
+		appendMemory(other.managed)
+	end 'append'
+
+	/// Append all elements out of a raw `__ManagedMemory`, without wrapping it in an `Array` first.
+	///
+	/// This is the whole of `append` — the array half of `other` was never read. Since the envelope
+	/// collapse an `Array` IS its `__ManagedMemory`, so `Array.init(mem)` can no longer be free: it
+	/// must allocate a fresh record to view `mem` through. A caller that already holds the memory and
+	/// only wants its elements copied out was therefore paying a record per call for nothing —
+	/// `StringBuilder.appendBytes` paid one PER APPEND.
+	public function appendMemory(source ElementMemory)
+		// Copy element-by-element through `push`. The `__ManagedMemory.append`
+		// builtin runs at ~300 KB/s (it bytes-copies through a slow path),
+		// whereas `push` — backed by `ensureCapacity`'s geometric growth and a
+		// direct slot store — runs at ~64 MB/s, ~100x faster. Reserve once up
+		// front so the per-element pushes never re-grow, then push each element
+		// (which also gives each copied element correct copy semantics rather
+		// than the builtin's raw byte memcpy).
+		let sourceLen = source.length()
+		ensureCapacity(managed.length() + sourceLen)
+		for i in 0 upto sourceLen 'copy'
+			let value = try source.get(i) otherwise panic("Array.appendMemory: get({i}) OOB — i < source.length")
+			push(value)
+		end 'copy'
+	end 'appendMemory'
+
+	/// Remove and return last element, throws if empty
+	public function pop() returns Element throws ArrayError
+		let len = managed.length()
+		if len == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return try managed.remove(len - 1) otherwise throw ArrayError.indexOutOfBounds
+	end 'pop'
+
+	/// Insert element at index, shifting elements to the right. An `at` above `count()` clamps to the end
+	/// and appends; there is no low clamp, because `ElementIndex` refuses a negative at the door.
+	public function insert(at ElementIndex, value Element)
+		let len = managed.length()
+
+		// Only the HIGH end clamps. There used to be a low clamp beside it, because `ElementIndex` was a
+		// FULL range and therefore unguarded, so a `-1` arrived intact: MEASURED then, `shiftRight(-1, len)`
+		// read the slot BEFORE the buffer and stored it at 0, turning `[10, 20, 30]` into `[0, 10, 20]`. The
+		// alias now stops at `i64.max`, so the door refuses a negative outright — foldable ⇒ E3005, laundered
+		// ⇒ a `Range check failed` panic — and `insert(-1)` is a REFUSAL rather than an append-to-front.
+		var index = at
+		if index > len 'clampHigh'
+			index = len
+		end 'clampHigh'
+
+		ensureCapacity(len + 1)
+
+		if index < len 'shift'
+			try managed.shiftRight(index, len - index) otherwise 'shiftErr'
+				panic("Array.insert: shiftRight OOB — index and count are within ensured capacity")
+			end 'shiftErr'
+		end 'shift'
+
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Array.insert: set OOB — index clamped to [0, len] and capacity ensured")
+		end 'setErr'
+		try managed.setLength(len + 1) otherwise 'lenErr'
+			panic("Array.insert: setLength OOB — capacity ensured for len+1")
+		end 'lenErr'
+	end 'insert'
+
+	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
+	public function remove(at ElementIndex) returns Element throws ArrayError
+		return try managed.remove(at) otherwise throw ArrayError.indexOutOfBounds
+	end 'remove'
+
+	/// Remove all elements from the array (keeps capacity)
+	public function clear()
+		managed.clear()
+	end 'clear'
+
+	// =========================================================================
+	// Capacity Management
+	// =========================================================================
+
+	/// Reserve space by ensuring array has at least minCapacity slots
+	public function reserve(minCapacity ElementIndex)
+		let cap = managed.capacity()
+		if minCapacity > cap 'grow'
+			try managed.grow(minCapacity) otherwise 'growErr'
+				panic("Array.reserve: grow failed — minCapacity > cap guaranteed")
+			end 'growErr'
+		end 'grow'
+	end 'reserve'
+
+	/// Resize array to newLength elements, allocating if needed.
+	///
+	/// Growing exposes ZERO-INITIALIZED elements, and a zero is an ELEMENT only while the element
+	/// lives INLINE in the buffer — an int, a float, a bool, a byte, a ranged typealias over one of
+	/// those, a payload-free enum. That holds whether the new slots are fresh capacity or slots this
+	/// array used before and gave up: the buffer's slots above `length` are always zero, because
+	/// every operation that vacates a slot (`clear`, `remove`/`pop`, and a shrinking `resize`)
+	/// erases it on the way out. See THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon.
+	///
+	/// ⚠ A MANAGED element — a struct, a `String`, a nested container, a boxed union — lives in the
+	/// buffer as a refcounted POINTER, so a zeroed slot there is NULL: an absence, not a value. Maxon
+	/// has no default constructor, so there is nothing correct to put in it, and the array that comes
+	/// back answers `count()` = N while `get(0)` throws `emptySlot`. **A managed element type is
+	/// refused at COMPILE TIME (E3106)**, naming the type: grow with `push(value)` or
+	/// `growFilled(newLength, value:)`, which make the caller supply the element the type cannot
+	/// invent, and shrink with `truncate(newLength)`.
+	///
+	/// The refusal covers the whole call and not only the growing half, because which half this is
+	/// cannot be known until it runs: `newLength` is compared against a length, and a compiler holds
+	/// neither. That is exactly why `truncate` is a separate method — a name can say the direction
+	/// where an argument cannot.
+	///
+	/// The refusal reaches only element types the compiler KNOWS. Inside a generic body the element
+	/// is still a parameter, one body serves every instantiation, and `Map`/`Set` build their slot
+	/// tables through exactly that path — they track occupancy in a parallel `states` column and
+	/// never read a slot they did not write. `__ManagedMemory.setLength` is the layer where an
+	/// unwritten slot is a defined state, and it stays available for that.
+	///
+	/// Shrinking releases the elements that leave the live range.
+	public function resize(newLength ElementIndex)
+		reserve(newLength)
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.resize: setLength refused a length reserve had just made room for — the two disagree about the capacity")
+		end 'lenErr'
+	end 'resize'
+
+	/// Shorten the live range to `newLength`, releasing every element that leaves it. A `newLength`
+	/// at or above the current `count()` does nothing — this SHORTENS, and only shortens.
+	///
+	/// It is the half of `resize` that is always well defined. Growing has to put something in the
+	/// slots it exposes and a managed element type gives it nothing to put (see `resize`), but
+	/// SHRINKING only ever destroys, so it needs no element and is available for every element type.
+	/// That split is why this exists separately rather than as a `resize` a caller hopes is going
+	/// down: `resize` cannot know which direction it is being asked for until it runs, and this one
+	/// says so in its name.
+	public function truncate(newLength ElementIndex)
+		if newLength >= managed.length() 'nothingToDrop'
+			return
+		end 'nothingToDrop'
+
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.truncate: setLength refused a length BELOW the current one, which is always within capacity")
+		end 'lenErr'
+	end 'truncate'
+
+	/// Grow to `newLength`, setting ONLY the entries the growth ADDED to `value`. What is already
+	/// there is untouched, and a `newLength` at or below the current length does nothing — this
+	/// GROWS; `truncate` is what shrinks.
+	///
+	/// THIS IS THE OPERATION FOR A COLUMN THAT IS EXTENDED — an id space that widens as a pass mints
+	/// new ids, a row that follows a growing value count. `resize` is the trap there, and it is a
+	/// quadratic one: `resize` goes through `reserve`, which grows capacity to EXACTLY the length
+	/// asked for, so a column extended a few entries at a time is reallocated and copied IN FULL on
+	/// every extension — Θ(extensions × length) bytes, on precisely the shape that extends most.
+	/// This grows capacity GEOMETRICALLY instead (see `grownCapacity`), which makes the same walk
+	/// amortized linear.
+	///
+	/// The fill writes `value`, and `value` is USUALLY NOT ZERO — a `NoStoreAnchorPressure`, an
+	/// out-of-file register sentinel, a pool popcount. That is the whole reason this exists rather
+	/// than `resize`: the added entries need a MEANING, not merely a defined bit pattern.
+	///
+	/// The entries it lands on always read zero beforehand, whether they are fresh capacity or slots
+	/// this array used before and gave up — see THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon
+	/// (verified: `push` × 4, `clear()`, `resize(4)` reads back 0 0 0 0, not the previous occupants).
+	/// So a caller filling with ZERO is
+	/// paying for a fill it does not need; that is the only cost of using this uniformly, and it is
+	/// worth it to keep ONE extension operation rather than two.
+	public function growFilled(newLength ElementIndex, value Element)
+		let existing = managed.length()
+		if newLength <= existing 'nothingAdded'
+			return
+		end 'nothingAdded'
+
+		ensureCapacity(newLength)
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.growFilled: setLength OOB — capacity just ensured for newLength")
+		end 'lenErr'
+
+		fillPublished(existing, count: newLength - existing, value: value)
+	end 'growFilled'
+
+	/// Set the length to `newLength` and write `value` into EVERY entry of `[0, newLength)`.
+	///
+	/// The twin of `growFilled`, and they divide by WHAT THEY WRITE, not by what they allocate:
+	/// `growFilled` touches only the entries an extension ADDED and leaves the rest standing, while
+	/// this one rewrites the whole column (and so also SHRINKS it). This is what a per-function
+	/// scratch buffer wants on the way in — every entry is about to be recomputed from scratch, so
+	/// only the STORAGE is being reused, never a value.
+	///
+	/// It is a METHOD for the reason `growFilled` is. A free function cannot be generic over an
+	/// array's element type, so the same idea had to be hand-written once per element type — and it
+	/// was, three times (`refillColumn` for an 8-byte int column, `refillBoolColumn` for a bool one,
+	/// `resetRow` for a bit-word one), three copies that nothing made agree.
+	public function refill(newLength ElementIndex, value Element)
+		resize(newLength)
+
+		fillPublished(0, count: newLength, value: value)
+	end 'refill'
+
+	/// Write `value` into every entry of `[start, start + count)`, which the CALLER has already
+	/// published — this only writes, it never changes the length.
+	///
+	/// `growFilled` and `refill` differ in the window and in nothing else, and this is where that
+	/// stops being two copies of one decision. The buffer's `fill` writes the whole window in one
+	/// call and ANSWERS WHETHER IT DID: it applies to a trivial element and DECLINES for a managed
+	/// one, whose slot holds exactly one reference — taking and releasing that reference is emitted
+	/// by the compiler at each store, and a bulk runtime loop cannot respell it. The per-element
+	/// loop below is the arm it declined, and it is the whole of what these two used to do.
+	function fillPublished(start ElementIndex, count ElementIndex, value Element)
+		let applied = try managed.fill(start, count: count, value: value) otherwise 'fillErr'
+			panic("Array.fillPublished: fill OOB — the window is inside the length the caller just published")
+		end 'fillErr'
+
+		if not applied 'aManagedElement'
+			for i in start upto start + count 'fill'
+				try managed.set(i, value) otherwise 'setErr'
+					panic("Array.fillPublished: set OOB at {i} — the window is inside the published length")
+				end 'setErr'
+			end 'fill'
+		end 'aManagedElement'
+	end 'fillPublished'
+
+	// =========================================================================
+	// Iterable Interface
+	// =========================================================================
+
+	typealias ArrayIter = ArrayIterator with Element
+
+	/// Create a fresh iterator positioned at the first element.
+	/// Throws IterationError.exhausted if the array is empty.
+	public function createIterator() returns ArrayIter throws IterationError
+		return try ArrayIter.create(managed)
+	end 'createIterator'
+
+	/// Alias for createIterator(). Kept for call sites that still think of this
+	/// as a cursor (random-access navigation via advance/retreat/peek).
+	public function cursor() returns ArrayIter throws IterationError
+		return try ArrayIter.create(managed)
+	end 'cursor'
+end 'Array'
+
+/// Iterator for Array — holds a managed cursor into the backing memory and
+/// preserves the "points at valid element" invariant. current() is infallible;
+/// navigation (advance/retreat/peek) throws IterationError. advanceBy/retreatBy
+/// come from the Iterator/BidirectionalIterator extension methods.
+public type ArrayIterator uses Element implements BidirectionalIterator with Element
+	typealias ElementMemory = __ManagedMemory with Element
+	typealias RawCursor = __ManagedMemoryCursor with Element
+	var raw as RawCursor
+
+	public static function create(source ElementMemory) returns Self throws IterationError
+		let cursor = try source.createCursor() otherwise throw IterationError.exhausted
+		return Self{raw: cursor}
+	end 'create'
+
+	// --- Infallible reads ---
+
+	public function current() returns Element
+		return raw.current()
+	end 'current'
+
+	public function index() returns ElementIndex
+		return raw.index()
+	end 'index'
+
+	// --- Navigation (only fallible surface) ---
+
+	/// Move forward by `n` positions (default 1). Throws IterationError.exhausted
+	/// if the resulting position would be past the last element.
+	public function advance() throws IterationError
+		try raw.advance() otherwise throw IterationError.exhausted
+	end 'advance'
+
+	public function retreat() throws IterationError
+		try raw.retreat() otherwise throw IterationError.atStart
+	end 'retreat'
+
+	/// Seek directly to an absolute position. Throws IterationError.exhausted if
+	/// the index is out of bounds.
+	public function seek(index ElementIndex) throws IterationError
+		try raw.seek(index) otherwise throw IterationError.exhausted
+	end 'seek'
+
+	public function peek(ahead ElementIndex) returns Element throws IterationError
+		return try raw.peek(ahead) otherwise throw IterationError.exhausted
+	end 'peek'
+end 'ArrayIterator'
+
+// Conditional extension: contains is only available when Element is Equatable
+public extension Array where Element is Equatable
+	typealias ElementArray = Array with Element
+
+	public function contains(element Element) returns bool
+		for item in self 'scan'
+			if item == element 'found'
+				return true
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
+
+	public function contains(sequence ElementArray) returns bool
+		let selfLen = count()
+		let elemLen = sequence.count()
+
+		if elemLen == 0 'empty'
+			return true
+		end 'empty'
+
+		for i in 0 to (selfLen - elemLen) 'scan'
+			var matched = true
+			for j in 0 upto elemLen 'cmp'
+				let a = try get(i + j) otherwise 'a'
+					break
+				end 'a'
+				let b = try sequence.get(j) otherwise 'b'
+					break
+				end 'b'
+				if a != b 'ne'
+					matched = false
+					break
+				end 'ne'
+			end 'cmp'
+			if matched 'found'
+				return true
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
+end 'Array'
+
+// Sort entry points. Four overloads cover (stable vs unstable) × (Comparable
+// default vs explicit comparator). All bodies live in this file as thin
+// dispatchers; the algorithms themselves are in stdlib/helpers/sort/*.maxon.
+//
+// Algorithm routing:
+//   sort()      / sort(cmp)      → driftsort (adaptive stable sort with
+//                                  bidirectional run detection + powersort
+//                                  merge policy over a bounded buffer).
+//                                  Reference bottom-up merge sort stays
+//                                  callable as `referenceMergeSort` for
+//                                  cross-check tests.
+//   sortUnstable() / sortUnstable(cmp) → pdqsort (pattern-defeating quicksort).
+//
+// All four delegate to algorithm-specific entries that short-circuit to
+// `smallSortRange` for n ≤ 32, avoiding the per-call setup cost of
+// driftsort's run stack / scratch buffer or pdqsort's pivot machinery on
+// tiny slices.
+//
+// The Comparable overloads pass an inline closure
+// `function(x Element, y Element) gives x.compare(y)`. The closure body
+// dispatches `x.compare(y)` through the enclosing extension's
+// `where Element is Comparable` witness slot via closure-env inheritance.
+public extension Array where Element is Comparable
+	/// Sort in place using the element's `Comparable.compare` ordering.
+	/// Stable: equal elements keep their relative order.
+	public function sort()
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.driftsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
+	end 'sort'
+
+	/// Sort in place using the element's `Comparable.compare` ordering.
+	/// Unstable: relative order of equal elements is not preserved.
+	public function sortUnstable()
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.pdqsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
+	end 'sortUnstable'
+end 'Array'
+
+// Comparator overloads. No Comparable constraint — the caller provides the
+// ordering. Useful for sorting by a derived key, descending order, or
+// element types that don't implement Comparable.
+public extension Array
+	/// Sort in place using the supplied comparator. Stable.
+	public function sort(cmp SortComparator)
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.driftsortRange(lo, hi: hi, cmp: cmp)
+	end 'sort'
+
+	/// Sort in place using the supplied comparator. Unstable.
+	public function sortUnstable(cmp SortComparator)
+		let lo = 0 as SortIndex
+		let hi = managed.length()
+		self.pdqsortRange(lo, hi: hi, cmp: cmp)
+	end 'sortUnstable'
+end 'Array'
+
+// Conditional conformance: Array implements Hashable and Equatable when Element does
+// Uses raw byte-level hashing (djb2) over the managed memory buffer
+public extension Array implements Hashable, Equatable where Element is Hashable and Equatable
+	public function hash() returns HashValue
+		let byteLen = managed.length() * managed.elementSize()
+		var h = 5381
+		for i in 0 upto byteLen 'hash_loop'
+			let b = try managed.byteAt(i) otherwise panic("Array.hash: byteAt OOB — i < byteLen invariant")
+			h = h * 33 + b
+		end 'hash_loop'
+		return h and 0xFFFFFFFF
+	end 'hash'
+
+	public function equals(other Self) returns bool
+		let selfLen = managed.length()
+		let otherLen = other.managed.length()
+		if selfLen != otherLen 'len'
+			return false
+		end 'len'
+		let byteLen = selfLen * managed.elementSize()
+		for i in 0 upto byteLen 'cmp'
+			let ab = try managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
+			let bb = try other.managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
+			if ab != bb 'ne'
+				return false
+			end 'ne'
+		end 'cmp'
+		return true
+	end 'equals'
+end 'Array'

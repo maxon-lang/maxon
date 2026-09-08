@@ -1,0 +1,54 @@
+// Test: fromRawValue-runtime
+
+typealias Integer = int(i64.min to i64.max)
+
+enum HttpStatus
+	ok = 200
+	notFound = 404
+end 'HttpStatus'
+
+function getCode() returns Integer
+	return 404
+end 'getCode'
+
+function main() returns ExitCode
+	let code = getCode()
+	let status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+	if status == HttpStatus.notFound 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rcx, 404
+  __il_cont:
+    x64.callDirect __enum_from_raw_HttpStatus
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 200
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.cmpRegImm32 rax, 404
+    x64.jcc notEqual, ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

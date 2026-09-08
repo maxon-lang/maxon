@@ -1,0 +1,46 @@
+// Test: error.existential-return-claim-cannot-be-resolved-in-the-declaration-view
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function make() returns TakerOfT
+		return Runner.create(20 + self.seed)
+	end 'make'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	return IntBox.create(0).make().label() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:31:3: cannot return a value from 'Box.make', which is declared to return the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it

@@ -1,0 +1,56 @@
+// Test: computed-argument-is-guarded-at-the-callee-entry
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function takes(code ExitCode) returns ExitCode
+  return code
+end 'takes'
+
+function main() returns ExitCode
+  return takes(opaque(0) - 5)
+end 'main'
+---
+ExitCode: 1
+---
+func @takes {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rcx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at computed-argument-is-guarded-at-the-callee-entry.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_cont#2:
+    x64.movRegImm rcx, 18446744073709551611
+  __il_slow:
+    x64.callDirect takes
+  __il_cont#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

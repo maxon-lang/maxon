@@ -1,0 +1,38 @@
+// Test: nested-div-as-divisor
+function main() returns ExitCode
+	let a = 1000
+	let b = 84
+	let c = 4
+	let inner = b / c
+	let r = a / inner
+	if r == 47 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1000
+    x64.movRegImm32 rcx, 84
+    x64.sarRegImm8 rcx, rcx, 63
+    x64.shrRegImm8 rcx, rcx, 62
+    x64.leaRegRegImm32 rcx, rcx, 84
+    x64.sarRegImm8 rcx, rcx, 2
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rax, 47
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+}

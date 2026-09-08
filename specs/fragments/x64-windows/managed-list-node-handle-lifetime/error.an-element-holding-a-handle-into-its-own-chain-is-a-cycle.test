@@ -1,0 +1,59 @@
+// Test: error.an-element-holding-a-handle-into-its-own-chain-is-a-cycle
+typealias Small = int(0 to 255)
+typealias CellChain = __ManagedList with Cell
+typealias CellNode = __ManagedListNode with Cell
+
+interface Backref
+	function tag() returns Small
+end 'Backref'
+
+type Nothing implements Backref
+	let mark as Small
+
+	export static function create(m Small) returns Self
+		return Self{mark: m}
+	end 'create'
+
+	export function tag() returns Small
+		return self.mark
+	end 'tag'
+end 'Nothing'
+
+type Holder implements Backref
+	var back as CellNode
+
+	export static function create(n CellNode) returns Self
+		return Self{back: n}
+	end 'create'
+
+	export function tag() returns Small
+		return 1
+	end 'tag'
+end 'Holder'
+
+type Cell
+	var back as Backref
+
+	export static function create(b Backref) returns Self
+		return Self{back: b}
+	end 'create'
+
+	export function retarget(b Backref)
+		self.back = b
+	end 'retarget'
+
+	export function tag() returns Small
+		return self.back.tag()
+	end 'tag'
+end 'Cell'
+
+function main() returns ExitCode
+	var chain = CellChain.create()
+	let n = chain.insertLast(Cell.create(Nothing.create(3)))
+	var cell = n.value()
+	cell.retarget(Holder.create(n))
+	return cell.tag()
+end 'main'
+---
+CompilerError:
+error E4014: <fragment>:22:6: type 'Holder' contains a reference cycle (via Holder → back: CellNode → Cell → back: Backref → Holder); recursive type references are not allowed

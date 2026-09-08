@@ -1,0 +1,32 @@
+// Test: error.an-extension-body-cannot-name-a-conformers-field
+typealias Int = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Int
+end 'Tagged'
+
+extension Tagged
+	export function doubled() returns Int
+		return n * 2
+	end 'doubled'
+end 'Tagged'
+
+type Counter implements Tagged
+	var n as Int
+
+	export static function create(n Int) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function tag() returns Int
+		return n
+	end 'tag'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(3)
+	return c.doubled()
+end 'main'
+---
+CompilerError:
+error E2004: <fragment>:10:10: Undefined variable 'n'

@@ -1,0 +1,127 @@
+// Test: basic-nested-array
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+typealias SmallInt = int(0 to 100)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+	export var name as String
+
+	export static function create(name String) returns Self
+		return Self{
+			items: ElementArray.create(),
+			name: name
+		}
+	end 'create'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+end 'Container'
+
+typealias IntContainer = Container with SmallInt
+
+function main() returns ExitCode
+	var ic = IntContainer.create("numbers")
+	ic.push(10)
+	ic.push(20)
+	let c = ic.count()
+	if c == 2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Container.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Container.push {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_push
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1  ; "numbers"
+    arm64.leaRdata x1, __layout_Container_SmallInt
+    arm64.bl Container.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.leaRdata x2, __layout_Container_SmallInt
+    arm64.movRegReg x0, x19
+    arm64.bl Container.push
+    arm64.movImm x1, 20
+    arm64.leaRdata x2, __layout_Container_SmallInt
+    arm64.movRegReg x0, x19
+    arm64.bl Container.push
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont:
+    arm64.cmp x0, 2
+    arm64.b.ne ifcont
+  check:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_SmallInt
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_SmallInt
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

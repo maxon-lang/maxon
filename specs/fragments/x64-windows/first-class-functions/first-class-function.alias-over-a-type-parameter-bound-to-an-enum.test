@@ -1,0 +1,104 @@
+// Test: first-class-function.alias-over-a-type-parameter-bound-to-an-enum
+enum Shade
+	light
+	dark
+end 'Shade'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+end 'Holder'
+
+typealias ShadeHolder = Holder with Shade
+
+function invert(s Shade) returns Shade
+	if s == Shade.light 'wasLight'
+		return Shade.dark
+	end 'wasLight'
+	return Shade.light
+end 'invert'
+
+function main() returns ExitCode
+	let h = ShadeHolder.create(Shade.light)
+	let flipped = h.apply(invert)
+	if flipped == Shade.dark 'ok'
+		print("dark\n")
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @invert {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  wasLight:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 0
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegFunc rdx, [rip + __fnref_invert]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Holder_Shade]
+    x64.callDirect Holder.apply
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "dark\x0a"
+    x64.callDirect print
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

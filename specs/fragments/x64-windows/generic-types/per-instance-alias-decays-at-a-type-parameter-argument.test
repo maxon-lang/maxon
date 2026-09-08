@@ -1,0 +1,114 @@
+// Test: per-instance-alias-decays-at-a-type-parameter-argument
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias WA = Wrapper with Integer
+typealias IntBox = Box with Integer
+
+function takesPlain(_ Integer) returns ExitCode
+	return 0
+end 'takesPlain'
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let t = a.getTag()
+	let b = IntBox.create(t)
+	print("{b.value}")
+	return takesPlain(a.getTag())
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 5
+    x64.leaRegSlot rbx, slot0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], rcx
+  __il_body#4:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_cont#3:
+    x64.leaRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 r12, [rcx + 0]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __il_body#5:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_body#6:
+    x64.movRegImm32 r8, 0
+  __il_cont#1:
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

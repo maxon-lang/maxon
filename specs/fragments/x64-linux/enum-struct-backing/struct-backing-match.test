@@ -1,0 +1,60 @@
+// Test: struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(1)
+	sub = Meta.create(1)
+	mul = Meta.create(3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.sub
+	return match op 'dispatch'
+		add gives 10
+		sub gives 20
+		mul gives 30
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  matcharm:
+    x64.movRegImm32 r8, 20
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at struct-backing-match.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

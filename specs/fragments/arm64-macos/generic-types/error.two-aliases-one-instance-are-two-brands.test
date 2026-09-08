@@ -1,0 +1,25 @@
+// Test: error.two-aliases-one-instance-are-two-brands
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias LeafBoxAgain = Box with Leaf
+function takes(b LeafBox) returns ExitCode
+	print("{b.value.s}")
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(LeafBoxAgain.create(Leaf.make("a")))
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:21:9: argument type mismatch for 'b': expected 'LeafBox', got 'LeafBoxAgain'

@@ -1,0 +1,26 @@
+// Test: default-panic.enum-statement
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.red
+	match c 'check'
+		red then return 1
+		default panic("unhandled color")
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

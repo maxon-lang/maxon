@@ -1,0 +1,21 @@
+// Test: error.retype-struct-field-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(1)
+	p.x = "hello"
+	print("{p.x}")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'int'

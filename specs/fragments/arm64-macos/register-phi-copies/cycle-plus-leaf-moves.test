@@ -1,0 +1,69 @@
+// Test: cycle-plus-leaf-moves
+function cycleAndLeaf(p Integer) returns Integer
+	var a = p + 1
+	var b = p + 2
+	var c = p + 3
+	var d = p
+	var i = 0
+	while i < 4 'loop'
+		let t = a
+		d = a
+		a = b
+		b = c
+		c = t
+		i = i + 1
+	end 'loop'
+	return a * 1000 + b * 100 + c * 10 + d
+end 'cycleAndLeaf'
+
+function main() returns ExitCode
+	let r = cycleAndLeaf(0)
+	if r == 2311 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __il_body:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.movImm x3, 3
+    arm64.movImm x4, 0
+  whilehdr:
+    arm64.cmp x4, 4
+    arm64.b.ge whileexit
+  loop:
+    arm64.add x4, x4, 1
+    arm64.movRegReg x0, x1
+    arm64.xchgRegReg x1, x2
+    arm64.xchgRegReg x2, x3
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x16, 1000
+    arm64.mul x1, x1, x16
+    arm64.movImm x16, 100
+    arm64.mul x2, x2, x16
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 10
+    arm64.mul x2, x3, x16
+    arm64.add x1, x1, x2
+    arm64.add x0, x1, x0
+  __il_cont:
+    arm64.cmp x0, 2311
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

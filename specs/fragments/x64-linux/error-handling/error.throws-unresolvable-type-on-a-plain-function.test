@@ -1,0 +1,20 @@
+// Test: error.throws-unresolvable-type-on-a-plain-function
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+function f(x Code) returns Code throws Bogus
+	if x < 10 'small'
+		throw BoxedError.withMessage("nope")
+	end 'small'
+	return x
+end 'f'
+
+function main() returns ExitCode
+	return try f(3) otherwise 55
+end 'main'
+---
+CompilerError:
+error E3113: <fragment>:8:10: 'throws Bogus' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into

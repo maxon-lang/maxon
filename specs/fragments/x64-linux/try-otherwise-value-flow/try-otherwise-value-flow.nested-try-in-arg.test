@@ -1,0 +1,121 @@
+// Test: try-otherwise-value-flow.nested-try-in-arg
+enum E
+	bad
+end 'E'
+
+function getString(i ExitCode) returns ExitCode throws E
+	if i == 0 'zero'
+		throw E.bad
+	end 'zero'
+	return 42
+end 'getString'
+
+function consume(x ExitCode) returns ExitCode throws E
+	if x == 0 'empty'
+		throw E.bad
+	end 'empty'
+	return x
+end 'consume'
+
+function main() returns ExitCode
+	let n = try consume(try getString(1) otherwise 0) otherwise 0
+	return n
+end 'main'
+---
+ExitCode: 42
+---
+func @getString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  zero:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @consume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  empty:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr#2:
+    x64.movRegImm32 rcx, 0
+    x64.jmp trycont#3
+  tryok:
+    x64.movRegReg rcx, r8
+  trycont#3:
+    x64.callDirect consume
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont#6
+  tryerr#5:
+    x64.movRegImm32 r8, 0
+  trycont#6:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

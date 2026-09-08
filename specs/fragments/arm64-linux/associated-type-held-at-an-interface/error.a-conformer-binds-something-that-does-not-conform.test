@@ -1,0 +1,53 @@
+// Test: error.a-conformer-binds-something-that-does-not-conform
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Tally
+	var pos as Integer
+
+	export static function create() returns Self
+		return Self{pos: 3}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+end 'Tally'
+
+type OddBag implements Bag with Tally
+	let seed as Integer
+
+	export static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function createIterator() returns Tally throws IterationError
+		return Tally.create()
+	end 'createIterator'
+end 'OddBag'
+
+typealias CursorBag = Bag with Cursor
+
+function total(source CursorBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(OddBag.create(1))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3126: <fragment>:25:6: 'OddBag' binds 'Bag's associated type 'Iter' to 'Tally', and this program holds 'Iter' at the interface type 'Cursor' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and 'Tally' does not implement 'Cursor'. Declare the conformance, or hold the associated type at an interface every conformer implements

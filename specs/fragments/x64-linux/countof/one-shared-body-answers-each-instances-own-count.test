@@ -1,0 +1,70 @@
+// Test: one-shared-body-answers-each-instances-own-count
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec5.create()
+	return a.capacity() * 10 + b.capacity()
+end 'main'
+---
+ExitCode: 35
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect Vector.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N5_Int]
+    x64.movRegImm32 rdx, 5
+    x64.callDirect Vector.create
+  __il_cont#5:
+    x64.movRegImm32 rax, 30
+  __il_cont#4:
+    x64.leaRegRegImm32 r12, rax, 5
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at one-shared-body-answers-each-instances-own-count.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

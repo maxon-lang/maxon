@@ -1,0 +1,78 @@
+// Test: dispatch.default-only
+typealias N = int(0 to 100)
+
+function only(x N) returns N
+	return match x 'c'
+		default gives 7
+	end 'c'
+end 'only'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if only(5) == 7 'a'
+		n = n + 1
+	end 'a'
+	if only(0) == 7 'b'
+		n = n + 1
+	end 'b'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+  matchdefault#13:
+    x64.movRegImm32 rcx, 7
+  __il_cont#11:
+    x64.cmpRegImm32 rcx, 7
+    x64.jcc notEqual, matchdefault#22
+  a:
+    x64.movRegImm32 rax, 1
+  matchdefault#22:
+    x64.movRegImm32 rcx, 7
+  __il_cont#20:
+    x64.cmpRegImm32 rcx, 7
+    x64.jcc notEqual, critsplit
+  b:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg less, rax
+    x64.jcc less, __rc_panic#6
+  __rc_chk#7:
+    x64.cmpRegImm32 r8, 255
+    x64.setccReg greater, rcx
+    x64.jcc lessEqual, __rc_ok#5
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dispatch.default-only.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#5:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __rc_panic#9
+  __rc_chk#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __rc_ok#8
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dispatch.default-only.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#8:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

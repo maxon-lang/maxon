@@ -1,0 +1,37 @@
+// Test: a-signed-negative-reaches-a-whole-word-pattern-unguarded
+typealias Word = bits(64)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function main() returns ExitCode
+	let laundered = opaque(0) - 1
+	let extreme = u64.max as Word
+	return 7 if (laundered as Word) == extreme else 1
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  ternarytrue:
+    arm64.movImm x0, 7
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-signed-negative-reaches-a-whole-word-pattern-unguarded.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

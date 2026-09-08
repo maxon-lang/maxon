@@ -1,0 +1,29 @@
+// Test: directives.dead-branch-unparsed-in-type-body
+type Holder
+	#if testing(true)
+		static function ghost() returns ExitCode
+			return no_such_function_anywhere()
+		end 'ghost'
+	#endif
+
+	export static function value() returns ExitCode
+		return 33
+	end 'value'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.value()
+end 'main'
+---
+ExitCode: 33
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.movRegImm32 r8, 33
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}

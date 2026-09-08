@@ -1,0 +1,64 @@
+// Test: enum-struct-backing-field-argument
+typealias Wide = int(i64.min to i64.max)
+
+type Spec
+	export var width as Wide
+	export var height as Wide
+
+	export static function make(width Wide, height Wide) returns Spec
+		return Spec{width: width, height: height}
+	end 'make'
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3, height: 2}
+	large = Spec{width: 9, height: 4}
+end 'Preset'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let p = Preset.large
+	return over(p.width)
+end 'main'
+---
+ExitCode: 109
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 r8, 109
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at enum-struct-backing-field-argument.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,110 @@
+// Test: pdq-all-equal
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for _ in 0 upto 35 'fill'
+		a.push(7)
+	end 'fill'
+	Log.startCapture()
+	a.sortUnstable(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "pdq.equalElements") 'e'
+		print("equal-path-fired\n")
+	end 'e'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 35
+    x64.jcc greaterEqual, forexit
+  fill:
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.callDirect Log.startCapture
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.sortUnstable#Array.SortComparator
+    x64.callDirect Log.stopCapture
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_10]  ; "pdq.equalElements"
+    x64.movRegReg rcx, r12
+    x64.callDirect Log.fired
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  e:
+    x64.leaRegRdata rcx, [rip + __str_rec_11]  ; "equal-path-fired\x0a"
+    x64.callDirect print
+  ifcont:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

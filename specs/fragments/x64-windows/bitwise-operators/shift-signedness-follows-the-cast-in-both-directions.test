@@ -1,0 +1,53 @@
+// Test: shift-signedness-follows-the-cast-in-both-directions
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function sourceKeepsItsOwnType(p Num) returns Num
+	let w = p as Wide
+	return (w shr 60) - (p shr 60)
+end 'sourceKeepsItsOwnType'
+
+function castToSigned(v Wide) returns Num
+	let n = v as Num
+	return n shr 60
+end 'castToSigned'
+
+function main() returns ExitCode
+	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
+		return 1
+	end 'sourceKeeps'
+	if castToSigned(u64.max) != -1 'toSigned'
+		return 2
+	end 'toSigned'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#6:
+    x64.movRegImm32 rax, 16
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 16
+    x64.jcc equal, __il_body#8
+  sourceKeeps:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#8:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#7:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, ifcont
+  toSigned:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,31 @@
+// Test: ternary-expression.mixed-int-float-promotes
+function main() returns ExitCode
+	let c = true
+	let x = 1.0 if c else 2
+	return trunc(x)
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  ternarytrue:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+  matchcont:
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at ternary-expression.mixed-int-float-promotes.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

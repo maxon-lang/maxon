@@ -1,0 +1,53 @@
+// Test: try-block.bare-throw-in-nested-if
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        if true 'gate'
+            throw MyError.failed
+        end 'gate'
+    end 'work' otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 5
+        end 'k'
+    end 'h'
+    return sum as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  gate:
+    x64.movRegImm32 rax, 1
+  tryblkerr:
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchdead
+  matcharm:
+    x64.movRegImm32 r8, 5
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-block.bare-throw-in-nested-if.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

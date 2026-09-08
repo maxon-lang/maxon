@@ -1,0 +1,188 @@
+// `run_scale_test` MCP tool. Wraps `maxon scale-test` — the scaling INSTRUMENT — and returns
+// its measurements as a STRUCTURED document.
+//
+// ⚠ IT HAS NO VERDICT, AND THIS TOOL MUST NOT INVENT ONE. scale-test reports numbers and their
+// deltas from the last run recorded in `docs/optimization-log.md`; it renders no judgement about
+// them, and there is nothing to pass. A `verdict` field here would put a green light in front of a
+// caller who would then, reasonably, try to make it green — which is how the instrument came to be
+// altered to stop it complaining, rather than the compiler being explained. `exitCode` is the only
+// pass/fail thing in the envelope, and it means only ONE thing: non-zero iff the RUN BROKE and
+// measured nothing (a rung would not compile, or the generated corpus folded away).
+//
+// ⚠ AND IT REPORTS NO WALL TIME. The document carries allocations, frees, bytes and CPU TICKS — per
+// rung and per phase — and no milliseconds, no exponents, no residuals. Wall time counts every other
+// process on the box, so it cannot be trended and is never collected; if a caller wants the
+// milliseconds of one compile, that is the COMPILER's own instrument: `log: "compiler:debug"`.
+// CPU ticks are different in kind: they count only the COMPILING THREAD, so preemption is invisible
+// to them and they CAN be trended — and they are the only column that can see a cost which allocates
+// nothing. They are not exact the way the memory columns are (a few percent of turbo/thermal/cache
+// noise) and their unit is platform-defined, which is why `repeat` is in the document beside them and
+// why a consumer compares RATIOS. The ladder DOUBLES, so the ratio between two rungs IS the growth
+// (x2.00 linear, x4.00 quadratic) in every column, taken from the counts with a division.
+//
+// IT DOES NOT SCRAPE. The runner's stdout is a padded ASCII table built to be read by a person, and
+// a scrape of it would silently mis-parse the day a phase name outgrew its column. So the tool asks
+// the runner for `--result-json=<path>` and reads THAT — the same reason the compiler grew
+// `--metrics=` rather than having the runner scrape its `--log=compiler:debug` table one level down.
+// The returned doc carries the runner's own JSON verbatim, plus the envelope every tool here returns
+// (command, exitCode, durationMs), plus the tail of the human report for a reader who wants it.
+//
+// Inputs (JSON):
+//   rungs?: int          → --rungs=<n>          how many rungs to climb. Each DOUBLES the program.
+//   repeat?: int         → --repeat=<n>         compiles per rung. CPU takes the MINIMUM of them;
+//                                               memory takes the first and cross-checks the rest
+//   note?: string        → --note=<text>        RECORD this run in docs/optimization-log.md, with
+//                                               <text> as the reason the numbers moved
+//   emitCorpus?: string  → --emit-corpus=<dir>  dump the generated corpus and compile nothing
+//   log?: string         → --log=<value>
+//
+// Output (JSON): { command, exitCode, durationMs, result: <the runner's document>, rawTail }
+
+// A full six-rung ladder is ~20 s of compiling PER REPEAT — so ~60 s at the default `repeat` of 3 —
+// and the top rungs are superlinear, so a slow or loaded machine can take several times that. Ten
+// minutes is the same head room `run_spec_test` allows, and for the same reason: a runaway run should
+// be reported, not silently killed.
+//
+// ⚠ THE TWO KNOBS MULTIPLY, and their product can exceed this: `rungs` is exponential and `repeat` is
+// linear, so `rungs=8, repeat=25` is on the order of half an hour. That is not clamped here — a
+// caller who asks for it gets this timeout, reported as an error with the elapsed time on it, which
+// is the honest answer to a request for more compiling than ten minutes buys.
+let defaultScaleTestTimeoutMs = 600000
+
+// Where the runner is asked to leave its structured result. Under the corpus temp dir, which is
+// already gitignored and already wiped per run — a result file is exactly as disposable as the
+// corpus that produced it.
+let scaleResultRelativePath = ".scale-tmp/scale-result.json"
+
+// Enough of the human report to see the curve table and the delta from the last recorded run,
+// without shipping the whole thing through the MCP envelope alongside the structured copy of the
+// same numbers.
+let scaleRawTailMaxBytes = 4096
+
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// compiler is measured, and — when `note` is given — whose `docs/optimization-log.md`
+/// gains a row. Resolved and validated by the dispatcher.
+export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
+	let binary = try compilerBinary(repoRoot) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "scale-test: the compiler has not been built. Build it first via the `build` tool.")
+	end 'noBin'
+
+	let resultPath = childPath(repoRoot, segment: scaleResultRelativePath)
+
+	// A STALE result file is worse than none. If the run breaks before writing one, a leftover from a
+	// previous run would be read back and reported as THIS run's measurements — numbers from a run
+	// that never happened. Delete it up front so its absence is meaningful.
+	try File.delete(resultPath) otherwise ignore
+
+	let argv = buildScaleTestArgv(argsDoc, argsId: argsId, resultPath: resultPath)
+	let displayCommand = displayCommandFor(binary, argv: argv)
+
+	let timing = Clock.nowMs()
+	// `workingDirectory: repoRoot` is load-bearing, not tidiness. The runner resolves the corpus, the
+	// trend log, and the rung paths it hands the compiler ALL relative to the working directory — and
+	// the rung paths in particular must stay relative, because an absolute path is a String the
+	// compiler allocates and its LENGTH would shift the byte column of the trend log, which is a fact
+	// about the compiler and must not become a fact about where the repo lives (see ScaleTestRunner's
+	// CorpusRelativeRoot).
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultScaleTestTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "scale-test: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(timing)
+
+	return buildScaleOutcome(displayCommand, result: result, durationMs: elapsed, resultPath: resultPath)
+end 'scaleTestHandler'
+
+// =============================================================================
+// Argument parsing
+// =============================================================================
+
+function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FilePath) returns StringArray
+	var argv = StringArray.create()
+	argv.push("scale-test")
+	argv.push("--result-json={resultPath.path}")
+
+	let rungs = try argsDoc.getInt(argsId, key: "rungs") otherwise 0
+	if rungs > 0 'haveRungs'
+		argv.push("--rungs={rungs}")
+	end 'haveRungs'
+
+	// Forwarded verbatim, INCLUDING a value the runner will reject. `--repeat` is refused and never
+	// clamped there, and clamping it here would put this tool's opinion of a valid repeat count beside
+	// the runner's — two copies of one rule, which is the bug this repo keeps paying for. A caller who
+	// asks for something impossible gets the runner's own refusal and a non-zero exitCode.
+	let repeat = try argsDoc.getInt(argsId, key: "repeat") otherwise 0
+	if repeat > 0 'haveRepeat'
+		argv.push("--repeat={repeat}")
+	end 'haveRepeat'
+
+	let note = try argsDoc.getString(argsId, key: "note") otherwise ""
+	if not note.isEmpty() 'haveNote'
+		argv.push("--note={note}")
+	end 'haveNote'
+
+	let emitCorpus = try argsDoc.getString(argsId, key: "emitCorpus") otherwise ""
+	if not emitCorpus.isEmpty() 'haveEmitCorpus'
+		argv.push("--emit-corpus={emitCorpus}")
+	end 'haveEmitCorpus'
+
+	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+	if not log.isEmpty() 'haveLog'
+		argv.push("--log={log}")
+	end 'haveLog'
+
+	return argv
+end 'buildScaleTestArgv'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildScaleOutcome(command String, result CollectedOutput, durationMs DurationMs, resultPath FilePath) returns ToolOutcome
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("command")
+	children.push(doc.add(JsonNode.stringNode(command)))
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(result.exitCode() as JsonFloat)))
+	keys.push("durationMs")
+	children.push(doc.add(JsonNode.numberNode(durationMs as JsonFloat)))
+
+	// The runner's own structured document, spliced in whole. When it is absent the run BROKE before
+	// it could write one — a crash, a timeout, a rung that would not compile, a corpus that folded
+	// away — and that is reported as an `error`, not as an empty result, because an empty result would
+	// read as "nothing to report" when the truth is "nothing was measured".
+	//
+	// `error` is NOT a verdict about the compiler and must never be read as one. It says the RUN
+	// failed. The measurements, when there are any, carry no verdict at all.
+	let resultText = try File.readText(resultPath) otherwise 'noResult'
+		return brokenRunOutcome(doc, keys: keys, children: children, message: "scale-test wrote no result document — it exited {result.exitCode()} before completing, so nothing was measured. The tail of its output is in `rawTail`.", combined: combined)
+	end 'noResult'
+
+	let parsed = try Json.parse(resultText) otherwise (err) 'badJson'
+		return brokenRunOutcome(doc, keys: keys, children: children, message: "scale-test's result document is not valid JSON ({err.name}).", combined: combined)
+	end 'badJson'
+
+	keys.push("result")
+	children.push(copyJsonNode(parsed, srcId: parsed.root, dst: doc))
+
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: scaleRawTailMaxBytes))))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildScaleOutcome'
+
+// A run that produced no measurements. The envelope (command, exitCode, durationMs) is already in
+// `keys`/`children`; this finishes it with the reason and the tail of the output.
+function brokenRunOutcome(doc JsonDoc, keys StringArray, children JsonNodeIdArray, message String, combined String) returns ToolOutcome
+	keys.push("error")
+	children.push(doc.add(JsonNode.stringNode(message)))
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: scaleRawTailMaxBytes))))
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'brokenRunOutcome'

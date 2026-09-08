@@ -1,0 +1,174 @@
+// Logging system for the compiler.
+//
+// Carries the category/level machinery (`logDebug(LogCategory.lexer, …)`) plus
+// the log-option parser the driver wires up.
+
+// Simple enums, not unions: every case is payload-free and the types are used
+// purely as value tables (`.rawValue` for severity ordering / the textual label,
+// `.ordinal` for the per-category override slot, `.name`, `fromName`) — never via
+// `match`. `.rawValue`, `fromName`, etc. are enum features.
+export enum LogLevel
+	NONE
+	ERROR
+	INFO
+	DEBUG
+	TRACE
+end 'LogLevel'
+
+// String-backed: each case's `.rawValue` is its 3-char log prefix.
+export enum LogCategory
+	compiler = "CMP"
+	lexer = "LEX"
+	parser = "PAR"
+	semantic = "SEM"
+	ir = "IR "
+	codegen = "GEN"
+	binary = "BIN"
+	testing = "TST"
+end 'LogCategory'
+
+var globalLogLevel = 2
+
+typealias LazyMessage = function() returns String
+
+// Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
+// Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
+typealias StoredLevel = int(0 to u64.max)
+typealias CategoryLevelArray = Array with StoredLevel
+
+var categoryLogLevels = CategoryLevelArray.create()
+var categoryLevelsInitialized = false
+
+function ensureCategoryLevels()
+	if categoryLevelsInitialized 'alreadyDone'
+		return
+	end 'alreadyDone'
+	categoryLevelsInitialized = true
+	// One override slot per LogCategory case, indexed by `category.ordinal`.
+	for _ in 0 upto LogCategory.allCases.count() 'fill'
+		categoryLogLevels.push(0)
+	end 'fill'
+end 'ensureCategoryLevels'
+
+function effectiveLogLevel(category LogCategory) returns StoredLevel
+	if categoryLevelsInitialized 'hasLevels'
+		// Sentinel: 0 = "no category-specific override"; caller falls through to globalLogLevel.
+		let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
+		if stored > 0 'hasOverride'
+			return stored - 1
+		end 'hasOverride'
+	end 'hasLevels'
+	return globalLogLevel
+end 'effectiveLogLevel'
+
+export function logError(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.ERROR, message: message)
+end 'logError'
+
+export function logInfo(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.INFO, message: message)
+end 'logInfo'
+
+export function logDebug(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.DEBUG, message: message)
+end 'logDebug'
+
+module function logTrace(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.TRACE, message: message)
+end 'logTrace'
+
+export function setLogLevel(level LogLevel)
+	globalLogLevel = level.rawValue
+end 'setLogLevel'
+
+function setCategoryLogLevel(category LogCategory, level LogLevel)
+	ensureCategoryLevels()
+	try categoryLogLevels.set(category.ordinal, value: level.rawValue + 1) otherwise panic("invariant: categoryLogLevels.set OOB")
+end 'setCategoryLogLevel'
+
+// Parses a log option string like "debug" or "lexer:trace".
+export function parseLogOption(option String) returns bool
+	let parts = option.split(":")
+	if parts.count() == 1 'noColon'
+		let level = try LogLevel.fromName(option.toUpper()) otherwise return false
+		setLogLevel(level)
+		return true
+	end 'noColon'
+
+	let categoryStr = try parts.get(0) otherwise return false
+	var levelStr = try parts.get(1) otherwise return false
+
+	let category = try LogCategory.fromName(categoryStr) otherwise return false
+
+	let level = try LogLevel.fromName(levelStr.toUpper()) otherwise return false
+
+	setCategoryLogLevel(category, level: level)
+	return true
+end 'parseLogOption'
+
+// The unit every log event is attributed to — WHICH COMPILE produced the line. Set once per
+// compile by `Compiler.compileToProduct`, from the compile root (see DebugTrace.traceUnitOf).
+//
+// ⚠ **LAST WRITER WINS ACROSS COMPILES, AND THAT IS EXACT RATHER THAN MERELY TOLERATED.** A caller may
+// now perform thousands of compiles in one process (`spec-test` compiles every case in process since
+// G20), so this latch is overwritten once per compile — but a compile is SERIAL, so there is no second
+// compile running whose events this could misattribute. ⛔ That is no longer the "single-M scheduler"
+// argument it used to be: `Diagnostics`' capture latch carries the reason that replaced it, and rosters
+// the four module-level latches (this one included) that rest on it. `compileToProduct` states it at the
+// write.
+//
+// It is a module-level var rather than a parameter because the whole point of Workstream O1 is
+// that the CALL SITES DO NOT CHANGE: `logDebug(LogCategory.ir, ...)` reads the same in every one
+// of the ~20 places it appears, and a sink that demanded a unit argument would have rewritten all
+// of them. The event carries `gt` and `p_id` from the runtime regardless, and THOSE — not this —
+// are what demux N interleaved workers; the unit only says which compile a line belongs to.
+var currentTraceUnit = 0 as TraceUnit
+
+export function setTraceUnit(unit TraceUnit)
+	currentTraceUnit = unit
+end 'setTraceUnit'
+
+// The STRUCTURED tier: an interned name and two numbers, and nothing else. No String is built,
+// no closure is created, nothing is allocated — which is what makes it usable from inside the
+// register allocator, where a formatted message would allocate into the very `mm` stream the
+// trace exists to read (and cost more than the work it measures).
+//
+// It honours the same category/level machinery `log` does, so `--log=codegen:trace` turns these
+// on exactly as it turns text lines on. Intern the name ONCE, at a `let`, not per call:
+// `__DebugStream.nameId("...")` is a compile-time constant, so a name in a loop costs nothing —
+// but keeping it at the top makes that visible.
+module function logEvent(category LogCategory, level LogLevel, name TraceName, arg0 TraceArg = 0, arg1 TraceArg = 0)
+	let effectiveLevel = effectiveLogLevel(category)
+	if level.rawValue <= effectiveLevel 'check'
+		__DebugStream.event(name, category.ordinal, level.rawValue, currentTraceUnit, arg0, arg1)
+	end 'check'
+end 'logEvent'
+
+// The TEXT tier — and the sink swap that is the point of this file.
+//
+// When the DebugStream ring is attached, the message goes into the RING, not to stderr. Under a
+// worker pool, N interleaved stderr writers produce torn lines that cannot say which worker or
+// which compile they came from; the same message on the ring carries `gt`, `p_id` and the unit,
+// and the monitor can put it back in order. When the ring is NOT attached — every ordinary build
+// — the behaviour is exactly what it was, and the `__DebugStream` calls cost zero instructions.
+//
+// This tier allocates (the caller's thunk already built a String), and it says so. That is why
+// there is a structured tier above it.
+function log(category LogCategory, level LogLevel, message LazyMessage)
+	let effectiveLevel = effectiveLogLevel(category)
+	if level.rawValue <= effectiveLevel 'check'
+		let msg = message()
+
+		if __DebugStream.enabled() 'ring'
+			// `String.addressableBytes()` is stdlib-internal, so the bytes are reached the way all
+			// code outside the stdlib reaches them: through an independent `toByteArray()` view.
+			// Bound to a local rather than passed inline so the view is unambiguously still alive
+			// while the intrinsic reads it.
+			let msgBytes = msg.toByteArray()
+			__DebugStream.text(category.ordinal, level.rawValue, currentTraceUnit, msgBytes.managed)
+			return
+		end 'ring'
+
+		printError("[{category.rawValue}] {level.name}: {msg}\n")
+	end 'check'
+end 'log'

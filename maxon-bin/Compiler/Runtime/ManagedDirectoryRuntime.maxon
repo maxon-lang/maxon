@@ -1,0 +1,903 @@
+// Runtime/ManagedDirectoryRuntime.maxon — the `__ManagedDirectory` box: one Win32 SEARCH, closed on drop (R4.3).
+//
+// ⭐ **THE ORACLE IS `specs/managed-directory.md`**, exactly as `ManagedFileRuntime`'s header records for
+// the file family: the ten committed cases are the whole of what can be asked.
+//
+// ⭐⭐ **TWO LANES AS OF MAC5** — `x64-windows` and arm64-macOS, whose `FindFirstFileA` is emulated over
+// `opendir`/`readdir`/`fnmatch` because Win32 takes a GLOB where POSIX takes a DIRECTORY
+// (`Arm64DarwinRuntime.buildArm64DarwinDirFindFirstChunk` carries the split and the one semantic difference
+// the corpus does not reach). This paragraph used to read "HOST-ONLY BY THE SAME RULING (2026-07-30)"; the
+// roster it points at is now `TargetFacilities.targetProvidesFacility`'s `managedDirectory` row.
+//
+// ⚠ Everything below is unchanged by that. A target that provides NEITHER still refuses at the call site
+// with the EXISTING `E3104 targetUnsupportedConstruct`, which matches on the `__md_` PREFIX — so a method
+// added later is gated by construction rather than by memory.
+//
+// ---
+//
+// ⭐⭐ **THE RECORD IS TWO-LEVEL.**
+// A `__ManagedDirectory` is an 8-byte BOX whose single `_block` field points at a separately allocated FIND
+// BLOCK holding the search handle, the 320-byte `WIN32_FIND_DATAA` the OS refills, and the advance-first
+// pending flag. The 8-byte box is this family's shape throughout
+// (`ManagedFileRuntime.ManagedFileBoxBytes`), so the front end's `StructLayout` and the runtime's
+// allocation are held together by the same drift guard (`SignatureIndex.managedDirectoryLayout`).
+//
+// ⭐⭐ **WHY A SEPARATE BLOCK AT ALL, RATHER THAN A 336-BYTE BOX?** Because the box is what user code HOLDS —
+// it is stored into a `var dir as __ManagedDirectory` field, copied between owners, and refcounted — while
+// the find record is what the OS WRITES THROUGH for the whole life of the search. Fusing them would put a
+// kernel-written 320-byte buffer inside a refcounted user aggregate, and `close()` would then have no way to
+// release the OS resource without releasing the memory the still-live box is made of. The split is what lets
+// `close()` be idempotent and independent of the drop, which is the contract the corpus depends on.
+
+// ⭐ **THE BOX — its field offset and its size**, asserted against the registered `StructLayout`
+// (`SignatureIndex.managedDirectoryLayout`) rather than agreeing with it by inspection, exactly as
+// `ManagedFileHandleOffset`/`ManagedFileBoxBytes` are: the SHAPE is stated for the front end by that layout
+// and written here by these constants, and two readers of one shape is the pair this project keeps finding
+// drifted.
+//
+// One 8-byte slot holding the find block's address. `specs/managed-directory.md`'s "Type Structure" names the
+// single `_block` field, and the corpus never reads it — direct construction is refused (E3072) so the
+// pointer cannot be forged, and every read is the runtime's own through this offset.
+export let ManagedDirectoryBlockOffset = 0 as ByteOffset
+export let ManagedDirectoryBoxBytes = 8 as ParsedInt
+
+// ⭐⭐ **THE FIND BLOCK'S LAYOUT:**
+//
+//   [0  .. 7]    the `FindFirstFileA` search HANDLE
+//   [8  .. 327]  the 320-byte `WIN32_FIND_DATAA` the OS refills on every `FindNextFileA`
+//   [328..335]   the advance-first PENDING flag
+//
+// ⚠⚠ **THE PENDING FLAG IS NOT BOOKKEEPING — WITHOUT IT THE FIRST ENTRY OF EVERY SEARCH IS SILENTLY LOST.**
+// `FindFirstFileA` does not merely open a search, it RETURNS THE FIRST ENTRY, already written into the
+// record. `next()` is documented advance-first ("advances the cursor to the next REAL entry"), so a naive
+// `next()` that calls `FindNextFileA` immediately skips over the entry the OPEN already fetched. The flag
+// says "the record already holds an unconsumed entry": the first `next()` consumes it in place and only
+// later ones fetch.
+// ⚠ It is invisible to the corpus's search patterns by luck, not by design: a `dir/*` pattern's first two
+// entries are `.` and `..`, which the dot filter discards anyway — so a missing flag would pass
+// `search-and-list` and lose the first REAL entry of any pattern that does not match them (`dir/*.txt`).
+// `managed-directory.next-does-not-skip-the-first-match` is the case that would catch it.
+//
+// ⚠ The flag is a full WORD rather than a byte. The Std tier's `accessWidthFor` carries `byte` and
+// `word64` and nothing between, so either would lower; a word costs the same 336 bytes and keeps every
+// access in this file at one width.
+//
+// ⚠⚠ **THE TWO TAIL NUMBERS ARE DERIVED, NOT TRANSCRIBED, AND THAT IS THE POINT** (review, R4.3). `328` and
+// `336` are `8 + FindDataBytes` and that plus one word — so writing them as literals would be a THIRD copy
+// of "a `WIN32_FIND_DATAA` is 320 bytes", the first two being `ManagedFileRuntime.FindDataBytes` (which
+// `stat`/`exists` allocate by) and the Win32 header itself. Nothing would make the copies agree: correct
+// the size in one place and this block silently UNDER-ALLOCATES, at which point the kernel writes the tail
+// of the find record straight over the pending flag on every `FindNextFileA` — a wrong answer with no
+// compile error and no failing test. `FindDataBytes` is exported for exactly this reader.
+let FindBlockHandleOffset = 0 as ByteOffset
+let FindBlockFindDataOffset = 8 as ByteOffset
+
+// The pending flag's own width — see above for why it is a word.
+let FindBlockPendingBytes = 8 as ParsedInt
+let FindBlockPendingOffset = ((FindBlockFindDataOffset as ParsedInt) + FindDataBytes) as ByteOffset
+let FindBlockBytes = (FindBlockPendingOffset as ParsedInt) + FindBlockPendingBytes
+
+// The pending flag's two values. Named rather than spelled `1`/`0` at four sites: the flag reads as a
+// direction ("consume in place" vs "fetch") and a bare literal at a branch says neither.
+let FindEntryPending = 1 as ParsedInt
+let FindEntryConsumed = 0 as ParsedInt
+
+// The handle value a CLOSED block carries — `ManagedFileClosedHandle`'s twin, and zero for its reason: the
+// find block is allocated zeroed, so a block whose `FindFirstFileA` never ran and one that has been closed
+// carry the same value and ONE guard covers both. A search handle the OS actually returns is never 0
+// (`FindFirstFileA` reports failure as `INVALID_HANDLE_VALUE`, which is -1).
+let ManagedDirectoryClosedHandle = 0 as ParsedInt
+
+// `next()`'s two answers, per `specs/managed-directory.md`: "returns non-zero if one was found or 0 when the
+// iteration is complete". EOF is a plain 0 RETURN and never a throw, so only a real OS error reaches
+// `nextFailed`.
+let DirectoryEntryFound = 1 as ParsedInt
+let DirectoryIterationComplete = 0 as ParsedInt
+
+// ASCII `.` — the leading byte of the `.` / `..` pseudo-entries. **The dot filtering lives in the RUNTIME,
+// not the stdlib**: the spec states it as the method's contract ("The runtime owns all dot-filtering, so
+// `filename()` never returns `.` or `..`").
+// ⚠ **EXPORTED FOR THE POSIX LANE** — `Arm64DarwinRuntime` spells the CURRENT DIRECTORY `"."` when a
+// search pattern carries no `/`, which is the same character this filter tests for.
+export let DotByte = 0x2E as ParsedInt
+
+// The NUL that ends a cstring — what ends `cFileName`, what tells `.` from `.x` and `..` from `..x`, what
+// `emitCStringLength` walks to, and what `CommandLineRuntime` terminates each scanned argument with.
+// EXPORTED once that fourth reader arrived rather than re-spelled `0` beside it: a `0` at a byte compare
+// says nothing about whether it means "end of string" or "the number zero".
+export let NulByte = 0 as ParsedInt
+
+// `ERROR_NO_MORE_FILES` — the ONE `GetLastError` reading that makes a FALSE from `FindNextFileA` an ordinary
+// end of iteration rather than a failure. Everything else is a real error and throws `nextFailed`.
+// ⚠ **EXPORTED FOR THE LANE THAT MUST *PRODUCE* IT (MAC5).** `FindNextFileA` reports end-of-iteration by
+// failing with this code; `readdir` reports it by answering NULL with `errno` UNCHANGED, so a POSIX lane
+// has to synthesize the number — `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` maps a cleared
+// `errno` onto exactly this, and reads it from here rather than transcribing it.
+export let ErrorNoMoreFiles = 18 as ParsedInt
+
+// `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesA` answers for a path that names nothing. It is the
+// full DWORD, so it is compared against a DWORD-masked load rather than against -1.
+// ⚠ **EXPORTED FOR THE SAME REASON** — `GetFileAttributesA` answers it and a POSIX lane's `stat` failure
+// must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
+export let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
+
+// ⭐ **`MAX_PATH` — THE FIRST BUFFER EVERY Win32 PATH FILL IN THIS COMPILER ASKS FOR.** `GetCurrentDirectoryA(n, buf)`
+// answers three different things: `0` is failure, `< n` is "written, NUL included", and `>= n` is "too
+// small — and this is the size it needs, NUL included", in which case the buffer's contents are UNDEFINED.
+// So the first attempt uses `MAX_PATH` and a second attempt uses exactly what the OS asked for. A THIRD attempt
+// cannot be needed: the second buffer is the size the OS itself named.
+//
+// ⚠ EXPORTED for `ProcessRuntime` (W5 review), whose `GetModuleFileNameA` walk starts at the same 260 for
+// the same reason. It briefly held its own `FirstPathAttemptBytes = 260`, which is ONE Win32 constant
+// written down twice: the day a measurement says a bigger first attempt is right, one of the two would move
+// and nothing would make the other follow. The two loops differ in their RETRY POLICY, not in what
+// `MAX_PATH` is.
+export let MaxPathBytes = 260 as ParsedInt
+
+// ⭐ **THE OTHER HALF OF THAT POLICY: HOW MUCH BIGGER THE NEXT ATTEMPT IS.** A left shift of one — the
+// buffer doubles — which bounds the number of attempts at log₂(path length / 260) and the wasted bytes at
+// under one buffer's worth.
+//
+// ⚠ It lived in `ProcessRuntime` while only `__proc_exe_path` grew. `__md_current_path` grows too since
+// MAC5 (`getcwd` cannot name a required size — see that builder), so it moved beside `MaxPathBytes`: the
+// first attempt's size and the growth step are ONE policy, and this file is where the first half already
+// was.
+export let PathGrowthShift = 1 as ParsedInt
+
+// ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
+// `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the enum
+// DECLARED at `stdlib/Builtins.maxon:190` (A1s). `verifyManagedDirectoryOrdinals` below is what holds these
+// literals to that declaration.
+//
+// ⚠ **THE SOURCE OF THESE NUMBERS IS `stdlib/Builtins.maxon:189-199`, NOT A COMMENT.** Omitting
+// `iteratorInvalid` from the count shifts every ordinal after it by one.
+//
+// ⚠ `iteratorInvalid` (4) has no flag here because nothing throws it: it names "filename() on an exhausted
+// iterator", and `filename()` is non-throwing in the spec. The case is DECLARED (the
+// ordinals after it depend on its slot) and deliberately unreachable — which is why its ORDINAL is here even
+// though its flag is not, and why `claimManagedDirectoryOrdinals` states it as `neverThrown` rather than
+// leaving a gap a corpus reorder could move in silence (W135).
+let ManagedDirectoryNotFoundOrdinal = 0 as ParsedInt
+let ManagedDirectoryAccessDeniedOrdinal = 1 as ParsedInt
+let ManagedDirectoryOpenSearchFailedOrdinal = 2 as ParsedInt
+let ManagedDirectoryNextFailedOrdinal = 3 as ParsedInt
+let ManagedDirectoryIteratorInvalidOrdinal = 4 as ParsedInt
+let ManagedDirectoryCreateFailedOrdinal = 5 as ParsedInt
+let ManagedDirectoryCurrentPathFailedOrdinal = 6 as ParsedInt
+let ManagedDirectoryClosedOrdinal = 7 as ParsedInt
+let ManagedDirectoryNotFoundFlag = ManagedDirectoryNotFoundOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryAccessDeniedFlag = ManagedDirectoryAccessDeniedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryOpenSearchFailedFlag = ManagedDirectoryOpenSearchFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryNextFailedFlag = ManagedDirectoryNextFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryCreateFailedFlag = ManagedDirectoryCreateFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryCurrentPathFailedFlag = ManagedDirectoryCurrentPathFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryClosedFlag = ManagedDirectoryClosedOrdinal + ErrorFlagOrdinalBias
+
+// The `__md_` prefix that identifies EVERY directory runtime entry point — the one test `scanRuntimeUsage`
+// reads to set `usesManagedDirectory`, and the one `SemanticCheck` reads for E3104.
+let ManagedDirectoryRuntimePrefix = b"__md_"
+
+// ⭐ **THE EIGHT ENTRY POINTS.** Seven name a `__ManagedDirectory` method and `__md_destruct` is the
+// compiler-INSERTED one: the drop a box takes when its
+// last owner goes away (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half.
+export let ManagedDirectoryOpenSearchName = b"__md_open_search"
+export let ManagedDirectoryNextName = b"__md_next"
+export let ManagedDirectoryFilenameName = b"__md_filename"
+export let ManagedDirectoryCloseName = b"__md_close"
+export let ManagedDirectoryDestructName = b"__md_destruct"
+export let ManagedDirectoryExistsName = b"__md_exists"
+export let ManagedDirectoryCreateName = b"__md_create"
+export let ManagedDirectoryCurrentPathName = b"__md_current_path"
+
+// ⭐ **WHICH `__ManagedDirectory` CALLEES THROW** — the fourth composer behind `Parser.isThrowingRuntimeCallee`.
+// Held to the builders by the bidirectional drift guard in `installManagedDirectoryRuntime`, copied from
+// `installManagedFileRuntime` for its stated reason: a predicate and a `throws` stamp are one fact in two
+// places, and this project keeps finding that pair drifted.
+export function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) returns bool
+	// ⚠ **THE FOUR ABSENTEES ARE EACH ABSENT FOR A STATED REASON, not by oversight.**
+	//   • `__md_close` — the spec documents `close()` as idempotent and destructor-called; naming it here
+	//     would make a `try` REQUIRED on a call that cannot fail (E3055).
+	//   • `__md_destruct` — a DROP has no caller to hand an error to; it runs at a scope exit nobody wrote.
+	//   • `__md_exists` — `false` is a valid answer ("it is not a directory"), not a failure.
+	//   • `__md_filename` — the spec's "Instance Methods (non-throwing)". It reads a record the OPEN already
+	//     filled, so there is no call to fail.
+	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName)
+end 'isThrowingManagedDirectoryRuntimeCallee'
+
+// ⭐⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM.**
+// `SemanticCheck.validatePlainCall`'s E3057 names the call that needed a `try`, and `specs/managed-directory.md`
+// pins that sentence: `throwing function requires try: 'next'`. The user never wrote `__md_next`, so the
+// runtime name would be a symbol they have never heard of — the same objection `TargetUnsupportedUnnamedSubject`
+// records for E3104.
+//
+// ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING.** Each arm answers with the very
+// `ManagedDirectory*Method` byte string `parseManagedDirectoryStaticCall`/`dispatchManagedDirectoryMethod`
+// dispatched on, so there is nothing here that can disagree with what the source is matched against.
+// It is asked only on the COLD path, and only for the four THROWING callees — the other four cannot reach
+// either diagnostic at all, which is what the panic states rather than answers.
+//
+// ⚠⚠ **AS OF D11c IT HAS A SECOND READER, AND THE `create` ARM IS ITS ALONE (D11c review).** `Parser`'s E3059
+// asks this same map for a VALUELESS `try`, and `__md_create` is the family's one void throwing member — so
+// that arm has no E3057 case and E3059 is the only thing that can observe it. `specs/void-call-result.md`
+// pins it there rather than here, beside the other eight callees E3059 can reach, because the roster is
+// "throwing AND void" and that crosses every family. **MEASURED: with this arm answering `next`, the whole
+// suite read 2897/0 while an author who wrote `create` was told about `'next'`.**
+export function managedDirectorySourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ManagedDirectoryOpenSearchName) 'openSearch'
+		return ManagedDirectoryOpenSearchMethod
+	end 'openSearch'
+	if callee.equals(ManagedDirectoryNextName) 'next'
+		return ManagedDirectoryNextMethod
+	end 'next'
+	if callee.equals(ManagedDirectoryCreateName) 'create'
+		return ManagedDirectoryCreateMethod
+	end 'create'
+	if callee.equals(ManagedDirectoryCurrentPathName) 'currentPath'
+		return ManagedDirectoryCurrentPathMethod
+	end 'currentPath'
+	panic("managedDirectorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedDirectory` callee — this map is asked ONLY behind `isThrowingManagedDirectoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedDirectory*Method` constant. `installManagedDirectoryRuntime`'s drift guard asks this for every throwing `__md_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
+end 'managedDirectorySourceMethodName'
+
+// ⭐ **THE ERROR TYPE A DIRECTORY CALLEE THROWS — the WHAT to the predicate's THAT**, and the twin of
+// `managedFileThrows`. `ProgramSignatures.throwsOf` answers with it for a callee no file declares, which is
+// what types an `otherwise (e)` binding and therefore what makes `match e` see an enum instead of a scalar;
+// the four throwing builders stamp it as their `throws` clause. ONE speller for one fact.
+export function managedDirectoryThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(ManagedDirectoryErrorTypeName))
+end 'managedDirectoryThrows'
+
+// The three-flag errno classification (`ManagedFileRuntime.emitErrnoClassifiedThrow`) with THIS family's two
+// fixed cases supplied. `__ManagedDirectoryError`'s `notFound`/`accessDenied` sit at the same two ordinals
+// `__ManagedFileError`'s do, but they are named here rather than inherited, so that coincidence is a fact
+// this file states about its own enum instead of a silent dependency on another one's. Only the
+// catch-all differs per operation.
+function emitDirectoryErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag ParsedInt, ids ValueMinter)
+	emitErrnoClassifiedThrow(module, func: func, block: block, err: err, notFoundFlag: ManagedDirectoryNotFoundFlag, deniedFlag: ManagedDirectoryAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
+end 'emitDirectoryErrnoClassifiedThrow'
+
+// The find block a live box points at. Every instance entry point starts here.
+function emitLoadFindBlock(module StdModule, block IrBlock, box ValueId, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: box, offset: ManagedDirectoryBlockOffset, ids: ids)
+end 'emitLoadFindBlock'
+
+// The address of the find block's `WIN32_FIND_DATAA`, which is what every Win32 find call is handed.
+function emitFindDataAddr(module StdModule, block IrBlock, findBlock ValueId, ids ValueMinter) returns ValueId
+	let offset = emitConst(module, block: block, value: FindBlockFindDataOffset as ParsedInt, ids: ids)
+	return emitBin(module, block: block, a: findBlock, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitFindDataAddr'
+
+// The address of `cFileName` inside the find block — the record's offset plus the field's, so the two
+// numbers are added in ONE place rather than pre-summed into a third constant that could disagree with them.
+function emitFileNameAddr(module StdModule, block IrBlock, findBlock ValueId, ids ValueMinter) returns ValueId
+	let offset = emitConst(module, block: block, value: (FindBlockFindDataOffset + FindDataFileNameOffset) as ParsedInt, ids: ids)
+	return emitBin(module, block: block, a: findBlock, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitFileNameAddr'
+
+// ⭐ **strlen — WALK A NUL-TERMINATED cstring AND LEAVE ITS LENGTH IN THE CONTINUATION BLOCK.**
+//
+// ⚠ **EXTRACTED FROM `emitCStringToManaged` WHEN THE COMMAND-LINE RUNTIME BECAME ITS SECOND ASKER.**
+// `__cl_count`/`__cl_arg` size their scratch buffer by the command line's length and do not want the copy,
+// so the measure and the build are now two builders rather than one — which is also what makes the length
+// available to a caller that is not about to allocate an `Array` record.
+//
+// `length`'s `ValueId` is MINTED BY THE CALLER and used as the walk's loop-carried cursor. At the moment the
+// header exits, that cursor IS the length, and it reaches the continuation block with NO block-arg of its
+// own: the header dominates the continuation (its `condBranch` is the only way in), so the value is simply
+// in scope — the same dominance argument `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
+export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, length ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"mdslh")
+	var body = module.addBlock(func, label: b"mdslb")
+	let done = module.addBlock(func, label: b"mdsld")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+	header.blockArgs.push(IrBlockArg.create(length, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let ch = emitLoadByte(module, block: header, base: cstr, index: length, ids: ids)
+	let nul = emitConst(module, block: header, value: NulByte, ids: ids)
+	let atEnd = emitCmp(module, block: header, a: ch, b: nul, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let next = emitBin(module, block: body, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	return done
+end 'emitCStringLength'
+
+// One byte of a NUL-terminated cstring, zero-extended.
+//
+// ⚠ EXPORTED because `CommandLineRuntime`'s splitter reads the command line a byte at a time and this is
+// exactly that read. A second copy would be a second answer to "how wide is a cstring byte, and is it
+// zero-extended?" — the pair this project keeps finding drifted.
+export function emitLoadByte(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
+	let loaded = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: addr, offset: 0 as ByteOffset, valueType: StdType.u8))
+	return loaded
+end 'emitLoadByte'
+
+// One byte INTO a raw buffer — `emitLoadByte`'s exact dual, and the one writer of a `u8` at this tier.
+//
+// ⚠ **IT LIVES BESIDE ITS DUAL RATHER THAN BESIDE ITS FIRST CALLER (W5).** It was file-private in
+// `CommandLineRuntime`, which made the pair "how wide is a raw byte, and is it zero-extended?" answerable
+// from two files with only one of the two answers exported — so the second family that needed to WRITE a
+// byte (`__proc_exe_path`, NUL-terminating an unavailable path) would have had to copy it. The load and the
+// store are one fact about one representation; they are now one paragraph.
+export function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
+end 'emitStoreByte'
+
+// ⭐⭐ **A NUL-TERMINATED cstring → A FRESH OWNED `__ManagedMemory`, AND THE CALLER OWNS THE RESULT.**
+// `filename()` and `currentPath()` both answer with one, and both would otherwise be twenty lines of the
+// same loop.
+//
+// ⭐ **IT ALLOCATES AND COPIES RATHER THAN HANDING BACK A POINTER INTO THE FIND BLOCK.** A raw pointer
+// would be a cstring wearing a record's type: invalidated by the very next `next()` and left dangling by
+// `close()`. It would not type either — a `__ManagedMemory` here is a real `Array` record and
+// `String.init(dir.filename())` reads its `length@8`/`buffer@0`, which a cstring pointer does not have.
+//
+// The record and its buffer come from `ManagedMemoryRuntime.emitManagedByteBuffer`, which is where the
+// `__managed_create` + `__managed_reserve` pair and the reason for it now live — `__con_read_stdin` (W5) fills the
+// same kind of record from an OS read instead of from a copy, and the two must not grow two answers to
+// "how is a byte-element `Array` record made?".
+//
+// Threads through `cur` and returns the continuation block: the strlen loop and the copy loop each add
+// blocks, so the caller carries on from the one this leaves it in. The record's `ValueId` is MINTED BY THE
+// CALLER and handed in, rather than returned beside the block — a pair would have to be a `type`, and that
+// is a heap box (plus a destructor cascade over its `IrBlock` field) per call, for two values.
+export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, ids ValueMinter) returns IrBlock
+	// The LENGTH's id is minted here and handed down, exactly as `record`'s is and for the same reason: a
+	// builder that returns both a block and a value would have to return a pair, and a pair is a heap box.
+	let i = ids.mint()
+	var build = emitCStringLength(module, func: func, cur: cur, cstr: cstr, length: i, ids: ids)
+
+	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
+	// PUBLISH the bytes. `__managed_reserve` sets the capacity and leaves the length 0 (that is its contract, and
+	// `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
+	// answer with the empty string.
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordLengthOffset, value: i)
+	return afterCopy
+end 'emitCStringToManaged'
+
+// `__md_open_search(pathRec) -> (box, flag)` — open a Win32 search, or throw `__ManagedDirectoryError`.
+//
+// ⚠ **THE PENDING FLAG IS SET HERE AND NOWHERE ELSE.** `FindFirstFileA` has already written the first entry
+// into the record by the time this returns; see `FindBlockPendingOffset` for what happens without it.
+function buildManagedDirectoryOpenSearch(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryOpenSearchName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var afterCopy = module.addBlock(func, label: b"mdterm")
+	var failed = module.addBlock(func, label: b"mdfail")
+	var opened = module.addBlock(func, label: b"mdok")
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0 as ValueId
+
+	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let blockSize = emitConst(module, block: afterCopy, value: FindBlockBytes, ids: ids)
+	let findBlock = emitRawAlloc(module, block: afterCopy, byteCount: blockSize, ids: ids)
+	let findData = emitFindDataAddr(module, block: afterCopy, findBlock: findBlock, ids: ids)
+	let search = ids.mint()
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
+	// The last error is captured IMMEDIATELY after the call — a `__mm_free` in between runs Win32 code of its
+	// own and could overwrite the thread's last-error. The same ordering `ManagedFileRuntime` states once.
+	let err = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.osLastError(err))
+	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
+	let isInvalid = emitCmp(module, block: afterCopy, a: search, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.condBranch(isInvalid, thenBlockId: failed.id, elseBlockId: opened.id))
+
+	// The find block is released on the failure path: the throw carries no box, so nothing else ever will.
+	emitRawFree(module, block: failed, ptr: findBlock, ids: ids)
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryOpenSearchFailedFlag, ids: ids)
+
+	emitStoreHandleSlot(module, block: opened, record: findBlock, handleOffset: FindBlockHandleOffset, handle: search, ids: ids)
+	let pending = emitConst(module, block: opened, value: FindEntryPending, ids: ids)
+	emitStoreField(module, block: opened, record: findBlock, offset: FindBlockPendingOffset, value: pending)
+
+	// The box: one 8-byte slot holding the find block's address, allocated through `__mm_alloc` so the
+	// ordinary ownership machinery drops it — and the drop it takes is `__md_destruct`, which closes the
+	// search and frees BOTH allocations (`SignatureIndex.managedNameDropCallee`).
+	let boxSize = emitConst(module, block: opened, value: ManagedDirectoryBoxBytes, ids: ids)
+	let box = emitRawAlloc(module, block: opened, byteCount: boxSize, ids: ids)
+	emitStoreField(module, block: opened, record: box, offset: ManagedDirectoryBlockOffset, value: findBlock)
+	emitOkReturn(module, block: opened, value: box, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryOpenSearch'
+
+// ⭐⭐ **`__md_next(box) -> (found, flag)` — ADVANCE-FIRST, DOT-FILTERING, AND EOF AS A PLAIN 0.**
+//
+// The shape: consume the pending entry if there is one, otherwise fetch; then test the
+// entry against `.`/`..` and go round again if it is one; a real entry answers 1.
+//
+//   entry     → the closed guard (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`)
+//   checkPend → pending? consume it in place : fetch
+//   fetch     → `FindNextFileA`; FALSE + `ERROR_NO_MORE_FILES` ⇒ EOF, FALSE + anything else ⇒ throw
+//   dotCheck  → is the current name `.` or `..`? yes ⇒ back to `fetch`, no ⇒ found
+//
+// ⚠ **THE DOT TEST IS THREE BYTES, NOT ONE**, and each of the three matters: `.` is byte0 `.` + byte1 NUL,
+// `..` is byte0 `.` + byte1 `.` + byte2 NUL, and a real `.gitignore` / `..config` must survive both. Testing
+// only byte0 would hide every dotfile in the directory.
+function buildManagedDirectoryNext(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkPend = module.addBlock(func, label: b"mdpend")
+	var consume = module.addBlock(func, label: b"mdconsume")
+	var fetch = module.addBlock(func, label: b"mdfetch")
+	var fetchFailed = module.addBlock(func, label: b"mdnofile")
+	var atEof = module.addBlock(func, label: b"mdeof")
+	var fetchError = module.addBlock(func, label: b"mdnexterr")
+	var dotCheck = module.addBlock(func, label: b"mddot")
+	var dot1 = module.addBlock(func, label: b"mddot1")
+	var dot2 = module.addBlock(func, label: b"mddot2")
+	var found = module.addBlock(func, label: b"mdfound")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
+
+	// ⚠ **THE `closed` GUARD PREVENTS A CRASH AS WELL AS A WRONG ANSWER.** Without it `next()` on a closed
+	// search reaches `FindNextFileA(NULL)` while the pending flag may still claim an entry, so `d.close()`
+	// then `d.next()` either REPLAYS the first entry as found or faults with an access violation.
+	// `managed-directory.next-after-close-throws-closed` pins it. The guard's SHAPE is
+	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow`, shared with `__ManagedFile`'s `size`/`read`/`write`,
+	// which throw `__ManagedFileError.closed` from the identical test for the identical reason — only the
+	// record, the offset, the sentinel and the flag are this family's. The handle sits one level down (in
+	// the find block, not in the box), which is exactly what the `record`/`handleOffset` pair carries. It is
+	// called directly rather than through a directory-family wrapper because there is ONE site.
+	let handle = emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: checkPend, record: findBlock, handleOffset: FindBlockHandleOffset, closedSentinel: ManagedDirectoryClosedHandle, closedFlag: ManagedDirectoryClosedFlag, ids: ids)
+
+	// Pending? Then `FindFirstFileA`'s entry is still unconsumed: clear the flag and go straight to the dot
+	// check, WITHOUT fetching. This is the half that keeps the first entry of every search.
+	let pendingFlag = emitLoadField(module, block: checkPend, record: findBlock, offset: FindBlockPendingOffset, ids: ids)
+	let consumedConst = emitConst(module, block: checkPend, value: FindEntryConsumed, ids: ids)
+	let alreadyConsumed = emitCmp(module, block: checkPend, a: pendingFlag, b: consumedConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkPend, op: StdOp.condBranch(alreadyConsumed, thenBlockId: fetch.id, elseBlockId: consume.id))
+
+	let clearPending = emitConst(module, block: consume, value: FindEntryConsumed, ids: ids)
+	emitStoreField(module, block: consume, record: findBlock, offset: FindBlockPendingOffset, value: clearPending)
+	module.setTerminator(consume, op: StdOp.branch(dotCheck.id))
+
+	let findData = emitFindDataAddr(module, block: fetch, findBlock: findBlock, ids: ids)
+	let verdict = ids.mint()
+	emitIoPark(module, block: fetch, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(fetch, op: StdOp.osFileFindNext(verdict, handleId: handle, findDataPtrId: findData))
+	let err = ids.mint()
+	module.appendOp(fetch, op: StdOp.osLastError(err))
+	let falseConst = emitConst(module, block: fetch, value: Win32False, ids: ids)
+	let noEntry = emitCmp(module, block: fetch, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fetch, op: StdOp.condBranch(noEntry, thenBlockId: fetchFailed.id, elseBlockId: dotCheck.id))
+
+	// ⭐ A FALSE means one of two very different things, and `GetLastError` is what tells them apart.
+	let noMoreConst = emitConst(module, block: fetchFailed, value: ErrorNoMoreFiles, ids: ids)
+	let isEof = emitCmp(module, block: fetchFailed, a: err, b: noMoreConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fetchFailed, op: StdOp.condBranch(isEof, thenBlockId: atEof.id, elseBlockId: fetchError.id))
+
+	let complete = emitConst(module, block: atEof, value: DirectoryIterationComplete, ids: ids)
+	emitOkReturn(module, block: atEof, value: complete, ids: ids)
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: fetchError, err: err, fallbackFlag: ManagedDirectoryNextFailedFlag, ids: ids)
+
+	// `.`/`..` filtering. `name[0] != '.'` is a real entry at once; otherwise byte1 decides, and if byte1 is
+	// also `.` then byte2 does.
+	let name = emitFileNameAddr(module, block: dotCheck, findBlock: findBlock, ids: ids)
+	let zeroIndex = emitConst(module, block: dotCheck, value: 0, ids: ids)
+	let byte0 = emitLoadByte(module, block: dotCheck, base: name, index: zeroIndex, ids: ids)
+	let dotConst = emitConst(module, block: dotCheck, value: DotByte, ids: ids)
+	let leadingDot = emitCmp(module, block: dotCheck, a: byte0, b: dotConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dotCheck, op: StdOp.condBranch(leadingDot, thenBlockId: dot1.id, elseBlockId: found.id))
+
+	let oneIndex = emitConst(module, block: dot1, value: 1, ids: ids)
+	let byte1 = emitLoadByte(module, block: dot1, base: name, index: oneIndex, ids: ids)
+	let nul1 = emitConst(module, block: dot1, value: NulByte, ids: ids)
+	let isSingleDot = emitCmp(module, block: dot1, a: byte1, b: nul1, pred: StdCmpPred.eq, ids: ids)
+	// A bare `.` is skipped; anything else with a leading dot needs byte2 to decide.
+	module.setTerminator(dot1, op: StdOp.condBranch(isSingleDot, thenBlockId: fetch.id, elseBlockId: dot2.id))
+
+	let secondDot = emitCmp(module, block: dot2, a: byte1, b: dotConst, pred: StdCmpPred.eq, ids: ids)
+	var dot3 = module.addBlock(func, label: b"mddot3")
+	module.setTerminator(dot2, op: StdOp.condBranch(secondDot, thenBlockId: dot3.id, elseBlockId: found.id))
+
+	let twoIndex = emitConst(module, block: dot3, value: 2, ids: ids)
+	let byte2 = emitLoadByte(module, block: dot3, base: name, index: twoIndex, ids: ids)
+	let nul2 = emitConst(module, block: dot3, value: NulByte, ids: ids)
+	let isDoubleDot = emitCmp(module, block: dot3, a: byte2, b: nul2, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dot3, op: StdOp.condBranch(isDoubleDot, thenBlockId: fetch.id, elseBlockId: found.id))
+
+	let one = emitConst(module, block: found, value: DirectoryEntryFound, ids: ids)
+	emitOkReturn(module, block: found, value: one, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryNext'
+
+// `__md_filename(box) -> arrRec` — the current entry's name as a FRESH owned `__ManagedMemory`. NON-throwing
+// per the spec's "Instance Methods (non-throwing)": it reads a record the open already filled, so there is no
+// call to fail.
+//
+// ⚠ **BEFORE THE FIRST `next()` AND AFTER EOF IT ANSWERS WITH WHATEVER THE RECORD HOLDS, AND THAT IS THE
+// DOCUMENTED CONTRACT RATHER THAN AN OVERSIGHT.** The spec says "Only valid after a `next()` call that
+// returned non-zero"; Win32 does not clear `cFileName` when `FindNextFileA` reports end-of-iteration, so the
+// last successful name stays there, and before the first `next()` the record holds `FindFirstFileA`'s entry.
+// It is never a WILD read: `openSearch` only returns a box whose record
+// the OS has filled, and neither `close()` nor the pending flag touches the name bytes.
+function buildManagedDirectoryFilename(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryFilenameName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
+	let name = emitFileNameAddr(module, block: entry, findBlock: findBlock, ids: ids)
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: entry, cstr: name, record: record, ids: ids)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildManagedDirectoryFilename'
+
+// `__md_close(box)` — close the search handle, idempotently. Returns nothing and throws nothing, per the
+// spec's "Idempotent. Also called automatically via destructor."
+//
+// ⭐ **IT DOES NOT FREE THE BLOCK — THE DESTRUCTOR DOES.** The block's single reference belongs to the
+// OWNER (a `Directory.dir` field, a scope binding), whose own drop frees it, so a `close()` that released
+// it too would double-free every explicitly-closed handle. `search-and-list` runs exactly that sequence
+// (an explicit `close()` and then a scope-exit drop of the wrapper).
+//
+// ⭐ **IDEMPOTENCE IS THE ZEROED HANDLE**, exactly as `__mf_close`'s is: the block is zeroed at allocation
+// and this writes the closed sentinel back, so one guard covers "never opened" and "already closed".
+// ⚠ It clears the PENDING flag as well, and that is not tidiness: the flag says "the record holds an entry
+// nobody has consumed", which stops being true the moment the search is gone. Leaving it set would make a
+// post-close `next()` replay the first entry — which the `closed` guard now refuses anyway, so this is the
+// second of two independent reasons the replay cannot happen.
+function buildManagedDirectoryClose(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doClose = module.addBlock(func, label: b"mddo")
+	var done = module.addBlock(func, label: b"mddone")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
+	let slot = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
+	let closedConst = emitConst(module, block: entry, value: ManagedDirectoryClosedHandle, ids: ids)
+	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
+	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
+	let handle = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
+
+	emitIoPark(module, block: doClose, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(doClose, op: StdOp.osFileFindClose(handle))
+	let zero = emitConst(module, block: doClose, value: ManagedDirectoryClosedHandle, ids: ids)
+	emitStoreField(module, block: doClose, record: findBlock, offset: FindBlockHandleOffset, value: zero)
+	let consumed = emitConst(module, block: doClose, value: FindEntryConsumed, ids: ids)
+	emitStoreField(module, block: doClose, record: findBlock, offset: FindBlockPendingOffset, value: consumed)
+	module.setTerminator(doClose, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryClose'
+
+// ⭐⭐ **`__md_destruct(box)` — THE RAII DESTRUCTOR, AND THE REASON A `__ManagedDirectory` MAY BE DROPPED AT
+// ALL.** The refcount-checked teardown a box takes instead of the generic `__mm_decref`: last owner ⇒ close
+// the search, free the find block, free the eight bytes; otherwise lower the count and keep the box.
+//
+// ⭐ It reuses `__md_close` rather than re-emitting the close, so idempotence is stated once: an explicit
+// `d.close()` followed by the scope-exit drop finds the sentinel already stored and does nothing.
+//
+// ⚠ **IT FREES TWO ALLOCATIONS, WHICH IS THE WHOLE COST OF THE TWO-LEVEL RECORD**, and the ORDER matters:
+// the find block is read (by `__md_close`) before it is freed, and the box is freed last because the block's
+// address is read out of it.
+//
+// The skeleton is `MmRuntime.emitFieldCascadeDestructor`'s minus the field walk, and
+// `emitRefcountCheckToLastOwner` is shared with it — so "how many owners are left?" is asked one way by
+// every destructor in the compiler.
+function buildManagedDirectoryDestruct(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var drop = module.addBlock(func, label: b"drop")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+
+	module.appendOp(drop, op: StdOp.call(ids.mint(), callee: ManagedDirectoryCloseName, args: argsOf(box)))
+	let findBlock = emitLoadFindBlock(module, block: drop, box: box, ids: ids)
+	emitRawFree(module, block: drop, ptr: findBlock, ids: ids)
+	emitRawFree(module, block: drop, ptr: box, ids: ids)
+	module.setTerminator(drop, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryDestruct'
+
+// `__md_exists(pathRec) -> 0 | 1` — NON-throwing: "it is not a directory" is an answer, not a failure.
+//
+// ⭐ **THE ANSWER IS `bool` AT THE SURFACE, AND THE CORPUS SETTLES IT**: `specs/managed-directory.md:205`
+// writes `if not __ManagedDirectory.exists(…)`, so `not` must be logical negation and not bitwise
+// complement. The RUNTIME still answers a 0/1 i64 (this tier has no `setcc`); it is the PARSER that tags
+// the result `ValueTypeTag.boolean`, which is exactly the arrangement `__managed_is_empty` already has.
+//
+// ⭐ **IT ASKS `GetFileAttributesA`, NOT `FindFirstFileA`**, which is the opposite of the choice
+// `__mf_exists` makes — see the `osFileAttributes` op's comment for why the argument that forbids a second
+// entry point there does not reach here: this takes a bare DIRECTORY path, and opening a search on one would
+// cost a handle to answer a question about one bit.
+function buildManagedDirectoryExists(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var afterCopy = module.addBlock(func, label: b"mdterm")
+	var missing = module.addBlock(func, label: b"mdmiss")
+	var present = module.addBlock(func, label: b"mdpresent")
+	var isDir = module.addBlock(func, label: b"mdisdir")
+	var notDir = module.addBlock(func, label: b"mdnotdir")
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0 as ValueId
+
+	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let rawAttrs = ids.mint()
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osFileAttributes(rawAttrs, pathPtrId: scratch))
+	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+	// `GetFileAttributesA` answers a DWORD, so the comparison is against the MASKED value: a raw i64 register
+	// holding 0x00000000FFFFFFFF is not -1, and testing it against -1 would call every missing path present.
+	let mask = emitConst(module, block: afterCopy, value: DwordMask, ids: ids)
+	let attrs = emitBin(module, block: afterCopy, a: rawAttrs, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let invalidConst = emitConst(module, block: afterCopy, value: InvalidFileAttributes, ids: ids)
+	let noSuchPath = emitCmp(module, block: afterCopy, a: attrs, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.condBranch(noSuchPath, thenBlockId: missing.id, elseBlockId: present.id))
+
+	let zeroAnswer = emitConst(module, block: missing, value: 0, ids: ids)
+	module.setTerminator(missing, op: StdOp.ret(zeroAnswer))
+
+	// The path exists — but `exists()` asks whether it is a DIRECTORY, so a plain file answers false.
+	let dirMask = emitConst(module, block: present, value: FileAttributeDirectory, ids: ids)
+	let dirBit = emitBin(module, block: present, a: attrs, b: dirMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let noBit = emitConst(module, block: present, value: 0, ids: ids)
+	let directory = emitCmp(module, block: present, a: dirBit, b: noBit, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(present, op: StdOp.condBranch(directory, thenBlockId: isDir.id, elseBlockId: notDir.id))
+
+	let yes = emitConst(module, block: isDir, value: 1, ids: ids)
+	module.setTerminator(isDir, op: StdOp.ret(yes))
+	let no = emitConst(module, block: notDir, value: 0, ids: ids)
+	module.setTerminator(notDir, op: StdOp.ret(no))
+
+	module.functions.push(func)
+end 'buildManagedDirectoryExists'
+
+// `__md_create(pathRec)` — VOID and throwing: `CreateDirectoryA(path, NULL)`, with a zero BOOL classified
+// through the shared errno mapping (`createFailed` as the catch-all).
+//
+// ⚠ It is NOT the file family's `buildManagedFilePathOperation`, even though the skeleton rhymes: that
+// builder is parameterized over `__ManagedFile`'s ops and its enum's flags, and threading a second enum
+// through it would make one function speak for two error types. The shared parts — the scratch copy, the
+// errno classification, the two exits — ARE shared; what is written here is the one call and its verdict.
+function buildManagedDirectoryCreate(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryCreateName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var afterCopy = module.addBlock(func, label: b"mdterm")
+	var failed = module.addBlock(func, label: b"mdfail")
+	var ok = module.addBlock(func, label: b"mdok")
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0 as ValueId
+
+	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let verdict = ids.mint()
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osDirCreate(verdict, pathPtrId: scratch))
+	let err = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.osLastError(err))
+	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+	let falseConst = emitConst(module, block: afterCopy, value: Win32False, ids: ids)
+	let refused = emitCmp(module, block: afterCopy, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.condBranch(refused, thenBlockId: failed.id, elseBlockId: ok.id))
+
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryCreateFailedFlag, ids: ids)
+	emitVoidOkReturn(module, block: ok, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryCreate'
+
+// ⭐⭐ **`__md_current_path() -> (arrRec, flag)` — THE WORKING DIRECTORY, THROUGH A GROW-AND-RETRY LOOP.**
+//
+// The API's answer means three different things (see `MaxPathBytes`), so the body is: try `MAX_PATH`; if it
+// fits, copy out; if it did not, DOUBLE and try again; if any attempt answers 0, free and throw
+// `currentPathFailed`.
+//
+// ⛔⛔ **IT WAS A STRAIGHT-LINE PAIR OF ATTEMPTS AND IT COULD NOT STAY ONE, BECAUSE THE SECOND ATTEMPT'S
+// SIZE HAS NO POSIX SOURCE (MAC5).** `GetCurrentDirectoryA` answers the REQUIRED size when the buffer is
+// too small, which is what made two attempts provably enough — the second buffer was the size the OS
+// itself named. `getcwd(buf, n)` names nothing: it answers the buffer or NULL with `ERANGE`, and there is
+// no call that reports the length of a working directory. So a lane serving this op can only report "too
+// small", and a retry at a size nobody named must come from the CALLER doubling. Two honest places to put
+// that doubling existed and this is the one the op's own contract demands: `StdOp.osDirCurrentPath` states
+// that the retry lives in Std *precisely so a backend does not own a buffer policy*, so hiding a doubling
+// loop inside the Darwin chunk would be the backend growing an allocation strategy the Std tier is holding
+// for it.
+//
+// ⭐ It is now `ProcessRuntime.buildProcessExecutablePath`'s loop exactly — same carried pair, same shared
+// three-way verdict, same doubling constant — and the two differ only in what "unavailable" means: an
+// executable path answers the empty string, a working directory THROWS. That convergence is the point:
+// there was one retry policy written two ways, and the Win32-only half of the difference has gone.
+//
+// ⚠ The raw cstring buffer is a scratch allocation this function owns end to end: it is freed before EVERY
+// exit, the throwing one included, and what the caller receives is the independent `__ManagedMemory` copy.
+function buildManagedDirectoryCurrentPath(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var attempt = module.addBlock(func, label: b"mdattempt")
+	var fitTest = module.addBlock(func, label: b"mdcpfit")
+	var grow = module.addBlock(func, label: b"mdgrow")
+	var failed = module.addBlock(func, label: b"mdfail")
+	var copyOut = module.addBlock(func, label: b"mdcopy")
+
+	// The buffer and its capacity are the loop's carried pair — the phi model is the only way a value
+	// crosses a merge at this tier, and `attempt` is the only block with more than one predecessor.
+	let buffer = ids.mint()
+	let capacity = ids.mint()
+	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
+
+	let firstSize = emitConst(module, block: entry, value: MaxPathBytes, ids: ids)
+	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
+
+	// ⚠ `fitTest`, `grow`, `failed` and `copyOut` carry NO block args and take no edge arguments: `attempt`
+	// dominates all four, so `buffer`, `capacity` and `written` are simply in scope.
+	let written = ids.mint()
+	emitIoPark(module, block: attempt, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(attempt, op: StdOp.osDirCurrentPath(written, bufLenId: capacity, bufPtrId: buffer))
+	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: failed, whenFits: copyOut, whenTooSmall: grow, ids: ids)
+
+	// Too small: release this attempt's buffer, double the capacity and go round again.
+	emitRawFree(module, block: grow, ptr: buffer, ids: ids)
+	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
+	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let grownBuf = emitRawAlloc(module, block: grow, byteCount: grownCapacity, ids: ids)
+	module.setTerminator(grow, op: StdOp.branch(attempt.id))
+	grow.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(grownBuf, second: grownCapacity)))
+
+	emitRawFree(module, block: failed, ptr: buffer, ids: ids)
+	emitErrorReturn(module, block: failed, flag: ManagedDirectoryCurrentPathFailedFlag, ids: ids)
+
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, ids: ids)
+	emitRawFree(module, block: built, ptr: buffer, ids: ids)
+	emitOkReturn(module, block: built, value: record, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryCurrentPath'
+
+// ⭐⭐ **ONE ATTEMPT'S THREE-WAY VERDICT FOR A Win32 CALL THAT FILLS A CALLER'S BUFFER AND ANSWERS A COUNT.**
+// `0` is a failure; `< capacity` means the answer is in the buffer, NUL included; anything else means the
+// buffer was too small. Three answers, one classification, and the callers differ only in where each of
+// the three goes.
+//
+// ⚠⚠ **THE `written == 0` TEST IS FIRST AND IT HAS TO BE: a 0 also satisfies `< capacity`**, so the fit test
+// alone would route a failure into the copy and read a buffer the OS never wrote. That ordering is the ONE
+// fact this function exists to hold — and it was written down TWICE, here and inline in `ProcessRuntime`'s
+// `GetModuleFileNameA` loop, until the W5 review folded them together. Nothing made the two agree, and what
+// a divergence produces is a read of undefined memory rather than a diagnostic.
+//
+// ⭐ **WHAT IT DOES NOT OWN IS THE MERGE ARGUMENTS, AND THAT IS THE HONEST SEAM.** `__md_current_path`
+// carries each attempt's buffer into all three exits as a block arg, because its two attempts reach ONE
+// `copyOut`/`failed` pair from different blocks; `__proc_exe_path`'s exits are all dominated by its loop
+// header, so its buffer is simply in scope and its edges carry nothing. The classification is one fact; the
+// phi shape is two, so the caller pushes its own `branchEdges`.
+//
+// ⚠ The `check` block is the CALLER's to create, so each builder keeps its own block ORDER and its own
+// label. It is the only block this verdict needs beyond the ones the caller already names.
+export function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	let refused = emitCmp(module, block: block, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(refused, thenBlockId: whenRefused.id, elseBlockId: check.id))
+
+	let fits = emitCmp(module, block: check, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: whenFits.id, elseBlockId: whenTooSmall.id))
+end 'emitFilledBufferVerdict'
+
+// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedFileRuntime` for its stated
+// reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,
+// and a builder that gains or loses a clause without the predicate following is a `try` that silently stops
+// being required (or an E3055 on a call that cannot fail). Checked in BOTH directions.
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic — one
+// constant so the lookup's message and the claim's message name the same author.
+let ManagedDirectoryOrdinalInstaller = b"the __ManagedDirectory runtime"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedDirectoryError` (7b, re-anchored at A1s)** — the twin of
+// `verifyManagedFileOrdinals`, which carries the whole argument: the case ORDER is the wire format, the
+// declaration it is verified against is `stdlib/Builtins.maxon`'s, and it is a free function because it
+// needs the `Project` and must run on every compile.
+export function verifyManagedDirectoryOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: ManagedDirectoryErrorTypeName, installer: ManagedDirectoryOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedDirectoryOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyManagedDirectoryOrdinals'
+
+function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
+	var directoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedDirectoryOrdinalInstaller)
+	directoryErrors.claim(ManagedDirectoryNotFoundCaseName, ordinal: ManagedDirectoryNotFoundOrdinal)
+	directoryErrors.claim(ManagedDirectoryAccessDeniedCaseName, ordinal: ManagedDirectoryAccessDeniedOrdinal)
+	directoryErrors.claim(ManagedDirectoryOpenSearchFailedCaseName, ordinal: ManagedDirectoryOpenSearchFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryNextFailedCaseName, ordinal: ManagedDirectoryNextFailedOrdinal)
+	// `filename()` on an exhausted iterator is non-throwing — see the ordinal block at the top of this file.
+	directoryErrors.neverThrown(ManagedDirectoryIteratorInvalidCaseName, ordinal: ManagedDirectoryIteratorInvalidOrdinal)
+	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryCurrentPathFailedCaseName, ordinal: ManagedDirectoryCurrentPathFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
+	directoryErrors.requireTotal()
+end 'claimManagedDirectoryOrdinals'
+
+export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesManagedDirectory 'noManagedDirectory'
+		return
+	end 'noManagedDirectory'
+
+	buildManagedDirectoryOpenSearch(module)
+	buildManagedDirectoryNext(module)
+	buildManagedDirectoryFilename(module)
+	buildManagedDirectoryClose(module)
+	buildManagedDirectoryDestruct(module)
+	buildManagedDirectoryExists(module)
+	buildManagedDirectoryCreate(module)
+	buildManagedDirectoryCurrentPath(module)
+
+	for func in module.functions 'eachFunc'
+		if not isManagedDirectoryRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+		let named = isThrowingManagedDirectoryRuntimeCallee(func.name)
+		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+		if stamped and not named 'stampedNotNamed'
+			panic("installManagedDirectoryRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedDirectoryRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.3)")
+		end 'stampedNotNamed'
+		if named and not stamped 'namedNotStamped'
+			panic("installManagedDirectoryRuntime: isThrowingManagedDirectoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.3)")
+		end 'namedNotStamped'
+
+		// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** R4.3's map
+		// is the OLDEST instance of this exposure — it shipped guarded only by its own panic — and D12 turned
+		// one instance into four. Asked, not described: the CALL is the check, so a missing arm fires here at
+		// install rather than in front of a user who forgot a `try`. Reasoning lives once, on
+		// `GtRuntime.runtimeCalleeSourceMethod`.
+		if named 'hasSourceMethod'
+			requireQuotableSourceSpelling(managedDirectorySourceMethodName(func.name), callee: func.name)
+		end 'hasSourceMethod'
+	end 'eachFunc'
+end 'installManagedDirectoryRuntime'
+
+// Every callee this file installs — what the drift guard iterates, what `scanRuntimeUsage` reads to set
+// `usesManagedDirectory`, and what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows
+// target. A PREFIX test rather than an eight-way `or`: every entry point this file installs is `__md_`-named
+// by construction, so a ninth is covered without being remembered here as well as declared above.
+export function isManagedDirectoryRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ManagedDirectoryRuntimePrefix)
+end 'isManagedDirectoryRuntimeCallee'

@@ -1,0 +1,22 @@
+// Test: error.a-map-key-array-is-refused-for-its-element
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+typealias OpaqueArr = Array with Opaque
+typealias OpaqueArrMap = Map with (OpaqueArr, Val)
+
+function main() returns ExitCode
+	var m = OpaqueArrMap.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:13:11: Type 'OpaqueArr' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:13:11: Type 'OpaqueArr' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'

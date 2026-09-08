@@ -1,0 +1,195 @@
+// Test: top-level-var-array-literal
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 52
+---
+data {
+  __data_items@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_items
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 1
+    arm64.movImm x2, 12
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#16
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#16
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x3, 1
+    arm64.b.ls __im_slow#16
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#16
+  __im_viewed:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_store
+  __im_slow#16:
+    arm64.bl __managed_set
+    arm64.b __im_cont#15
+  __im_store:
+    arm64.add x0, x3, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+  __im_cont#15:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at top-level-var-array-literal.test:5: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.leaGlobal x0, __data_items
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow#23
+  __im_load#24:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#34
+  __im_empty#25:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#35
+  __im_slow#23:
+    arm64.bl __managed_get
+    arm64.b __im_cont#22
+  critsplit#35:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#22
+  critsplit#34:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#22:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x19, 0
+    arm64.b trycont#5
+  tryok#3:
+    arm64.movRegReg x19, x0
+  trycont#5:
+    arm64.leaGlobal x0, __data_items
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#27
+  __im_load#28:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 8
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#36
+  __im_empty#29:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#37
+  __im_slow#27:
+    arm64.bl __managed_get
+    arm64.b __im_cont#26
+  critsplit#37:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#26
+  critsplit#36:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#6
+  tryerr#7:
+    arm64.movImm x20, 0
+    arm64.b trycont#8
+  tryok#6:
+    arm64.movRegReg x20, x0
+  trycont#8:
+    arm64.leaGlobal x0, __data_items
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 2
+    arm64.b.ls __im_slow#31
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#38
+  __im_empty#33:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#39
+  __im_slow#31:
+    arm64.bl __managed_get
+    arm64.b __im_cont#30
+  critsplit#39:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#30
+  critsplit#38:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#30:
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#11
+  tryerr#10:
+    arm64.movImm x0, 0
+  trycont#11:
+    arm64.add x1, x19, x20
+    arm64.add x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at top-level-var-array-literal.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

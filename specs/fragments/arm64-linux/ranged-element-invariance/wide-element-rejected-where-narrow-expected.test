@@ -1,0 +1,18 @@
+// Test: wide-element-rejected-where-narrow-expected
+typealias Narrow = int(0 to 16)
+typealias NarrowCol = Array with Narrow
+typealias Wide = int(0 to u64.max)
+typealias WideCol = Array with Wide
+
+function readNarrow(col NarrowCol) returns Narrow
+	return try col.get(0) otherwise panic("get")
+end 'readNarrow'
+
+function main() returns ExitCode
+	var wide = WideCol.create()
+	wide.push(7)
+	return readNarrow(wide)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:9: argument type mismatch for 'col': expected 'NarrowCol', got 'WideCol'

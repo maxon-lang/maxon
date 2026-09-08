@@ -1,0 +1,55 @@
+// Test: while-loops.carried-var-assigned-only-inside-an-if
+function main() returns ExitCode
+	var x = 1
+	var i = 0
+	while i < 3 'l'
+		if i == 1 'b'
+			x = 2
+		end 'b'
+		i = i + 1
+	end 'l'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 1
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, whileexit
+  l:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, critsplit
+  b:
+    x64.movRegImm32 rcx, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rcx, r8
+  ifcont:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r8, rcx
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at while-loops.carried-var-assigned-only-inside-an-if.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

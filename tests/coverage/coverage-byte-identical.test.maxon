@@ -1,0 +1,135 @@
+// coverage-byte-identical.test.maxon — instrumentation is a SEPARATE BUILD, and it may not leak into an
+// ordinary one.
+//
+// The debug-info sidecar is metadata and the executable is byte-identical with it and without it. Coverage
+// is the OPPOSITE, and deliberately so: it emits a counter increment per point and a dump on the way out,
+// so the instrumented image is a DIFFERENT program from the one that ships. Both halves of that need
+// gating, and each is blind to the other's failure:
+//   * instrumentation that reached an ordinary build would make every binary a user ships pay for counters
+//     nobody reads, and would silently change what every other case in this tree measures;
+//   * instrumentation that did NOT reach the flagged build would leave a binary with no counters at all —
+//     and, joined against a point table, a report full of zeroes that reads exactly like untested code.
+//
+// ⭐⭐ **ONE STAGED SOURCE PATH AND ONE OUTPUT PATH, BUILT THREE TIMES.** Both paths reach the emitted
+// image — the SOURCE path through the spans it carries, and the OUTPUT BASENAME on Mach-O as the ad-hoc
+// code signature's identifier, whose LENGTH moves the `__LINKEDIT` sizes — so either one left to vary
+// reports a difference the flag never caused. Every build is handed the same `-o`, and each image is
+// COPIED ASIDE under a name no build writes before the next build is run.
+//
+// ⭐ **THE SECOND ORDINARY BUILD IS THE POSITIVE CONTROL, AND IT IS NOT OPTIONAL.** A comparison that can
+// only report "different" proves nothing by reporting it. Two ordinary builds of one source to one path
+// are asserted byte-identical FIRST; only then does a difference against the instrumented build mean the
+// flag caused it rather than the build being non-reproducible.
+//
+// ⛔ **NO WRITER STAMPS A BUILD TIME INTO THE IMAGE** — the PE writer zeroes every `TimeDateStamp`, and
+// neither the Mach-O nor the ELF writer reads a clock. That is what makes raw byte identity the right
+// instrument here rather than a comparison masking known noise: masking hides whatever else drifted into
+// the bytes it covers.
+//
+// ⛔ **AN ORDINARY BUILD WRITES NO COUNTER FILE**, which is the half a byte comparison alone is blind to:
+// two images could agree while an ordinary build left a stale data file behind for a later report to join
+// against the wrong binary.
+
+// This case's staging label, and the ONE output path every build here is handed.
+let ByteIdenticalCaseLabel = "byte-identical"
+let ImageOutputStem = "image"
+
+// Where each build's image is parked: names no build writes, inside the case's own staging tree.
+let FirstOrdinaryImageName = "retained-ordinary-first"
+let SecondOrdinaryImageName = "retained-ordinary-second"
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'instrumentation reaches the flagged build and no other, and an ordinary build writes no counters'
+	let staged = stagedProgram(ByteIdenticalCaseLabel, fixture: StatesFixtureName)
+	let image = builtExecutable(staged, stem: ImageOutputStem)
+	let data = coverageDataPath(image)
+
+	try requirePlainBuild(staged, output: image)
+	try requireNoCounterFile(data, what: "the first ordinary build")
+	let firstOrdinary = retainImage(image, staged: staged, name: FirstOrdinaryImageName)
+
+	try requirePlainBuild(staged, output: image)
+	try requireNoCounterFile(data, what: "the second ordinary build")
+	let secondOrdinary = retainImage(image, staged: staged, name: SecondOrdinaryImageName)
+
+	// ⭐ THE CONTROL. Same source, same output path, same flags: the two images must agree, or a
+	// difference below says nothing about the flag.
+	try requireIdenticalBytes(firstOrdinary, second: secondOrdinary)
+
+	try requireCoverageBuild(staged, output: image)
+
+	// ⭐ THE HEADLINE. The only thing that changed is the flag, so a difference here IS the
+	// instrumentation — and its absence means the flagged build emitted no counters.
+	try requireDifferentBytes(firstOrdinary, second: image)
+end 'instrumentation reaches the flagged build and no other, and an ordinary build writes no counters'
+
+// ============================================================================================
+// THE COUNTER FILE
+// ============================================================================================
+
+// A counter file is written by the PROGRAM, not by the build, so an ordinary build must leave none. One
+// left behind would be joined by a later `report` against whichever binary now sits beside it.
+function requireNoCounterFile(data FilePath, what String) throws TestFailure
+	try Expect.isFalse(File.exists(data), message: "{what} left {data.toString()} behind. Counters are written by an instrumented program on its way out and never by a build; a data file beside an uninstrumented binary is one a later report will happily read, and it holds another build's numbers.")
+end 'requireNoCounterFile'
+
+// ============================================================================================
+// COMPARING THE IMAGES
+// ============================================================================================
+
+// The image a build just wrote, moved aside so the next build can be handed the same output path. The
+// original goes, so a build that produces nothing cannot be read as though it had produced the same thing
+// twice — the caller's existence assertion is what would otherwise be satisfied by the stale file.
+function retainImage(built FilePath, staged FilePath, name String) returns FilePath
+	let retained = staged.join(name)
+	try File.writeBinary(retained, content: fileBytes(built)) otherwise panic("coverage tests: the gate could not run — could not retain {built.toString()} as {retained.toString()}.")
+	try File.delete(built) otherwise panic("coverage tests: the gate could not run — could not clear {built.toString()}, so the next build cannot be given that path.")
+
+	return retained
+end 'retainImage'
+
+function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
+	let firstBytes = fileBytes(first)
+	let secondBytes = fileBytes(second)
+	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty. A build that wrote nothing has nothing to compare, and two of them would agree.")
+	try Expect.isTrue(bytesAreIdentical(firstBytes, second: secondBytes), message: "two ORDINARY builds of one staged source to one output path produced DIFFERENT images ({firstBytes.count()} bytes against {secondBytes.count()}). Nothing varied between them — no writer stamps a clock into an image — so the build is not reproducible, and the difference this case goes on to attribute to `{CoverageBuildFlag}` could not be attributed to anything.")
+end 'requireIdenticalBytes'
+
+function requireDifferentBytes(first FilePath, second FilePath) throws TestFailure
+	let firstBytes = fileBytes(first)
+	let secondBytes = fileBytes(second)
+	try Expect.notEqual(firstBytes.count() as AssertedInt, expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
+	try Expect.notEqual(secondBytes.count() as AssertedInt, expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
+	try Expect.isFalse(bytesAreIdentical(firstBytes, second: secondBytes), message: "`{BuildCommandName} … {CoverageBuildFlag}` emitted the SAME image as an ordinary build. Instrumenting adds a counter increment per coverage point and a dump on the way out, so the two cannot be the same program: an identical image means the flag was accepted and did nothing, and every counter a report then reads is a zero that is indistinguishable from untested code.")
+end 'requireDifferentBytes'
+
+function bytesAreIdentical(first ByteArray, second ByteArray) returns bool
+	if first.count() != second.count() 'differentLengths'
+		return false
+	end 'differentLengths'
+
+	var offset = 0
+	for octet in first 'eachByte'
+		let other = try second.get(offset) otherwise return false
+		if octet != other 'differs'
+			return false
+		end 'differs'
+
+		offset = offset + 1
+	end 'eachByte'
+
+	return true
+end 'bytesAreIdentical'
+
+// One emitted executable's bytes. Its absence is asked here rather than read as an empty file: a build
+// that exited 0 and wrote nothing is a claim the caller's exit-code assertion cannot see.
+function fileBytes(path FilePath) returns ByteArray
+	if not File.exists(path) 'notWritten'
+		panic("coverage tests: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare.")
+	end 'notWritten'
+
+	return try File.readBinary(path) otherwise panic("coverage tests: the gate could not run — could not read {path.toString()}.")
+end 'fileBytes'

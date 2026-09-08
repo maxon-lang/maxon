@@ -1,0 +1,19 @@
+// Test: error.multi-segment-qualified-call-to-module-scoped-function
+// --- file: lib/inner/deep.maxon
+typealias Integer = int(0 to 125)
+
+module function scopedHelper() returns Integer
+	return 7
+end 'scopedHelper'
+
+export function seen() returns Integer
+	return scopedHelper()
+end 'seen'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return lib.inner.scopedHelper()
+end 'main'
+---
+CompilerError:
+error E3088: app/<fragment>:15:9: function 'scopedHelper' is module-scoped and not visible from this directory

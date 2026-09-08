@@ -1,0 +1,47 @@
+// Test: first-class-function.capturing-closure-through-witness-dispatch-errors
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+interface Stasher
+	function stash(fn UnaryOp) returns Integer
+end 'Stasher'
+
+type Slot implements Stasher
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+
+	export function stash(fn UnaryOp) returns Integer
+		self.op = fn
+		return 7
+	end 'stash'
+end 'Slot'
+
+type W uses T where T is Stasher
+	export var inner as T
+
+	export static function create(inner T) returns Self
+		return Self{inner: inner}
+	end 'create'
+
+	export function put(k Integer) returns Integer
+		return self.inner.stash(function(n Integer) gives n + k)
+	end 'put'
+end 'W'
+
+typealias SlotW = W with Slot
+
+function plain(n Integer) returns Integer
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	let s = Slot.create(plain)
+	let w = SlotW.create(s)
+	return w.put(5)
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:30:27: cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

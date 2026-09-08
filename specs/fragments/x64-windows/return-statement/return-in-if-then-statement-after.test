@@ -1,0 +1,38 @@
+// Test: return-in-if-then-statement-after
+function pick(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	let fallback = 4
+	return fallback
+end 'pick'
+
+function main() returns ExitCode
+	if pick(9) != 1 'tookFalsePath'
+		return 2
+	end 'tookFalsePath'
+
+	return pick(0)
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  positive:
+    x64.movRegImm32 rax, 1
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, ifcont
+  tookFalsePath:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 4
+  __il_cont#10:
+    x64.popReg rbp
+    x64.ret
+}

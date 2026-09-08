@@ -1,0 +1,26 @@
+// Test: directives.not-doubles-back
+function main() returns ExitCode
+	#if not os(Wasi)
+		#if os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#else
+		#if not os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#endif
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.epilogue 16
+    arm64.ret
+}

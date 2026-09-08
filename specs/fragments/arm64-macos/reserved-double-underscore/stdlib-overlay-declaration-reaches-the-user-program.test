@@ -1,0 +1,72 @@
+// Test: stdlib-overlay-declaration-reaches-the-user-program
+// --- stdlib-overlay: Builtins.maxon
+export enum __OverlayProbe
+	first
+	second
+end '__OverlayProbe'
+// --- file: main.maxon
+function rank(e __OverlayProbe) returns ExitCode
+	return match e 'which'
+		first gives 1
+		second gives 42
+	end 'which'
+end 'rank'
+
+function main() returns ExitCode
+	return rank(__OverlayProbe.second)
+end 'main'
+---
+ExitCode: 42
+---
+func @rank {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.movImm x0, 42
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+  matcharm:
+    arm64.movImm x1, 42
+  matchcont:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.b.le __rc_ok
+  __il_slow:
+    arm64.bl rank
+    arm64.b __il_cont
+  __rc_ok:
+    arm64.movRegReg x0, x1
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

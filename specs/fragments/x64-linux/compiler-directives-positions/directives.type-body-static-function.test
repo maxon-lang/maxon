@@ -1,0 +1,25 @@
+// Test: directives.type-body-static-function
+type Holder
+	#if testing(false)
+		static function value() returns ExitCode
+			return 23
+		end 'value'
+	#endif
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.value()
+end 'main'
+---
+ExitCode: 23
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.movRegImm32 r8, 23
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}

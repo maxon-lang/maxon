@@ -1,0 +1,58 @@
+// Test: error.contested-generic-alias-at-the-opaque-copy-gate
+// --- file: acontainer.maxon
+export type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+// --- file: bhandles.maxon
+type Handle
+	export var f as __ManagedFile
+
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Handle'
+
+typealias Bag = Array with Handle
+typealias NestedContainer = Container with Bag
+
+export function useHandles() returns Integer
+	var sa = Bag.create()
+	sa.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 0))
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	return 1
+end 'useHandles'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: cmain.maxon
+typealias Low = int(0 to 100)
+typealias Bag = Array with Low
+typealias NestedContainer = Container with Bag
+
+function main() returns ExitCode
+	var sa = Bag.create()
+	sa.push(7)
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	var dup = nc.duplicate()
+	return useHandles() - 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+note: stdlib/Array.maxon:161:32: raised inside the library, on behalf of the construct above

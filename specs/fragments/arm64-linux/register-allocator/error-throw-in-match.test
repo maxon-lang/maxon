@@ -1,0 +1,91 @@
+// Test: error-throw-in-match
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	invalidInput
+	notFound
+end 'MyError'
+
+function lookup(key Integer) returns Integer throws MyError
+	match key 'dispatch'
+		1 then return 100
+		2 then return 200
+		default then throw MyError.notFound
+	end 'dispatch'
+end 'lookup'
+
+function main() returns ExitCode
+	let a = try lookup(2) otherwise 0
+	let b = try lookup(99) otherwise 42
+	return (a + b) and 125
+end 'main'
+---
+ExitCode: 112
+---
+func @lookup {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 100
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdefault
+  matcharm#2:
+    arm64.movImm x0, 200
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdefault:
+    arm64.movImm x9, 2
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 2
+    arm64.bl lookup
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.movImm x19, 0
+    arm64.b trycont#3
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont#3:
+    arm64.movImm x0, 99
+    arm64.bl lookup
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#6
+  tryerr#5:
+    arm64.movImm x0, 42
+  trycont#6:
+    arm64.add x0, x19, x0
+    arm64.movImm x16, 125
+    arm64.and x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at error-throw-in-match.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

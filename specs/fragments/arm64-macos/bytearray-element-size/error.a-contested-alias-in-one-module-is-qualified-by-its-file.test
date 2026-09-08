@@ -1,0 +1,21 @@
+// Test: error.a-contested-alias-in-one-module-is-qualified-by-its-file
+// --- file: pkg/lib.maxon
+export typealias Byte = int(0 to 1000)
+export typealias Bytes = Array with Byte
+
+export function takesWide(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesWide'
+
+// --- file: pkg/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = Bytes.create()
+	mine.push(65)
+	return takesWide(7) + mine.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: pkg/<fragment>:17:9: argument type mismatch for 'b': expected 'pkg/<fragment>.Bytes', got 'int'

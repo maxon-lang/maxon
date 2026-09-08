@@ -1,0 +1,79 @@
+// Test: a-case-named-enum-sharing-a-line-with-the-next-case
+typealias Idx = int(0 to 100)
+
+enum Kw
+	enum omega
+end 'Kw'
+
+type Box
+	export var base as Idx
+
+	export static function create() returns Box
+		return Self{base: 0}
+	end 'create'
+
+	export function total() returns Idx
+		return self.base + helper()
+	end 'total'
+end
+
+function helper() returns Idx
+	return 12
+end 'helper'
+
+function main() returns ExitCode
+	match Kw.omega 'm'
+		enum then return 1
+		omega then return Box.create().total()
+	end 'm'
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_cont:
+    x64.leaRegRegImm32 r8, rax, 12
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-case-named-enum-sharing-a-line-with-the-next-case.test:16: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+  matcharm:
+    x64.leaRegSlot rcx, slot0
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.callDirect Box.total
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

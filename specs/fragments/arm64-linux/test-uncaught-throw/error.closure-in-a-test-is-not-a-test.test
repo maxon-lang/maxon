@@ -1,0 +1,29 @@
+// Test: error.closure-in-a-test-is-not-a-test
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup() returns Tally throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+typealias Tally = int(0 to 100)
+typealias Producer = function() returns Tally
+
+function callIt(produce Producer) returns Tally
+	return produce()
+end 'callIt'
+
+test 'runs a closure'
+	let got = callIt(function() gives try lookup())
+	print("got {got}\n")
+end 'runs a closure'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2001: <fragment>:19:36: try without otherwise requires the enclosing function to have 'throws'

@@ -1,0 +1,35 @@
+// Test: dispatch-throwing-arg-type-mismatch-error
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+interface Risky
+	function risk(n Integer) returns Integer throws Boom
+end 'Risky'
+
+type Safe implements Risky
+	export var tag as Integer
+
+	static function create() returns Safe
+		return Self{tag: 0}
+	end 'create'
+
+	function risk(n Integer) returns Integer throws Boom
+		return n + 1
+	end 'risk'
+end 'Safe'
+
+function drive(r Risky) returns Integer
+	return try r.risk("no") otherwise 0
+end 'drive'
+
+function main() returns ExitCode
+	print("v={drive(Safe.create())}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:26:15: argument type mismatch for 'n': expected 'Integer', got 'String'

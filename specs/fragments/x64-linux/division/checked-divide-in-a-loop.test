@@ -1,0 +1,63 @@
+// Test: checked-divide-in-a-loop
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 1
+	while i <= 6 'loop'
+		sum = sum + (try (100 / opaque(i)) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 244
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rcx, 1
+  whilehdr:
+    x64.cmpRegImm32 rcx, 6
+    x64.jcc greater, whileexit
+  loop:
+    x64.movRegImm32 rax, 100
+  __il_cont:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rsi
+    x64.movRegReg rdi, rcx
+    x64.orRegReg rdi, rcx, rsi
+    x64.cqo
+    x64.idivReg rdi
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 rax, 0
+  trycont:
+    x64.leaRegRegReg r8, r8, rax
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at checked-divide-in-a-loop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

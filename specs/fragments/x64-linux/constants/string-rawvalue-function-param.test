@@ -1,0 +1,90 @@
+// Test: string-rawvalue-function-param
+enum Planet
+	earth = "Earth"
+	mars = "Mars"
+	venus = "Venus"
+end 'Planet'
+
+function getName(p Planet) returns String
+	return p.rawValue
+end 'getName'
+
+function main() returns ExitCode
+	let planet = Planet.mars
+	let name = getName(planet)
+	if name == "Mars" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @getName {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "Earth"
+    x64.imulRegReg rax, rax, rdx
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg equal, rdx
+    x64.leaRegRdata rsi, [rip + __str_rec_4]  ; "Mars"
+    x64.imulRegReg rdx, rdx, rsi
+    x64.leaRegRegReg rax, rax, rdx
+    x64.cmpRegImm32 rcx, 2
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_5]  ; "Venus"
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getName
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "Mars"
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

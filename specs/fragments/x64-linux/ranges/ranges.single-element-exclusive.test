@@ -1,0 +1,44 @@
+// Test: ranges.single-element-exclusive
+function main() returns ExitCode
+		var count = 0
+		for _ in 5 upto 6 'loop'
+				count = count + 1
+		end 'loop'
+		return count
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 5
+  forhdr:
+    x64.cmpRegImm32 rax, 6
+    x64.jcc greaterEqual, forexit
+  loop:
+    x64.leaRegRegImm32 r8, r8, 1
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ranges.single-element-exclusive.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,82 @@
+// Test: the-inline-conditional-spelling-of-the-same-sequence
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function picked(flag bool) returns Marker
+	return Marker.function if (flag) else Marker.other
+end 'picked'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	if picked(true) == Marker.function 'ok'
+		return pick(Victim.found(42))
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  ternarytrue:
+    arm64.movImm x0, 0
+  __il_cont#3:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x19, 42
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#10:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.b __il_cont#8
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#11:
+    arm64.movImm x19, 0
+  __il_cont#8:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

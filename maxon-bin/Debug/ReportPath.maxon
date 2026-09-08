@@ -1,0 +1,81 @@
+// Debug/ReportPath.maxon — how a report spells a file on disk and a whole number.
+//
+// ⭐⭐ **ONE RULE EACH, because THREE drivers print into transcripts that are DIFFED** — the coverage
+// report, the profile report and its launcher's refusals, and the `test` report. A second copy would
+// not fail to compile; it would make one transcript machine-specific, or make two drivers disagree on
+// a spelling alone over a measurement they read identically. `tests/coverage`, `tests/profile` and
+// `tests/test-command` compare those transcripts byte for byte.
+
+// ⭐ Relative to the working directory when the file is under it, so a transcript is the same on every
+// machine, and the caller's own spelling when it is not — which is honest, because a file outside the
+// tree has no shorter true name. Separators are normalized to `/` so a Windows run and a POSIX run
+// agree: the host answers with its own separator, and an expectation carrying a backslash would be
+// right on exactly one platform.
+export function reportPathDisplay(path FilePath) returns String
+	let workingDirectory = Directory.currentPath()
+
+	let relative = try path.resolve(workingDirectory).relativeTo(workingDirectory) otherwise 'onAnotherRoot'
+		return forwardSlashed(path.toString())
+	end 'onAnotherRoot'
+
+	// The working directory itself relativizes to nothing at all, which names no file in a sentence like
+	// "not a directory: ". `.` is what a relative path to itself is called.
+	if relative.isEmpty() 'theWorkingDirectoryItself'
+		return WorkingDirectoryDisplay
+	end 'theWorkingDirectoryItself'
+
+	let spelled = relative.toString()
+
+	// A relative path that CLIMBS is no shorter a name than the caller's spelling, and it is a worse one:
+	// it is read against a working directory the reader has to already know.
+	if spelled.startsWith(ParentDirectoryPrefix) 'outsideTheWorkingDirectory'
+		return forwardSlashed(path.toString())
+	end 'outsideTheWorkingDirectory'
+
+	return forwardSlashed(spelled)
+end 'reportPathDisplay'
+
+// A path a report holds only as a SPELLING — an executable named on the command line, a source file
+// named by a sidecar. A spelling the host cannot parse as a path is printed as it was given, because
+// there is no path to relativise it against.
+export function reportPathDisplay(spelled String) returns String
+	let path = try FilePath.from(spelled) otherwise return forwardSlashed(spelled)
+
+	return reportPathDisplay(path)
+end 'reportPathDisplay'
+
+let WorkingDirectoryDisplay = "."
+let ParentDirectoryPrefix = ".."
+
+// The Windows separator, as the one byte a report must never carry. Named because it appears only in
+// the substitution below, where a bare literal would read as decoration rather than as the whole point.
+let HostAlienSeparator = "\\"
+let ReportSeparator = "/"
+
+// `replace` is a no-op on POSIX, where the two separators already agree.
+function forwardSlashed(spelled String) returns String
+	return spelled.replace(HostAlienSeparator, with: ReportSeparator)
+end 'forwardSlashed'
+
+// A quantity a report prints as a number — a deadline in seconds, a rate in hertz, a share of a run.
+// Full float range: the rule below is about SPELLING and constrains none of them.
+export typealias ReportNumber = float(f64.min to f64.max)
+
+// ⭐ The SHORTEST text that reads back to a number. Maxon gives every float a fractional digit, so a
+// whole number of seconds, of hertz or of percent would otherwise print `600.0` where the reference
+// driver — which these transcripts are held to byte for byte — writes `600`. Only a lone trailing zero
+// is dropped: `0.5` keeps both halves and an exponent form has no fraction to drop.
+export function reportWholeNumberText(value ReportNumber) returns String
+	let spelled = "{value}"
+	let halves = spelled.split(DecimalPoint)
+	if (try halves.get(1) otherwise "") != WholeFraction 'notAWholeNumber'
+		return spelled
+	end 'notAWholeNumber'
+
+	return try halves.get(0) otherwise spelled
+end 'reportWholeNumberText'
+
+let DecimalPoint = "."
+
+// The fraction a whole number prints, and the only one this drops.
+let WholeFraction = "0"

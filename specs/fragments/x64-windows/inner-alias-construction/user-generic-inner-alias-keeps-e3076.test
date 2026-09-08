@@ -1,0 +1,26 @@
+// Test: user-generic-inner-alias-keeps-e3076
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	static function make() returns ExitCode
+		let p = IntPair{a: 9}
+		return p.a
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+---
+CompilerError:
+error E3076: <fragment>:16:19: type 'IntPair' can only be constructed from within its own methods; use a static factory method instead

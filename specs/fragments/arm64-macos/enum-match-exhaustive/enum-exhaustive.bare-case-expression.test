@@ -1,0 +1,40 @@
+// Test: enum-exhaustive.bare-case-expression
+enum Status
+		pending
+		approved
+		rejected
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.approved
+	let code = match s 'eval'
+		pending gives 0
+		approved gives 1
+		rejected gives 2
+	end 'eval'
+	return code
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm:
+    arm64.movImm x0, 1
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at enum-exhaustive.bare-case-expression.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

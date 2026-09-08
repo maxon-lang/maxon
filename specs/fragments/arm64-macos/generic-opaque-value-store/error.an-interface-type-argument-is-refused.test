@@ -1,0 +1,40 @@
+// Test: error.an-interface-type-argument-is-refused
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Box uses T
+	var value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns T
+		return value
+	end 'get'
+end 'Box'
+
+typealias NamedBox = Box with Named
+
+function main() returns ExitCode
+	let b = NamedBox.create(Thing.create(3))
+	return b.get().label().length()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:32:31: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument

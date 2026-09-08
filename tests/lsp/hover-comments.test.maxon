@@ -1,0 +1,63 @@
+// hover-comments.test.maxon — hover over text that only LOOKS like a declaration.
+//
+// ⭐ **THE THIRD TEST IS WHAT KEEPS THE FIRST TWO HONEST.** "Answers nothing inside a comment" is
+// satisfied by a server that answers nothing anywhere, so the positive case — a real name on the same
+// line, after the comment closes — has to sit beside them.
+//
+// Three of the twenty-four recovered hover tests; the harness is `hover-probe.test.maxon`'s and
+// `hover-declarations.test.maxon` holds the five that hover over real declarations.
+
+test 'hover excludes text in line comments'
+	// Request hover on 'for' inside the line comment (line 0, col 24)
+	// Should return error since there's no hover for text inside comments
+	//
+	// ⛔ The recovered test expected a THROWN `NoHoverInfo`. Absence is option-shaped here instead: an
+	// error and an empty string are both sentinels inside their own domain, and the second one fails
+	// silently the day a real rendering is empty.
+	let document = lineCommentDocument()
+
+	try expectNoHover(document, line: 0, character: 24, note: "`for` inside a LINE COMMENT is prose, not a keyword. A server that hovers it is tokenising the comment body, which would make every English word in a file hoverable.")
+end 'hover excludes text in line comments'
+
+test 'hover excludes text in block comments'
+	// Request hover on 'for' in the block comment (line 1, col 17)
+	// Should return error since there's no hover for text inside comments
+	//
+	// ⚠ The fixture's lines 1 and 2 begin with THREE SPACES, and column 17 is counted against them.
+	let document = blockCommentDocument()
+
+	try expectNoHover(document, line: 1, character: 17, note: "`for` inside a BLOCK COMMENT is prose. The line-comment case and this one fail differently in a scanner that handles only one of the two comment forms, so both are asked.")
+end 'hover excludes text in block comments'
+
+test 'hover works after block comment ends'
+	// Request hover on 'function' keyword after the block comment (line 0, col 18)
+	//
+	// The positive counterpart to the two exclusion tests: it proves the exclusion is BOUNDED. A scanner
+	// that swallowed the rest of the line after `*/` would pass both of those and fail this one.
+	let document = inlineBlockCommentDocument()
+	let rendering = try hoverRendering(document, line: 0, character: 18)
+
+	try Expect.contains(rendering, needle: "function", message: "code on the same line AFTER a closed block comment hovers normally.")
+end 'hover works after block comment ends'
+
+function lineCommentDocument() returns String
+	return String.from(b"// This function uses for loops and if statements
+function test() returns int
+    return 42
+end 'test'")
+end 'lineCommentDocument'
+
+function blockCommentDocument() returns String
+	return String.from(b"/* This is a block comment
+   that mentions for loops
+   and if statements */
+function test() returns int
+    return 42
+end 'test'")
+end 'blockCommentDocument'
+
+function inlineBlockCommentDocument() returns String
+	return String.from(b"/* comment */ function test() returns int
+    return 42
+end 'test'")
+end 'inlineBlockCommentDocument'

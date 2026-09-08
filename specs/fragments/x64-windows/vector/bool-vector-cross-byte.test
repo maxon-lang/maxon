@@ -1,0 +1,177 @@
+// Test: bool-vector-cross-byte
+typealias Bits16 = Vector with 16 bool
+
+function main() returns ExitCode
+	var v = Bits16.create()
+	try v.set(0, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(8, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(15, value: true) otherwise panic("test invariant: set OOB")
+	var count = 0
+	var i = 0
+	while i < v.count() 'scan'
+		let bit = try v.get(i) otherwise false
+		if bit 'isSet'
+			count = count + 1
+		end 'isSet'
+		i = i + 1
+	end 'scan'
+	return count
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N16_bool]
+    x64.movRegImm32 rdx, 16
+    x64.callDirect Vector.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N16_bool]
+    x64.movRegImm32 rsi, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at bool-vector-cross-byte.test:6: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N16_bool]
+    x64.movRegImm32 rsi, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at bool-vector-cross-byte.test:7: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 rdx, 8
+    x64.movRegImm32 rax, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N16_bool]
+    x64.movRegImm32 rsi, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at bool-vector-cross-byte.test:8: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegImm32 rdx, 15
+    x64.movRegImm32 rax, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N16_bool]
+    x64.movRegImm32 rsi, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at bool-vector-cross-byte.test:9: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.movRegImm32 rax, 16
+  __il_cont:
+    x64.cmpRegReg r13, rax
+    x64.jcc greaterEqual, whileexit
+  scan:
+    x64.leaRegRdata rax, [rip + __layout_Vector_N16_bool]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#12
+  tryerr#13:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok#12:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  isSet:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r12
+  ifcont:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at bool-vector-cross-byte.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

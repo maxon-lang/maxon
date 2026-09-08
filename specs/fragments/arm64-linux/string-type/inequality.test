@@ -1,0 +1,28 @@
+// Test: inequality
+function main() returns ExitCode
+	let s = "hello"
+	if s != "world" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_2  ; "hello"
+    arm64.leaRdata x1, __str_rec_3  ; "world"
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont
+  check:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

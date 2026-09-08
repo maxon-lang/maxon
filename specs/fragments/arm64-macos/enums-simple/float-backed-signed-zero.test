@@ -1,0 +1,37 @@
+// Test: float-backed-signed-zero
+enum SignedZero
+	negz = -0.0
+	posz = 0.0
+end 'SignedZero'
+
+function main() returns ExitCode
+	let x = SignedZero.negz
+	return match x 'check'
+		negz gives 4
+		posz gives 7
+	end 'check'
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm:
+    arm64.movImm x0, 4
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at float-backed-signed-zero.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

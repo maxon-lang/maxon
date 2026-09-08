@@ -1,0 +1,310 @@
+// coverage-branch-arms.test.maxon — branch coverage is REAL, and it reaches the two arms a line table can
+// never describe: the `else` nobody wrote, and the `match` case nobody took.
+//
+// ⭐⭐ **THIS IS THE THING NO LINE TABLE CAN DO.** A `.mxdbg` line row is `(codeOffset, file, line, col,
+// flags)` — no successor, no edge, no condition identity. An `if` with no `else` therefore has NO ROW for
+// the arm it does not take, and cannot have one: that arm has no source text. Instrumentation is the only
+// place its count can come from, which is why a port that reports lines and stops has not ported this.
+//
+// ⭐⭐ **AND `match`, WHICH IS THE ONE THAT READS GREEN WHEN IT IS WRONG.** Maxon's primary dispatch
+// construct mints an arm per case, and a report that does not know that says `branches: 0/0 arms taken`
+// with nothing beside any arm — three falsehoods at once over a program with an untested case, the worst
+// being a green total, because a green number gets trusted. So the summary is asserted to instrument a
+// non-zero number of arms AND to leave one untaken, and the untaken arm is asserted at exactly 0.
+//
+// ⭐ **WHAT IS PINNED IS RELATIONSHIPS AND SHAPES, NEVER COUNTS.** How many times a taken arm ran moves
+// with the fixture; that it ran at all does not. How many arms a `match` has is the FIXTURE's, so it is
+// counted out of the staged source rather than written here — a fixture that grows a case grows what is
+// demanded of the report.
+//
+// ⛔ **EVERY BRANCH THIS CASE NAMES IS FOUND BY ANCHOR.** A branch is identified by its construct's own
+// position, and an arm by its own line, so both are looked up by the line the staged fixture anchors
+// rather than by a number that goes stale when the fixture grows a line.
+
+// This case's staging label.
+let BranchArmsCaseLabel = "branch-arms"
+
+// The constructs of the fixture this case asks about, by anchor.
+let ImplicitElseAnchor = "implicitElse"
+let DispatchAnchor = "dispatch"
+let TakenArmAnchor = "takenArm"
+let UntakenArmAnchor = "untakenArm"
+
+// The report section this case reads, and the summary key its tally is read off.
+let BranchesSectionHeading = "=== branches ==="
+let BranchesSummaryKey = "branches: "
+
+// How the report writes a branch row: `<file>:<line>:<col>  <arm>  <arm>…`, an arm being
+// `<kind>[(implicit)]@<line>=<count>`.
+let PositionSeparator = ":"
+let ArmLineSeparator = "@"
+let ArmCountSeparator = "="
+let ImplicitArmSuffix = "(implicit)"
+let ThenArmKind = "then"
+let CaseArmKind = "case"
+let PositionColumn = 0
+let FirstArmColumn = 1
+
+// A position names a file, a line and a column, so it spells the separator at least twice. An absolute
+// path on Windows spells it once more, which is why the line is read from the END.
+let PositionPieces = 3
+let LineFromEnd = 2
+
+// How the fixture spells a `match` arm. The arms an `if` has are the language's — always two — but how
+// many a `match` has is this fixture's, so it is counted here rather than written down.
+let MatchArmKeyword = " gives "
+
+// A branch row of the report, or the absence of one.
+union BranchRowLookup
+	none
+	found(row String)
+end 'BranchRowLookup'
+
+// One arm of a branch row, or the absence of one.
+union ArmLookup
+	none
+	found(arm String)
+end 'ArmLookup'
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'every branch arm is counted, including the implicit else and the case no run reached'
+	let staged = stagedProgram(BranchArmsCaseLabel, fixture: StatesFixtureName)
+	let executable = builtExecutable(staged, stem: CoveredOutputStem)
+	try requireCoverageBuild(staged, output: executable)
+
+	let report = try requireCoverageRunReport(staged, executable: executable)
+
+	let rows = branchSectionRows(report)
+	try Expect.notEqual(rows.count() as AssertedInt, expected: 0, message: "the report has no `{BranchesSectionHeading}` section, or an empty one, over a fixture holding two `if`s and a three-way `match`. Line coverage over branching code without branch coverage is a number that cannot see the arm nobody took. The report reads:{LineFeed}{report}")
+
+	try requireSummaryCountsArms(report)
+	try requireImplicitElseCounted(rows, staged: staged, report: report)
+	try requireDispatchArmsCounted(rows, staged: staged, report: report)
+end 'every branch arm is counted, including the implicit else and the case no run reached'
+
+// ============================================================================================
+// THE SUMMARY
+// ============================================================================================
+
+// ⭐ THE EXACT WRONG ANSWER THIS CASE EXISTS FOR: `branches: 0/0 arms taken` over a program whose `match`
+// has an untested arm. Both halves are asserted — a non-zero denominator, so arms are being instrumented
+// at all, and a numerator below it, so the one arm the fixture never reaches is being counted as untaken.
+function requireSummaryCountsArms(report String) throws TestFailure
+	let arms = summaryTokenAfter(report, key: BranchesSummaryKey)
+	let taken = ratioNumerator(arms)
+	let instrumented = ratioDenominator(arms)
+	try Expect.greaterThan(instrumented as AssertedInt, than: 0, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — no arms instrumented at all — over a fixture with two `if`s and a three-way `match`. A zero denominator does not mean the program never branches — it means the report mints no arm points at all, and it makes every per-arm assertion below vacuous. The report reads:{LineFeed}{report}")
+	try Expect.lessThan(taken as AssertedInt, than: instrumented as AssertedInt, message: "the summary reports `{BranchesSummaryKey}{arms} arms taken` — every arm taken — over a fixture whose `match` deliberately holds a case no run reaches. A green branch total on code with an untested arm is the worst answer this tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
+end 'requireSummaryCountsArms'
+
+// ============================================================================================
+// THE `if` WITH NO `else`
+// ============================================================================================
+
+// The arm with no source text. Its count comes from instrumentation or from nowhere, and the fixture
+// drives the false edge on purpose, so a report that mints the arm and never increments it is caught too.
+function requireImplicitElseCounted(rows StringArray, staged FilePath, report String) throws TestFailure
+	let line = anchoredLineNumber(staged, anchor: ImplicitElseAnchor)
+	match branchRowAt(rows, line: line) 'listed'
+		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes an `if` with no `else`. A branch that is not reported is one whose untaken arm cannot be found by reading the report at all. The report reads:{LineFeed}{report}")
+		found(row) then try requireIfArms(row, line: line)
+	end 'listed'
+end 'requireImplicitElseCounted'
+
+function requireIfArms(row String, line FixtureLineNumber) throws TestFailure
+	let arms = armsOf(row)
+	try Expect.equal(arms.count() as AssertedInt, expected: 2, message: "the `if` at line {line} reports {arms.count()} arms. An `if` has two whether or not the source writes the second — an arm roster that only holds the arms with source text can never report the edge that was not taken. Its row reads: {row}")
+
+	match armWithKindSuffix(arms, suffix: ImplicitArmSuffix) 'implicit'
+		none then try Expect.fail("the `if` at line {line} reports no `{ImplicitArmSuffix}` arm. The source writes no `else`, so that arm has no line table row and CANNOT have one; naming it implicit is what tells a reader the count belongs to an edge rather than to a statement. Its row reads: {row}")
+		found(arm) then try requireImplicitArm(arm, line: line, row: row)
+	end 'implicit'
+
+	match armWithKind(arms, kind: ThenArmKind) 'taken'
+		none then try Expect.fail("the `if` at line {line} reports no `{ThenArmKind}` arm. Its row reads: {row}")
+		found(arm) then try Expect.equal(armLine(arm) as AssertedInt, expected: line as AssertedInt, message: "the `{ThenArmKind}` arm of the `if` at line {line} names line {armLine(arm)} instead. Every arm names the line to LOOK at, and for an `if` that is the `if` itself. Its row reads: {row}")
+	end 'taken'
+end 'requireIfArms'
+
+function requireImplicitArm(arm String, line FixtureLineNumber, row String) throws TestFailure
+	try Expect.equal(armLine(arm) as AssertedInt, expected: line as AssertedInt, message: "the implicit `else` of the `if` at line {line} names line {armLine(arm)}. An arm with no source text still has a line to send a reader to, and it is the `if`'s. Its row reads: {row}")
+
+	// ⭐ THE HEADLINE. The fixture calls `classify` with values that fall through the `if`, so this edge is
+	// taken and no line table anywhere can say so.
+	try Expect.greaterThan(armCount(arm) as AssertedInt, than: 0, message: "the implicit `else` of the `if` at line {line} is reported as never taken, over a fixture that drives that edge on every call but one. An arm minted and never incremented is worse than an arm nobody minted: it is a report that positively claims the untested half was untested. Its row reads: {row}")
+end 'requireImplicitArm'
+
+// ============================================================================================
+// THE `match`
+// ============================================================================================
+
+// Every case of the dispatch is an arm, the one the run reaches is positive, and the one it never reaches
+// is exactly 0 — not blank, and not absent.
+function requireDispatchArmsCounted(rows StringArray, staged FilePath, report String) throws TestFailure
+	let line = anchoredLineNumber(staged, anchor: DispatchAnchor)
+	match branchRowAt(rows, line: line) 'listed'
+		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes a three-way `match`. `match` is Maxon's primary dispatch construct: a report that does not mint arms for it reports a program made of `match`es as having no branches at all. The report reads:{LineFeed}{report}")
+		found(row) then try requireMatchArms(row, line: line, staged: staged)
+	end 'listed'
+end 'requireDispatchArmsCounted'
+
+function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) throws TestFailure
+	let arms = armsOf(row)
+	let declared = declaredMatchArmCount(staged)
+	try Expect.equal(arms.count() as AssertedInt, expected: declared as AssertedInt, message: "the `match` at line {line} reports {arms.count()} arms where the staged fixture declares {declared} cases. A branch summary that can only hold a PAIR has to report every `match` as two-way or as nothing at all. Its row reads: {row}")
+
+	for arm in arms 'eachArm'
+		let kind = armKind(arm)
+		try Expect.equal(kind, expected: CaseArmKind, message: "an arm of the `match` at line {line} is reported as `{kind}` rather than `{CaseArmKind}`. One shape names every arm — `then`, `else` and `case` alike — and the kind is what tells a reader which construct they are looking at. Its row reads: {row}")
+	end 'eachArm'
+
+	let takenLine = anchoredLineNumber(staged, anchor: TakenArmAnchor)
+	match armAtLine(arms, line: takenLine) 'taken'
+		none then try Expect.fail("the `match` at line {line} reports no arm at line {takenLine}, which the staged fixture anchors as the case its run reaches. Each case arm names its OWN line, so a reader can see which case was missed. Its row reads: {row}")
+		found(arm) then try Expect.greaterThan(armCount(arm) as AssertedInt, than: 0, message: "the case arm at line {takenLine} is reported as never taken, over a fixture that dispatches to it. Its row reads: {row}")
+	end 'taken'
+
+	// ⭐ THE HEADLINE. A zero here is the whole point; blank, absent, or folded into the taken tally are
+	// three different ways of reporting an untested arm as though nothing were missing.
+	let untakenLine = anchoredLineNumber(staged, anchor: UntakenArmAnchor)
+	match armAtLine(arms, line: untakenLine) 'untaken'
+		none then try Expect.fail("the `match` at line {line} reports no arm at line {untakenLine}, which the staged fixture anchors as the case NOTHING reaches. An arm roster built from the arms that ran cannot contain the one that did not, which is the only arm anyone needed the report for. Its row reads: {row}")
+		found(arm) then try Expect.equal(armCount(arm) as AssertedInt, expected: 0, message: "the case arm at line {untakenLine} is reported as taken {armCount(arm)} times, over a fixture that never dispatches to it. Its row reads: {row}")
+	end 'untaken'
+end 'requireMatchArms'
+
+// How many cases the fixture's `match` declares. Counted out of the staged source so a fixture that grows
+// a case grows what is demanded of the report; refused loudly at zero, because a roster nobody found
+// would make the comparison above assert nothing.
+function declaredMatchArmCount(staged FilePath) returns CoverageTally
+	var declared = 0
+	for line in stagedSourceLines(staged) 'eachLine'
+		if line.contains(MatchArmKeyword) 'anArm'
+			declared = declared + 1
+		end 'anArm'
+	end 'eachLine'
+
+	if declared == 0 'noneDeclared'
+		panic("coverage tests: the gate could not run — no line of the staged fixture spells '{MatchArmKeyword}', so this case has no arm roster to hold the report to.")
+	end 'noneDeclared'
+
+	return declared
+end 'declaredMatchArmCount'
+
+// ============================================================================================
+// READING THE BRANCH SECTION
+// ============================================================================================
+
+// The rows under `=== branches ===`. It is the report's last section, so the walk runs to the end
+// and empty lines are dropped rather than terminating it.
+function branchSectionRows(report String) returns StringArray
+	var rows = StringArray.create()
+	var inSection = false
+	for rawLine in outputLines(report) 'eachLine'
+		let line = rawLine.trim()
+		if line == BranchesSectionHeading 'opensTheSection'
+			inSection = true
+			continue
+		end 'opensTheSection'
+
+		if inSection and not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'branchSectionRows'
+
+// The branch row whose CONSTRUCT sits at `line`. A branch is identified by its own token position, so two
+// `if`s or two `match`es can never share one row.
+function branchRowAt(rows StringArray, line FixtureLineNumber) returns BranchRowLookup
+	for row in rows 'eachRow'
+		if branchRowLine(row) == line 'theRow'
+			return BranchRowLookup.found(row)
+		end 'theRow'
+	end 'eachRow'
+
+	return BranchRowLookup.none
+end 'branchRowAt'
+
+// The LINE of a row's leading `<file>:<line>:<col>` token, read from the end so a path that spells the
+// separator itself does not shift the columns. A row spelling no position reads 0, which matches no
+// anchored line and fails the caller's lookup rather than standing in for a branch nobody reported.
+function branchRowLine(row String) returns FixtureLineNumber
+	let position = try whitespaceTokens(row).get(PositionColumn) otherwise ""
+	let pieces = position.split(PositionSeparator)
+	if pieces.count() < PositionPieces 'notAPosition'
+		return 0
+	end 'notAPosition'
+
+	let numbered = try pieces.get(pieces.count() - LineFromEnd) otherwise ""
+
+	return decimalValue(numbered) as FixtureLineNumber
+end 'branchRowLine'
+
+// A row's arms, in the order it printed them — which is MINT order, and therefore source order.
+function armsOf(row String) returns StringArray
+	var arms = StringArray.create()
+	var column = 0
+	for token in whitespaceTokens(row) 'eachToken'
+		if column >= FirstArmColumn 'anArm'
+			arms.push(token)
+		end 'anArm'
+
+		column = column + 1
+	end 'eachToken'
+
+	return arms
+end 'armsOf'
+
+function armWithKind(arms StringArray, kind String) returns ArmLookup
+	for arm in arms 'eachArm'
+		if armKind(arm) == kind 'theArm'
+			return ArmLookup.found(arm)
+		end 'theArm'
+	end 'eachArm'
+
+	return ArmLookup.none
+end 'armWithKind'
+
+function armWithKindSuffix(arms StringArray, suffix String) returns ArmLookup
+	for arm in arms 'eachArm'
+		if armKind(arm).endsWith(suffix) 'theArm'
+			return ArmLookup.found(arm)
+		end 'theArm'
+	end 'eachArm'
+
+	return ArmLookup.none
+end 'armWithKindSuffix'
+
+function armAtLine(arms StringArray, line FixtureLineNumber) returns ArmLookup
+	for arm in arms 'eachArm'
+		if armLine(arm) == line 'theArm'
+			return ArmLookup.found(arm)
+		end 'theArm'
+	end 'eachArm'
+
+	return ArmLookup.none
+end 'armAtLine'
+
+// The three parts of `<kind>@<line>=<count>`. A token that spells none of them reads as an empty kind and
+// zero elsewhere, which fails the assertion that consumes it rather than passing it.
+function armKind(arm String) returns String
+	return try arm.split(ArmLineSeparator).get(0) otherwise ""
+end 'armKind'
+
+function armLine(arm String) returns FixtureLineNumber
+	let tail = try arm.split(ArmLineSeparator).get(1) otherwise ""
+	let numbered = try tail.split(ArmCountSeparator).get(0) otherwise ""
+
+	return decimalValue(numbered) as FixtureLineNumber
+end 'armLine'
+
+function armCount(arm String) returns CoverageTally
+	let counted = try arm.split(ArmCountSeparator).get(1) otherwise ""
+
+	return decimalValue(counted)
+end 'armCount'

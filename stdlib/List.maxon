@@ -1,0 +1,177 @@
+/// Doubly linked list with O(1) insertion and removal at both ends, O(n) indexed access.
+/// Backed by a ManagedList for efficient node management with automatic memory cleanup.
+/// @category Collections
+// ListError - errors for list operations
+public enum ListError implements Error
+	empty
+end 'ListError'
+
+// The nodes live in one `__ManagedList`, whose length is a signed machine word, so neither the count
+// of them nor an index into them can reach past `i64.max`.
+typealias NodeCount = int(0 to u64.max)
+typealias NodeIndex = int(0 to u64.max)
+
+public type List uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, ListIter), Cloneable
+	typealias ElementArray = Array with Element
+	typealias EManagedList = __ManagedList with Element
+	typealias ENode = __ManagedListNode with Element
+
+	var chain as EManagedList
+
+	/// Create an empty list
+	public static function create() returns Self
+		return Self{chain: EManagedList.create()}
+	end 'create'
+
+	// InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
+	static function init(arr ElementArray) returns Self
+		var result = Self{chain: EManagedList.create()}
+		for item in arr 'build'
+			result.append(item)
+		end 'build'
+		return result
+	end 'init'
+
+	/// Get the number of elements in the list
+	public function count() returns NodeCount
+		return chain.count()
+	end 'count'
+
+	/// Check if the list is empty
+	public function isEmpty() returns bool
+		return chain.isEmpty()
+	end 'isEmpty'
+
+	/// Get the first element, throws if empty
+	public function first() returns Element throws ArrayError
+		let node = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return node.value()
+	end 'first'
+
+	/// Get the last element, throws if empty
+	public function last() returns Element throws ArrayError
+		let node = try chain.tail() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return node.value()
+	end 'last'
+
+	/// Walk from head to the node at the given offset.
+	function walkTo(offset NodeIndex) returns ENode throws ArrayError
+		var current = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		for _ in 0 upto offset 'walk'
+			current = try current.next() otherwise 'err2'
+				throw ArrayError.indexOutOfBounds
+			end 'err2'
+		end 'walk'
+		return current
+	end 'walkTo'
+
+	/// Get element at index (0-based, front to back), throws if out of bounds
+	public function get(index NodeIndex) returns Element throws ArrayError
+		let node = try walkTo(index)
+		return node.value()
+	end 'get'
+
+	/// Add an element to the front of the list. O(1).
+	public function prepend(value Element)
+		chain.insertFirst(value)
+	end 'prepend'
+
+	/// Add an element to the back of the list. O(1).
+	public function append(value Element)
+		chain.insertLast(value)
+	end 'append'
+
+	/// Insert an element at the given index. O(n).
+	/// Valid range is `[0, count]` — `count` appends at the end. An index
+	/// past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`
+	/// rather than silently clamping to the tail.
+	public function insert(at NodeIndex, value Element) throws ArrayError
+		if at > chain.count() 'oob'
+			throw ArrayError.indexOutOfBounds
+		end 'oob'
+
+		if at == 0 'front'
+			chain.insertFirst(value)
+			return
+		end 'front'
+
+		if at == chain.count() 'back'
+			chain.insertLast(value)
+			return
+		end 'back'
+
+		let current = try walkTo(at - 1)
+		chain.insertAfter(current, value: value)
+	end 'insert'
+
+	/// Remove and return the first element, throws if empty. O(1).
+	public function removeFirst() returns Element throws ArrayError
+		let node = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return chain.remove(node)
+	end 'removeFirst'
+
+	/// Remove and return the last element, throws if empty. O(1).
+	public function removeLast() returns Element throws ArrayError
+		let node = try chain.tail() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return chain.remove(node)
+	end 'removeLast'
+
+	/// Remove and return element at index, throws if out of bounds. O(n).
+	public function remove(at NodeIndex) returns Element throws ArrayError
+		let node = try walkTo(at)
+		return chain.remove(node)
+	end 'remove'
+
+	/// Remove all elements
+	public function clear()
+		chain.clear()
+	end 'clear'
+
+	/// Create a deep copy of this list
+	public function clone() returns Self
+		var result = Self{chain: EManagedList.create()}
+		for item in self 'copy'
+			result.append(item)
+		end 'copy'
+		return result
+	end 'clone'
+
+	typealias ListIter = ListIterator with Element
+
+	/// Create a fresh iterator for traversal. Throws IterationError.exhausted on empty lists.
+	public function createIterator() returns ListIter throws IterationError
+		return try ListIter.create(chain)
+	end 'createIterator'
+end 'List'
+
+/// Iterator for List — traverses nodes using the safe node API.
+/// Positioning invariant: the iterator always points at a valid node; current()
+/// reads its value without bounds checks.
+public type ListIterator uses Element implements Iterator with Element
+	typealias EManagedList = __ManagedList with Element
+	typealias ENode = __ManagedListNode with Element
+	var node as ENode
+
+	public static function create(chain EManagedList) returns Self throws IterationError
+		let head = try chain.head() otherwise throw IterationError.exhausted
+		return Self{node: head}
+	end 'create'
+
+	public function current() returns Element
+		return node.value()
+	end 'current'
+
+	public function advance() throws IterationError
+		node = try node.next() otherwise throw IterationError.exhausted
+	end 'advance'
+end 'ListIterator'

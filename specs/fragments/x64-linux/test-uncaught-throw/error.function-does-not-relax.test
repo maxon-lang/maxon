@@ -1,0 +1,25 @@
+// Test: error.function-does-not-relax
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+enum OwnError implements Error
+	bad
+end 'OwnError'
+
+function lookup() throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+function notATest() throws OwnError
+	try lookup()
+end 'notATest'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:16:2: try propagates 'ApiError' but enclosing function throws 'OwnError' — add 'otherwise' to convert

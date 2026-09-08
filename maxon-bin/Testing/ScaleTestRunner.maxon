@@ -1,0 +1,1248 @@
+// ScaleTestRunner — climb the generated ladder, measure its COST, print it, and record the trend.
+//
+// IT RENDERS NO VERDICT. There is nothing here to pass.
+//
+// `spec-test` proves the compiler is CORRECT and gates on it. This is an INSTRUMENT: it compiles a
+// ladder of generated programs — six rungs, each double the last — measures ALLOCATIONS, FREES,
+// BYTES and CPU TICKS per phase per rung, prints them, and appends a datapoint to
+// `docs/optimization-log.md`. The question it answers is *"what has this compiler's cost actually
+// done, change by change"*, not *"may I merge"*.
+//
+// ===========================================================================================
+// NO WALL TIME, AND NO CURVES. Both deletions, and why.
+// ===========================================================================================
+//
+// IT DOES NOT COLLECT WALL TIME, AND THAT HALF HAS NEVER CHANGED. Wall time counts every OTHER
+// process on the machine too, so a dated table of it compares a loaded box in July against an idle
+// one in August and concludes nothing. Measured, on this very ladder: one run read `phase:parse` at
+// x5.03 then x1.78 across a DOUBLING corpus, which is not a curve of any shape — it is preemption.
+// (The COMPILER still times itself, and should: `--metrics=<path>` and `--log=compiler:debug` give
+// per-phase milliseconds for ONE compile, which is where a clock is worth reading and where nothing
+// is trended against another machine on another day. This runner reads those metrics files and
+// ignores their wall-clock column.)
+//
+// WHAT IT DOES COLLECT INSTEAD IS CPU TIME, and the distinction is the whole reason a cost column
+// can be here at all. `__Builtins.threadCpuTicks()` advances only while the compiling THREAD is
+// scheduled, so preemption and every other process are invisible to it. That makes it trendable
+// where wall time is not — and it is the ONLY column that can see a cost which allocates nothing,
+// the class every time-only quadratic in PLAN.md belongs to.
+//
+// ⚠ IT IS NOT EXACT, AND THE OTHER COLUMNS ARE. Allocations and bytes are bit-for-bit reproducible:
+// the same compiler on the same corpus produces the same digits whatever else the machine is doing,
+// so a number that MOVED, moved for a reason. `cpuTicks` still moves a few percent with turbo,
+// thermal throttling and cache pressure from other cores, which is why each rung is compiled
+// `--repeat` times and the MINIMUM is kept (see the repetition section below). Against the question
+// the ladder asks — x2 linear vs x4 quadratic — that band has a 100% margin. Against a claimed
+// few-percent constant-factor win it is worth nothing; use the allocation columns for that.
+//
+// AND IT FITS NOTHING. The ladder DOUBLES, so the ratio between two consecutive rungs IS the growth,
+// read straight off the raw numbers — x2.00 is linear, x4.00 is quadratic. A fitted exponent could
+// say nothing that the doubling had not already said, and it dragged a residual behind it, and the
+// residual dragged a NOISY verdict, and the NOISY verdict got an exemption written for it so that it
+// would stop complaining. That is optimizing the gauge instead of the engine, and it is only ever
+// tempting when there is a gauge that can be wrong. A ratio is a division: there is no light to turn
+// green, so a surprising number is a READING TO EXPLAIN. See ScaleRatio.
+//
+// ===========================================================================================
+// WHAT AN EXIT CODE STILL MEANS
+// ===========================================================================================
+//
+// Exit 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself broke —
+// it could not measure, or could not deliver what it measured:
+//
+//   - a rung would not compile,
+//   - a metrics file was missing or malformed,
+//   - the generated corpus was DEGENERATE — it folded away, so nothing was measured at all
+//     (ScaleCorpus.assertCorpusCompiled),
+//   - the trend log could not be read, or a `--note` could not honestly be recorded in it,
+//   - a `--result-json` document was asked for and could not be written. The caller that asks for
+//     that file is a MACHINE, and a run that answers it with an exit code of 0 and no file has told
+//     it a successful-looking lie.
+//
+// A broken MEASUREMENT is a broken run. A SURPRISING NUMBER is not. The report says which happened,
+// loudly, and never confuses the two.
+//
+// ===========================================================================================
+// A SUBPROCESS PER RUNG, AND `--repeat` OF THEM
+// ===========================================================================================
+//
+// The compiler has no on-disk cache — `Compiler.loadProject` reads every source fresh in every process — so
+// a new process is COLD BY CONSTRUCTION and there is nothing to bust. Spawning also means a crash
+// at the top rung kills that rung and not the run, which is not hypothetical: the 19,200-block
+// shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
+// would report nothing at all about the five rungs that had already climbed.
+//
+// EACH RUNG IS COMPILED `--repeat` TIMES (`DefaultRepeatCount` — ONE — unless asked otherwise), AND
+// THE TWO KINDS OF COLUMN TAKE OPPOSITE THINGS FROM THAT. That asymmetry is why the default is 1 and
+// why raising it is a real thing to do; see `DefaultRepeatCount` for the measurement behind both:
+//
+//   - MEMORY needs exactly ONE repetition and gains nothing whatever from a second. Allocations,
+//     frees and bytes are bit-for-bit reproducible, so every repeat returns the same digits. They
+//     are taken from the FIRST compile and never re-measured.
+//   - CPU needs SEVERAL, and takes the MINIMUM. `cpuTicks` is the one measure here that is not
+//     reproducible: it moves with turbo, thermal throttling and cache pressure, so one sample is
+//     partly a reading of whatever the machine was doing during it. The minimum is the
+//     least-disturbed run, which is the right estimator for a cost that noise can only ever ADD to.
+//     A mean would be dragged by a single stall, and a stall is exactly the thing that is not the
+//     compiler.
+//
+// WHEN THERE IS MORE THAN ONE REPEAT, they owe the memory columns something other than a second
+// measurement: they are CROSS-CHECKED FOR EQUALITY. Every phase's allocs/frees/bytes, and the emitted
+// code size, must be IDENTICAL in every repeat, and a difference is a BROKEN RUN rather than a number
+// to average away — a compiler that allocates differently for the same input has made every row of
+// the trend log suspect, and that log's whole claim is that a movement in those columns is real. The
+// check costs nothing beyond the repeat itself, and only a repeated compile can make it.
+//
+// ⚠ AT THE DEFAULT OF 1 THIS CHECK DOES NOT RUN — there is nothing to compare against. That is the
+// deliberate cost of the default (see `DefaultRepeatCount`), and `--repeat=2` is the cheapest way to
+// buy it back. It is not the only line of defence: the fragment goldens prove byte-identical codegen
+// across ~1,900 spec tests every suite run, which is a far stronger determinism gate — it simply does
+// not look at allocation COUNTS, which is precisely the gap this check covered.
+
+// A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
+// directory.
+//
+// That is a correctness requirement, not a filing preference. `build <dir>` LISTS the directory it
+// is given, and every entry costs the compiler a `FilePath` and a `String`: a rung whose own output
+// sits beside its sources measures a different program than the same rung on a fresh checkout. It
+// used to, by exactly 26 allocations and 945 bytes per rung, and the "reproducible" memory numbers
+// were reproducible only on a machine that had run the suite before. See ScaleCorpus's header, and
+// `pruneRungDir`, which enforces the other half of the invariant.
+let RungMetricsSuffix = ".metrics.tsv"
+let RungOutputSuffix = ".out"
+
+// The compiler must be given a RELATIVE rung path, and this is load-bearing rather than tidy.
+//
+// The byte counters count every String the compiler allocates, and a source file's PATH is one of
+// them. An absolute path is as long as wherever the repo happens to live, so the same rung compiled
+// from `C:/dev/maxon` and from `/home/e/src/maxon-checkout` would allocate a different number of
+// BYTES. A relative path is the same string on every machine. The subprocess inherits this process's
+// working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
+//
+// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN, which this comment claimed until it was
+// measured. The COMPILER resolves each source path against `Directory.currentPath()` itself — per file,
+// per compile, in `Queries.isStdlibSourceFile` — so the working directory's length lands in the byte
+// column whatever this side hands it. The reading that showed it is ScaleHistory's header, under (2),
+// and it is deliberately NOT copied here: the copy that lived on this line said "against exactly 0
+// allocations", which was the general rule an implementer then lost most of a session to, and a fourth
+// site is a fourth place to leave saying the old thing. Keeping this relative still removes the ARGV
+// copy of the path and is still right; the trend log's byte column is comparable across two runs only
+// when the working directory matches too, which is why `mintedAtCell` records both.
+let CorpusRelativeRoot = ".scale-tmp"
+
+// Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
+// metrics file that never appeared, a trend log that could not be read.
+//
+// A union carrying its own message, because Maxon errors are enums/unions and a message is the only
+// payload any of these needs — every one of them is reported to a human and none is recovered from
+// programmatically. `scaleErrorText` is the single place it is unwrapped.
+export union ScaleError implements Error
+	reason(message String)
+end 'ScaleError'
+
+export function scaleErrorText(error ScaleError) returns String
+	return match error 'e'
+		reason(message) gives message
+	end 'e'
+end 'scaleErrorText'
+
+// One phase's numbers, as parsed back out of a rung's metrics TSV.
+//
+// STILL NO `nanos` FIELD, and now for a sharper reason than "time is unreliable". The TSV carries
+// TWO cost columns and they are not the same kind of number. Wall time counts every other process
+// on the box — carried into a dated trend table it would compare a loaded machine in July against
+// an idle one in August, which is the argument this suite was built on and it has not changed.
+// `cpuTicks` counts only the compiling thread: preemption is invisible to it, so it survives a
+// busy machine and can be trended. One is read, one is skipped, and the difference is which
+// question each can answer.
+//
+// ⚠ `cpuTicks` IS NOT BIT-REPRODUCIBLE the way allocs/frees/bytes are. It still moves with turbo,
+// thermal throttling and cache pressure from other cores — a few percent, against the x2-vs-x4
+// signal the doubling ladder reads, which has a 100% margin. So: a movement in the memory columns
+// is always real; a movement in this one is real only outside the noise band. See the trust table
+// in docs/optimization-log.md, which states the band that was actually measured.
+export type PhaseMetric
+	export let allocs as AllocCount
+	export let frees as AllocCount
+	export let bytes as HeapByteCount
+	export let cpuTicks as CpuTicks
+
+	export static function create(allocs AllocCount, frees AllocCount, bytes HeapByteCount, cpuTicks CpuTicks) returns PhaseMetric
+		return Self{allocs: allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks}
+	end 'create'
+
+	export static function zero() returns PhaseMetric
+		return Self{allocs: 0, frees: 0, bytes: 0, cpuTicks: 0}
+	end 'zero'
+end 'PhaseMetric'
+
+export typealias PhaseMetricArray = Array with PhaseMetric
+
+// Everything one rung reported. `phases` and `regAlloc` are dense, indexed by their enum's ordinal,
+// so a phase that failed to appear in the TSV is a parse ERROR rather than a silent zero — see
+// `parseRungMetrics`.
+export type RungResult
+	export let rung as RungIndex
+	export let sourceBytes as SourceByteCount
+	export let codeBytes as CodeByteCount
+	export let total as PhaseMetric
+	export let phases as PhaseMetricArray
+	export let regAlloc as PhaseMetricArray
+
+	export static function create(rung RungIndex, sourceBytes SourceByteCount, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
+		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc}
+	end 'create'
+
+	export function phaseAt(phase CompilePhase) returns PhaseMetric
+		return try self.phases.get(phase.ordinal) otherwise panic("RungResult.phaseAt: phases.get OOB for '{phase.name}'")
+	end 'phaseAt'
+
+	export function regAllocAt(sub RegAllocPhase) returns PhaseMetric
+		return try self.regAlloc.get(sub.ordinal) otherwise panic("RungResult.regAllocAt: regAlloc.get OOB for '{sub.name}'")
+	end 'regAllocAt'
+end 'RungResult'
+
+export typealias RungResultArray = Array with RungResult
+
+// ===========================================================================================
+// The phases this instrument reports, enumerated ONCE
+// ===========================================================================================
+
+// WHAT one row of the per-phase table is measured from: a compile phase, or one of the register
+// allocator's sub-phases.
+//
+// The sub-phases are a BREAKDOWN of `phase:regalloc` and not extra phases beside it — adding them to
+// the same list would double-count every allocation the allocator makes — so they are enumerated
+// after the phases and printed under them.
+//
+// ONE ENUMERATION, walked by the human table and by `--result-json` alike. Two hand-maintained walks
+// of the same enums is how a phase gets added to `CompilePhase`, timed, metered, and then silently
+// omitted from one output but not the other; and a name built at two sites is a name that can differ
+// at two sites. The list, and the naming, live here.
+export union PhaseSource
+	compilePhase(phase CompilePhase)
+	regAllocPhase(sub RegAllocPhase)
+end 'PhaseSource'
+
+export typealias PhaseSourceArray = Array with PhaseSource
+
+let PhaseNamePrefix = "phase:"
+let RegAllocNamePrefix = "regalloc:"
+
+export function scalePhaseSources() returns PhaseSourceArray
+	var sources = PhaseSourceArray.create()
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		sources.push(PhaseSource.compilePhase(phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		sources.push(PhaseSource.regAllocPhase(sub))
+	end 'eachSub'
+
+	return sources
+end 'scalePhaseSources'
+
+export function phaseSourceName(source PhaseSource) returns String
+	return match source 'src'
+		compilePhase(phase) gives "{PhaseNamePrefix}{phase.name}"
+		regAllocPhase(sub) gives "{RegAllocNamePrefix}{sub.name}"
+	end 'src'
+end 'phaseSourceName'
+
+export function phaseMetricOf(source PhaseSource, result RungResult) returns PhaseMetric
+	return match source 'src'
+		compilePhase(phase) gives result.phaseAt(phase)
+		regAllocPhase(sub) gives result.regAllocAt(sub)
+	end 'src'
+end 'phaseMetricOf'
+
+// ===========================================================================================
+// `--repeat=<n>` — how many times each rung is compiled
+// ===========================================================================================
+
+// How many compiles one rung gets. The upper bound is a TYPO GUARD and nothing deeper: the cost is
+// LINEAR in it, unlike `--rungs`, where each step doubles the program and the bound is protecting
+// you from a cliff. But `--repeat=300` on a six-rung ladder is an hour of compiling that nobody
+// meant to ask for, and a minimum stops improving long before that.
+//
+// The alias's range IS the accepted range, so the type and `parseRepeatCount`'s bound check cannot
+// disagree about what a valid repeat count is.
+export typealias RepeatCount = int(1 to 25)
+
+export let MinRepeatCount = 1 as RepeatCount
+export let MaxRepeatCount = 25 as RepeatCount
+
+// ONE (user ruling, 2026-07-27) — because the routine per-rung read is a MEMORY read, and MEASURED,
+// the repeats buy that read NOTHING.
+//
+// This was THREE, on a judgement about noise: one sample cannot tell a stall from a cost, two cannot
+// tell which of a disagreeing pair was disturbed, three is where a minimum starts being stable. That
+// reasoning is still correct ABOUT THE CPU COLUMN. What it got wrong is who pays: it is charged to
+// every rung of every run, while the column it defends is the one column this instrument reads
+// second.
+//
+// Measured on the same tree, `--repeat=3` vs `--repeat=1`:
+//   - the per-phase ALLOCATION tables are BYTE-IDENTICAL. Not close — identical, as the section
+//     above already promised they would be. The default was buying the memory columns nothing.
+//   - the run costs 51 s vs 17 s. Exactly 3x, because the cost is linear in this number.
+//   - the CPU column is where it shows: a single sample reads ~+9-10% higher at rung 5 (lex +9.7%,
+//     parse +10.2%, regalloc +8.9%), and per-phase exponents wobble up to +-0.5 (pruneDeadBlockArgs
+//     1.91 -> 2.41, semanticCheck 1.85 -> 2.32, runtimeAugment 1.95 -> 1.11).
+//
+// Against the only question a DOUBLING ladder asks — x2 is linear, x4 is quadratic — a +-0.5 wobble
+// still leaves 100% of margin, which is why 1 is enough for the routine read.
+//
+// ⚠ RAISE IT WHEN YOU ARE COMPARING TWO BINARIES' CPU. An A/B is exactly the case the minimum was
+// built for: there the effect under test can be a few percent, so a single sample cannot carry it.
+// (`--repeat=3` and `--repeat=5` are what the 2026-07-28 `phase:signatures` investigation ran, and
+// interleaving — not sample count alone — is what finally settled it.)
+//
+// ⚠ TWO THINGS ARE GENUINELY GIVEN UP HERE, and neither is hidden:
+//   1. The cross-repeat EQUALITY CHECK below cannot run at 1 — a repeated compile is the only thing
+//      that can make it. Codegen determinism is still gated, far more strongly, by the fragment
+//      goldens over ~1,900 spec tests; what goes unchecked is ALLOCATION-COUNT determinism, which
+//      those goldens do not see. `--repeat=2` restores the check for anyone who wants it.
+//   2. CPU rows logged before this date are MINIMA and rows after it are single samples, so they sit
+//      ~10% apart for no reason in the compiler. The changeover is recorded in
+//      docs/optimization-log.md at the date; do not read that step as a regression.
+export let DefaultRepeatCount = 1 as RepeatCount
+
+// The outcome of parsing `--repeat=<n>`. A union rather than a throw, for `--rungs`'s reason: the
+// caller is inside the argument loop and must neither diverge nor invent a value — `invalid` is
+// recorded as a bad option and the driver then refuses to run at all.
+export union RepeatCountArg
+	valid(count RepeatCount)
+	invalid
+end 'RepeatCountArg'
+
+// Parse `--repeat=<n>`.
+//
+// REFUSED, never clamped — the same door as `--rungs` and `--workers`. `--repeat=0` asks for a rung
+// that is never compiled, and a caller who typed it and silently got 3 would believe they had
+// measured something they had not.
+//
+// The digits are `parseCount`'s job, as they are for `--rungs`; this decides only what a valid RANGE
+// is, and keeps that decision in the same function as the narrowing cast so the two cannot drift.
+export function parseRepeatCount(raw String) returns RepeatCountArg
+	let value = try parseCount(raw) otherwise 'notANumber'
+		return RepeatCountArg.invalid
+	end 'notANumber'
+
+	if value < MinRepeatCount or value > MaxRepeatCount 'outOfRange'
+		return RepeatCountArg.invalid
+	end 'outOfRange'
+	return RepeatCountArg.valid(value as RepeatCount)
+end 'parseRepeatCount'
+
+// ===========================================================================================
+// Entry point
+// ===========================================================================================
+
+// The command, wrapped so the checkout's TREE LOCK is taken for its whole duration and released
+// through ONE exit — `measureScaleLadder` below has a dozen returns, and a release written at each of
+// them is a release the next one forgets (see `Main.compileAndReport`).
+//
+// A scale run compiles a generated ladder with the in-tree binary and writes its corpus into the
+// checkout, so it contends with a `build` (which replaces that binary mid-ladder) and with a suite
+// (which is the other thing sizing the machine) exactly as those two contend with each other. And its
+// numbers are the reason it matters most: a rung measured against a machine running somebody else's
+// suite is a recorded row of noise, and a recorded row is permanent.
+export function runScaleTest(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: ScaleTestUsage) 'noPositional'
+		return 1
+	end 'noPositional'
+
+	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
+		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
+	end 'badCorpus'
+
+	let lockExit = acquireTreeLock(corpusRoot)
+	if lockExit != 0 'busyTree'
+		return lockExit
+	end 'busyTree'
+
+	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot)
+	releaseTreeLock()
+	return runExit
+end 'runScaleTest'
+
+// `scale-test` reads NO positional argument, so any of them is a typo the run must not swallow — it
+// took several minutes and produced a table about something the caller did not ask for. Spelled with
+// the shared helper rather than a second copy of the message, at the ONE count that differs.
+let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
+
+function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
+	// `--update-required` is GONE from this command, and saying so is worth four lines. It rewrote
+	// committed memory goldens; there are no goldens. It is still a spec-test flag, and the driver
+	// parses the command line before it knows which command is running — so without this it would be
+	// accepted here and silently do nothing, on a command line every document in this tree used to
+	// tell people to type.
+	if args.updateRequired 'noGoldens'
+		printError("scale-test: --update-required is gone. It rewrote the committed memory goldens, and there are none:\n")
+		printError("            this suite renders no verdict and has nothing to accept.\n")
+		printError("            To RECORD a run in {OptimizationLogRelativePath}, use --note=\"<what changed and why>\".\n")
+		return 1
+	end 'noGoldens'
+
+	// WHERE THIS RUN IS MEASURED is resolved FIRST, because it is two things at once: what each rung is
+	// compiled BY and FROM, and the provenance every recorded row carries.
+	//
+	// BOTH PATHS, and neither is optional. A compile derives every stdlib source path from the compiler's
+	// own executable path, and it resolves every RUNG source path against the working directory
+	// (`Queries.isStdlibSourceFile`, per file) — so the BYTE column of this run is comparable only with a
+	// logged row that had the same two. Keyed on the executable alone, one binary run from a second
+	// directory read `comparable` and printed a +203,310-byte fiction at rung 5. See ScaleHistory's header
+	// for both measurements.
+	let compilerExe = try Process.executablePath() otherwise 'noExe'
+		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
+	end 'noExe'
+
+	// ⚠ AND WHETHER THAT BINARY IS OLDER THAN THE TREE IT WAS BUILT FROM, before a rung is generated.
+	// A ladder read off the previous binary is what filed this check: a build failed `error-codes
+	// check`, its exit code went unread, and a whole run's numbers were attributed to a change that
+	// was not in the binary that produced them. A recorded row is permanent, so the wrong provenance
+	// outlives the session that made it — see ScaleHistory on why every row states where it was
+	// measured. This is the same question one level up: WHAT was measured.
+	let freshnessExit = refuseIfStale(compilerExe, role: "the scale-test compiler")
+	if freshnessExit != 0 'staleBinary'
+		return freshnessExit
+	end 'staleBinary'
+
+	// Resolved to an absolute path for the comparison's sake, not for the compiler's: the compiler is
+	// still handed the RELATIVE rung path (see `CorpusRelativeRoot`), and this is the string that says
+	// which directory that relative path was relative TO.
+	let mintedAt = mintedAtCell(compilerExe.toString(), corpusRoot: corpusRoot.resolve(Directory.currentPath()).toString())
+
+	// The trend is read next, before a single rung is compiled. It is what this run's numbers are
+	// reported against, and if a `--note` cannot honestly be recorded in it, saying so after thirty
+	// seconds of compiling would be a rude way to report a typo.
+	let trend = try loadScaleTrend() otherwise (error) 'noTrend'
+		return brokenRun("the trend log could not be read", detail: scaleErrorText(error))
+	end 'noTrend'
+
+	if not args.note.isEmpty() 'wantsToRecord'
+		try assertRecordable(trend, note: args.note, mintedAt: mintedAt, rungs: args.rungs) otherwise (error) 'unrecordable'
+			return brokenRun("this run could not be recorded", detail: scaleErrorText(error))
+		end 'unrecordable'
+	end 'wantsToRecord'
+
+	// Whether this run's BYTES may be subtracted from the logged row's. Decided ONCE, here, and handed
+	// to every consumer of the comparison — the human report and `--result-json` alike — so the two
+	// cannot come to different conclusions about the same pair of rows.
+	let bytesComparable = byteComparability(trend, mintedAt: mintedAt)
+
+	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}, compiling each {args.repeat} time(s)\n")
+	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
+		return brokenRun("the corpus could not be generated", detail: scaleErrorText(error))
+	end 'genErr'
+
+	// SAY WHAT THIS CORPUS COVERS AND WHAT IT CANNOT, on every run and before any number. An instrument
+	// that cannot state its blind spots produces confident zeros — see `printCorpusManifest`.
+	printCorpusManifest()
+
+	if not args.emitCorpus.isEmpty() 'corpusOnly'
+		print("scale-test: corpus written to {corpusRoot.toString()} (--emit-corpus: not compiling)\n")
+		return 0
+	end 'corpusOnly'
+
+	// AND SAY WHAT THE COMPILER'S OWN INPUT WAS — the corpus is only half of what each rung compiles.
+	// Asked here rather than beside the manifest above because it describes the COMPILES, and the
+	// `--emit-corpus` run just above this line makes none.
+	try printStdlibWalkCensus() otherwise (error) 'noStdlibWalk'
+		return brokenRun("the checkout's stdlib/ could not be walked", detail: scaleErrorText(error))
+	end 'noStdlibWalk'
+
+	printRungHeader()
+	var results = RungResultArray.create()
+	for rung in ladder 'eachRung'
+		// One rung compiled is this run's unit of progress, and the tree lock's heartbeat is what
+		// says the holder is still making it. The compiles themselves are CHILD processes, so none
+		// of the compiler's own phase heartbeats reach this record — the ladder has to say so itself.
+		touchTreeLock()
+
+		var result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
+			// A rung that would not compile — or that compiled and then DISAGREED with the generator about
+			// what it computes — is a broken run, not a slow one: every later rung is a superset of this
+			// one's shapes, so there is nothing left to measure and nothing the rungs below it can be
+			// compared against.
+			//
+			// ⚠ THE HEADLINE SAYS "did not deliver a rung to measure" AND NOT "failed to compile", because
+			// since BATCH10 this arm has two causes and naming only the first was a lie about the second:
+			// a rung that compiles cleanly and then exits with a failed witness reported itself as a
+			// COMPILE failure, with an empty compiler stderr underneath it to prove it had not. The detail
+			// line is where the two are told apart, and it always names which happened.
+			return brokenRun("rung {rung.index} did not deliver a rung to measure", detail: scaleErrorText(error))
+		end 'rungFailed'
+
+		// The repeats. The first compile above is repeat 1, so this loop runs `repeat - 1` more times
+		// and `--repeat=1` skips it entirely — one path, not a special case. Each fold keeps the first
+		// compile's memory, takes the least CPU seen so far, and refuses a memory number that moved.
+		for run in 1 upto args.repeat 'eachRepeat'
+			let again = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'repeatFailed'
+				return brokenRun("rung {rung.index} compiled once and then FAILED on repeat {run + 1}", detail: scaleErrorText(error))
+			end 'repeatFailed'
+
+			result = try leastCpuRung(result, again: again, run: run) otherwise (error) 'nondeterministic'
+				return brokenRun("the compiler is NONDETERMINISTIC — two identical compiles of rung {rung.index} reported different MEMORY, so every allocation and byte in {OptimizationLogRelativePath} is suspect", detail: scaleErrorText(error))
+			end 'nondeterministic'
+		end 'eachRepeat'
+
+		printRungLine(result, results: results)
+		results.push(result)
+	end 'eachRung'
+
+	// Check the instrument before the subject. A corpus that folded away measured NOTHING, and every
+	// number below it would be a number about nothing — a beautifully proportional set of them.
+	try assertCorpusCompiled(results) otherwise (error) 'degenerate'
+		return brokenRun("the generated corpus was DEGENERATE, so this run measured nothing", detail: scaleErrorText(error))
+	end 'degenerate'
+
+	printPhaseTable(results, measure: ScaleMeasure.allocations, repeat: args.repeat)
+	printPhaseTable(results, measure: ScaleMeasure.bytes, repeat: args.repeat)
+	printPhaseTable(results, measure: ScaleMeasure.cpuTicks, repeat: args.repeat)
+
+	// DID ANYTHING MOVE — decided ONCE, like the comparability above it, and for the same reason: the
+	// report's closing sentence and the recording sentence are two statements of one fact, and two
+	// answers to one question is how they come to contradict each other in the output of one run.
+	let memoryMoved = anyMemoryMoved(trend, results: results, bytes: bytesComparable)
+
+	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+	printCorpusGrowth(results)
+
+	if not args.resultJson.isEmpty() 'json'
+		try writeResultJson(args.resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat), mintedAt: mintedAt, bytes: bytesComparable) otherwise (error) 'jsonFailed'
+			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
+		end 'jsonFailed'
+	end 'json'
+
+	if not args.note.isEmpty() 'record'
+		let recorded = recordRun(results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+		if recorded != 0 'recordFailed'
+			return recorded
+		end 'recordFailed'
+	end 'record'
+
+	return 0
+end 'measureScaleLadder'
+
+// The ONE way this instrument fails: the RUN broke — it could not measure, or could not deliver what
+// it measured. It says so in those words, so that a reader can never mistake it for a judgement about
+// the numbers; there is no judgement about the numbers.
+//
+// Each caller names what broke, and the causes are not interchangeable: a degenerate corpus measured
+// NOTHING, while a result document that could not be written measured everything and could not hand
+// it over. This line therefore says "the run", which is true of both, rather than "nothing was
+// measured", which was written for the first and is a lie about the second.
+function brokenRun(what String, detail String) returns ExitCode
+	printError("\nscale-test: BROKEN RUN — {what}.\n")
+	printError("  {detail}\n")
+	printError("  The RUN failed. This is not a verdict about the compiler's numbers. Fix it and re-run.\n")
+	return 1
+end 'brokenRun'
+
+// Record this run in the trend log.
+//
+// `--note` IS AN INSTRUCTION, NOT A REQUEST. If it was given, the row is written — full stop.
+//
+// This used to decline when allocations and bytes both matched the last logged row, on the theory
+// that a row about nothing is noise. It is the wrong theory, and it fails SILENTLY, which is the
+// worse half: the operator who typed `--note` asking for the datapoint got a line of prose and no
+// row. A tool that second-guesses an explicit instruction from its operator, and then leaves the
+// history it was told to write simply absent, is worse than one that logs a dull row — and the
+// operator is the only party who knows why the run was made.
+//
+// The REPORT stays honest — an unmoved run is told it did not move — but the row is written.
+//
+// (Every guard that protects the log's INTEGRITY still refuses: a note carrying a `|` or a forged
+// marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
+// Those reject BAD INPUT, which is a different thing entirely from overruling a valid one.)
+function recordRun(results RungResultArray, note String, mintedAt String, bytes ByteDelta, moved bool) returns ExitCode
+	if not moved 'unchanged'
+		print("\nscale-test: {unchangedColumnsText(bytes)} since the last logged run — recording anyway, because --note was given.\n")
+	end 'unchanged'
+
+	try recordScaleRun(results, note: note, mintedAt: mintedAt) otherwise (error) 'writeFailed'
+		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
+	end 'writeFailed'
+	return 0
+end 'recordRun'
+
+// WHICH columns that "nothing moved" is a claim about. When the byte delta is withheld the sentence may
+// not say bytes are unchanged: nothing compared them, and reporting silence as agreement is the same
+// failure as reporting a path artifact as a regression, pointed the other way.
+function unchangedColumnsText(bytes ByteDelta) returns String
+	return match bytes 'b'
+		comparable gives "no change in allocations or bytes"
+		withheld gives "no change in allocations (bytes not compared)"
+	end 'b'
+end 'unchangedColumnsText'
+
+// Where the corpus is generated. `--emit-corpus=<dir>` puts it somewhere a human can read it;
+// otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
+// CorpusRelativeRoot for why relative rather than absolute is load-bearing.
+function corpusRootPath(args MaxonArgs) returns FilePath throws FilePathError
+	if not args.emitCorpus.isEmpty() 'explicit'
+		return try FilePath.from(args.emitCorpus)
+	end 'explicit'
+	return try FilePath.from(CorpusRelativeRoot)
+end 'corpusRootPath'
+
+// ===========================================================================================
+// Compiling one rung
+// ===========================================================================================
+
+function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) returns RungResult throws ScaleError
+	let metricsPath = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}")
+	let outputBase = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungOutputSuffix}")
+
+	var argv = StringArray.create()
+	argv.push(BuildSubcommandName)
+	argv.push(rung.dir.toString())
+	argv.push(OutputFlagName)
+	argv.push(outputBase.toString())
+	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
+
+	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if compile.exitCode != 0 'compileFailed'
+		throw ScaleError.reason("compiler exited {compile.exitCode}: {compile.stderr.trim()}")
+	end 'compileFailed'
+
+	try runRung(outputBase, rung: rung)
+
+	// A MISSING metrics file is a failed rung, never a rung of zeroes. Zeroes would fit a curve —
+	// a beautifully flat one — and report that the compiler had become infinitely fast.
+	let text = try File.readText(metricsPath) otherwise throw ScaleError.reason("rung {rung.index} produced no metrics file at {metricsPath.toString()}")
+
+	return try parseRungMetrics(text, rung: rung)
+end 'compileRung'
+
+// ⭐⭐ **THE RUNG IS RUN, AND ITS EXIT CODE IS THE ONE THING THIS INSTRUMENT HAS EVER ASSERTED ABOUT
+// WHAT IT COMPILES.** Until BATCH10 `compileRung` wrote an executable and never opened it: `outputBase`
+// was passed to `-o` and never referenced again. So the ladder measured what compiling a program COST
+// and had no opinion whatever on whether that program was correct — and it wasn't. MEASURED on rung 0
+// before this: the accumulator wrapped i64 by the seventh driver, which turned `ownedSiteBlock`'s
+// `if acc > 0` false and SKIPPED every heap-creating site in the corpus, and rung 1 did not terminate.
+// Neither could be seen from a metrics file.
+//
+// ⚠ **THIS IS NOT A GATE AND DOES NOT BECOME ONE.** A wrong exit code is a BROKEN RUN — the same channel
+// a rung that fails to compile already uses, and for the same reason: the instrument did not measure a
+// surprising number, it measured a program that is not the program this generator describes, so there is
+// nothing to read. There is still no verdict about any number here, and `scale-test` still exits 0
+// whatever the numbers say.
+//
+// The witnesses themselves are `ScaleCorpus`'s (`driverWitnessTail`); this end only has to spawn the
+// binary and insist on `CorpusOkExit`.
+//
+// ⚠ The host's executable suffix comes from `Target.hostExecutableExtension` — the compiler's OWN
+// target model, spelled once for the whole tree. `SpecTestRunner` asks
+// `executableExtension(effectiveTarget)` instead, which is the TARGET's extension and a different
+// question.
+function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
+	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
+
+	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if run.exitCode != CorpusOkExit 'wrongExit'
+		throw ScaleError.reason("rung {rung.index} exited {run.exitCode} where every witness holding is {CorpusOkExit}. Each generated driver hands `main` its argument back only when the construct it emitted computed what ScaleCorpus built it to compute, so this rung's binary DISAGREES with the generator about what its own program does — the numbers this rung produced are about a program that is not the one described. stderr: {run.stderr.trim()}")
+	end 'wrongExit'
+end 'runRung'
+
+// A file in the corpus root. `join` is overloaded on String and FilePath and a bare String constant
+// matches both, so the component is bound to a FilePath first.
+function corpusRootFile(root FilePath, name String) returns FilePath throws ScaleError
+	let component = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
+	return root.join(component)
+end 'corpusRootFile'
+
+// ===========================================================================================
+// Folding the repeats — MIN on the CPU column, EQUALITY on the memory ones
+// ===========================================================================================
+
+// This rung as measured so far, folded with one more compile of it.
+//
+// The result keeps the FIRST compile's memory and the LEAST CPU any compile has reported for each
+// phase. `sourceBytes` is not compared because it cannot differ: it comes from the generated rung,
+// not from the compile, and both compiles were handed the same ScaleRung.
+//
+// ⚠ EVERY CPU COLUMN TAKES ITS OWN MINIMUM, so the printed table can be a COMPOSITE of several
+// compiles and the `total` row is not the sum of the phase rows. It never was — `unattributed` is a
+// real gap between them — but this is a second reason, and it is the deliberate price of removing a
+// stall from the ONE phase it landed in instead of discarding every good reading in the run around
+// it. Each row is the best available answer to "what does this phase cost", which is the question
+// the table is asked; no row is a claim about a particular process.
+function leastCpuRung(first RungResult, again RungResult, run RepeatCount) returns RungResult throws ScaleError
+	// The emitted code size is the degeneracy check's subject, so a rung that emitted a different
+	// executable on the second compile is the same failure as a phase that allocated differently —
+	// it is simply not a number this instrument may keep.
+	if again.codeBytes != first.codeBytes 'codeMoved'
+		throw ScaleError.reason("rung {first.rung} emitted {first.codeBytes} bytes of code on the first compile and {again.codeBytes} on repeat {run + 1}")
+	end 'codeMoved'
+
+	let total = try leastCpuPhase(first.total, again: again.total, what: MetricsKindTotal, rung: first.rung, run: run)
+
+	// Walked off `scalePhaseSources` rather than off the two enums again, for the reason that list
+	// exists: the fold then covers exactly what the tables print, and a phase cannot be added to one
+	// walk and left out of the other. It yields both enums in ordinal order, so pushing in its order
+	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt` read back.
+	var phases = PhaseMetricArray.create()
+	var regAlloc = PhaseMetricArray.create()
+	for source in scalePhaseSources() 'eachSource'
+		let least = try leastCpuPhase(phaseMetricOf(source, result: first), again: phaseMetricOf(source, result: again), what: phaseSourceName(source), rung: first.rung, run: run)
+		match source 'dest'
+			compilePhase then phases.push(least)
+			regAllocPhase then regAlloc.push(least)
+		end 'dest'
+	end 'eachSource'
+
+	return RungResult.create(first.rung, sourceBytes: first.sourceBytes, codeBytes: first.codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+end 'leastCpuRung'
+
+// One phase, folded across two compiles: the memory triple must MATCH, and the CPU reading is the
+// smaller of the two.
+//
+// MIN, NOT MEAN, and the asymmetry is the justification. Noise on a CPU reading can only ADD — a
+// stall, a migration, a cache line a neighbouring core evicted — so the smallest sample is the one
+// closest to what the phase costs, and every larger one carries something that is not the compiler.
+// A mean has no such property: one stall moves it, and it moves it in the direction that reads as a
+// regression.
+//
+// The memory numbers are not folded at all. They are bit-for-bit reproducible, so a second compile
+// has nothing to add to them and everything to say about whether that claim is still true — which is
+// the one thing a repeated compile can check for free, and the one-shot runner could not check at all.
+function leastCpuPhase(first PhaseMetric, again PhaseMetric, what String, rung RungIndex, run RepeatCount) returns PhaseMetric throws ScaleError
+	if again.allocs != first.allocs or again.frees != first.frees or again.bytes != first.bytes 'memoryMoved'
+		throw ScaleError.reason("rung {rung} `{what}`: the first compile reported {first.allocs} allocs / {first.frees} frees / {first.bytes} bytes, repeat {run + 1} reported {again.allocs} / {again.frees} / {again.bytes}")
+	end 'memoryMoved'
+
+	if again.cpuTicks >= first.cpuTicks 'noQuicker'
+		return first
+	end 'noQuicker'
+
+	return PhaseMetric.create(first.allocs, frees: first.frees, bytes: first.bytes, cpuTicks: again.cpuTicks)
+end 'leastCpuPhase'
+
+// ===========================================================================================
+// Parsing the metrics TSV (the format is MetricsEmit's; see its header)
+// ===========================================================================================
+
+function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws ScaleError
+	// SEEDED BY PUSHING, not by `resize`. `resize` on an array of STRUCTS sets the length
+	// without giving the new slots storage: `count()` answers 5 while `get(0)` reports OOB.
+	// This code survived it only because every slot is `set` before anything reads it — and
+	// the identical line in CompileTimings.create, where the first access IS a read, panicked
+	// on phase 0 the moment its column became a struct. Pushing is correct at both.
+	var phases = PhaseMetricArray.create()
+	var regAlloc = PhaseMetricArray.create()
+	for _ in 0 upto CompilePhase.allCases.count() 'seedPhases'
+		phases.push(PhaseMetric.zero())
+	end 'seedPhases'
+	for _ in 0 upto RegAllocPhase.allCases.count() 'seedRegAlloc'
+		regAlloc.push(PhaseMetric.zero())
+	end 'seedRegAlloc'
+
+	// `seen` is what turns a missing row into an error instead of a zero. A dense array seeded with
+	// zeroes cannot otherwise tell "this phase did no work" from "this phase never reported".
+	var phaseSeen = BoolArray.create()
+	phaseSeen.resize(CompilePhase.allCases.count())
+
+	var total = PhaseMetric.zero()
+	var totalSeen = false
+	var codeBytes = 0 as CodeByteCount
+	var codeSeen = false
+
+	for line in text.split(MetricsRowSep) 'eachLine'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'skip'
+			continue
+		end 'skip'
+
+		let fields = trimmed.split(MetricsColumnSep)
+		if fields.count() != MetricsFieldCount 'malformed'
+			throw ScaleError.reason("malformed metrics row (expected {MetricsFieldCount} tab-separated fields, got {fields.count()}): {trimmed}")
+		end 'malformed'
+
+		let kind = try fields.get(MetricsKindField) otherwise panic("parseRungMetrics: kind field OOB after count check")
+		let name = try fields.get(MetricsNameField) otherwise panic("parseRungMetrics: name field OOB after count check")
+		let metric = try parseMetricFields(fields)
+
+		if kind == MetricsKindTotal 'isTotal'
+			total = metric
+			totalSeen = true
+		end 'isTotal' else if kind == MetricsKindPhase 'isPhase'
+			let phase = try CompilePhase.fromName(name) otherwise throw ScaleError.reason("metrics names an unknown phase '{name}'")
+			try phases.set(phase.ordinal, value: metric) otherwise panic("parseRungMetrics: phases.set OOB for '{name}'")
+			try phaseSeen.set(phase.ordinal, value: true) otherwise panic("parseRungMetrics: phaseSeen.set OOB for '{name}'")
+		end 'isPhase' else if kind == MetricsKindRegAlloc 'isRegAlloc'
+			let sub = try RegAllocPhase.fromName(name) otherwise throw ScaleError.reason("metrics names an unknown regalloc sub-phase '{name}'")
+			try regAlloc.set(sub.ordinal, value: metric) otherwise panic("parseRungMetrics: regAlloc.set OOB for '{name}'")
+		end 'isRegAlloc' else if kind == MetricsKindCode 'isCode'
+			codeBytes = metric.bytes as CodeByteCount
+			codeSeen = true
+		end 'isCode' else if kind == MetricsKindUnattributed 'isUnattributed'
+			// Read and discarded: the compiler emits it so the two reconciliation panics run on
+			// every metrics build (that is what makes them a tripwire), but the curves are fitted from
+			// the phases themselves and from the total, both of which are already here.
+			continue
+		end 'isUnattributed' else 'unknownKind'
+			throw ScaleError.reason("metrics row has an unknown kind '{kind}': {trimmed}")
+		end 'unknownKind'
+	end 'eachLine'
+
+	if not totalSeen 'noTotal'
+		throw ScaleError.reason("metrics for rung {rung.index} carried no `total` row")
+	end 'noTotal'
+	if not codeSeen 'noCode'
+		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the corpus self-check cannot run without it")
+	end 'noCode'
+
+	for phase in CompilePhase.allCases 'checkSeen'
+		let seen = try phaseSeen.get(phase.ordinal) otherwise panic("parseRungMetrics: phaseSeen.get OOB for '{phase.name}'")
+		if not seen 'missing'
+			throw ScaleError.reason("metrics for rung {rung.index} never reported phase '{phase.name}' — a phase added to CompilePhase but not to the metrics output would silently vanish from every curve and every trend column")
+		end 'missing'
+	end 'checkSeen'
+
+	return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+end 'parseRungMetrics'
+
+function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
+	let allocs = try parseCount(try fields.get(MetricsAllocsField) otherwise panic("parseMetricFields: allocs field OOB after count check"))
+	let frees = try parseCount(try fields.get(MetricsFreesField) otherwise panic("parseMetricFields: frees field OOB after count check"))
+	let bytes = try parseCount(try fields.get(MetricsBytesField) otherwise panic("parseMetricFields: bytes field OOB after count check"))
+	let cpuTicks = try parseCount(try fields.get(MetricsCpuTicksField) otherwise panic("parseMetricFields: cpuTicks field OOB after count check"))
+	return PhaseMetric.create(allocs as AllocCount, frees: frees as AllocCount, bytes: bytes as HeapByteCount, cpuTicks: cpuTicks as CpuTicks)
+end 'parseMetricFields'
+
+export typealias ParsedCount = int(0 to u64.max)
+
+// A non-negative decimal integer — THE one decimal parser in the suite (the metrics TSV, the trend
+// log's grouped digits and `--rungs` all come through here). Every number any of them carries is a
+// count, a byte volume, or a nanosecond reading, and none of them can be negative.
+//
+// The digit-count guard is not decoration: `--rungs=999999999999999999999` is user input, and
+// without it the accumulator would run past `u64.max` and trap on the range rather than being
+// rejected as the nonsense it is. Twenty digits is `u64.max`'s own width.
+export function parseCount(raw String) returns ParsedCount throws ScaleError
+	if raw.isEmpty() 'empty'
+		throw ScaleError.reason("expected a number, got an empty field")
+	end 'empty'
+
+	let digits = raw.toByteArray()
+	if digits.count() > MaxDecimalDigits 'tooManyDigits'
+		throw ScaleError.reason("'{raw}' has {digits.count()} digits — no count in this suite exceeds {MaxDecimalDigits}")
+	end 'tooManyDigits'
+
+	var value = 0 as ParsedCount
+	for digit in digits 'eachDigit'
+		if digit < AsciiDigitZero or digit > AsciiDigitNine 'notADigit'
+			throw ScaleError.reason("expected a number, got '{raw}'")
+		end 'notADigit'
+		value = value * 10 + ((digit - AsciiDigitZero) as ParsedCount)
+	end 'eachDigit'
+	return value
+end 'parseCount'
+
+// The decimal width of u64.max — one more digit than any value the accumulator above can hold.
+let MaxDecimalDigits = 20
+
+let AsciiDigitZero = 0x30
+let AsciiDigitNine = 0x39
+
+// ===========================================================================================
+// Reporting — data, and nothing but
+// ===========================================================================================
+
+let RungColumnWidth = 10 as ColumnWidth
+let SizeColumnWidth = 12 as ColumnWidth
+let CountColumnWidth = 14 as ColumnWidth
+let GrowthColumnWidth = 9 as ColumnWidth
+
+// The per-phase table's columns. `phase` is wide enough for `phase:elimTrivialBlockArgs`.
+let PhaseColumnWidth = 28 as ColumnWidth
+let PhaseCountColumnWidth = 12 as ColumnWidth
+
+// THE LADDER'S OWN TABLE, and the `x` columns are what make it readable at a glance.
+//
+// Each rung DOUBLES the program, so a column of x2.00 is a compiler that is linear in its input and
+// a column of x4.00 is one that is quadratic. Nothing is fitted and nothing is interpreted: the
+// number printed is this rung's count divided by the one below it.
+function printRungHeader()
+	print("\n")
+	print("{padRight("  rung", width: RungColumnWidth)}{padLeft("source", width: SizeColumnWidth)}{padLeft("code", width: SizeColumnWidth)}{padLeft("allocs", width: CountColumnWidth)}{padLeft("x", width: GrowthColumnWidth)}{padLeft("frees", width: CountColumnWidth)}{padLeft("bytes", width: CountColumnWidth)}{padLeft("x", width: GrowthColumnWidth)}\n")
+end 'printRungHeader'
+
+// `results` is the rungs climbed SO FAR, not including this one — the line is printed as each rung
+// lands, so that a run whose top rung dies has still told you everything the rungs below it said.
+//
+// Every table row below is accumulated in a `StringBuilder`, not a `String`: a `String` owns exactly
+// the bytes it holds, so each `append` recopies the whole row so far (stdlib/String.maxon), and the
+// phase table's rows carry one column per rung.
+function printRungLine(result RungResult, results RungResultArray)
+	var line = StringBuilder.create()
+	line.append(padRight("  rung {result.rung}", width: RungColumnWidth))
+	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
+	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
+	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs as MeasuredQuantity, results: results, measure: ScaleMeasure.allocations)), width: GrowthColumnWidth))
+	line.append(padLeft("{result.total.frees}", width: CountColumnWidth))
+	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes as MeasuredQuantity, results: results, measure: ScaleMeasure.bytes)), width: GrowthColumnWidth))
+	print("{line.build()}\n")
+end 'printRungLine'
+
+// This rung's growth over the LAST rung in `results` — which is the rung below it, because the
+// caller has not pushed this one yet. Rung 0 has nothing below it and says so.
+function growthAgainstPrevious(now MeasuredQuantity, results RungResultArray, measure ScaleMeasure) returns GrowthReading
+	if results.count() == 0 'bottomRung'
+		return GrowthReading.noBaseline
+	end 'bottomRung'
+
+	let below = try results.get(results.count() - 1) otherwise panic("growthAgainstPrevious: count > 0 but the last result is missing")
+	return growthOf(now, previous: measureOf(below.total, measure: measure))
+end 'growthAgainstPrevious'
+
+// WHICH of a phase's published measures a table is about. ONE value threaded through one accessor,
+// rather than a copy of every table function per measure differing only in the field it reads — the
+// allocations table, the bytes table and the CPU table are the same table asked a different question.
+//
+// It was a `bool` while there were exactly two. A third measure is precisely the moment a boolean
+// stops being able to say what it means, so it became an enum rather than growing a second flag —
+// two bools would encode four states for three answers, and nothing would say which fourth.
+//
+// FREES ARE NOT A TABLE HERE. They track allocations almost exactly (a compile that allocates N and
+// frees N-k has k live at exit, and k is small and constant), so a copy of this table would be a
+// near-duplicate paid for in a screenful. They are measured, printed per rung above, and carried
+// per phase in `--result-json` for anyone who wants them.
+export enum ScaleMeasure
+	allocations
+	bytes
+	// ⚠ The one measure here that is NOT bit-reproducible — see PhaseMetric's header. It is the only
+	// one that can see a cost which allocates nothing, which is why it is worth its noise band.
+	cpuTicks
+end 'ScaleMeasure'
+
+export function measureOf(metric PhaseMetric, measure ScaleMeasure) returns MeasuredQuantity
+	return match measure 'm'
+		allocations gives metric.allocs as MeasuredQuantity
+		bytes gives metric.bytes as MeasuredQuantity
+		cpuTicks gives metric.cpuTicks as MeasuredQuantity
+	end 'm'
+end 'measureOf'
+
+// EVERY PHASE, AT EVERY RUNG — the table that localizes a movement.
+//
+// The rung table above says the compiler's allocations moved. This one says WHICH PHASE'S did, and
+// the `x` column says whether that phase is growing linearly with the program or faster than it.
+//
+// The regalloc sub-phases are printed under the phases, not among them: they are a BREAKDOWN of
+// `phase:regalloc` and adding them to the same list would double-count every allocation they make.
+function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat RepeatCount)
+	print("\n")
+	print("  per-phase {measureHeading(measure)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
+	print("  {repeatNote(measure, repeat: repeat)}\n")
+	print("\n")
+
+	var header = StringBuilder.create()
+	header.append(padRight("  phase", width: PhaseColumnWidth))
+	for result in results 'eachRung'
+		header.append(padLeft("rung {result.rung}", width: PhaseCountColumnWidth))
+	end 'eachRung'
+	header.append(padLeft("x", width: GrowthColumnWidth))
+	print("{header.build()}\n")
+
+	for source in scalePhaseSources() 'eachPhase'
+		printPhaseRow(source, results: results, measure: measure)
+	end 'eachPhase'
+end 'printPhaseTable'
+
+function measureHeading(measure ScaleMeasure) returns String
+	return match measure 'm'
+		allocations gives "ALLOCATIONS"
+		bytes gives "BYTES"
+		cpuTicks gives "CPU TICKS (this thread only — not reproducible to the digit; see the header)"
+	end 'm'
+end 'measureHeading'
+
+// WHICH COMPILE THE COLUMN CAME FROM — printed under EVERY table, not under the CPU one alone.
+//
+// The rung was compiled `--repeat` times and the two kinds of column took opposite things from
+// that: the exact ones took the first and re-checked the rest, the CPU one took the smallest (see
+// this file's header). A reader told neither will assume whichever they last read about, and the
+// two carry very different licences to act on a small movement.
+function repeatNote(measure ScaleMeasure, repeat RepeatCount) returns String
+	return match measure 'm'
+		allocations gives exactColumnNote(repeat)
+		bytes gives exactColumnNote(repeat)
+		cpuTicks gives leastCpuNote(repeat)
+	end 'm'
+end 'repeatNote'
+
+function exactColumnNote(repeat RepeatCount) returns String
+	if repeat == 1 'oneCompile'
+		return "from ONE compile per rung (--repeat=1). Exact and reproducible; a repeat would only re-check it."
+	end 'oneCompile'
+	return "from the FIRST of {repeat} compiles per rung, and IDENTICAL in every one of them — checked, not assumed."
+end 'exactColumnNote'
+
+function leastCpuNote(repeat RepeatCount) returns String
+	if repeat == 1 'oneCompile'
+		return "from ONE compile per rung (--repeat=1): a single sample, undefended against a stall."
+	end 'oneCompile'
+	return "the LEAST of {repeat} compiles per rung — the least-disturbed sample, since noise can only ADD to a CPU reading."
+end 'leastCpuNote'
+
+function printPhaseRow(source PhaseSource, results RungResultArray, measure ScaleMeasure)
+	var line = StringBuilder.create()
+	line.append(padRight("  {phaseSourceName(source)}", width: PhaseColumnWidth))
+
+	for result in results 'eachRung'
+		line.append(padLeft("{measureOf(phaseMetricOf(source, result: result), measure: measure)}", width: PhaseCountColumnWidth))
+	end 'eachRung'
+
+	line.append(padLeft(growthText(topRungGrowth(source, results: results, measure: measure)), width: GrowthColumnWidth))
+	print("{line.build()}\n")
+end 'printPhaseRow'
+
+// The growth of the TOP rung over the one below it — the steepest, most informative end of the
+// ladder, and the one a phase that has gone superlinear shows it in first.
+function topRungGrowth(source PhaseSource, results RungResultArray, measure ScaleMeasure) returns GrowthReading
+	if results.count() < MinRungsForGrowth 'tooFewRungs'
+		return GrowthReading.noBaseline
+	end 'tooFewRungs'
+
+	let top = try results.get(results.count() - 1) otherwise panic("topRungGrowth: the ladder is not empty")
+	let below = try results.get(results.count() - 2) otherwise panic("topRungGrowth: the ladder has at least two rungs")
+
+	return growthOf(measureOf(phaseMetricOf(source, result: top), measure: measure), previous: measureOf(phaseMetricOf(source, result: below), measure: measure))
+end 'topRungGrowth'
+
+// What the compiler allocated, against what it allocated when the trend log was last written.
+//
+// THIS IS THE POINT OF THE WHOLE INSTRUMENT. These numbers are bit-for-bit reproducible AT ONE PATH, so
+// a difference here is REAL — the same input through the same compiler cannot produce a different one by
+// accident. It is worth explaining rather than merely noticing.
+//
+// ⚠ AND NEITHER COLUMN IS COMPARABLE ACROSS CHECKOUTS — they are spoiled DIFFERENTLY, which is the one
+// asymmetry this report has to carry. The byte term GROWS with the program, so against a row minted
+// elsewhere the byte delta is WITHHELD rather than printed. The allocation term is a CONSTANT at every
+// rung, so that delta IS printed — a flat offset cancels out of every ratio and out of any delta that
+// grows per rung, so its shape survives — under a caveat that its constant term does not.
+//
+// ScaleHistory's header holds the readings. They appear in exactly one other place — the paragraph
+// `printMintedElsewhereReason` PRINTS, which is operator-facing and has to carry its own numbers — and
+// no comment anywhere restates them. That is not tidiness: the claim these paragraphs replaced was
+// written down in four files, so correcting it meant four hand-edits and three chances to leave one
+// saying `path-independent`.
+function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
+	print("\n")
+	match trend 'm'
+		absent then printNoPreviousRun()
+		present(date, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, mintedAt: mintedAt, bytes: bytes, moved: moved)
+	end 'm'
+end 'printMemoryTrend'
+
+function printNoPreviousRun()
+	print("  {OptimizationLogRelativePath} has no rows yet — this run is the first datapoint, so there is\n")
+	print("  nothing to difference it against. Record it with --note=\"<what changed and why>\".\n")
+end 'printNoPreviousRun'
+
+let TrendRungColumnWidth = 8 as ColumnWidth
+let TrendCountColumnWidth = 16 as ColumnWidth
+let TrendDeltaColumnWidth = 14 as ColumnWidth
+
+// `moved` is a PARAMETER, not a local: it is `anyMemoryMoved`'s answer, which the recording sentence also
+// reads. This function used to accumulate its own, which made "did the memory move" — including the rule
+// that a withheld column has not — a decision written twice in two files.
+function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, mintedAt String, bytes ByteDelta, moved bool)
+	print("  vs the last row of {OptimizationLogRelativePath} — {date}, \"{note}\"\n")
+	print("\n")
+	print("{padRight("  rung", width: TrendRungColumnWidth)}{padLeft("allocs", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}{padLeft("bytes", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}\n")
+
+	for i in 0 upto results.count() 'eachRung'
+		let result = try results.get(i) otherwise panic("printMemoryDelta: i < count but results.get({i}) failed")
+
+		var line = StringBuilder.create()
+		line.append(padRight("  {result.rung}", width: TrendRungColumnWidth))
+		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
+		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(byteDeltaText(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes), width: TrendDeltaColumnWidth))
+		print("{line.build()}\n")
+	end 'eachRung'
+
+	printMintedElsewhere(bytes, mintedAt: mintedAt)
+
+	if not moved 'unchanged'
+		// "every rung COMPARED", because a rung the logged row never climbed prints `-` above and was not
+		// compared at all — claiming it matches would be the withheld column's mistake in the other column.
+		print("\n  {unchangedColumnsText(bytes)} — every rung compared against the last logged run matches it exactly.\n")
+		return
+	end 'unchanged'
+
+	// "AT ONE PATH" IS THE WHOLE QUALIFIER, and it is three words rather than a paragraph because the
+	// paragraph is already printed directly above by `printMintedElsewhere` — on exactly the runs where
+	// the qualifier bites. Without it this sentence tells a reader that a cross-checkout delta must be
+	// the compiler, which is the attribution it was measured NOT to license.
+	print("\n  A number here MOVED, and it moved for a reason: these counts are bit-for-bit reproducible,\n")
+	print("  so the same input through the same compiler AT ONE PATH cannot produce a different one by\n")
+	print("  accident. Explain it, and record it with --note — the instrument sees WHAT moved and never why.\n")
+end 'printMemoryDelta'
+
+// WHAT THE TABLE ABOVE IS WORTH WHEN THE TWO ROWS WERE MINTED ELSEWHERE — printed under it, and only
+// when they were. One column is blank and the other is not, and a reader is owed both halves of why.
+//
+// The alternative was the confident wrong number this replaced, and the alternative to THAT would be a
+// blank column with no explanation, which reads as a bug in the tool. A reader who is refused a
+// subtraction is owed the reason and the way to get it: measure both binaries at ONE path.
+function printMintedElsewhere(bytes ByteDelta, mintedAt String)
+	match bytes 'b'
+		comparable then return
+		withheld(why) then printMintedElsewhereReason(why, mintedAt: mintedAt)
+	end 'b'
+end 'printMintedElsewhere'
+
+// ⚠ THE SECOND PARAGRAPH REPLACED A FALSE ONE, and the false one was this instrument's own sentence
+// about itself: "the ALLOCATION delta above is unaffected — path-independent in every A/B measured so
+// far". It was not. Saying LESS than the truth here would be the same defect: the shape of that column
+// really does survive, and withholding it too would throw away a reading that is sound.
+function printMintedElsewhereReason(why String, mintedAt String)
+	print("\n  ⚠ The BYTE delta is WITHHELD, not zero: {why}.\n")
+	print("    A compile allocates the path strings it works with: it derives every stdlib source path from\n")
+	print("    the COMPILER's own path, and resolves every rung source path against the WORKING DIRECTORY. So\n")
+	print("    the byte column carries a term proportional to each of their LENGTHS — measured at ~2,100 bytes\n")
+	print("    per character at rung 0 rising to ~9,300 at rung 5, which is not a constant a reader could\n")
+	print("    subtract. Nothing is normalised here: the counts are exactly what was measured, and the one\n")
+	print("    subtraction that cannot be honest is not performed.\n")
+	print("\n")
+	print("  ⚠ The ALLOCATION delta above is NOT clean either — it is spoiled DIFFERENTLY, and the difference\n")
+	print("    is what SURVIVES. Its path term is a CONSTANT, the same number at every rung, where the byte\n")
+	print("    term grows with the program. So the SHAPE of that column stands — a flat offset cancels out of\n")
+	print("    every rung-over-rung ratio and out of any delta that GROWS per rung — while a FLAT per-rung\n")
+	print("    delta between these two rows is unattributable and must not be filed as a cost.\n")
+	print("    ⇒ AND EQUALISING THE PATH LENGTH IS NOT THE FIX: measured on ONE byte-identical binary, two\n")
+	print("    45-character checkouts of different DEPTH read +273 allocations at every one of six rungs,\n")
+	print("    while a 45- and a 14-character checkout of the same depth read 0 at every one.\n")
+	print("    ⇒ Both columns take the SAME remedy: run both binaries from ONE directory, swapped into one\n")
+	print("    location. This run was minted at `{mintedAt}`.\n")
+end 'printMintedElsewhereReason'
+
+// A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
+// at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
+// perfectly reasonable thing to do while iterating, and it still prints.)
+function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderIndex) returns String
+	let before = try logged.get(rung) otherwise return NoBaselineText
+	return signedDeltaText(current as Delta, before: before as Delta)
+end 'countDeltaText'
+
+// The byte column's delta cell, which is the ONE cell of this table that can be refused.
+//
+// `WithheldDeltaText` rather than `NoBaselineText`, and they must not look alike: "the logged run never
+// climbed this rung" and "these two rows were measured against different yardsticks" are different
+// facts, and a reader who cannot tell them apart learns neither.
+function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung LadderIndex, bytes ByteDelta) returns String
+	match bytes 'b'
+		withheld then return WithheldDeltaText
+		comparable then break 'b'
+	end 'b'
+	let before = try logged.get(rung) otherwise return NoBaselineText
+	return signedDeltaText(current as Delta, before: before as Delta)
+end 'byteDeltaText'
+
+// Short enough that `padLeft` still puts space in front of it at `TrendDeltaColumnWidth` — a cell that
+// exactly fills its column runs into the one beside it and the table stops being a table. The ⚠ block
+// under it carries the reason; this only has to be unmistakably not a number, and not `-`.
+let WithheldDeltaText = "withheld"
+
+function signedDeltaText(current Delta, before Delta) returns String
+	if current > before 'grew'
+		return "+{groupDigits(current - before)}"
+	end 'grew'
+	return groupDigits(current - before)
+end 'signedDeltaText'
+
+// A position in the ladder — an index into the parallel per-rung arrays (this run's results, and
+// the logged run's columns), which is NOT the same thing as `RungIndex`: those arrays may be shorter
+// than the ladder the log recorded, and that is exactly the case the delta report has to handle.
+export typealias LadderIndex = int(0 to u64.max)
+
+// ⭐ WHAT THE COMPILER'S OWN SOURCE WALK ACTUALLY TOUCHED — the files it found and the directories it
+// listed, under the `stdlib/` every rung of this run compiles against.
+//
+// ⚠ **GIT CANNOT SEE IGNORED CONTENT AND THIS WALK CAN, so two checkouts of ONE COMMIT need not be one
+// tree.** `collectMaxonSources` recurses into every subdirectory of `stdlib/`, dot-directories
+// included, and `stdlib/` is walked once per compile — so a gitignored directory present in the main
+// checkout and absent from every `git worktree add` adds a FLAT constant to `phase:load` at every rung,
+// which is exactly the shape a real code change is read as.
+//
+// ⭐ **THE COUNT IS HERE BECAUSE THE DELTA CANNOT BE DECODED WITHOUT IT.** An operator staring at a flat
+// +12 allocations cannot turn that into "one stray directory" without already knowing this host's
+// per-directory cost — which is the bisect the number is supposed to replace. And that cost is neither
+// portable nor constant: measured at 12 allocations / 4,879 bytes per stray directory on arm64-macOS
+// against A2y's 14 / 829 on its own host, because `Directory.list` is `FindFirstFile` on Windows and
+// `opendir`/`readdir` here, and because the byte column carries the path-length term
+// `printMintedElsewhereReason` already documents. The COUNT is the only signal that survives the move.
+//
+// ⭐⭐ **THE RULE THIS IS ONE HALF OF: AN A/B ACROSS TWO CHECKOUTS IS NOT SOUND BY DEFAULT.** Two known
+// ways it goes wrong are now named by this instrument, and BOTH produce a FLAT per-rung delta — which is
+// precisely the shape of a real per-compile cost, and is why each was read as one:
+//
+//   - the TREE differs, because git cannot see ignored content (A2y, above — this census);
+//   - the PATH differs, because a compile allocates the path strings it works with (A3p — see
+//     ScaleHistory's header for the readings, and `printMintedElsewhereReason` for what it prints).
+//
+// They are separate mechanisms with separate remedies, so they are detected separately; what they share
+// is the reading they corrupt. ⇒ A FLAT delta between two checkouts is the one shape to distrust, and a
+// delta that GROWS per rung is the one neither mechanism can fake.
+//
+// It is a number a reader COMPARES against the checkout a logged row was minted at, and nothing more.
+// No threshold, no baseline, no refusal — this instrument renders no verdicts (see this file's header),
+// and a census that refused would be the deleted gate apparatus growing back.
+//
+// The one thing that IS a refusal is being unable to walk at all, which is a BROKEN RUN in the ordinary
+// sense: every rung compile resolves stdlib the same way and would fail the same way, so saying it here
+// beats reporting it as "rung 0 did not deliver a rung to measure".
+function printStdlibWalkCensus() throws ScaleError
+	// The same resolution every spawned rung compile makes — this runner IS the compiler it spawns
+	// (`compilerExe` is its own path), so asking it here asks about the very directory they will load.
+	let stdlibDir = try locateStdlibDir() otherwise throw ScaleError.reason("stdlib/ could not be located by walking up from the running compiler's own path — every rung would fail to load it")
+
+	var sources = MaxonSourcePathArray.create()
+	let directories = try collectMaxonSources(stdlibDir, into: sources) otherwise throw ScaleError.reason("{stdlibDir.toString()} could not be listed")
+
+	print("{padRight(StdlibWalkLabel, width: StdlibWalkLabelWidth)}{groupDigits(sources.count())} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {stdlibDir.toString()}\n")
+	print("{padRight("", width: StdlibWalkLabelWidth)}git cannot see IGNORED content and this walk can, so compare these two counts against\n")
+	print("{padRight("", width: StdlibWalkLabelWidth)}the checkout a logged row was minted at before reading a flat delta as a code change.\n")
+end 'printStdlibWalkCensus'
+
+// Indented to the same column as every other line of the report. The label carries no trailing space
+// of its own: the width is what separates it from the counts AND what the two continuation lines are
+// padded to, so the label and its hanging indent cannot drift apart.
+let StdlibWalkLabel = "  stdlib walk:"
+let StdlibWalkLabelWidth = 15 as ColumnWidth
+
+// The corpus self-check's own numbers. They are PRINTED, not merely consulted: a reader looking at a
+// set of tidy proportional memory numbers is entitled to see the evidence that they are numbers about
+// a program that was actually compiled, rather than one that folded away to nothing.
+function printCorpusGrowth(results RungResultArray)
+	print("\n")
+	if results.count() < MinRungsForGrowth 'tooFewRungs'
+		print("  corpus: {results.count()} rung(s) — too few to say anything about GROWTH, this check included.\n")
+		return
+	end 'tooFewRungs'
+
+	var line = StringBuilder.create()
+	line.append("  corpus: emitted code grows")
+	for i in 1 upto results.count() 'eachRung'
+		line.append(" {growthText(codeGrowthAt(results, rung: i))}")
+	end 'eachRung'
+
+	print("{line.build()} per rung (floor {growthText(GrowthReading.measured(MinCodeGrowthRatio))}) —\n")
+	print("          the programs compiled rather than folding away, so the numbers above are numbers\n")
+	print("          about something.\n")
+end 'printCorpusGrowth'

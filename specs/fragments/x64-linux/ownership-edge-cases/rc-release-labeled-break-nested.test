@@ -1,0 +1,102 @@
+// Test: rc-release-labeled-break-nested
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		let p = Pair.create(i, b: i * 10)
+		var j = 0
+		while j < 3 'inner'
+			let q = Pair.create(j, b: j * 10)
+			if p.a == 1 'check'
+				if q.a == 2 'found'
+					result = p.b + q.b
+					break 'outer'
+				end 'found'
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 64
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+  whilehdr#1:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, whileexit#3
+  outer:
+    x64.imulRegRegImm32 rcx, rax, 10
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.storeBaseDispReg.word64 [rdx + 8], rcx
+    x64.movRegImm32 rcx, 0
+  whilehdr#4:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greaterEqual, whileexit#6
+  inner:
+    x64.imulRegRegImm32 rsi, rcx, 10
+    x64.leaRegSlot rdi, slot2
+    x64.storeBaseDispReg.word64 [rdi + 0], rcx
+    x64.storeBaseDispReg.word64 [rdi + 8], rsi
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc notEqual, ifcont
+  check:
+    x64.loadRegBaseDisp.word64 rsi, [rdi + 0]
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc notEqual, ifcont
+  found:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.jmp whileexit#3
+  ifcont:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr#4
+  whileexit#6:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr#1
+  whileexit#3:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at rc-release-labeled-break-nested.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 64
+    x64.popReg rbp
+    x64.ret
+}

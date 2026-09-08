@@ -1,0 +1,157 @@
+// Test: module-union-in-monomorphized-method
+typealias Small = int(0 to 100)
+
+union Hold
+	unowned
+	owned(v Small)
+end 'Hold'
+
+var hold = Hold.unowned
+
+type Cell uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function stash(v Small)
+		hold = Hold.owned(v)
+	end 'stash'
+
+	export function readBack() returns Small
+		return match hold 'r'
+			unowned gives 0
+			owned(v) gives v
+		end 'r'
+	end 'readBack'
+end 'Cell'
+
+typealias SmallCell = Cell with Small
+
+function main() returns ExitCode
+	let c = SmallCell.create(1)
+	c.stash(5)
+	return c.readBack()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __data_hold@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Cell.stash {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at module-union-in-monomorphized-method.test:18: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.leaGlobal x0, __data_hold
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.leaGlobal x0, __data_hold
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Cell.readBack {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_hold
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at module-union-in-monomorphized-method.test:23: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 1
+    arm64.leaRegSlot x19, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.stash
+  __il_body:
+    arm64.leaGlobal x0, __data_hold
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#3:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#4:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __il_cont
+  __il_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.readBack
+  __il_cont:
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}

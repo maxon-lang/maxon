@@ -1,0 +1,22 @@
+// Test: assign-widening-byte-to-int
+
+typealias Byte = int(0 to u8.max)
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var i = 0 as Integer
+	let b = 7 as Byte
+	i = b as Integer
+	return i as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

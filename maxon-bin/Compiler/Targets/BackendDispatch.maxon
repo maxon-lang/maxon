@@ -1,0 +1,647 @@
+// BackendDispatch — the Phase-7 backend driver: it takes a lowered StdModule to
+// a runnable executable. `buildBackend` runs the fixed Std→Target→CodeResult
+// sequence; `augmentWithRuntime` supplies the OS entry point; `writeExecutable`
+// dispatches the CodeResult to the per-OS object writer.
+//
+// Std, not MIR: The compiler has no MIR tier (see StdDialect's header). The backend's
+// input is the Std module the pipeline produced, and `lowerStdToX64` asserts on
+// entry that no Std-only `sugar` op survived to reach it.
+//
+// These stages are driven as ordered function calls rather than PassKind entries
+// (the pipeline in PassPipeline stops at StdModule): the backend produces a
+// CodeResult, which is not an IR module, so it does not fit the module-field
+// dispatch model.
+//
+// `augmentWithRuntime` installs the `mrt_start` entry stub; the PANIC RUNTIME it
+// calls into (the `#DE` fault handler and its symbolized backtrace) is appended as
+// hand-assembled chunks during the encode phase — see `buildBackend` and
+// X64Runtime's header for why it cannot be TargetOps. A `return 42` program
+// allocates nothing and spawns nothing, so it carries no slab/MM init, no
+// green-thread scheduler and no IOCP.
+
+// `mrt_start`'s frame: 32 bytes of Win64 shadow space for the calls it makes, and
+// NOTHING else. The OS enters the stub with rsp ≡ 8 (mod 16), as if via `call`; the
+// stub's own `push rbp` moves it to ≡ 0, so an exact-multiple-of-16 reservation keeps
+// it aligned at each `call` and no odd 8 is needed.
+//
+// ⚠ This USED to be 0x28 (32 + 8) — the 8 was the alignment correction for a stub that
+// pushed nothing. The frame pointer's push now supplies that parity, so the same
+// arithmetic `computeFrameBytes` does for every other function (entry ≡ 8, one push ⇒ an
+// even reservation) gives 0x20 here. Keeping 0x28 would leave rsp ≡ 8 AT the call — a
+// misalignment nothing on this path reads today, and that would start corrupting the
+// moment anything below it spills an XMM register (P1.0d.4 floats).
+let EntryStubFrameBytes = 0x20
+
+// Run the full backend: Std → Target → register allocation → prologue/epilogue →
+// runtime augmentation → machine-code emission → CodeResult.
+//
+// `throws CompileError` because TWO backend stages can FAIL for a real reason the user must fix, both
+// reported onto `project.diagnostics`: register allocation raises E5001 when a loop needs more registers
+// than exist, and the reachability prune raises E4015 when a declaration collides with a symbol the
+// compiler emits (A1t — the first stage that can see BOTH, so the first that can tell them apart).
+// `project` also carries the `opRanges`/`valueOrigins` tables the allocator maps a Target ValueId back to
+// its source span through. Every other backend stage is infallible — a failure there is a compiler bug and
+// still panics.
+// Each stage below is bracketed by one `PhaseProbe`, which measures its wall time AND its
+// allocations at the same two instants (see PhaseProbe's header for why that is one type
+// and not two). The stages are strictly sequential and none calls another, so the phases
+// are disjoint by construction and nothing has to be subtracted back out (unlike the
+// allocator's internals, which nest — see CompileTimings' header). `regalloc`'s own seven
+// sub-phases are recorded into `project.timings.regAlloc` / `project.memory.regAlloc` and
+// nest UNDER this phase in both reports; they are a breakdown of what is measured here,
+// never additional phases.
+// Run the backend for `target`, dispatched on its CPU: the x64 pipeline, or the arm64 one
+// (`Arm64Backend`, wave 1). Both share the register allocator, the runtime augmentation and the
+// per-OS writer; they differ in isel + encoder + frame, which is exactly the per-ISA split the
+// unified `TargetOp` was chosen to allow (USER RULING). The sugar gate is target-neutral and runs
+// here, once, so every backend inherits it.
+//
+// ⭐ **`usage` IS THE INSTALLATION DECISION, CARRIED — NOT RE-DERIVED.** Three things down here are
+// conditional on which emitted runtime the program carries: the entry stub's leak gate, the per-function
+// green-thread stack guard, and the hand-assembled GT/IOCP chunks. All three are part of an
+// INSTALLATION, and installation is decided exactly once, before lowering, by `RuntimeUsage` — see
+// DeadFunctionElimination's header for the full split of duties.
+//
+// ⚠ They used to ask the MODULE instead ("does it contain `__mm_leak_check` / `__gt_spawn` /
+// `__gt_io_read`?"), on the argument that by this point the module IS the answer, so a threaded flag
+// would be the same fact written down twice and free to disagree. That argument rested on a premise
+// DEAD-FUNCTION ELIMINATION removes: that nothing takes an installed function back out. It does, and a
+// probe for one representative function is not a probe for the runtime it represents — a `sleep(1)`
+// program installs the whole GT scheduler and never calls `__gt_spawn`, so pruning that one function
+// (correctly) turned the chunk gate off and the link failed on `__gt_context_switch`, which nine
+// async/streaming specs caught at once. The fact is now written down ONCE, where it is decided, and
+// read here.
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
+	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
+	assertNoSugarOps(stdModule)
+	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
+
+	// Prune what cannot be reached BEFORE the expensive half — isel, register allocation, frames,
+	// encoding and linking all run per function, so a function dropped here is work no backend does.
+	// Target-neutral and therefore HERE rather than inside a backend, for the same reason the sugar gate
+	// is: reachability is a property of the Std tier, so x64/arm64/wasm inherit it instead of each
+	// re-adding it. `globalData` reaches it because an `.rdata` slot is a reference this module's ops do
+	// not spell (see DeadFunctionElimination's root set).
+	//
+	// It `throws` for one reason, and it is a USER error rather than a pruning failure: this is the LAST site
+	// that builds a `FunctionNameIndex` over a module, and the only one downstream of every install — so a
+	// declaration colliding with a symbol the compiler emits is visible here and nowhere earlier, and E4015 is
+	// reported at the index. Its root set raises the same code for the other half of that rule (a name the
+	// compiler ROOTS, in a program that installs nothing under it) — see `markCompilerOwnedRoot`.
+	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
+	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH (A2l).** It comes back from the
+	// prune rather than being built here because the prune is what makes an earlier one stale, and it is
+	// built at all because NOTHING APPENDS A FUNCTION AFTER THIS LINE: every `install*Runtime` ran in
+	// `compileToCodeResult` above, the entry stub and the hand-assembled runtime chunks join at the TARGET
+	// tier as chunks rather than Std functions, and this dispatch is the last thing between the prune and
+	// the backends. So an index taken here describes the array all three backends will walk — which is what
+	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
+	// uniqueness guarantee none of them stated.
+	let funcNames = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
+
+	match target.cpu 'cpu'
+		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+	end 'cpu'
+end 'buildBackend'
+
+// The wasm backend: Std → a WASI-Preview2 CORE module (bytes). Unlike x64/arm64 it consumes the
+// StdModule DIRECTLY — no register allocation, no prologue/epilogue, no Target dialect (see
+// StdToWasm's header) — so this backend's isel, encode and link work is fused into the single
+// `buildWasmCoreModule` call and billed together to `encode`. The `$run` entry (and the `wasi:cli/exit`
+// import it calls) are synthesized inside that call, so `augmentWithRuntime` is NOT run for wasm and
+// its `wasi` arm stays unreached. `globalData` reaches it because a top-level `var` is a `.data` slot
+// this backend lays into an active linear-memory segment and resolves every `globalAddr` against —
+// the same laid-out table the native writers serialize into their `.data` section. The bytes ride in
+// the CodeResult's `wasmCoreModule` field; every machine-code field is empty (see
+// `CodeResult.forWasm`), and `writeWasm` wraps the bytes into a component. It takes no `target`: the
+// sole wasm target is wasm32-wasi, and `buildBackend` has already dispatched on it.
+// `usage` reaches it for the ONE reason the native backends need it: the leak gate. `usesHeap` is
+// where "was the MM runtime installed?" is decided, so wasm reads that bit rather than re-deriving it
+// from the module — see `StdToWasm.appendLeakGate`.
+function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
+	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName)
+	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+
+	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
+end 'buildWasmBackend'
+
+// The x64 backend: Std → Target → register allocation → prologue/epilogue → runtime augmentation →
+// machine-code emission → CodeResult.
+function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
+	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
+	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
+	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
+	// once sections are laid out — see `lowerStdToX64`.
+	// THE CLASS COLUMN CROSSES THE TIER BOUNDARY HERE, and it travels FORWARD, WITH the module: this
+	// call is the last pass that can see a Std type, so it is the only one that can say which register
+	// FILE a value lives in. The allocator consumes that answer and never re-derives it — `movRegReg`,
+	// `loadRegSlot` and `xchgRegReg` are class-agnostic by design, so a copy's class is knowable only
+	// from its source (see TargetDialect's `ValueClassColumn`).
+	//
+	// The two come back TOGETHER because a `TargetModule` alone is not a complete answer: it carries no
+	// types, so nothing downstream could say what file any of its values belongs in. Returning the pair
+	// is what makes it impossible to hand the allocator one without the other.
+	var (targetModule, valueClasses) = lowerStdToX64(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usage.usesGt)
+	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
+
+	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
+	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
+	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
+
+	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.
+	// A block whose only op is a `jmp` is genuinely empty only once SSA destruction has placed (or
+	// declined to place) its edge copies; before that it is an edge about to receive moves. The frame
+	// pass then sees the surviving blocks, so a callee-saved register or a `call` reachable only from
+	// dead code stops being paid for. See `BranchCleanup`'s header.
+	cleanUpBranches(targetModule, project: project)
+
+	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
+	insertPrologueEpilogue(targetModule, target: target)
+	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
+
+	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
+	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
+	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
+	// never installed does not link.
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, entryFunction: project.entryFunctionName)
+	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
+
+	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
+	var chunks = FunctionCodeChunkArray.create()
+	for func in targetModule.functions 'eachFunc'
+		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: usage.usesGt, target: target))
+	end 'eachFunc'
+	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than
+	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
+	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
+	// user code, which keeps `mrt_start` at `.text` offset 0 where the backtrace needs it.
+	//
+	// x64-windows installs a Windows Vectored Exception Handler; x64-linux installs a SIGFPE handler via
+	// rt_sigaction (`appendX64RuntimeChunks` branches on the OS). Both catch the `idiv` #DE and turn it
+	// into a panic diagnostic + symbolized backtrace + exit 1; only the Windows one can say WHICH #DE
+	// (a zero divisor vs `i64.min / -1`), because Linux reports one `si_code` for both — see
+	// `X64Runtime.buildLinuxFaultHandlerChunk`. arm64-macOS installs the same diagnostic behind a POSIX
+	// `sigaction` (`Arm64FaultRuntime`); what differs there is the CAUSE, not the handler — AArch64's
+	// `sdiv` does not trap at all, so only the nil-dereference arm is ever entered.
+	// macos/wasi never reach here for an x64 module: `augmentWithRuntime` above already rejected them.
+	match target.os 'panicRuntime'
+		windows or
+			linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage)
+		macos or
+			wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
+	end 'panicRuntime'
+	// The x64-LINUX host surface — the `mrt_host_*` file, directory and standard-input bodies, which are
+	// raw `syscall` sequences with no TargetOp spelling for the same reason the panic runtime above has
+	// none. Each rides the `RuntimeUsage` bit its Std-tier installer was gated on, so the list is empty for
+	// a program that touches no file. Windows has no counterpart: every one of those primitives is a Win32
+	// import the isel emits inline.
+	if target.os == Os.linux 'linuxHostSurface'
+		appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
+	end 'linuxHostSurface'
+	// The three hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
+	// `__gt_morestack`) and, under `usesIocp`, the IOCP completion-drain loop are part of the GT
+	// runtime's INSTALLATION, so they ride the same bits `installGtRuntime` was gated on rather than a
+	// probe of the module (see this file's `buildBackend` header for the probe that DFE invalidated).
+	if usage.usesGt 'gtChunks'
+		appendX64GtRuntimeChunks(chunks, usesIocp: usage.usesIocp, target: target)
+	end 'gtChunks'
+	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+
+	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
+	let codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
+	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
+
+	return codeResult
+end 'buildX64Backend'
+
+// Function/chunk name → the byte offset that chunk starts at in `.text`. Declared ONCE, here, because
+// it is one fact: x64 and arm64 each carried an identical typealias under its own name, and both concat
+// passes key exactly this map with exactly this meaning.
+export typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
+
+// How many labels a concat pass has laid so far — the ordinal `recordChunkLabel` compares the map's height
+// against. Not a `FuncIndex`: a chunk is not a module function (the entry stub, the hand-assembled runtime
+// chunks and `__symtable` have no position in `stdModule.functions`).
+module typealias ChunkLabelCount = int(0 to u64.max)
+
+// ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME (A2l).**
+//
+// ⚠ **THIS IS A REACHABLE, SILENT MISCOMPILE, AND IT WAS MEASURED — not a hygiene guard.** A `.text`
+// layout map is keyed by NAME and read by `resolveCallFixups`, so a bare last-wins `upsert` does not
+// degrade an answer, it BINDS EVERY CALL TO THE OTHER BODY. `function mrt_runtime_init() returns int`
+// in an ordinary user program compiled, linked and RAN: the user's body was laid out, the
+// hand-assembled panic-runtime chunk of the same name was laid after it, and the program's own call to
+// its own function silently reached the runtime chunk instead — **exit 127 where the source says 7**,
+// with no diagnostic anywhere. (`mrt_start` was worse only in being loud: it tripped the entry-offset
+// guard and PANICKED the compiler on a plain user program, which is not a diagnostic either.)
+//
+// ⚠ **AND `FunctionNameIndex` CANNOT COVER IT, WHICH IS WHY THE CHECK LIVES HERE.** These names are not
+// a module's function names: the chunk list is every Std function PLUS the entry stub PLUS the
+// hand-assembled runtime chunks (`mrt_*`, `__gt_*`) PLUS `__symtable` — and the last three are minted at
+// the TARGET tier, after the last index any Std pass can build. Which of them exist depends on the target
+// and on `RuntimeUsage`, so the set cannot be PREDICTED upstream; it can only be NOTICED here, at the one
+// place that decides the layout. That is A1t's lesson (a collision is something to notice, never
+// something to predict) applied one tier down.
+//
+// The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
+// already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
+// one integer compare, and no second hash probe on a per-chunk loop.
+module function recordChunkLabel(labelOffsets FuncLabelOffsetMap, name ByteArray, offset CodeOffset, laidOut ChunkLabelCount, project Project, funcNames FunctionNameIndex) throws CompileError
+	labelOffsets.upsert(name, value: offset)
+
+	if labelOffsets.count() as ChunkLabelCount != laidOut + 1 'duplicateChunkName'
+		try refuseDuplicateChunkName(name, project: project, funcNames: funcNames)
+	end 'duplicateChunkName'
+end 'recordChunkLabel'
+
+// The DECLARATION that took a name the compiler lays a chunk under. It is the SAME rule and the SAME
+// diagnostic as `FunctionNameIndex`'s duplicate refusal (E4015) — a declaration collided with a symbol the
+// compiler emits — and it is reported the same way, positioned at the declaration, because the cure is
+// the same: rename it. Only the DISCRIMINATOR differs. There both sides are module functions and
+// `sourceFilePath` tells the parsed one from the synthesized one; here the compiler's side is not in the
+// module at all, so the question is instead "does the Std module define this name, and from a source
+// file?" — which the checked index answers in one lookup.
+function refuseDuplicateChunkName(name ByteArray, project Project, funcNames FunctionNameIndex) throws CompileError
+	let spelled = String.from(name)
+	let declared = try funcNames.funcNamed(name) otherwise 'noModuleFunction'
+		panic("refuseDuplicateChunkName: two chunks are laid out under '{spelled}' and NEITHER is a Std function, so both were minted at the Target tier — the entry stub, a hand-assembled runtime chunk, or `__symtable`. Each of those is appended at exactly one site, so this is an augmentation that ran twice")
+	end 'noModuleFunction'
+
+	if declared.sourceFilePath.isEmpty() 'bothSynthesized'
+		panic("refuseDuplicateChunkName: the Std function named '{spelled}' is SYNTHESIZED, and a Target-tier chunk claims the same name — an `install*Runtime` and a hand-assembled chunk both supply this symbol, which is a compiler bug rather than anything a program can cause")
+	end 'bothSynthesized'
+
+	reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{spelled}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two bodies under one `.text` label. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls and the runtime's own call sites — so the declaration is the side that must move: rename it", line: declared.nameLine, column: declared.nameColumn, filePath: declared.sourceFilePath)
+	throw CompileError.compileError
+end 'refuseDuplicateChunkName'
+
+// Install the OS entry point at the MODULE level. x64-windows prepends `mrt_start` as a module
+// function (all-physical registers, its own explicit frame), which concat lays out first; it runs
+// AFTER register allocation and prologue/epilogue so the hand-built stub is never reprocessed. This
+// pass is WINDOWS-ONLY: the arm64 backend has no module-level entry, because its macOS stub calls
+// `_exit` through a GOT import that has no TargetOp channel, so it is hand-assembled as a
+// FunctionCodeChunk in the encode phase instead (see `Arm64Backend.buildArm64Backend` /
+// `Arm64Runtime`); arm64-linux shares that chunk, differing only in its exit route. So both non-wasi
+// non-windows arms answer the same thing and are consolidated into one.
+//
+// `checkLeaks` is `RuntimeUsage.usesHeap` — whether the MM runtime (and with it `__mm_leak_check`) was
+// installed. A program with no allocator cannot leak, so it carries no gate.
+//
+// `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
+// `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
+// carries neither call and its emitted stub is byte-identical to before that rung.
+//
+// `drainGreenThreads` is `RuntimeUsage.usesGt` — whether the green-thread scheduler was installed, and so
+// whether `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the
+// module for this file's own recorded reason: dead-function elimination takes installed functions back out,
+// so *"does the module still contain X"* is not a question about the runtime X belongs to.
+//
+// `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
+// stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
+// here; see that field.
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+	match target.os 'os'
+		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
+		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
+		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
+	end 'os'
+end 'augmentWithRuntime'
+
+// Build `mrt_start` and lay it out FIRST so its `.text` offset is the PE entry
+// point. The stub bridges Maxon's custom ABI (primary return in R8) to Win64's
+// ExitProcess (UINT arg in ECX):
+//   push rbp           open the saved-RBP chain (see below)
+//   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
+//   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
+//   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
+//   [call __module_init]    fill every EAGER managed global's .data slot (P1.7 slice 2a)
+//   call main          main returns its ExitCode in R8 (custom ABI)
+//   [global cleanup]   mov rcx, r8 ; call __maxon_global_cleanup  -> the same code back in R8
+//   [ds shutdown]      mov rbx, r8 ; call __ds_shutdown ; mov r8, rbx
+//   [coverage dump]    mov rcx, COMPLETED ; mov rbx, r8 ; call __cov_dump ; mov r8, rbx
+//   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
+//   call [ExitProcess] terminate the process with that code
+//   add rsp, 0x20      release the frame — dead, but the mirror must be total
+//   pop rbp            restore the caller's frame pointer
+//   ret                dead (ExitProcess never returns); kept for well-formedness
+//
+// This stub is built AFTER `insertPrologueEpilogue`, so it does not inherit that pass's
+// frame and must lay its own. It builds the SAME frame that pass builds — `push rbp` /
+// `mov rbp, rsp` through the shared `framePointerSetupOp`, so the chain's defining
+// instruction is spelled in one place — because `mrt_start` is the frame the chain ENDS
+// at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
+// one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
+// saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
+function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var block = module.addBlock(func, label: b"entry")
+
+	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
+	module.appendOp(block, op: framePointerSetupOp())
+	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
+	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
+	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
+	// silently drop exactly the allocations a program makes before `main`. Nothing is live across it —
+	// `main` has not run — so it is a bare call, `__module_init`'s shape.
+	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
+	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
+	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
+	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
+
+	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
+	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
+	// that code and gives back either the same code (nothing outstanding) or 101 (something was
+	// allocated and never freed). Every program that touches the heap therefore checks itself, and
+	// a missing decref is a FAILING TEST rather than an invisible one.
+	//
+	// It sits between `call main` and the ExitProcess bridge because that is the only point where
+	// the program is finished AND has not yet exited. It is skipped entirely for a program with no
+	// allocator, which cannot leak — there is nothing to count.
+	//
+	// The argument goes in RCX and the result comes back in R8: `__mm_leak_check` is an ordinary
+	// Maxon-ABI function (arg 0 = rcx, primary return = r8), not a Win64 import.
+	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag,
+	// and the leak check is the last thing that can still free a box — so the trace's final events happen
+	// above this line. `main`'s ExitCode is live in R8 here, so this one is PARKED where the attach is not.
+	appendDebugStreamDetach(module, block: block, debugStream: debugStream)
+	appendCoverageDump(module, block: block, dumpCoverage: dumpCoverage)
+
+	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
+	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
+	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
+	module.setTerminator(block, op: TargetOp.ret)
+
+	prependFunction(module, func: func)
+end 'prependEntryStub'
+
+// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, shared by both entry stubs. `main` has
+// returned its ExitCode in R8; `__mm_leak_check` takes that code (arg 0 in RCX, custom Maxon ABI) and
+// gives back either the same code (nothing outstanding) or 101 (something was allocated and never
+// freed), in R8. The value flow r8 -> rcx -> (adjusted) r8 is identical on Windows and Linux — only the
+// surrounding process-exit primitive differs — so the gate is written once here. It is skipped entirely
+// for a program with no allocator (`checkLeaks` false), which cannot leak; every program that touches
+// the heap therefore checks itself, and a missing decref is a FAILING TEST rather than an invisible one.
+function appendLeakGate(module TargetModule, block IrBlock, checkLeaks bool)
+	if checkLeaks 'leakGate'
+		appendExitCodePassThroughCall(module, block: block, callee: MmLeakCheckName)
+	end 'leakGate'
+end 'appendLeakGate'
+
+// ⭐⭐ **PUBLISH THE COUNTERS, ON A GATE OF ITS OWN AND NOT ON THE LEAK CHECK'S** — shared by both x64 entry
+// stubs. Dumping from inside `mm_leak_check` would fuse two unrelated questions: the
+// leak gate is emitted only for a program that touches the HEAP, so an allocation-free `--coverage` build
+// would write no `.mxcov` at all and every report would say "the program wrote none, so the run did not
+// complete" about a run that completed perfectly.
+//
+// ⚠ **AFTER the leak gate, deliberately.** The dump OPENS A FILE; ahead of the gate, any allocation inside
+// that surface would read as a leak and change the program's exit code — instrumentation altering what it
+// measures, which is the one thing it must not do.
+//
+// ⛔ **AND THE EXIT CODE IS PARKED ACROSS IT.** The two gates above are SHAPED to take the code and hand it
+// back; this one takes a status instead, so nothing carries R8 through the call.
+function appendCoverageDump(module TargetModule, block IrBlock, dumpCoverage bool)
+	if not dumpCoverage 'notInstrumented'
+		return
+	end 'notInstrumented'
+
+	module.appendOp(block, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: MxcovStatusCompleted as MachineWord))
+	appendCallPreservingExitCode(module, block: block, callee: CoverageDumpName)
+end 'appendCoverageDump'
+
+// ⭐⭐ **CALL `callee` WITH `main`'s ExitCode STILL LIVE IN R8.** R8 is in the allocator's assignable set
+// (`RegisterAllocator`'s available mask admits it), so ANY compiled callee's body may hold a value there —
+// a void signature guarantees nothing about it. RBX is callee-saved under the custom ABI, so a compiled
+// callee restores it, and `mrt_start` owes it to nobody. The arm64 stub makes the same argument for x19,
+// where the equivalent omission was a measured wrong exit code.
+//
+// The argument setup a callee needs goes AHEAD of this, so the park stays the last thing before the call.
+function appendCallPreservingExitCode(module TargetModule, block IrBlock, callee ByteArray)
+	module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rbx), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.callDirect(callee))
+	module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: x64PhysReg(X64Register.rbx)))
+end 'appendCallPreservingExitCode'
+
+// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — a `static`
+// member's is filled on first access instead (see `ModuleInit`) — shared by both entry
+// stubs, and the FIRST thing after the runtime init so a global is live for the whole of user code.
+// `__module_init` takes no argument and returns nothing; there is no live value to preserve across it
+// (`main` has not run), so it is a bare call. Emitted only for a program that has one (`initGlobals`).
+// The producer's two calls, emitted only into a `--debugstream` build — and they are NOT one shape, which
+// is why they are two functions rather than one taking a callee. The attach runs before `main` with nothing
+// live; the detach runs after it with the ExitCode in R8, and must park it.
+function appendDebugStreamAttach(module TargetModule, block IrBlock, debugStream bool)
+	if debugStream 'tracedBuild'
+		module.appendOp(block, op: TargetOp.callDirect(DsInitName))
+	end 'tracedBuild'
+end 'appendDebugStreamAttach'
+
+function appendDebugStreamDetach(module TargetModule, block IrBlock, debugStream bool)
+	if debugStream 'tracedBuild'
+		appendCallPreservingExitCode(module, block: block, callee: DsShutdownName)
+	end 'tracedBuild'
+end 'appendDebugStreamDetach'
+
+function appendModuleInitCall(module TargetModule, block IrBlock, initGlobals bool)
+	if initGlobals 'moduleInit'
+		module.appendOp(block, op: TargetOp.callDirect(ModuleInitName))
+	end 'moduleInit'
+end 'appendModuleInitCall'
+
+// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** (P1.7 slice 2a) — shared by both
+// entry stubs. The ORDER is the whole point: `__mm_leak_check` counts what is still allocated, so a global
+// released after it would read as a leak (exit 101) and one never released would read as one too. That is
+// exactly the property `static-variables.md`'s `top-level-var-string-mutate-cross-function` gates.
+//
+// It rides `appendExitCodePassThroughCall` because `__maxon_global_cleanup` is shaped like
+// `__mm_leak_check` deliberately: `main`'s ExitCode is the one live value on this path, and a void callee
+// would clobber it in R8 (see `ModuleInit.buildGlobalCleanup`).
+function appendGlobalCleanupGate(module TargetModule, block IrBlock, initGlobals bool)
+	if initGlobals 'globalCleanup'
+		appendExitCodePassThroughCall(module, block: block, callee: GlobalCleanupName)
+	end 'globalCleanup'
+end 'appendGlobalCleanupGate'
+
+// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (SV1)** —
+// shared by both entry stubs. The ORDER is the whole point, twice over:
+//
+//   • **AFTER the global cleanup**, because a released managed global may be the last owner of a service
+//     handle, and dropping it is what lets that service's green thread finish.
+//   • **BEFORE `__mm_leak_check`**, because a worker M's `__gt_reclaim` steps the very counters that gate
+//     reads. Un-joined, the two race and a clean program reports 101 intermittently — and a green thread
+//     that had not finished yet would report 75 for work that was merely still running.
+//
+// It rides `appendExitCodePassThroughCall` because `__gt_drain_at_exit` is shaped like `__mm_leak_check`
+// deliberately: `main`'s ExitCode is the one live value on this path, and a void callee would clobber it in
+// R8. A program with no scheduler carries neither the call nor the function.
+function appendGreenThreadDrainGate(module TargetModule, block IrBlock, drainGreenThreads bool)
+	if drainGreenThreads 'greenThreadDrain'
+		appendExitCodePassThroughCall(module, block: block, callee: GtDrainAtExitName)
+	end 'greenThreadDrain'
+end 'appendGreenThreadDrainGate'
+
+// Route `main`'s ExitCode (R8, the custom Maxon ABI's primary return) through `callee` and back into R8:
+// `mov rcx, r8` puts it in argument register 0, and the callee's own primary return lands where the next
+// stage of the exit path expects it. The ONE spelling of that value flow, shared by the leak gate and the
+// global-cleanup gate — two copies would be two chances to drop the exit code on the floor, silently.
+function appendExitCodePassThroughCall(module TargetModule, block IrBlock, callee ByteArray)
+	module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.callDirect(callee))
+end 'appendExitCodePassThroughCall'
+
+// Build the x64-LINUX entry stub `mrt_start` as a module function and lay it out FIRST — its `.text`
+// offset is the ELF entry point (`writeElf`'s `entryPoint = textVAddr + mainCallFixupOffset`, and concat
+// asserts the stub leads `.text`). The Linux twin of `prependEntryStub`, and CARRYING NO FRAME, for
+// reasons that all point the same way:
+//
+//   [argv capture]      argc from [rsp] and the vector from rsp+8 into their two .data words
+//   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
+//   [call __ds_init]      attach the DebugStream producer to its ring (a --debugstream build only)
+//   [call __module_init]  fill every EAGER managed global's .data slot (P1.7 slice 2a)
+//   call main            main returns its ExitCode in R8 (custom ABI)
+//   [global cleanup]     mov rcx, r8 ; call __maxon_global_cleanup  ->  the same code back in R8
+//   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
+//   [ds shutdown]        mov rbx, r8 ; call __ds_shutdown ; mov r8, rbx  — clears producer-alive
+//   [coverage dump]      mov rcx, COMPLETED ; mov rbx, r8 ; call __cov_dump ; mov r8, rbx
+//   mov edi, r8d         hand R8's low 32 bits to exit_group's rdi (Linux syscall arg 0)
+//   x64Syscall(exit_group)   mov eax, 231 ; syscall  — terminates the process
+//   ret                  dead (exit_group never returns); kept as the block's terminator for
+//                        well-formedness, exactly as the Windows stub's trailing `ret` is.
+//
+// ⚠ NO `push rbp`, AND THAT IS DELIBERATE — IT IS THE ALIGNMENT. The Linux kernel enters `_start` with
+// rsp ≡ 0 (mod 16) (argc at `[rsp]`, NO return address), where the Windows loader enters ≡ 8 (as if via
+// `call`). So `call main` from the kernel's alignment lands `main` at rsp ≡ 8 (mod 16) — exactly what a
+// The compiler function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
+// the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
+// frame: the SIGFPE backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
+// this frameless stub left, so the trace is `in main` -> `in mrt_start` -> ends), there is no Win64
+// shadow space to reserve (raw syscalls carry no imports, and the compiler functions spill to their OWN frames),
+// and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
+// terminates cleanly without this stub setting one up.
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var block = module.addBlock(func, label: b"entry")
+
+	// Install the SIGFPE fault handler (rt_sigaction) before any user code runs, exactly as the Windows
+	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init
+	// `appendX64LinuxRuntimeChunks` appended; it runs from the kernel's 16-aligned entry and returns with
+	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
+	appendLinuxArgvCapture(module, block: block, captureArgv: captureArgv)
+	appendLinuxEnvpCapture(module, block: block, captureEnvp: captureEnvp)
+	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	// ⭐ The producer attaches before `__module_init`, which is the first thing that can allocate — an eager
+	// managed global's box belongs in the trace, and attaching after it would drop exactly the allocations a
+	// program makes before `main`. See `prependEntryStub`, whose bracket this mirrors.
+	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
+	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
+	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
+	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
+	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag, and
+	// the leak check is the last thing that can still free a box — so the trace's final events happen above
+	// this line. `main`'s ExitCode is live in R8 here and is parked across it, exactly as the Windows stub
+	// parks it.
+	appendDebugStreamDetach(module, block: block, debugStream: debugStream)
+	appendCoverageDump(module, block: block, dumpCoverage: dumpCoverage)
+
+	// ExitCode (R8, custom ABI) -> EDI (Linux syscall arg 0). A 32-bit move, exactly as the Windows stub
+	// hands R8 to ECX for ExitProcess: an exit status is the low 8 bits, and the zero-extending `mov r32`
+	// clears the high half.
+	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rdi), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.x64Syscall(X64LinuxSyscallExitGroup))
+	module.setTerminator(block, op: TargetOp.ret)
+
+	prependFunction(module, func: func)
+end 'prependLinuxEntryStub'
+
+// ⭐⭐ **THE LINUX KERNEL PUTS THE ARGUMENT VECTOR ON THE STACK, AND THIS IS THE ONLY MOMENT IT IS
+// REACHABLE.** `execve` enters `mrt_start` with **argc at `[rsp]` and the vector itself at `rsp+8`** (the
+// pointers, NUL-terminated, with envp following) and with every GPR but rsp architecturally UNSPECIFIED.
+// The Std graph `CommandLineRuntime` builds for this lane reads those two `.data` words
+// (`CommandLineShape.argumentVector`), so all that is missing is who fills them — and only the frameless
+// stub, before any `call` has moved rsp, still knows where they are.
+//
+// ⚠ **argc IS A LOAD AND argv IS AN `lea`**: `[rsp]` holds the COUNT, while `rsp+8` IS the vector rather
+// than a word pointing at one.
+//
+// ⚠ It rides `RuntimeUsage.usesCommandLine` because the two `.data` slots exist only when that bit is set
+// (`commandLineRuntimeGlobals`), so an unconditional capture would relocate against absent labels.
+function appendLinuxArgvCapture(module TargetModule, block IrBlock, captureArgv bool)
+	if not captureArgv 'noArgv'
+		return
+	end 'noArgv'
+
+	let argc = x64PhysReg(X64Register.rax)
+	let argv = x64PhysReg(X64Register.rcx)
+	let slot = x64PhysReg(X64Register.rdx)
+
+	module.appendOp(block, op: TargetOp.loadRegBaseDisp(argc, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegRegImm32(argv, base: x64PhysReg(X64Register.rsp), disp: LinuxEntryArgvOffset))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgcLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argc, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgvLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argv, width: X64AccessWidth.word64))
+end 'appendLinuxArgvCapture'
+
+// ⭐⭐ **THE ENVIRONMENT VECTOR, WHICH IS REACHABLE ONLY HERE AND ONLY BY ARITHMETIC.** `envp` follows argv's
+// NUL terminator, so its base is `rsp + (argc + 2) * 8` — the count's own slot plus that terminator — and
+// nothing later in the process can recover it: a static image has no `environ` and no `getenv`.
+// `mrt_host_env_read` reads the word back out (`X64LinuxRuntime.buildX64LinuxEnvReadChunk`).
+//
+// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits — a
+// terminal-detecting program that never asks for its arguments carries this and not that — so it re-reads
+// `rsp` rather than depending on a register the other left behind.
+function appendLinuxEnvpCapture(module TargetModule, block IrBlock, captureEnvp bool)
+	if not captureEnvp 'noEnvp'
+		return
+	end 'noEnvp'
+
+	let envp = x64PhysReg(X64Register.rax)
+	let slot = x64PhysReg(X64Register.rdx)
+
+	module.appendOp(block, op: TargetOp.loadRegBaseDisp(envp, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegRegImm32(envp, base: envp, disp: LinuxEntryEnvpSkippedWords))
+	// The scale is the machine word, because what is being indexed is a vector of POINTERS.
+	module.appendOp(block, op: TargetOp.leaRegBaseIndexScale(envp, base: x64PhysReg(X64Register.rsp), index: envp, scale: MemoryIndexScale.byEight))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: LinuxEnvpLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: envp, width: X64AccessWidth.word64))
+end 'appendLinuxEnvpCapture'
+
+// Move `func` to the front of the module's function list so it lays out first in
+// `.text`. Block refs are flat `module.blocks` indices, so reordering the
+// function list never invalidates them.
+function prependFunction(module TargetModule, func IrFunction)
+	var reordered = IrFunctionArray.create()
+	reordered.push(func)
+	for existing in module.functions 'eachFunc'
+		reordered.push(existing)
+	end 'eachFunc'
+	module.functions = reordered
+end 'prependFunction'
+
+// Write the CodeResult to a runnable executable, dispatched on target OS: an x64-windows PE, an
+// arm64-macOS Mach-O, an arm64-linux static ELF, or a wasm32-wasi component (`writeWasm`).
+// Each writer lives beside the format it emits; the wasm one takes the core module bytes rather than
+// the whole CodeResult because building a component is a multi-step, multi-file job it owns end to
+// end (see its header).
+export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath)
+	match target.os 'os'
+		windows then writePe(outputPath, codeResult: codeResult, target: target)
+		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
+		linux then writeElf(outputPath, codeResult: codeResult, target: target)
+		wasi then writeWasm(outputPath, coreModule: codeResult.wasmCoreModule)
+	end 'os'
+end 'writeExecutable'

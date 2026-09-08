@@ -1,0 +1,21 @@
+// Test: let-alias-of-parameter-to-mutating-param-error
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(d IntArray)
+	d.push(3)
+end 'grow'
+
+function caller(p IntArray) returns Integer
+	let a = p
+	grow(a)
+	return a.count()
+end 'caller'
+
+function main() returns ExitCode
+	var v = IntArray.create()
+	return caller(v) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:11:2: cannot pass 'a' to function that mutates parameter 'd' (in caller)

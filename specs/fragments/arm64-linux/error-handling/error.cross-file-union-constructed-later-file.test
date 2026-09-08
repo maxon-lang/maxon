@@ -1,0 +1,117 @@
+// Test: error.cross-file-union-constructed-later-file
+// --- file: app.maxon
+typealias Tiny = int(0 to 7)
+
+type Decoy1
+	export var alpha as Tiny
+	export var beta as Tiny
+	export var gamma as Tiny
+end 'Decoy1'
+
+type Decoy2
+	export var only as Tiny
+end 'Decoy2'
+
+function main() returns ExitCode
+	let w = Woe.bad(Payload.create(7))
+	var result = 0
+	match w 'check'
+		bad(p) then result = p.mass
+		ok then result = 1
+	end 'check'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export type Payload
+	export var mass as Code
+
+	export static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Payload.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.movImm x19, 1
+  matchcont:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Woe
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at app.maxon:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @Payload.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

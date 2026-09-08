@@ -1,0 +1,31 @@
+// Test: error.one-interface-bound-two-ways
+typealias Whole = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+interface Conv uses Item
+	function convert(v Item) returns Whole
+end 'Conv'
+
+type Machine implements Conv with Whole, Conv with Real
+	export var tag as Whole
+
+	export static function create(tag Whole) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function convert(v Whole) returns Whole
+		return v
+	end 'convert'
+
+	export function convert(v Real) returns Whole
+		return 7
+	end 'convert'
+end 'Machine'
+
+function main() returns ExitCode
+	let m = Machine.create(1)
+	return m.convert(42)
+end 'main'
+---
+CompilerError:
+error E3111: <fragment>:9:6: Type 'Machine' reaches interface 'Conv''s requirement 'convert' by two routes that select different members: convert(v Whole) returns Whole, convert(v Real) returns Whole. A conforming type has ONE witness table per interface and ONE address per method slot, so 'Conv' must be conformed to exactly one way — bind its associated types once, either by removing the duplicate 'Conv' entry or by not also reaching it through an interface that 'Machine' already implements

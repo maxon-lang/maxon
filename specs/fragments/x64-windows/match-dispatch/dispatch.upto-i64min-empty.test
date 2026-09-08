@@ -1,0 +1,86 @@
+// Test: dispatch.upto-i64min-empty
+function classify(x Integer) returns Integer
+	return match x 'm'
+		0 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `0 upto i64.min` is the empty range — nothing is below i64.min. A prior bug decremented
+	// the exclusive upper to `i64.min - 1`, which wrapped to `i64.max` and matched every value >= 0.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
+	if classify(9223372036854775807) == 0 'd'
+		n = n + 1
+	end 'd'
+	return n
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+  matchdefault#15:
+    x64.movRegImm32 rcx, 0
+  __il_cont#12:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchdefault#20
+  a:
+    x64.movRegImm32 rax, 1
+  matchdefault#20:
+    x64.movRegImm32 rcx, 0
+  __il_cont#17:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchdefault#25
+  b:
+    x64.leaRegRegImm32 rax, rax, 1
+  matchdefault#25:
+    x64.movRegImm32 rcx, 0
+  __il_cont#22:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchdefault#30
+  c:
+    x64.leaRegRegImm32 rax, rax, 1
+  matchdefault#30:
+    x64.movRegImm32 rcx, 0
+  __il_cont#27:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit
+  d:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.upto-i64min-empty.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

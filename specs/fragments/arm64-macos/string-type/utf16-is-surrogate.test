@@ -1,0 +1,45 @@
+// Test: utf16-is-surrogate
+function main() returns ExitCode
+	if utf16IsSurrogate(55357) 'c7'
+		print("1\n")
+	end 'c7'
+	if utf16IsSurrogate(56832) 'c8'
+		print("2\n")
+	end 'c8'
+	if utf16IsSurrogate(65) 'c9'
+		print("0\n")
+	end 'c9'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  andrhs#9:
+    arm64.movImm x0, 1
+  __il_cont#7:
+    arm64.cbz x0, andrhs#16
+  c7:
+    arm64.leaRdata x0, __str_rec_3  ; "1\x0a"
+    arm64.bl print
+  andrhs#16:
+    arm64.movImm x0, 1
+  __il_cont#14:
+    arm64.cbz x0, __rc_ok
+  c8:
+    arm64.leaRdata x0, __str_rec_4  ; "2\x0a"
+    arm64.bl print
+  __rc_ok:
+    arm64.movImm x0, 0
+  __il_cont#21:
+    arm64.cbz x0, ifcont
+  c9:
+    arm64.leaRdata x0, __str_rec_5  ; "0\x0a"
+    arm64.bl print
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

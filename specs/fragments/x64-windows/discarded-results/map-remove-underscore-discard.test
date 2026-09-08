@@ -1,0 +1,113 @@
+// Test: map-remove-underscore-discard
+typealias Tally = int(0 to u64.max)
+typealias TallyMap = Map with (String, Tally)
+
+function main() returns ExitCode
+	var m = TallyMap.create()
+	m.upsert("a", value: 1)
+	_ = m.remove("a")
+	return m.count()
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_Tally]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "a"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata r9, [rip + __layout_Map_String_Tally]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegImm32 rax, 1
+    x64.callDirect Map.upsert
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "a"
+    x64.leaRegRdata rax, [rip + __layout_Map_String_Tally]
+    x64.leaRegRdata r9, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.remove
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 32]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg r12, rcx
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.count
+    x64.movRegReg r12, r8
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Map_String_Tally
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#3:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at map-remove-underscore-discard.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,626 @@
+// RegisterPressureDiagnostic — the E5001 "this needs more registers than exist"
+// message (design: ARCHITECTURE.md's register-allocator section). The DECISION that a point is a
+// genuine HOT overflow already happened in `SplitLiveRanges`: the cold-spill splitter
+// relieved every idle value and rematerialized every constant, and `chooseVictim` still
+// found NO value crossing the peak that can be moved — so what remains is the region's true
+// working set against the FULL pool. This file does NOT re-decide feasibility; it only turns that
+// already-exact decision into a source-mapped message. So it can add no false positive — every
+// number it prints comes from the peak the splitter converged on, measured against that peak's own
+// witness (`PressurePeak.witness`).
+//
+// **E5001 is a FULL-POOL overflow, always.** A point where the values fit the machine but not the
+// registers one op leaves them (a call's callee-saved subset, an `idiv`'s `pool ∖ {rax,rdx}`) is
+// relieved by a FORCED store/reload bracket and never reaches here — `noVictimAtPeak` panics rather
+// than let it. So the pool this message reports is the full 14, never a reduced one: reporting "6
+// live, only 5 survive a call" as a deficit was the false-positive class this design exists to end
+// (ARCHITECTURE, "Known limits" #2).
+//
+// **The message is the remedy, and the consumer is an agent in a rewrite loop**, so it must
+// let the agent converge in ONE step (design Phase 7):
+//   • the EXACT deficit ("remove N values"), not "too many";
+//   • each blocking value's SOURCE def site (via ValueOrigin -> Maxon op -> SourceRange),
+//     ranked cheapest-to-move first (fewest READS inside the region — the fewest reloads after
+//     the array rewrite);
+//   • the concrete transformation (hold the working set in an array).
+//
+// **THE OVERFLOW IS NOT ALWAYS A LOOP.** It was, until stack arguments removed the six-parameter cap: a
+// straight-line function could not hold more live values than the pool. A wide signature can, so the peak's
+// own block decides the REGION (its enclosing loop NEST, or the whole function) and, with it, the anchor,
+// the use counts, and which of the two message bodies is built. The loop body is byte-for-byte unchanged.
+//
+// **Deterministic byte-for-byte** (the `maxoncstderr` spec block gates it): no map iteration
+// anywhere, values are swept in id order, and the candidate list is sorted by a TOTAL order
+// (reads-in-region asc, then value id).
+//
+// **RULE 3 (design):** no compiler-introduced value may appear in the blocking set — an agent
+// told to delete a value that is not in its source cannot converge. Every blocking value is
+// resolved to a USER source span through four exhaustive routes (`defRangeOf`): a PARAMETER to
+// its declaration (`ParamOriginTable` — it is minted by no op), an op-defined value to its op,
+// a phi to the earliest incoming value it copies, and a splitter-minted value (a reload / a
+// rematerialized constant) chased through `SplitLineage` to the ORIGINAL user value it derives
+// from. Only a value with genuinely NO user ancestry after all four is a compiler DEFECT, so
+// `defRangeOf` PANICS naming it rather than emitting a misleading location.
+//
+// ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — THIS NOTE
+// USED TO SAY "unreachable at M5" AND IT WAS REACHED.** Every one of them ends in a table only the
+// parser fills (`ParamOriginTable`, `ValueOriginTable`, `project.opRanges`), so for a function the
+// COMPILER emitted they ALL answer nothing and the panic fires on the FIRST live value, whatever it is.
+// MEASURED: a four-line `sleep(1)` program, where `__gt_timer_check`'s heap walk holds 18 GPRs against
+// a pool of 14 — no green-thread program could be compiled, the compiler's own self-compile included.
+// ⇒ **WHAT MAKES THE PANIC A BACKSTOP IS NOT THE ROUTES, IT IS THAT E5001 IS NEVER RAISED FOR A
+// FUNCTION WITHOUT SOURCE**, and that is `SplitLiveRanges`' guarantee, not this file's: such a peak is
+// relieved by the forced bracket instead of refused (`relievePressure`'s `noAuthorToRefuse`), and
+// `noVictimAtPeak` panics as a splitter bug rather than calling in here if it ever is not.
+//
+// ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT, AND IT NEVER WAS.** Reaching this file at all is
+// already the decision that the author must act; a value the author cannot act on has to be relieved
+// BEFORE that, by the splitter, which is the only party that can still emit code. The one class this
+// has actually cost — a hidden dictionary parameter held across a loop in a generic body — is relieved
+// by `SplitLiveRanges.confinedOverflowAtPeak`, which is what stops the full-pool ranking from refusing
+// a peak whose values the ABI had already sent to memory. See its header.
+
+// How many times a blocking value is READ inside the OVERFLOWING REGION — the move-cost rank key
+// (fewer reads in it => fewer reloads after the array rewrite). A count of READS, so it is neither
+// a `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
+//
+// ⚠⚠ **IT COUNTS OP OPERANDS AND NOT BRANCH-EDGE ARGS, AND THE PRINTED WORD USED TO BE "used" —
+// WHICH IS A DIFFERENT CLAIM, AND A FALSE ONE.** A loop-carried `var` — one the loop only ASSIGNS,
+// read after it — is a block ARG at the loop header and is handed on at every join inside the loop,
+// so ALL of its in-loop uses are EDGE uses and this count is 0. Printed as "used 0 times in the
+// loop" that told the author the loop does not touch a value they can see being assigned further
+// down in that same loop, and an agent told to remove such a value cannot converge — the one failure the
+// message exists to avoid. MEASURED on the spec harness's own `MaxonArgs.parse` (BATCH43): eleven
+// of thirty-three blocking values printed "used 0 times in the loop", and every one of them was a
+// loop-header phi for a `var` that loop assigns. The NUMBER is right for what it ranks — after the
+// array rewrite the phi web is gone and only the reads come back as loads — so what was wrong was
+// the word, and the word is now `read`.
+typealias RegionReadCount = int(0 to u64.max)
+
+// One blocking value the user must consider removing from the region: its id, the SOURCE span
+// that declares it (a parameter's declaration, an op-defined value's op, or — for a phi — the
+// incoming value it copies; a rematerialized/reloaded value chases to what it derives from —
+// see `defRangeOf`), and how many times it is READ inside the region (the rank key).
+type PressureCandidate
+	export var valueId as ValueId
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var readsInRegion as RegionReadCount
+
+	static function create(valueId ValueId, line LineNumber, column ColumnNumber, readsInRegion RegionReadCount) returns PressureCandidate
+		return Self{valueId: valueId, line: line, column: column, readsInRegion: readsInRegion}
+	end 'create'
+end 'PressureCandidate'
+
+typealias PressureCandidateArray = Array with PressureCandidate
+
+// A candidate's position in the blocking-value list — what `sortedOrder` permutes and
+// `candidateList` walks. It indexes the CANDIDATES, not the CFG (it was a `CfgIndex`, which said
+// "block" about the rank of a value in a worklist).
+typealias CandidateIndex = int(0 to u64.max)
+typealias CandidateOrder = Array with CandidateIndex
+
+// Report the E5001 diagnostic for a HOT register-pressure overflow onto `project.diagnostics`
+// and THROW. The overflow point (`peak`) genuinely needs `peak.pressure` registers but only
+// `popcount(peak.witness)` are available there. This DIRECTLY throws (rather than
+// returning an error for the caller to throw) so the control flow is byte-for-byte the shape
+// of `PassPipeline.run`'s gate — report onto the shared project, then a plain
+// `throw CompileError.compileError`; `compileToCodeResult` catches it, prints, and re-throws a
+// FRESH one (the documented re-throw gotcha). Constructing-then-returning the error to throw
+// elsewhere leaves an owned `CompileError` box in flight across the throw boundary, which the
+// runtime does not reclaim (a stderr "MM leak" line that would corrupt the diagnostic — the very
+// thing the `maxoncstderr` block compares).
+export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
+	let message = buildRegisterPressureMessage(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+	// Whole-program-anchored (line 0), so `Diagnostic.render` emits `error E5001:` once and
+	// the multi-line body — which embeds each source location itself — flows through verbatim.
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.registerPressure, message: message))
+	throw CompileError.compileError
+end 'raiseRegisterPressure'
+
+// Assemble the multi-line E5001 message. Structure: a headline with the exact deficit, a
+// paragraph naming the constrained register count that actually applies at the point, the
+// ranked worklist of blocking values with their source def sites, and the transformation.
+function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
+	// THE POOL THE DEFICIT IS MEASURED AGAINST IS THE PEAK'S OWN WITNESS — the register set Hall's
+	// condition failed on. E5001 is raised ONLY for a FULL-POOL overflow (a CONFINED one is always
+	// relievable by a forced bracket, and `noVictimAtPeak` panics rather than let one surface here),
+	// so the witness is always the full pool and `available` is always 14.
+	//
+	// That equality is the point, not an accident to be optimized away: reading the pool off the peak
+	// OP instead — `pool ∖ op.implicitDefs`, which is what this used to do — reports 5 whenever a
+	// full-pool overflow happens to land on a call, and the deficit computed from it asks the author
+	// to remove NINE MORE VALUES THAN THE PROGRAM NEEDS. Measuring an E5001 against a reduced pool is
+	// the documented false-positive class (ARCHITECTURE, "Known limits" #2); the witness is what makes
+	// it structurally unspellable.
+	// PER FILE: "the full pool" is the pool of the peak's OWN register file — 14 GPRs or 16 XMMs, never
+	// the 30 the two hold between them. A loop needing 17 GPRs is a full-pool overflow of the GPR file
+	// however many XMMs sit idle, and measuring it against the mixed 30 makes every genuine E5001 look
+	// CONFINED and trips this panic instead of reporting the error the user must act on.
+	let available = regMaskPopcount(peak.witness)
+	let classPoolSize = classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)
+	if available != classPoolSize 'confinedPeak'
+		panic("buildRegisterPressureMessage: E5001 reached with a CONFINED peak (witness {peak.witness}, {available} of the {classPoolSize} {peak.witnessClass.name} registers) — such a point fits the machine and is relieved by a forced store/reload bracket, so `noVictimAtPeak` must have panicked before this. Reporting it as user register pressure would be the false positive this design treats as its worst possible bug.")
+	end 'confinedPeak'
+
+	let cfg = liveness.cfg
+	let filePath = func.sourceFilePath.toString()
+
+	// ⭐⭐ **IS THE PEAK EVEN IN A LOOP?** Until stack arguments removed the six-parameter cap it always was:
+	// straight-line code could not hold more live values than the pool, and the anchor scan's line-0
+	// fallback carried a comment saying it "cannot happen for a real loop overflow". A wide signature made
+	// it happen — ~20 live parameters overflow the file with no loop anywhere — and the message then named
+	// A LOOP THAT DOES NOT EXIST, at line 0, with every candidate "used 0 times in the loop". The REFUSAL is
+	// correct in both shapes; only the region differs, so it is decided once here and nothing below
+	// re-derives it.
+	let peakLoopDepth = try cfg.loopDepth.get(peak.blockLocal) otherwise panic("buildRegisterPressureMessage: loopDepth.get OOB for peak block {peak.blockLocal}")
+	let peakInLoop = peakLoopDepth != 0
+
+	let regionOps = collectRegionOps(module, cfg: cfg, peak: peak, peakInLoop: peakInLoop)
+	let candidates = collectCandidates(project, module: module, func: func, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionOps: regionOps)
+	let order = sortedOrder(candidates)
+	let anchorLine = pressureAnchorLine(module, project: project, funcIndex: funcIndex, peak: peak, peakInLoop: peakInLoop, candidates: candidates, regionOps: regionOps)
+
+	// EVERY count in the message is the number of LISTED, removable values — `candidates.count()`
+	// (the raw live-virtual working set, exactly what the worklist enumerates). The headline,
+	// the pressure paragraph, and the "remove N of these M" line all derive from it, so they are
+	// mutually consistent (never "18 must be held ... remove 4 of these 17"). `peak.pressure`
+	// (the EFFECTIVE pressure, raw + reuse-transient + dead-phi) is the register requirement the
+	// splitter decided against; the deficit is `peak.pressure - available`, the EXACT number of
+	// registers over the pool, so the remedy converges in one step. It is capped at the listed
+	// count so the message can never ask to remove more values than it lists — a safety floor
+	// that is a no-op at a hot-loop peak (there the corrections are ≤ `available`, so
+	// `peak.pressure - available ≤ candidates.count()`).
+	let heldCount = candidates.count()
+	let deficit = minCount(peak.pressure - available, b: heldCount)
+
+	// TWO WORDINGS, ONE SET OF NUMBERS. Every quantity above is computed once and both bodies read it, so
+	// the two can differ in prose and never in arithmetic. The LOOP body is byte-for-byte what it has always
+	// been — the committed `maxoncstderr` goldens on four targets pin it, and three of those targets cannot
+	// be executed on any one host, so it is left untouched rather than re-derived.
+	var msg = StringBuilder.create()
+	if peakInLoop 'inLoop'
+		msg.append("the loop at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
+		msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
+		msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by reads inside the loop):\n")
+		msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the loop"))
+		msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
+		msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
+		msg.append("  and the loop body no longer needs a register for each one.")
+		return msg.build()
+	end 'inLoop'
+
+	// The straight-line body. It may NOT borrow the loop wording: there is no loop body for a spill to land
+	// in, so the reason a spill is refused here is different — the values are all live AT ONE POINT, and the
+	// remedy is to stop them being live together rather than to lift them out of a repeated region.
+	msg.append("the code at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
+	msg.append("  {heldCount} values must be held in registers at once at this point, but\n  only {available} registers are available. Every value that could be moved out of the\n  way already was; the ones listed below are all live across this point at the same\n  time, so no further spill can relieve it.\n")
+	msg.append("\n  remove {deficit} of these {heldCount} value(s) from this point, cheapest first (ranked by reads in the function):\n")
+	msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the function"))
+	msg.append("\n  to fix: hold this working set in an array and index it, or split the function so\n")
+	msg.append("  fewer of these values are live at the same time.\n")
+	msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
+	msg.append("  and the code no longer needs a register for each one.")
+	return msg.build()
+end 'buildRegisterPressureMessage'
+
+// The smaller of two counts. Used to cap the reported deficit at the listed-candidate count.
+function minCount(a RegCount, b RegCount) returns RegCount
+	return a if a <= b else b
+end 'minCount'
+
+// Render the ranked worklist, one line per candidate: its source def site + its in-loop READ
+// count. The location is what identifies the value to the user — the compiler carries no value NAMES
+// (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
+// to recover.
+// `regionNoun` names what the read count was counted over — "the loop" or "the function", the same region
+// `collectRegionOps` gathered the ops `readsInRegion` counted in. Passed in rather than re-derived here, so
+// a count and the noun describing it cannot come apart.
+function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String, regionNoun String) returns String
+	var out = StringBuilder.create()
+	for idx in order 'each'
+		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
+		let plural = "" if c.readsInRegion == 1 else "s"
+		out.append("    {filePath}:{c.line}:{c.column}   read {c.readsInRegion} time{plural} in {regionNoun}\n")
+	end 'each'
+	return out.build()
+end 'candidateList'
+
+// The source line the headline anchors on, by region. IN A LOOP it is the region's first body statement
+// (`regionAnchorLine`). IN STRAIGHT-LINE CODE it is the PEAK OP's own line — the point every blocking
+// value is live at, which is the only place the user can act.
+//
+// ⚠ NEITHER ROUTE MAY RETURN 0, and BOTH need the same fallback to promise it. The peak op is often a
+// spill, a call or a control op that defines no origin-carrying value, and a region can consist of such
+// ops alone; `firstOriginLineOfOp` answers 0 for each. Both then fall back to the earliest blocking
+// value's def site, which RULE 3 guarantees is real user source. Reporting `:0` — a source position that
+// does not exist — is exactly the old loopless behaviour this replaces, so the guard is stated once here
+// rather than in each route.
+function pressureAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
+	var scanned = 0 as LineNumber
+	if peakInLoop 'loop'
+		scanned = regionAnchorLine(module, project: project, funcIndex: funcIndex, regionOps: regionOps)
+	end 'loop' else 'straightLine'
+		var buf = OperandList.create()
+		let peakOp = try module.ops.get(peak.peakOpIdx) otherwise panic("pressureAnchorLine: peak op {peak.peakOpIdx} not in module.ops")
+		scanned = firstOriginLineOfOp(project, funcIndex: funcIndex, op: peakOp, buf: buf)
+	end 'straightLine'
+
+	if scanned != 0 'found'
+		return scanned
+	end 'found'
+
+	return earliestCandidateLine(candidates)
+end 'pressureAnchorLine'
+
+// The smallest def line among the blocking values. The set cannot be empty — a point with no live value
+// cannot overflow a register file — and RULE 3 resolves every member to a user span, so this always names
+// real source rather than the 0 it is standing in for.
+function earliestCandidateLine(candidates PressureCandidateArray) returns LineNumber
+	var best = 0 as LineNumber
+	var found = false
+	for c in candidates 'each'
+		if (not found) or c.line < best 'smaller'
+			best = c.line
+			found = true
+		end 'smaller'
+	end 'each'
+
+	if not found 'empty'
+		panic("earliestCandidateLine: the blocking set is empty — a program point with no live value cannot overflow the register file, so the peak's live-before row was not the one the deficit was measured against")
+	end 'empty'
+
+	return best
+end 'earliestCandidateLine'
+
+// The source line to anchor "the loop at ..." on: the SMALLEST source line among the region's
+// Target ops that DEFINE an origin-carrying value, resolved with no dependence on block source info
+// (which does not survive to the Target tier).
+//
+// ⚠ WHETHER THE LOOP'S CONDITION CONTRIBUTES IS PER-ISA, and the committed goldens show both. x64
+// fuses `i < N` into a `cmp`+`jcc` that defines no virtual value (the flags are not an SSA value), so
+// `firstOriginLineOfOp` finds no def to map there and the anchor is the loop's first BODY statement
+// (`hot-loop-overflow`, `:21`). arm64 materializes the same test with a `cset` into a GPR, which IS an
+// origin-carrying def sited on the `while` line, so the anchor is the `while` itself
+// (`hot-loop-overflow-arm64`, `:32`). Both are "the earliest source line in the region that emits a
+// value", which is the one property this computes.
+//
+// 0 when no op of the region has an origin; `pressureAnchorLine` owns what that means.
+function regionAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, regionOps OpIndexArray) returns LineNumber
+	var best = 0 as LineNumber
+	var found = false
+	var buf = OperandList.create()
+	for opIdx in regionOps 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("regionAnchorLine: op {opIdx} not in module.ops")
+		let line = firstOriginLineOfOp(project, funcIndex: funcIndex, op: op, buf: buf)
+		if line == 0 'noOrigin'
+			continue
+		end 'noOrigin'
+		if (not found) or line < best 'smaller'
+			best = line
+			found = true
+		end 'smaller'
+	end 'eachOp'
+	return best
+end 'regionAnchorLine'
+
+// ⭐ THE OVERFLOWING REGION, as the ops it contains — the ONE thing that differs between the two shapes
+// of E5001, so it is derived ONCE here and everything downstream is asked in terms of it. The anchor and
+// every candidate's use count are both taken over this list, which is what stops the headline and the
+// ranked values below it from describing two different regions.
+//
+//  • A peak inside a LOOP is the case the design was written for: the region is the loop NEST enclosing
+//    the peak's OWN block, and what makes the overflow worth REFUSING rather than spilling is that a
+//    spill would land inside a body that runs many times.
+//  • A peak in STRAIGHT-LINE code overflows the file all the same — a wide signature can hold more live
+//    values than the machine has registers with no loop anywhere — and its region is simply the function.
+//
+// ⚠ **THE NEST, NOT "EVERY BLOCK AT DEPTH >= 1".** A block depth answers "is this block in SOME loop",
+// which every loop in the function answers yes to, so a depth test made a multi-loop function report the
+// EARLIEST loop in the file whatever had overflowed — and then ranked the blocking values by their uses
+// in all of the function's loops at once. In `two-loops-later-one-overflows` that named a loop whose whole
+// body is `pad = pad + 1`, three lines above the declarations of every value it went on to list, and
+// counted `pad`'s two uses in THAT loop as uses of a loop it is merely live across. The peak's block is
+// the only thing that says WHICH loop, and `enclosingLoopBlocks` is what turns it into one.
+function collectRegionOps(module TargetModule, cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns OpIndexArray
+	let region = regionBlocks(cfg, peak: peak, peakInLoop: peakInLoop)
+	var ops = OpIndexArray.create()
+	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
+		let inRegion = try region.get(i) otherwise panic("collectRegionOps: region.get OOB at block {i}")
+		if not inRegion 'outside'
+			continue
+		end 'outside'
+		let block = blockAt(module, topo: cfg.topo, local: i)
+		collectBlockOps(block, out: ops)
+	end 'eachBlock'
+	return ops
+end 'collectRegionOps'
+
+// The region's BLOCKS — the peak's enclosing loop nest, or every block of the function when the peak is
+// not in a loop.
+function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns BoolArray
+	if peakInLoop 'inLoop'
+		return enclosingLoopBlocks(cfg.topo, blockLocal: peak.blockLocal)
+	end 'inLoop'
+
+	var everyBlock = BoolArray.create()
+	everyBlock.refill(cfg.topo.numBlocks as ElementIndex, value: true)
+	return everyBlock
+end 'regionBlocks'
+
+// The source line of the first VIRTUAL DEF of `op` that has a ValueOrigin, or 0 when the op
+// defines no origin-carrying value (a control/spill op, or a phi-fed value). Used only to find
+// the message's anchor line, so a 0 result is fine: the region scan skips such an op, and
+// `pressureAnchorLine` turns a 0 from the peak op itself into the earliest blocking value's line.
+function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, buf OperandList) returns LineNumber
+	targetOpOperands(op, buf: buf)
+	for o in buf 'eachOperand'
+		if operandIsDef(o) and operandIsVirtual(o) 'def'
+			match project.valueOrigins.lookup(funcIndex, valueId: operandValueId(o)) 'origin'
+				none then break 'origin'
+				found(opIndex) then return project.opRanges.get(opIndex).line
+			end 'origin'
+		end 'def'
+	end 'eachOperand'
+	return 0
+end 'firstOriginLineOfOp'
+
+// ==========================================================================
+// Collecting + ranking the blocking values
+// ==========================================================================
+
+// The blocking values (everything live at the peak op), each resolved to its source def site
+// and its READ count within the overflowing region. `peak.liveBefore` IS the working set the deficit was
+// measured against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
+// order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
+// than moving the reference-typed candidates around (moving them would mutate the array while
+// an element borrow is live, which the borrow checker rejects).
+function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
+	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
+	var candidates = PressureCandidateArray.create()
+
+	for v in 0 upto cfg.valueCount 'eachValue'
+		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
+			continue
+		end 'notLive'
+		let range = defRangeOf(project, module: module, func: func, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
+		let readCount = readsInRegion(module, regionOps: regionOps, valueId: v)
+		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, readsInRegion: readCount))
+	end 'eachValue'
+
+	return candidates
+end 'collectCandidates'
+
+// A permutation of `candidates`' indices, sorted by the TOTAL order (reads-in-loop ASC, then
+// value id ASC) — cheapest to move out first, ties broken by id so the output is byte-
+// deterministic. Sorts a SCALAR index array (int copies, never a borrow) via insertion sort,
+// leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
+// register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
+function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
+	var order = CandidateOrder.create()
+	for i in 0 upto candidates.count() 'seed'
+		order.push(i)
+	end 'seed'
+
+	let n = order.count()
+	for i in 1 upto n 'each'
+		let keyIndex = try order.get(i) otherwise panic("sortedOrder: order.get OOB at {i}")
+		var j = i
+		while j > 0 and candidateAtGreater(candidates, aIndex: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB"), bIndex: keyIndex) 'shift'
+			try order.set(j, value: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB")) otherwise panic("sortedOrder: order.set OOB")
+			j = j - 1
+		end 'shift'
+		try order.set(j, value: keyIndex) otherwise panic("sortedOrder: order.set OOB")
+	end 'each'
+	return order
+end 'sortedOrder'
+
+// True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (reads-in-loop asc, then
+// value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
+function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
+	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
+	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
+	if a.readsInRegion != b.readsInRegion 'byReads'
+		return a.readsInRegion > b.readsInRegion
+	end 'byReads'
+	return a.valueId > b.valueId
+end 'candidateAtGreater'
+
+// The number of times `valueId` is READ (named by a virtual USE operand) by an op of the OVERFLOWING
+// REGION — the move-cost rank key (fewer reads => fewer reloads after the array rewrite), and the number
+// the message prints beside each candidate. It is counted over `collectRegionOps`' list and NOTHING else,
+// so it means exactly what the wording beside it says: reads inside the loop the headline names, or — for
+// a straight-line peak, which has no loop to count in — reads in the function.
+//
+// ⚠ A value in the blocking set can be read ZERO times in the region, and that is not a defect. TWO
+// different shapes read 0 here, and telling them apart is why the word is `read` and not `used`
+// (see `RegionReadCount`):
+//
+//  • live ACROSS the region without being read there — holding a register the region's own values
+//    cannot use. Such a value is normally COLD-split away before this file is reached.
+//  • CARRIED BY the region — a loop-carried `var` the loop only assigns is a block arg defined at the
+//    loop header, and every one of its in-loop uses is a branch-edge arg, which this does not count.
+//
+// Either way it is the CHEAPEST thing to move out, which is exactly where the ranking puts it: after the
+// author's array rewrite the phi web is gone and only the reads come back as loads.
+function readsInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionReadCount
+	var count = 0 as RegionReadCount
+	var buf = OperandList.create()
+	for opIdx in regionOps 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("readsInRegion: op {opIdx} not in module.ops")
+		targetOpOperands(op, buf: buf)
+		for o in buf 'eachOperand'
+			if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
+				count = count + 1
+			end 'use'
+		end 'eachOperand'
+	end 'eachOp'
+	return count
+end 'readsInRegion'
+
+// ==========================================================================
+// Source mapping (Target ValueId -> Maxon op -> source), with phi chasing
+// ==========================================================================
+
+// What a blocking value resolves to — the FOUR exhaustive routes to a user source span (see
+// the RULE 3 note at the top of the file). A union, so `collectReachableRanges` dispatches on
+// it with no bare `default`: a new route would be a compile error rather than a silent fall to
+// the phi chase.
+union ValueSource
+	// A function parameter — its declaration span (from `ParamOriginTable`).
+	param(range SourceRange)
+	// A splitter-minted value (a reload / a rematerialized constant) — the ORIGINAL value it
+	// derives from, chased recursively (its source may itself be derived, or a phi/param/op).
+	derived(sourceId ValueId)
+	// A value defined by a Maxon op — that op's index (into `project.opRanges`).
+	opDefined(opIndex OpIndex)
+	// No direct source: a phi/block-arg, chased to the incoming values its edges pass it.
+	phi
+end 'ValueSource'
+
+// Classify `valueId` into one of the four `ValueSource` routes, in priority order: parameter,
+// then splitter-derived, then op-defined, else a phi. The routes are disjoint by construction —
+// a parameter has a `ParamOriginTable` entry and no op; a fresh reload/remat id is in the
+// `SplitLineage` and in neither origin table; an op-defined value is in `ValueOriginTable`; a
+// phi is in none — so the order only decides which single table answers, never which of two.
+function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
+	match project.valueOrigins.paramRange(funcIndex, valueId: valueId) 'param'
+		found(range) then return ValueSource.param(range)
+		none then break 'param'
+	end 'param'
+	match lineage.sourceOf(valueId) 'derived'
+		source(sourceId) then return ValueSource.derived(sourceId)
+		none then break 'derived'
+	end 'derived'
+	match project.valueOrigins.lookup(funcIndex, valueId: valueId) 'origin'
+		found(opIndex) then return ValueSource.opDefined(opIndex)
+		none then return ValueSource.phi
+	end 'origin'
+end 'classifyValue'
+
+// The source span that declares `valueId`, for its candidate line — resolved through the four
+// `ValueSource` routes and, for phis (which have several incomings) and derived values, to the
+// EARLIEST reachable span (smallest line/column, then start/end byte). Earliest is the site a
+// user recognises: a loop-carried variable's DECLARATION rather than its in-loop update, a
+// parameter's declaration rather than a body use.
+//
+// RULE 3: after chasing parameters, split lineage, op origins, and phi incomings, a value that
+// resolves to NO span has genuinely no user ancestry — a compiler-introduced value RULE 3
+// forbids from blocking an allocation. This PANICS naming it rather than emitting a location
+// the user cannot act on. It is the backstop guarding the E5001 contract, and what keeps it
+// unreached is the CALLER's guarantee that no source-less function ever raises E5001 — not a
+// property of the four routes, which cannot answer for such a function at all (see the file header).
+function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
+	var ranges = SourceRangeArray.create()
+	var visited = BitWordArray.create()
+	visited.resize(wordsPerRow)
+	collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
+
+	if ranges.count() == 0 'ruleThree'
+		panic("register-pressure E5001: value {valueId} of '{String.from(func.name)}' (function index {funcIndex}, {topo.numBlocks} blocks) is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code. If the value is one the ABI has already excluded from part of the pool, the relief it was owed is `SplitLiveRanges.confinedOverflowAtPeak`'s forced bracket, and the question is why that did not reach it.")
+	end 'ruleThree'
+
+	return earliestRange(ranges)
+end 'defRangeOf'
+
+// Collect every user source span reachable from `valueId`: a parameter's / op's span directly,
+// a phi's incoming spans transitively, a split-derived value's source span transitively.
+// `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
+// a lineage chase is acyclic but shares the guard), so each value is explored once.
+function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+	if bitsetTest(visited, base: 0, bit: valueId as BitIndex) 'seen'
+		return
+	end 'seen'
+	bitsetAdd(visited, base: 0, bit: valueId as BitIndex)
+
+	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
+		param(range) then out.push(range)
+		derived(sourceId) then collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: sourceId, lineage: lineage, visited: visited, out: out)
+		opDefined(opIndex) then out.push(project.opRanges.get(opIndex))
+		phi then chasePhiIncomings(project, module: module, topo: topo, funcIndex: funcIndex, phiValueId: valueId, lineage: lineage, visited: visited, out: out)
+	end 'src'
+end 'collectReachableRanges'
+
+// For a phi, follow each incoming value its edges pass it, gathering their source spans. Does
+// nothing when the value is not a block-arg of any block — that leaves the caller's `out` free
+// of a span from this value, and only a value with no other route contributes none at all
+// (Rule 3).
+function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+	for incoming in phiIncomingValues(module, topo: topo, phiValueId: phiValueId) 'each'
+		collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
+	end 'each'
+end 'chasePhiIncomings'
+
+// Every value passed to `phiValueId` on a branch edge: locate the block where it is a block-arg
+// and its position there, then gather the positionally-corresponding arg from every edge that
+// targets that block. Empty when `phiValueId` is not a block-arg of any block.
+function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId ValueId) returns ValueIdArray
+	var result = ValueIdArray.create()
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
+		let pos = blockArgPosition(block, valueId: phiValueId)
+		if pos == block.blockArgs.count() 'notHere'
+			continue
+		end 'notHere'
+		gatherIncomingAtPosition(module, topo: topo, targetBlock: block, position: pos, out: result)
+	end 'eachBlock'
+	return result
+end 'phiIncomingValues'
+
+// The index of `valueId` in `block.blockArgs`, or `blockArgs.count()` when it is not a block-arg
+// of this block (a total-order "not found" sentinel, one past every valid index).
+function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
+	for k in 0 upto block.blockArgs.count() 'each'
+		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
+		if arg.valueId == valueId 'match'
+			return k
+		end 'match'
+	end 'each'
+	return block.blockArgs.count()
+end 'blockArgPosition'
+
+// Gather the `position`-th argument of every branch edge targeting `targetBlock` into `out`
+// (the values predecessors pass to that phi). Routed through `PhiEdgeView` so that the
+// positional `blockArgs[k] <-> argIds[k]` invariant every phi consumer rests on is enforced in
+// ONE place — this was the last reader indexing an edge's `argIds` raw.
+function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlock IrBlock, position PhiIndex, out ValueIdArray)
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
+		for edge in block.branchEdges 'eachEdge'
+			if edge.targetBlockId != targetBlock.id 'notThisEdge'
+				continue
+			end 'notThisEdge'
+			let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.registerPressureDiagnostic)
+			out.push(view.incomingAt(position))
+		end 'eachEdge'
+	end 'eachBlock'
+end 'gatherIncomingAtPosition'
+
+// The EARLIEST span among `ranges` — smallest (line, column, startByte, endByte). A total order
+// over the source buffer, so the same program always picks the same def site (the loop-carried
+// variable's declaration, which precedes its in-loop update in source). The start/end-byte
+// tiebreak keeps it deterministic even for two spans on the same line and column (it never
+// arises for the distinct declarations of a real overflow, but the order must still be total).
+function earliestRange(ranges SourceRangeArray) returns SourceRange
+	var best = try ranges.get(0) otherwise panic("earliestRange: ranges is empty")
+	for idx in 1 upto ranges.count() 'each'
+		let range = try ranges.get(idx) otherwise panic("earliestRange: ranges.get OOB")
+		if rangeEarlier(range, best: best) 'earlier'
+			best = range
+		end 'earlier'
+	end 'each'
+	return best
+end 'earliestRange'
+
+// True iff `range` precedes `best` under (line, column, startByte, endByte).
+function rangeEarlier(range SourceRange, best SourceRange) returns bool
+	if range.line != best.line 'byLine'
+		return range.line < best.line
+	end 'byLine'
+	if range.column != best.column 'byColumn'
+		return range.column < best.column
+	end 'byColumn'
+	if range.startByte != best.startByte 'byStart'
+		return range.startByte < best.startByte
+	end 'byStart'
+	return range.endByte < best.endByte
+end 'rangeEarlier'

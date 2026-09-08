@@ -1,0 +1,46 @@
+// Test: ternary-expression.elision.guard-actually-guards
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+function clampOrGuard(useDefault bool, big Integer) returns Integer
+	// `big as Small` range-check-panics for big > 10; it sits in the arm that
+	// `useDefault` does NOT select, so it must never run.
+	return 5 if useDefault else (big as Small)
+end 'clampOrGuard'
+
+function main() returns ExitCode
+	let guarded = clampOrGuard(true, big: 1000) // the cast is in the arm NOT selected
+	let direct = clampOrGuard(false, big: 7)
+	return (guarded + direct) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  ternarytrue:
+    x64.movRegImm32 rax, 5
+  __rc_ok#17:
+    x64.movRegImm32 rcx, 7
+  __il_cont:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at ternary-expression.elision.guard-actually-guards.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

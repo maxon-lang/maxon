@@ -1,0 +1,42 @@
+// Test: enum-method
+enum Direction
+	north
+	south
+
+	function isNorth() returns bool
+		let result = match self 'check'
+			north gives true
+			south gives false
+		end 'check'
+		return result
+	end 'isNorth'
+end 'Direction'
+
+function main() returns ExitCode
+	let d = Direction.north
+	if d.isNorth() 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm:
+    x64.movRegImm32 rax, 1
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  test:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

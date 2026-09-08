@@ -1,0 +1,77 @@
+// Test: top-level-array-merge-of-mutable-globals-shares
+var P = [1, 2]
+var Q = [5, 5]
+
+function main() returns ExitCode
+	var pick = P if Q.count() == 2 else Q
+	pick.push(9)
+	return P.count() + Q.count()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __data_P@0 = i64 0
+  __data_Q@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_Q
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, ternaryfalse
+  ternarytrue:
+    x64.leaRegGlobal rax, __data_P
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.leaRegGlobal rax, __data_Q
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+  matchcont:
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegGlobal rax, __data_P
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegGlobal rcx, __data_Q
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at top-level-array-merge-of-mutable-globals-shares.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

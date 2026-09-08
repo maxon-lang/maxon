@@ -1,0 +1,43 @@
+// Test: int-remainder-in-arithmetic
+function main() returns ExitCode
+	let a = 100
+	let b = 7
+	let c = 10
+	let rem = a mod b
+	return rem * c
+end 'main'
+---
+ExitCode: 20
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 100
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.subRegReg rcx, rcx, rax
+    x64.imulRegRegImm32 r8, rcx, 10
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at int-remainder-in-arithmetic.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

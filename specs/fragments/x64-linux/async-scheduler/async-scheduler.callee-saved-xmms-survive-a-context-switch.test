@@ -1,0 +1,181 @@
+// Test: async-scheduler.callee-saved-xmms-survive-a-context-switch
+function threadA() returns Integer
+	let a0 = 1.5
+	let a1 = 2.5
+	let a2 = 3.5
+	let a3 = 4.5
+	let a4 = 5.5
+	let a5 = 6.5
+	let a6 = 7.5
+	let a7 = 8.5
+	let a8 = 9.5
+	let a9 = 10.5
+	sleep(4)
+	let s1 = trunc(a0) + trunc(a1) + trunc(a2) + trunc(a3) + trunc(a4)
+	let s2 = trunc(a5) + trunc(a6) + trunc(a7) + trunc(a8) + trunc(a9)
+	sleep(4)
+	let s3 = trunc(a0 * 2.0) + trunc(a9 * 2.0)
+	return s1 + s2 + s3
+end 'threadA'
+
+function threadB() returns Integer
+	let b0 = 100.5
+	let b1 = 200.5
+	let b2 = 300.5
+	let b3 = 400.5
+	let b4 = 500.5
+	let b5 = 600.5
+	let b6 = 700.5
+	let b7 = 800.5
+	let b8 = 900.5
+	let b9 = 1000.5
+	sleep(2)
+	let t1 = trunc(b0) + trunc(b1) + trunc(b2) + trunc(b3) + trunc(b4)
+	let t2 = trunc(b5) + trunc(b6) + trunc(b7) + trunc(b8) + trunc(b9)
+	sleep(2)
+	let t3 = trunc(b0 * 2.0) + trunc(b9 * 2.0)
+	return t1 + t2 + t3
+end 'threadB'
+
+function main() returns ExitCode
+	let m0 = 11.5
+	let m1 = 22.5
+	let pa = async threadA()
+	let pb = async threadB()
+	let ra = await pa
+	let rb = await pb
+	let mine = trunc(m0) + trunc(m1)
+	if ra == 79 and rb == 7702 and mine == 33 'ok'
+		return 0
+	end 'ok'
+	return 9
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @threadA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 4
+    x64.callDirect sleep
+    x64.movRegImm32 rcx, 4
+    x64.callDirect sleep
+    x64.movRegImm32 r8, 79
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @threadB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+    x64.callDirect sleep
+    x64.movRegImm32 rcx, 2
+    x64.callDirect sleep
+    x64.movRegImm32 r8, 7702
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + threadA]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + threadB]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 rbx, 79
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#2
+  andrhs#1:
+    x64.cmpRegImm32 r8, 7702
+    x64.setccReg equal, rax
+  scmerge#2:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  andrhs#3:
+    x64.movRegImm32 rax, 1
+    x64.jmp scmerge#4
+  critsplit:
+    x64.movRegReg rax, rcx
+  scmerge#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 9
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

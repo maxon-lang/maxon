@@ -1,0 +1,21 @@
+// Test: cross-file-exported-cast-to-own-private-alias-declared-first
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+---
+ExitCode: 21
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 21
+    arm64.epilogue 16
+    arm64.ret
+}

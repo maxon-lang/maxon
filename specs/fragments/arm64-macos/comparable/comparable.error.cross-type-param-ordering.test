@@ -1,0 +1,36 @@
+// Test: comparable.error.cross-type-param-ordering
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type Point implements Comparable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function compare(other Point) returns Ordering
+		if self.x < other.x 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		return Ordering.greaterThan
+	end 'compare'
+end 'Point'
+
+type Mix uses A, B where A is Comparable, B is Comparable
+	export var a as A
+	export var b as B
+	export static function create(a A, b B) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function cross() returns bool
+		return self.a < self.b
+	end 'cross'
+end 'Mix'
+
+typealias PointIntMix = Mix with (Point, Integer)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:17: '<' on type parameter 'A' requires an argument of type 'A' (the `Self` its constraint provides), not a value of type parameter 'B'

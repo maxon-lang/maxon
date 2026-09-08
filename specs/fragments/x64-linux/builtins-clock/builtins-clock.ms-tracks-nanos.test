@@ -1,0 +1,112 @@
+// Test: builtins-clock.ms-tracks-nanos
+function main() returns ExitCode
+	let ns = __Builtins.currentTimeNanos()
+	let ms = __Builtins.currentTimeMs()
+	let nsAsMs = ns / 1000000
+	var score = 0
+	if ms >= nsAsMs 'notBehind'
+		score = score + 1
+	end 'notBehind'
+	if ms - nsAsMs < 50 'notAhead'
+		score = score + 1
+	end 'notAhead'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __gt_now_ns
+    x64.movRegReg rbx, r8
+    x64.callDirect __gt_now_ns
+    x64.movRegImm rax, 4835703278458516699
+    x64.imulHighReg r8
+    x64.sarRegImm8 rdx, rdx, 18
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rcx, rdx, rax
+    x64.movRegImm rax, 4835703278458516699
+    x64.imulHighReg rbx
+    x64.sarRegImm8 rdx, rdx, 18
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, ifcont#2
+  notBehind:
+    x64.movRegImm32 rdx, 1
+  ifcont#2:
+    x64.subRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 50
+    x64.jcc greaterEqual, critsplit
+  notAhead:
+    x64.leaRegRegImm32 r8, rdx, 1
+    x64.jmp ifcont#4
+  critsplit:
+    x64.movRegReg r8, rdx
+  ifcont#4:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-clock.ms-tracks-nanos.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

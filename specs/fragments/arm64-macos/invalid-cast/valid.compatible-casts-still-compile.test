@@ -1,0 +1,29 @@
+// Test: valid.compatible-casts-still-compile
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 1000)
+typealias Ratio = float(f64.min to f64.max)
+
+function isPositive(r Ratio) returns bool
+	return r > 0.0
+end 'isPositive'
+
+function main() returns ExitCode
+	let big = 42 as Big
+	let small = big as Small
+	let r = 42 as Ratio
+	if isPositive(r) 'ok'
+		return small
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+  ok:
+    arm64.epilogue 16
+    arm64.ret
+}

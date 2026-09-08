@@ -1,0 +1,235 @@
+// Test: narrow-signed-enum-element-reaches-user-code-through-the-corpus
+typealias Integer = int(i64.min to i64.max)
+
+enum Signal
+	minus = -1
+	zero = 0
+	plus = 1
+end 'Signal'
+
+typealias Signals = Array with Signal
+
+function bySignal(x Signal, y Signal) returns Ordering
+	if (x.rawValue as Integer) < (y.rawValue as Integer) 'less'
+		return Ordering.lessThan
+	end 'less'
+	if (x.rawValue as Integer) > (y.rawValue as Integer) 'greater'
+		return Ordering.greaterThan
+	end 'greater'
+	return Ordering.equalTo
+end 'bySignal'
+
+function markNegative(s Signal) returns Signal
+	if (s.rawValue as Integer) < 0 'wasNegative'
+		return Signal.plus
+	end 'wasNegative'
+	return Signal.zero
+end 'markNegative'
+
+function main() returns ExitCode
+	var a = Signals.create()
+	a.push(Signal.plus)
+	a.push(Signal.zero)
+	a.push(Signal.minus)
+	a.sort(bySignal)
+
+	let first = try a.first() otherwise Signal.zero
+	let last = try a.last() otherwise Signal.zero
+
+	var seenNegative = 0 as Integer
+	for v in a.map(markNegative) 'each'
+		seenNegative = seenNegative + (v.rawValue as Integer)
+	end 'each'
+
+	return ((((first.rawValue as Integer) + 2) * 100) + (((last.rawValue as Integer) + 2) * 10) + seenNegative) as ExitCode
+end 'main'
+---
+ExitCode: 131
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @bySignal {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.shlRegImm8 rcx, rcx, 56
+    x64.sarRegImm8 rcx, rcx, 56
+    x64.shlRegImm8 rdx, rdx, 56
+    x64.sarRegImm8 rdx, rdx, 56
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#2
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#4
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @markNegative {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.shlRegImm8 rcx, rcx, 56
+    x64.sarRegImm8 rcx, rcx, 56
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, ifcont
+  wasNegative:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 18446744073709551615
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegFunc rdx, [rip + __fnref_bySignal]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Signal]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_first
+    x64.shlRegImm8 r8, r8, 56
+    x64.sarRegImm8 r8, r8, 56
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont#3:
+    x64.leaRegRdata rdx, [rip + __layout_Array_Signal]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.last
+    x64.shlRegImm8 r8, r8, 56
+    x64.sarRegImm8 r8, r8, 56
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg r13, r8
+  trycont#6:
+    x64.movRegImm32 r14, 0
+    x64.leaRegFunc rdx, [rip + __fnref_markNegative]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Signal]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.map
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r15, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r15, rax
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r15*8 + 0]
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_get_unchecked
+    x64.movRegReg rax, r8
+  __im_cont:
+    x64.shlRegImm8 rax, rax, 56
+    x64.sarRegImm8 rax, rax, 56
+    x64.leaRegRegReg r14, r14, rax
+  forstep:
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 rax, r12, 2
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.leaRegRegImm32 rcx, r13, 2
+    x64.imulRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rbx, rax, r14
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_100]  ; "panic at narrow-signed-enum-element-reaches-user-code-through-the-corpus.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

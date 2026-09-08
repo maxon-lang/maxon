@@ -1,0 +1,26 @@
+// Test: error.nested-alias-position-is-nominal
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+typealias Outer = function(f Handler) returns Integer
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function runner(f Callback) returns Integer
+	return f(41)
+end 'runner'
+
+function drive(o Outer) returns Integer
+	return o(addOne)
+end 'drive'
+
+function main() returns ExitCode
+	let r = drive(runner)
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Handler) returns Integer', got 'fn(Callback) returns Integer'

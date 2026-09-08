@@ -1,0 +1,82 @@
+// Test: string-byte-at-body
+function main() returns ExitCode
+	return hashString("a") mod 7
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "a"
+    x64.callDirect hashString
+    x64.movRegImm32 rcx, 7
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rdx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at string-byte-at-body.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__managed_byte_at {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, badrange
+  chkhigh:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
+    x64.movRegReg rdi, rsi
+    x64.sarRegImm8 rdi, rsi, 63
+    x64.movRegReg r8, rdi
+    x64.xorRegImm32 r8, rdi, -1
+    x64.movRegImm32 r9, 0
+    x64.subRegReg r9, r9, rsi
+    x64.shlRegImm8 rsi, rsi, 3
+    x64.andRegReg r9, r9, rdi
+    x64.andRegReg rsi, rsi, r8
+    x64.orRegReg r9, r9, rsi
+    x64.imulRegReg rax, rax, r9
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.shrRegImm8 rax, rax, 3
+    x64.cmpRegReg rdx, rax
+    x64.jcc less, load
+  badrange:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 7
+    x64.popReg rbp
+    x64.ret
+  load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte r8, [rax + 0]
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}

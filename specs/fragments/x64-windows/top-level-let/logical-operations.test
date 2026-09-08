@@ -1,0 +1,41 @@
+// Test: logical-operations
+let BOTH = true and true
+let EITHER = false or true
+let NEITHER = not false
+
+function main() returns ExitCode
+	if BOTH and EITHER and NEITHER 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  andrhs#1:
+    x64.movRegImm32 rax, 1
+  scmerge#2:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  andrhs#3:
+    x64.movRegImm32 rax, 1
+    x64.jmp scmerge#4
+  critsplit:
+    x64.movRegReg rax, rcx
+  scmerge#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

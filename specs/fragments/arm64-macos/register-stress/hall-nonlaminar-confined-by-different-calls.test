@@ -1,0 +1,126 @@
+// Test: hall-nonlaminar-confined-by-different-calls
+function sink(x Integer) returns Integer
+	return x
+end 'sink'
+
+function pick(k Integer) returns Integer
+	let v1 = k + 11
+	let v2 = k + 22
+	let v3 = k + 33
+	let v4 = k + 44
+	let v5 = k + 55
+	let v6 = k + 66
+	var out = 0
+	if k == 1 'b1'
+		let t = sink(1)
+		out = v1 + t
+	end 'b1' else if k == 2 'b2'
+		let t2 = sink(2)
+		out = v2 + t2
+	end 'b2' else if k == 3 'b3'
+		let t3 = sink(3)
+		out = v3 + t3
+	end 'b3' else if k == 4 'b4'
+		let t4 = sink(4)
+		out = v4 + t4
+	end 'b4' else if k == 5 'b5'
+		let t5 = sink(5)
+		out = v5 + t5
+	end 'b5' else 'b6'
+		let t6 = sink(6)
+		out = v6 + t6
+	end 'b6'
+	return out
+end 'pick'
+
+function main() returns ExitCode
+	let total = pick(1) + pick(2) + pick(3) + pick(4) + pick(5) + pick(6)
+	if total == 273 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 11
+    arm64.add x2, x0, 22
+    arm64.add x3, x0, 33
+    arm64.add x4, x0, 44
+    arm64.add x5, x0, 55
+    arm64.add x6, x0, 66
+    arm64.cmp x0, 1
+    arm64.b.ne ifelse#2
+  __il_cont#16:
+    arm64.add x0, x1, 1
+    arm64.b ifcont
+  ifelse#2:
+    arm64.cmp x0, 2
+    arm64.b.ne ifelse#4
+  __il_cont#18:
+    arm64.add x0, x2, 2
+    arm64.b ifcont
+  ifelse#4:
+    arm64.cmp x0, 3
+    arm64.b.ne ifelse#6
+  __il_cont#20:
+    arm64.add x0, x3, 3
+    arm64.b ifcont
+  ifelse#6:
+    arm64.cmp x0, 4
+    arm64.b.ne ifelse#8
+  __il_cont#22:
+    arm64.add x0, x4, 4
+    arm64.b ifcont
+  ifelse#8:
+    arm64.cmp x0, 5
+    arm64.b.ne __il_cont#26
+  __il_cont#24:
+    arm64.add x0, x5, 5
+    arm64.b ifcont
+  __il_cont#26:
+    arm64.add x0, x6, 6
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 2
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 3
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 4
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 5
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 6
+    arm64.bl pick
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 273
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

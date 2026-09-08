@@ -1,0 +1,50 @@
+// Test: postfix.enum-method-on-a-call-result
+typealias Wide = int(i64.min to i64.max)
+
+enum Direction
+	north
+	south
+
+	function score() returns Wide
+		if self == Direction.north 'n'
+			return 7
+		end 'n'
+		return 3
+	end 'score'
+end 'Direction'
+
+function pick() returns Direction
+	return Direction.north
+end 'pick'
+
+function main() returns ExitCode
+	return pick().score()
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  n:
+    x64.movRegImm32 r8, 7
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at postfix.enum-method-on-a-call-result.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

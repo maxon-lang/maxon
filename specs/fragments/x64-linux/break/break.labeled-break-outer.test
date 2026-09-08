@@ -1,0 +1,54 @@
+// Test: break.labeled-break-outer
+function main() returns ExitCode
+	var x = 0
+	while x < 10 'outer'
+		x = x + 1
+		while true 'inner'
+			if x == 3 'check'
+				break 'outer'
+			end 'check'
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 rax, 10
+    x64.jcc greaterEqual, critsplit
+  outer:
+    x64.leaRegRegImm32 r8, rax, 1
+  inner:
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, whileexit#3
+  whileexit#6:
+    x64.movRegReg rax, r8
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg r8, rax
+  whileexit#3:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at break.labeled-break-outer.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

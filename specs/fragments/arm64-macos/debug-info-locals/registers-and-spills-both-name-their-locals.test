@@ -1,0 +1,293 @@
+// Test: registers-and-spills-both-name-their-locals
+typealias Tick = int(0 to 1000)
+
+function coloured(seed Tick) returns Tick
+	var carry = seed
+	var step = 1
+	var rounds = 0
+	while rounds < 3 'mix'
+		carry = (carry + step) mod 97
+		step = step + rounds
+		rounds = rounds + 1
+	end 'mix'
+
+	return carry
+end 'coloured'
+
+function spilled(seed Tick) returns Tick
+	let a = seed + 1
+	let b = seed + 2
+	let c = seed + 3
+	let d = seed + 4
+	let e = seed + 5
+	let f = seed + 6
+	let g = seed + 7
+	let h = seed + 8
+	let j = seed + 9
+	let k = seed + 10
+	let m = seed + 11
+	let n = seed + 12
+	let p = seed + 13
+	let q = seed + 14
+	let r = seed + 15
+	let t = seed + 16
+	var carry = seed
+	var rounds = 0
+	while rounds < 4 'grind'
+		carry = (carry + rounds) mod 89
+		rounds = rounds + 1
+	end 'grind'
+
+	return (carry + a + b + c + d + e + f + g + h + j + k + m + n + p + q + r + t) mod 89
+end 'spilled'
+
+function main() returns ExitCode
+	print("{coloured(2)}:{spilled(3)}\n")
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @coloured {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at registers-and-spills-both-name-their-locals.test:4: Range check failed: value outside typealias 'Tick'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 0
+  whilehdr:
+    arm64.cmp x2, 3
+    arm64.b.ge whileexit
+  mix:
+    arm64.add x0, x0, x1
+    arm64.movImm x3, 97
+    arm64.udiv x16, x0, x3
+    arm64.msub x0, x16, x3, x0
+    arm64.add x1, x1, x2
+    arm64.add x2, x2, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at registers-and-spills-both-name-their-locals.test:14: Range check failed: value outside typealias 'Tick'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#7:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @spilled {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at registers-and-spills-both-name-their-locals.test:17: Range check failed: value outside typealias 'Tick'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#4:
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
+    arm64.add x5, x0, 5
+    arm64.add x6, x0, 6
+    arm64.add x7, x0, 7
+    arm64.add x8, x0, 8
+    arm64.add x9, x0, 9
+    arm64.add x10, x0, 10
+    arm64.add x11, x0, 11
+    arm64.add x12, x0, 12
+    arm64.add x13, x0, 13
+    arm64.add x14, x0, 14
+    arm64.add x15, x0, 15
+    arm64.add x19, x0, 16
+    arm64.movImm x20, 0
+  whilehdr:
+    arm64.cmp x20, 4
+    arm64.b.ge whileexit
+  grind:
+    arm64.add x0, x0, x20
+    arm64.movImm x21, 89
+    arm64.udiv x16, x0, x21
+    arm64.msub x0, x16, x21, x0
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.add x0, x0, x10
+    arm64.add x0, x0, x11
+    arm64.add x0, x0, x12
+    arm64.add x0, x0, x13
+    arm64.add x0, x0, x14
+    arm64.add x0, x0, x15
+    arm64.add x0, x0, x19
+    arm64.movImm x1, 89
+    arm64.udiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 1000
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at registers-and-spills-both-name-their-locals.test:41: Range check failed: value outside typealias 'Tick'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#7:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x28
+    arm64.storeSlotReg slot10, x27
+    arm64.storeSlotReg slot9, x26
+    arm64.storeSlotReg slot8, x25
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 2
+    arm64.bl coloured
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_2  ; ":"
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 3
+    arm64.bl spilled
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl __uint_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_3  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.add x0, x19, x22
+    arm64.add x0, x0, x23
+    arm64.add x0, x0, x26
+    arm64.storeSlotReg slot1, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x28, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x19, x22
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x19, x26
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.loadRegSlot x0, slot1
+    arm64.storeBaseDispReg.word64 [x27 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+}

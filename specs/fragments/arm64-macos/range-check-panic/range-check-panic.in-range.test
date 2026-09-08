@@ -1,0 +1,21 @@
+// Test: range-check-panic.in-range
+typealias SmallInt = int(0 to 10)
+
+function check(x SmallInt) returns SmallInt
+  return x
+end 'check'
+
+function main() returns ExitCode
+  return check(5)
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,83 @@
+// Test: six-args-all-live-after-the-call
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
+	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
+end 'digits6'
+
+function keepAll(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
+	return r + a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f
+end 'keepAll'
+
+function main() returns ExitCode
+	let v = keepAll(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+	if v == 777777 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @keepAll {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x16, 100000
+    arm64.mul x6, x5, x16
+    arm64.movImm x16, 10000
+    arm64.mul x7, x4, x16
+    arm64.add x6, x6, x7
+    arm64.movImm x16, 1000
+    arm64.mul x7, x3, x16
+    arm64.add x6, x6, x7
+    arm64.movImm x16, 100
+    arm64.mul x7, x2, x16
+    arm64.add x6, x6, x7
+    arm64.movImm x16, 10
+    arm64.mul x7, x1, x16
+    arm64.add x6, x6, x7
+    arm64.add x6, x6, x0
+  __il_cont:
+    arm64.movImm x16, 100000
+    arm64.mul x0, x0, x16
+    arm64.add x0, x6, x0
+    arm64.movImm x16, 10000
+    arm64.mul x1, x1, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 1000
+    arm64.mul x1, x2, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 100
+    arm64.mul x1, x3, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 10
+    arm64.mul x1, x4, x16
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x5
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
+    arm64.movImm x3, 4
+    arm64.movImm x4, 5
+    arm64.movImm x5, 6
+    arm64.bl keepAll
+    arm64.movImm x16, 777777
+    arm64.cmp x0, x16
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

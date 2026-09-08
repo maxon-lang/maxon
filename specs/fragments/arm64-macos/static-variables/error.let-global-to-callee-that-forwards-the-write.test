@@ -1,0 +1,28 @@
+// Test: error.let-global-to-callee-that-forwards-the-write
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+let G = Box.make()
+
+function poke(c Box)
+	c.n = 99
+end 'poke'
+
+function bump(b Box)
+	poke(b)
+end 'bump'
+
+function main() returns ExitCode
+	bump(G)
+	return G.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)

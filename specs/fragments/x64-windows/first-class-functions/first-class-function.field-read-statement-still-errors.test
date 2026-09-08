@@ -1,0 +1,24 @@
+// Test: first-class-function.field-read-statement-still-errors
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let h = Handler.create(inc)
+	h.op
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:19:2: Unsupported: identifier statement

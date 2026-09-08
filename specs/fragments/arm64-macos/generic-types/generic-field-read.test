@@ -1,0 +1,44 @@
+// Test: generic-field-read
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	let b = IntBox.create(7)
+	if b.value == 7 'chk'
+		return 0
+	end 'chk'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.cmp x0, 7
+    arm64.b.ne ifcont
+  chk:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 32
+    arm64.ret
+}

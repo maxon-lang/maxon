@@ -1,0 +1,130 @@
+// Test: try-block-shadowed-binding.shadow-in-a-nested-handler-scope
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    one
+end 'ErrA'
+
+enum ErrB implements Error
+    two
+end 'ErrB'
+
+enum Other
+    alpha
+    beta
+end 'Other'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.one
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.two
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(true)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        let e = Other.beta
+        match e 'shadowed'
+            alpha then sum = 7
+            beta then sum = 9
+        end 'shadowed'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 9
+---
+func @callA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  c:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 5
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  c:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 6
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect callA
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, matcharm
+  tryblkok#2:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect callB
+    x64.leaRegRegImm32 rax, r10, 1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryblkok#3
+  matcharm:
+    x64.movRegImm32 rax, 9
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp tryblkcont
+  tryblkok#3:
+    x64.leaRegRegReg r8, rbx, r8
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-block-shadowed-binding.shadow-in-a-nested-handler-scope.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

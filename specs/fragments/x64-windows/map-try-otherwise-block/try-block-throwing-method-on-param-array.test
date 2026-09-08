@@ -1,0 +1,256 @@
+// Test: try-block-throwing-method-on-param-array
+typealias Code = int(0 to 125)
+typealias CodeArray = Array with Code
+
+function bump(a CodeArray)
+		try 'update'
+				let old = a.get(0)
+				a.set(0, value: old + 1)
+		end 'update' otherwise (e) 'bad'
+				match e 'kind'
+						indexOutOfBounds then panic("oob")
+						emptySlot then panic("empty")
+				end 'kind'
+		end 'bad'
+end 'bump'
+
+function main() returns ExitCode
+		var a = CodeArray.create()
+		a.push(41)
+		bump(a)
+		return try a.get(0) otherwise 99
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#16
+  __im_word#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#13
+  __im_load#18:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride#16:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#13
+  __im_byte#15:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#13
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#12
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#12
+  __im_slow#13:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#12:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, tryblkerr
+  tryblkok#2:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rax, 125
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at try-block-throwing-method-on-param-array.test:8: Range check failed: value outside typealias 'Code'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride#25
+  __im_word#23:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#22
+  __im_owned#26:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#22
+  __im_bounds#27:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __im_slow#22
+  __im_buffer#28:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#22
+  __im_viewed#29:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#22
+  __im_store#30:
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#21
+  __im_stride#25:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, __im_slow#22
+  __im_byte#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#22
+  __im_owned#31:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#22
+  __im_bounds#32:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __im_slow#22
+  __im_buffer#33:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#22
+  __im_viewed#34:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#22
+  __im_store#35:
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont#21
+  __im_slow#22:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r10
+  __im_cont#21:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryblkok#3
+  critsplit:
+    x64.movRegReg rcx, rax
+  tryblkerr:
+    x64.leaRegRegImm32 rax, rcx, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-block-throwing-method-on-param-array.test:11: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-block-throwing-method-on-param-array.test:12: empty\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  tryblkok#3:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 41
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect bump
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#11:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r12, 99
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r12, rax
+  trycont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

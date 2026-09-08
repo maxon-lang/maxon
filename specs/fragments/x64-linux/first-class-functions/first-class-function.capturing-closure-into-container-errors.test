@@ -1,0 +1,15 @@
+// Test: first-class-function.capturing-closure-into-container-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+typealias OpArray = Array with UnaryOp
+
+function main() returns ExitCode
+	let bump = 20
+	var a = OpArray.create()
+	a.push(function(n Integer) gives n + bump)
+	return a.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:10:9: cannot pass a closure that captures to a compiler runtime entry: it puts the value in heap memory that outlives this frame, and a runtime entry has no signature for the escape summary to be built from. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

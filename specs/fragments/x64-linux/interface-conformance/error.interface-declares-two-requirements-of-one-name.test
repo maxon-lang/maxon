@@ -1,0 +1,31 @@
+// Test: error.interface-declares-two-requirements-of-one-name
+typealias Code = int(0 to u32.max)
+
+interface Labeled
+	function label() returns Code
+	function label(extra Code) returns Code
+end 'Labeled'
+
+type Tag implements Labeled
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function label(extra Code) returns Code
+		return extra
+	end 'label'
+
+	export function label() returns Code
+		return 40
+	end 'label'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create(42)
+	return t.x
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requirements named 'label' — one conforming type files ONE accepted member per (interface, method NAME), so the two would contend for one witness-table entry. Give the requirements distinct names, or declare one of them on an interface this one `extends`

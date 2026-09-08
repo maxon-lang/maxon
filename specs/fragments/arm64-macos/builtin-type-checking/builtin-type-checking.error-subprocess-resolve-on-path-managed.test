@@ -1,0 +1,11 @@
+// Test: builtin-type-checking.error-subprocess-resolve-on-path-managed
+function main() returns ExitCode
+	let s = "ls"
+	// A `__ManagedMemory` reached the only way user code can reach a string's bytes: an independent
+	// `toByteArray()` view. It is still the wrong TYPE here, which is the point of the test.
+	_ = __Builtins.subprocessResolveOnPath(s.toByteArray().managed)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires a cstring, but its argument is ByteArray

@@ -1,0 +1,195 @@
+// Test: ternary-expression.in-extension-method-before-sibling
+typealias Small = int(0 to 1000)
+
+interface Bounded
+	function lo() returns Small
+	function hi() returns Small
+end 'Bounded'
+
+extension Bounded
+	function pickSmaller() returns Small
+		let smaller = self.lo() if self.lo() < self.hi() else self.hi()
+		return smaller
+	end 'pickSmaller'
+
+	function describe() returns Small
+		return self.hi() - self.lo()
+	end 'describe'
+end 'Bounded'
+
+type Pair implements Bounded
+	let l as Small
+	let h as Small
+
+	function lo() returns Small
+		return l
+	end 'lo'
+
+	function hi() returns Small
+		return h
+	end 'hi'
+
+	static function create(l Small, h Small) returns Self
+		return Self{l: l, h: h}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, h: 12)
+	let s = p.pickSmaller()
+	let d = p.describe()
+	return s + d
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pair.pickSmaller {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+  __il_cont:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, __il_body#11
+  __il_body#9:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.jmp matchcont
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.describe {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_cont:
+    x64.subRegReg r8, r8, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ternary-expression.in-extension-method-before-sibling.test:16: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at ternary-expression.in-extension-method-before-sibling.test:32: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at ternary-expression.in-extension-method-before-sibling.test:32: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rdx, 12
+    x64.callDirect Pair.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Pair.pickSmaller
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Pair.describe
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at ternary-expression.in-extension-method-before-sibling.test:41: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

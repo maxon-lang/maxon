@@ -1,0 +1,108 @@
+// Test: multi-peak-across-call
+function sink(x Integer) returns Integer
+	return x
+end 'sink'
+
+function f(p Integer) returns Integer
+	let a = p + 100
+	let b1 = p + 1
+	let b2 = p + 2
+	let b3 = p + 3
+	let b4 = p + 4
+	let b5 = p + 5
+	let b6 = p + 6
+	let b7 = p + 7
+	let b8 = p + 8
+	let b9 = p + 9
+	let b10 = p + 10
+	let b11 = p + 11
+	let b12 = p + 12
+	let b13 = p + 13
+	let b14 = p + 14
+	let s1 = b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13 + b14
+	let u1 = a + s1
+	let d1 = p + 1
+	let d2 = p + 2
+	let d3 = p + 3
+	let d4 = p + 4
+	let d5 = p + 5
+	let d6 = p + 6
+	let r = sink(p)
+	let u2 = a + d1 + d2 + d3 + d4 + d5 + d6 + r
+	return u1 + u2
+end 'f'
+
+function main() returns ExitCode
+	let r = f(0)
+	if r == 326 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @f {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.add x1, x0, 100
+    arm64.add x2, x0, 1
+    arm64.add x3, x0, 2
+    arm64.add x4, x0, 3
+    arm64.add x5, x0, 4
+    arm64.add x6, x0, 5
+    arm64.add x7, x0, 6
+    arm64.add x8, x0, 7
+    arm64.add x9, x0, 8
+    arm64.add x10, x0, 9
+    arm64.add x11, x0, 10
+    arm64.add x12, x0, 11
+    arm64.add x13, x0, 12
+    arm64.add x14, x0, 13
+    arm64.add x15, x0, 14
+    arm64.add x19, x2, x3
+    arm64.add x19, x19, x4
+    arm64.add x19, x19, x5
+    arm64.add x19, x19, x6
+    arm64.add x19, x19, x7
+    arm64.add x8, x19, x8
+    arm64.add x8, x8, x9
+    arm64.add x8, x8, x10
+    arm64.add x8, x8, x11
+    arm64.add x8, x8, x12
+    arm64.add x8, x8, x13
+    arm64.add x8, x8, x14
+    arm64.add x8, x8, x15
+    arm64.add x8, x1, x8
+  __il_cont:
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x1, x1, x6
+    arm64.add x1, x1, x7
+    arm64.add x0, x1, x0
+    arm64.add x0, x8, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl f
+    arm64.cmp x0, 326
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

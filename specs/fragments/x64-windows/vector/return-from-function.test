@@ -1,0 +1,151 @@
+// Test: return-from-function
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias Vec2 = Vector with 2 Integer
+
+function makeVec(a Integer, b Integer) returns Vec2
+	var v = Vec2.create()
+	try v.set(0, value: a) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: b) otherwise panic("test invariant: set OOB")
+	return v
+end 'makeVec'
+
+function main() returns ExitCode
+	let v = makeVec(30, b: 12)
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	return a + b
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @makeVec {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N2_Integer]
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Vector.create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata r9, [rip + __layout_Vector_N2_Integer]
+    x64.movRegImm32 rsi, 2
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at return-from-function.test:9: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N2_Integer]
+    x64.movRegImm32 rsi, 2
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at return-from-function.test:10: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 30
+    x64.movRegImm32 rdx, 12
+    x64.callDirect makeVec
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Vector_N2_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont#3:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Vector_N2_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegReg r12, r12, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at return-from-function.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

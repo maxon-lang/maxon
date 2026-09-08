@@ -1,0 +1,154 @@
+// Test: a-threaded-jump-table-arm-still-reaches-its-block
+typealias Val = int(i64.min to i64.max)
+
+var seed = 4
+
+function classify(n Val) returns Val
+	if n > 3 'big'
+		return n * 10
+	end 'big' else 'small'
+		return n
+	end 'small'
+end 'classify'
+
+function pick(n Val) returns Val
+	match n 'sel'
+		0 then return 100
+		1 then return 101
+		2 then return 102
+		3 then return 103
+		4 then return 104
+		5 then return 105
+		default then return 199
+	end 'sel'
+end 'pick'
+
+function main() returns ExitCode
+	let a = classify(seed)
+	let b = pick(seed)
+	if a != 40 'aWrong'
+		return 51
+	end 'aWrong'
+	if b != 104 'bWrong'
+		return 52
+	end 'bWrong'
+	if classify(seed - 4) != 0 'zeroWrong'
+		return 53
+	end 'zeroWrong'
+	if pick(seed + 3) != 199 'defaultWrong'
+		return 54
+	end 'defaultWrong'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __il_body#11:
+    arm64.cmp x0, 3
+    arm64.b.le __il_cont#10
+  big#12:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+  __il_cont#10:
+    arm64.leaGlobal x1, __data_seed
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  __il_body#15:
+    arm64.jumpTable x1, default=matchdefault#22 [[0]=matcharm#16, [1]=matcharm#17, [2]=matcharm#18, [3]=matcharm#19, [4]=matcharm#20, [5]=matcharm#21] @__jumptable_0
+  matchdefault#22:
+    arm64.movImm x1, 199
+    arm64.b __il_cont#9
+  matcharm#16:
+    arm64.movImm x1, 100
+    arm64.b __il_cont#9
+  matcharm#17:
+    arm64.movImm x1, 101
+    arm64.b __il_cont#9
+  matcharm#18:
+    arm64.movImm x1, 102
+    arm64.b __il_cont#9
+  matcharm#19:
+    arm64.movImm x1, 103
+    arm64.b __il_cont#9
+  matcharm#20:
+    arm64.movImm x1, 104
+    arm64.b __il_cont#9
+  matcharm#21:
+    arm64.movImm x1, 105
+  __il_cont#9:
+    arm64.cmp x0, 40
+    arm64.b.eq ifcont#2
+  aWrong:
+    arm64.movImm x0, 51
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.cmp x1, 104
+    arm64.b.eq ifcont#4
+  bWrong:
+    arm64.movImm x0, 52
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 4
+  __il_body#25:
+    arm64.cmp x0, 3
+    arm64.b.le __il_cont#24
+  big#26:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+  __il_cont#24:
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#6
+  zeroWrong:
+    arm64.movImm x0, 53
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 3
+  __il_body#30:
+    arm64.jumpTable x0, default=matchdefault#37 [[0]=matcharm#31, [1]=matcharm#32, [2]=matcharm#33, [3]=matcharm#34, [4]=matcharm#35, [5]=matcharm#36] @__jumptable_1
+  matchdefault#37:
+    arm64.movImm x0, 199
+    arm64.b __il_cont#29
+  matcharm#31:
+    arm64.movImm x0, 100
+    arm64.b __il_cont#29
+  matcharm#32:
+    arm64.movImm x0, 101
+    arm64.b __il_cont#29
+  matcharm#33:
+    arm64.movImm x0, 102
+    arm64.b __il_cont#29
+  matcharm#34:
+    arm64.movImm x0, 103
+    arm64.b __il_cont#29
+  matcharm#35:
+    arm64.movImm x0, 104
+    arm64.b __il_cont#29
+  matcharm#36:
+    arm64.movImm x0, 105
+  __il_cont#29:
+    arm64.cmp x0, 199
+    arm64.b.eq ifcont#8
+  defaultWrong:
+    arm64.movImm x0, 54
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

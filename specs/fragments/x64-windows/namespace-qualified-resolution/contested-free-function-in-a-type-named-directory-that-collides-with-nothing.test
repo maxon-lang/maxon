@@ -1,0 +1,61 @@
+// Test: contested-free-function-in-a-type-named-directory-that-collides-with-nothing
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+public function helper() returns Integer
+	return 5
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+public type Point
+	export var x as Integer
+
+	export static function create() returns Integer
+		return 9
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	return (Point.create() * 10 + Point.helper()) as ExitCode
+end 'main'
+---
+ExitCode: 93
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rax, 9
+  __il_cont#5:
+    x64.imulRegRegImm32 rax, rax, 10
+  __il_cont#4:
+    x64.leaRegRegImm32 r8, rax, 3
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

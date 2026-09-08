@@ -1,0 +1,235 @@
+// Test: sha256.64-zero-bytes
+function main() returns ExitCode
+	var data = ByteArray.create()
+	var i = 0
+	while i < 64 'fill'
+		data.push(0)
+		i = i + 1
+	end 'fill'
+	let hash = sha256(data)
+	// SHA-256(64 * 0x00) = f5a5fd42...
+	// first byte = 0xf5 = 245, last byte = 0x4b = 75
+	let first = try hash.get(0) otherwise 0
+	let last = try hash.get(31) otherwise 0
+	print("{first} {last}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_sha256KTable@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 r12, 64
+    x64.jcc greaterEqual, whileexit
+  fill:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect sha256
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot1, rbx
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#14
+  __im_word#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#11
+  __im_load#16:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#15
+  __im_stride#14:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#11
+  __im_byte#13:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#11
+  __im_load#17:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#15:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#10
+  __im_empty#18:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#10
+  __im_slow#11:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg r12, rax
+  trycont#6:
+    x64.movRegImm32 rdx, 31
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#23
+  __im_word#21:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 31
+    x64.jcc belowEqual, __im_slow#20
+  __im_load#25:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 248
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#24
+  __im_stride#23:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#20
+  __im_byte#22:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 31
+    x64.jcc belowEqual, __im_slow#20
+  __im_load#26:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 31
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#24:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_cont#19
+  __im_empty#27:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#19
+  __im_slow#20:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r10
+  __im_cont#19:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont#9
+  tryok#7:
+    x64.movRegReg rbx, rax
+  trycont#9:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __uint_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r12
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.loadRegSlot r13, slot7
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot r13, slot5
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot r12, slot4
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

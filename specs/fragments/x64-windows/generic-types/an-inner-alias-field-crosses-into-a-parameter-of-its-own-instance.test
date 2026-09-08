@@ -1,0 +1,216 @@
+// Test: an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance
+typealias Num = int(i64.min to i64.max)
+
+type HoldA uses T
+	typealias Items = Array with T
+	export var items as Items
+	export static function create(seed T) returns Self
+		var arr = Items.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other Items)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldA'
+
+typealias HoldANum = HoldA with Num
+
+function main() returns ExitCode
+	let b = HoldANum.create(7)
+	var a = HoldANum.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @HoldA.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned#8:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds#9:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_buffer#10:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed#11:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#12:
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned#13:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds#14:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_buffer#15:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed#16:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#17:
+    x64.storeBaseDispReg.byte [rax + 0], rbx
+    x64.movRegImm32 rax, 0
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r10
+  __im_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance.test:10: seeded slot 0 must exist after resize(1)\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @HoldA.adopt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 7
+    x64.leaRegRdata rdx, [rip + __layout_HoldA_Num]
+    x64.callDirect HoldA.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.leaRegRdata rdx, [rip + __layout_HoldA_Num]
+    x64.callDirect HoldA.create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect HoldA.adopt
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "ok\x0a"
+    x64.callDirect print
+  ifcont:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_HoldA_Num
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HoldA_Num
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

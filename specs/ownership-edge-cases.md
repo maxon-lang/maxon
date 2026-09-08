@@ -1,0 +1,2994 @@
+---
+feature: ownership-edge-cases
+status: experimental
+keywords: [refcount, memory, ownership, destructor, cleanup]
+category: memory-safety
+---
+
+# Ownership & Memory Management Edge Cases
+
+Tests for the refcount-based memory manager, ordered from simple to complex.
+Uses `MmTrace: true` so the trace log verifies correct incref/decref/free behaviour.
+
+## Tests
+
+<!-- test: rc-single-alloc-freed -->
+Single struct allocated and freed in the same function scope.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	@heap let p = Point.create(1, y: 2)
+	return p.x
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-alias-incref -->
+Aliasing a struct increfs it; both variables share refcount and object is freed once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	@heap let a = Box.create(42)
+	let b = a
+	return b.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-reassign-decrefs-old -->
+Reassigning a var decrefs the old object immediately; the old object must be freed before scope exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Tag
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Tag'
+
+function main() returns ExitCode
+	var t = Tag.create(1)
+	t = Tag.create(2)
+	t = Tag.create(3)
+	return t.id
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-inner-block-freed -->
+Struct created in an inner if-block is freed when that block exits, before the outer block ends.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Widget
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var result = 0
+	if true 'inner'
+		@heap let w = Widget.create(7)
+		result = w.id
+	end 'inner'
+	return result
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-return-transfers-ownership -->
+Returning a struct skips its decref; caller receives ownership and frees it at its own scope exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var kind as Integer
+
+	static function create(kind Integer) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Token'
+
+function makeToken(k Integer) returns Token
+	let t = Token.create(k)
+	return t
+end 'makeToken'
+
+function main() returns ExitCode
+	let tok = makeToken(99)
+	return tok.kind
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-alias-survives-reassign -->
+Aliased reference keeps object alive when the original var is reassigned.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Num'
+
+function main() returns ExitCode
+	var a = Num.create(10)
+	let b = a
+	a = Num.create(20)
+	return b.v + a.v
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-loop-per-iteration-freed -->
+A struct allocated each loop iteration is freed at loop-block exit before the next iteration.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 4 'loop'
+		@heap let c = Counter.create(i)
+		total = total + c.n
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: rc-break-frees-before-exit -->
+Struct allocated before a break is decref'd before the loop block is exited.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Step
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Step'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 10 'loop'
+		@heap let s = Step.create(i)
+		if s.val == 3 'stop'
+			break
+		end 'stop'
+		i = i + 1
+	end 'loop'
+	return i
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-continue-frees-before-restart -->
+Struct allocated before a continue is decref'd before the loop restarts.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Item'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		@heap let item = Item.create(i)
+		i = i + 1
+		if item.v == 2 'skip'
+			continue
+		end 'skip'
+		total = total + item.v
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: rc-nested-struct-field-incref -->
+When a struct is consumed into a struct-typed field, the outer's destructor cascade drops the inner field; both outer and inner are freed exactly once (the consumed argument moves, so the caller does not double-drop it).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var child as Inner
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let inner = Inner.create(55)
+	let outer = Outer.create(inner)
+	return outer.child.val
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: rc-nested-struct-deep-freed -->
+Three-level nested struct: all three levels are freed when the outermost var leaves scope, each consumed one level up so no level is double-dropped.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type A
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var a as A
+
+	static function create(a A) returns Self
+		return Self{a: a}
+	end 'create'
+end 'B'
+
+type C
+	export var b as B
+
+	static function create(b B) returns Self
+		return Self{b: b}
+	end 'create'
+end 'C'
+
+function main() returns ExitCode
+	let c = C.create(B.create(A.create(7)))
+	return c.b.a.n
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-field-overwrite-decrefs-old -->
+Overwriting a struct field via a method decrefs the old field value and increfs the new one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Payload
+	export var data as Integer
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Payload'
+
+type Container
+	export var payload as Payload
+
+	export function setPayload(p Payload)
+		payload = p
+	end 'setPayload'
+
+	static function create(payload Payload) returns Self
+		return Self{payload: payload}
+	end 'create'
+end 'Container'
+
+function main() returns ExitCode
+	let old = Payload.create(1)
+	var c = Container.create(old)
+	c.setPayload(Payload.create(2))
+	return c.payload.data
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-field-overwrite-managed-list -->
+Overwriting a struct field three times; each old value must be freed promptly.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Val
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Val'
+
+type Holder
+	export var v as Val
+
+	export function set(newV Val)
+		v = newV
+	end 'set'
+
+	static function create(v Val) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Val.create(0))
+	h.set(Val.create(10))
+	h.set(Val.create(20))
+	h.set(Val.create(30))
+	return h.v.n
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-container-push-incref -->
+Pushing a struct into an array increfs it; after the local var leaves scope the element still lives.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+function main() returns ExitCode
+	var arr = NodeArray.create()
+	if true 'scope'
+		let n = Node.create(10)
+		arr.push(n)
+	end 'scope'
+	let got = try arr.get(0) otherwise Node.create(-1)
+	return got.id
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: rc-container-pop-decrefs -->
+Popping the last element and discarding the result frees the element at scope exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+function main() returns ExitCode
+	var arr = NodeArray.create()
+	arr.push(Node.create(1))
+	arr.push(Node.create(2))
+	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
+		return 99
+	end 'err'
+	return arr.count() + popped.id - popped.id
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-container-overwrite-decrefs-old -->
+Setting an element at an existing index must decref the old element and incref the new one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Item.create(50))
+	try arr.set(0, value: Item.create(99)) otherwise panic("test invariant: set OOB")
+	let got = try arr.get(0) otherwise Item.create(-1)
+	return got.value
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-container-clear-decrefs-all -->
+Clearing an array decrefs every element; all elements freed when rc hits 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Item.create(1))
+	arr.push(Item.create(2))
+	arr.push(Item.create(3))
+	arr.clear()
+	return arr.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: rc-container-scope-exit-decrefs-elements -->
+When a container holding struct elements goes out of scope, all elements are decref'd.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function fill() returns Integer
+	var arr = ItemArray.create()
+	arr.push(Item.create(10))
+	arr.push(Item.create(20))
+	arr.push(Item.create(30))
+	return arr.count()
+end 'fill'
+
+function main() returns ExitCode
+	let n = fill()
+	return n
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-insert-then-remove-no-leak -->
+Insert many structs then remove them all; zero elements remain in memory.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Entry
+	export var key as Integer
+
+	static function create(key Integer) returns Self
+		return Self{key: key}
+	end 'create'
+end 'Entry'
+
+typealias EntryArray = Array with Entry
+
+function main() returns ExitCode
+	var arr = EntryArray.create()
+	var i = 0
+	while i < 5 'push'
+		arr.push(Entry.create(i))
+		i = i + 1
+	end 'push'
+	var total = 0
+	while arr.count() > 0 'pop'
+		let e = try arr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + e.key
+	end 'pop'
+	return total
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: rc-insert-in-middle-no-leak -->
+Insert at index 0 into an existing array; shiftRight zeroes the gap so no double-free occurs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Val
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Val'
+
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var arr = ValArray.create()
+	arr.push(Val.create(10))
+	arr.push(Val.create(30))
+	arr.insert(1, value: Val.create(20))
+	let a = try arr.get(0) otherwise Val.create(-1)
+	let b = try arr.get(1) otherwise Val.create(-1)
+	let c = try arr.get(2) otherwise Val.create(-1)
+	return a.n + b.n + c.n
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: rc-remove-middle-no-double-free -->
+Removing the middle element from an array; shiftLeft zeroes the trailing slot so setLength does not double-decref.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Val
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Val'
+
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var arr = ValArray.create()
+	arr.push(Val.create(1))
+	arr.push(Val.create(2))
+	arr.push(Val.create(3))
+	let removed = try arr.remove(1) otherwise 'err'
+		return 99
+	end 'err'
+	return removed.n + arr.count()
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: rc-nested-container-freed -->
+An array whose element type itself contains a struct field; freeing the outer array frees all nested objects.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Inner'
+
+type Wrapper
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	arr.push(Wrapper.create(Inner.create(1)))
+	arr.push(Wrapper.create(Inner.create(2)))
+	return arr.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-return-from-inner-block-cleanup -->
+Returning from inside a nested block must decref all locals in every enclosing block before returning.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Step
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Step'
+
+function compute(flag bool) returns Integer
+	@heap let outer = Step.create(1)
+	if flag 'inner'
+		@heap let inner = Step.create(2)
+		return outer.n + inner.n
+	end 'inner'
+	return outer.n
+end 'compute'
+
+function main() returns ExitCode
+	return compute(true)
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-return-container-element -->
+Getting an element from a container and returning it; element rc stays above 0 while container is freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function getFirst(arr ItemArray) returns Item
+	let elem = try arr.get(0) otherwise Item.create(-1)
+	return elem
+end 'getFirst'
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	arr.push(Item.create(77))
+	let result = getFirst(arr)
+	return result.value
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: rc-global-struct-outlives-local -->
+A global variable holds a struct that outlives the function that created it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cfg
+	export var level as Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Cfg'
+
+var globalCfg = Cfg.create(0)
+
+function setup()
+	globalCfg = Cfg.create(42)
+end 'setup'
+
+function main() returns ExitCode
+	setup()
+	return globalCfg.level
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-global-reassign-decrefs-old -->
+Reassigning a global struct var decrefs the old object and increfs the new one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type State
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'State'
+
+var g = State.create(0)
+
+function step(n Integer)
+	g = State.create(n)
+end 'step'
+
+function main() returns ExitCode
+	step(10)
+	step(20)
+	step(30)
+	return g.val
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-enum-no-struct-payload-freed -->
+A simple enum enum (no struct payload) is freed correctly at scope exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function colorCode(c Color) returns Integer
+	let result = match c 'pick'
+		red   gives 1
+		green gives 2
+		blue  gives 3
+	end 'pick'
+	return result
+end 'colorCode'
+
+function main() returns ExitCode
+	let c = Color.green
+	return colorCode(c)
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-enum-struct-payload-freed -->
+A enum case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	match s 'check'
+		empty then return 0
+		solid(b) then return b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	let s = Shape.solid(Body.create(5))
+	return massOf(s)
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: rc-closure-env-freed -->
+Closure environment block is allocated as a struct and freed when the closure variable goes out of scope.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let offset = 5
+	let result = apply(function(n Integer) gives n + offset, x: 10)
+	return result
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: rc-closure-captures-struct -->
+Closure captures a struct variable by address; the closure env is freed at scope exit but the original struct lives on.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias FnTypeAlias1 = function(Integer) returns Integer
+
+type Config
+	export var level as Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Config'
+
+function apply(f FnTypeAlias1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let cfg = Config.create(3)
+	let result = apply(function(_ Integer) gives cfg.level, x: 0)
+	return result
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-error-path-cleanup -->
+On the error path of a try expression the locally allocated struct must still be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	let got = try arr.get(0) otherwise Item.create(99)
+	return got.value
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-managed-list-insert-incref -->
+Inserting a struct into a managed list increfs the value; the node holds the reference.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	let t = Token.create(7)
+	let node = managedList.insertFirst(t)
+	return node.value().id
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-managed-list-remove-decrefs -->
+Removing a node from a managed list transfers ownership; value is freed when the result var leaves scope.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	let node = managedList.insertFirst(Token.create(9))
+	let removed = managedList.remove(node)
+	return removed.id + managedList.count()
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: rc-managed-list-clear-decrefs-all -->
+Clearing a managed list decrefs every node value; all values freed when rc hits 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	managedList.insertLast(Token.create(1))
+	managedList.insertLast(Token.create(2))
+	managedList.insertLast(Token.create(3))
+	managedList.clear()
+	return managedList.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: rc-managed-list-node-set-value-decrefs-old -->
+Calling `setValue` on a managed list node decrefs the old value and increfs the new one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token.create(1))
+	node.setValue(Token.create(99))
+	return node.value().id
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-for-in-elem-decrefed -->
+In a for-in loop over a struct array each element reference is decref'd at the end of the loop body.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Score
+	export var pts as Integer
+
+	static function create(pts Integer) returns Self
+		return Self{pts: pts}
+	end 'create'
+end 'Score'
+
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+	var scores = ScoreArray.create()
+	scores.push(Score.create(10))
+	scores.push(Score.create(20))
+	scores.push(Score.create(30))
+	var total = 0
+	for s in scores 'loop'
+		total = total + s.pts
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: rc-multiple-aliases-freed-once -->
+Three aliases to the same object; the object is freed exactly once when the last alias leaves scope.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Data'
+
+function main() returns ExitCode
+	@heap let a = Data.create(7)
+	let b = a
+	let c = a
+	return a.n + b.n + c.n
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: rc-deep-container-of-containers -->
+An array of arrays of structs; freeing the outer array cascades through all levels.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+typealias Grid = Array with CellArray
+
+function main() returns ExitCode
+	var grid = Grid.create()
+	var row1 = CellArray.create()
+	row1.push(Cell.create(1))
+	row1.push(Cell.create(2))
+	var row2 = CellArray.create()
+	row2.push(Cell.create(3))
+	grid.push(row1)
+	grid.push(row2)
+	return grid.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-struct-with-array-field-freed -->
+A struct that owns an array field; when the struct is freed the array (and its elements) are freed too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Entry
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Entry'
+
+typealias EntryArray = Array with Entry
+
+type Bucket
+	export var items as EntryArray
+
+	static function create(items EntryArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Bucket'
+
+function fill() returns Integer
+	var b = Bucket.create(EntryArray.create())
+	b.items.push(Entry.create(10))
+	b.items.push(Entry.create(20))
+	return b.items.count()
+end 'fill'
+
+function main() returns ExitCode
+	return fill()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-return-struct-literal -->
+Returning a struct literal directly from a function must transfer ownership at rc=1.
+The callee constructs the struct (rc=0), increfs it for the assignment, and transfers
+ownership to the caller via KeepVars. The caller must not incref again.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function makePair(x Integer, y Integer) returns Pair
+	return Pair.create(x, b: y)
+end 'makePair'
+
+function main() returns ExitCode
+	let p = makePair(3, y: 7)
+	return p.a + p.b
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: rc-return-struct-with-managed-field -->
+Returning a struct whose field is a shared managed reference. The callee increfs
+the shared field when storing it, and transfers the outer struct at rc=1.
+The caller must decref the outer struct, which cascades to decref the managed field.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Wrapper
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Wrapper'
+
+function wrap(i Inner) returns Wrapper
+	return Wrapper.create(i)
+end 'wrap'
+
+function main() returns ExitCode
+	let i = Inner.create(5)
+	let w = wrap(i)
+	return w.inner.value
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: rc-list-scope-cleanup -->
+List (struct owning a managed list field) must walk and decref managed list node values on scope exit.
+```maxon
+typealias StringList = List with String
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("hello")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-string-pattern-cleanup -->
+Match pattern string literals must be freed after comparison, even when a case matches.
+```maxon
+function main() returns ExitCode
+	let name = "alice"
+	match name 'greet'
+		"alice" then return 1
+		"bob" then return 2
+		default then return 0
+	end 'greet'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-char-single-alloc-freed -->
+Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
+```maxon
+function main() returns ExitCode
+	let c = 'A'
+	return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-char-alias-incref -->
+Aliasing a character increfs it; both variables share the same Character object.
+```maxon
+function main() returns ExitCode
+	let a = 'X'
+	let b = a
+	return a.byteLength() + b.byteLength()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-char-reassign-decrefs-old -->
+Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
+```maxon
+function main() returns ExitCode
+	var c = 'A'
+	c = 'B'
+	return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-char-return-transfers-ownership -->
+Returning a character from a function transfers ownership to the caller.
+```maxon
+function makeChar() returns Character
+	return 'Z'
+end 'makeChar'
+
+function main() returns ExitCode
+	let c = makeChar()
+	return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-char-inner-block-freed -->
+A character created in an inner if-block is freed when that block exits.
+```maxon
+function main() returns ExitCode
+	var result = 0
+	if true 'inner'
+		let c = 'Q'
+		result = c.byteLength()
+	end 'inner'
+	return result
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-tuple-primitive-freed -->
+A tuple of primitives is heap-allocated and freed at scope exit.
+```maxon
+function main() returns ExitCode
+	@heap let t = (10, 32)
+	return t.0
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: rc-tuple-alias-incref -->
+Aliasing a tuple increfs it; both variables share the same tuple object.
+```maxon
+function main() returns ExitCode
+	@heap let a = (3, 7)
+	let b = a
+	return b.0 + b.1
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: rc-tuple-reassign-decrefs-old -->
+Reassigning a tuple var decrefs the old tuple before storing the new one.
+```maxon
+function main() returns ExitCode
+	var t = (1, 2)
+	t = (3, 4)
+	return t.0 + t.1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-tuple-with-string-freed -->
+A tuple containing a managed type (String); the destructor must cascade to decref the String field.
+```maxon
+function main() returns ExitCode
+	let t = (42, "hello")
+	return t.0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-tuple-return-transfers-ownership -->
+Returning a tuple hands the caller a fully-owned value, with no reference left behind for
+either side to release twice or forget to release once.
+
+For a tuple of two primitives — as here — it does so by transferring no ownership at all: the
+pair fits in two registers, so `makePair` copies the halves into them and never allocates a
+record. There is nothing to own. A tuple outside that gate (three fields, a heap-typed field, a
+throwing or address-taken function) is still built on the heap and its reference still moves to
+the caller. Both conventions produce 8; the ownership rule is the same because in the first one
+there is no ownership to get wrong.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+	let t = makePair(5, b: 3)
+	return t.0 + t.1
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: rc-tuple-destructuring-cleanup -->
+Destructuring a tuple frees the tuple wrapper while the bindings remain live.
+```maxon
+function main() returns ExitCode
+	let t = (10, 20)
+	let (x, y) = t
+	return x + y
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-tuple-with-struct-freed -->
+A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let t = (1, Point.create(10, y: 20))
+	return t.0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-struct-literal-as-function-arg -->
+Passing a struct literal directly as a function argument must still free the struct after use. Currently leaks (exit 101).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function acceptPoint(p Point) returns Integer
+	return p.x + p.y
+end 'acceptPoint'
+
+function main() returns ExitCode
+	return acceptPoint(Point.create(3, y: 4))
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-tuple-return-destructure-no-crash -->
+Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+	let (x, y) = makePair(10, b: 32)
+	return x + y
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-enum-char-rawvalue-from-function -->
+Returning an enum's char rawValue through a function must not underflow the refcount. Currently the returned value is treated as a managed allocation when it's actually a raw constant, causing refcount underflow.
+```maxon
+enum Grade
+	excellent = 'A'
+	good = 'B'
+	average = 'C'
+end 'Grade'
+
+function getLetter(g Grade) returns Character
+	return g.rawValue
+end 'getLetter'
+
+function main() returns ExitCode
+	let grade = Grade.good
+	let letter = getLetter(grade)
+	if letter == 'B' 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-enum-name-from-function -->
+Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
+```maxon
+enum Direction
+	north
+	south
+	east
+	west
+end 'Direction'
+
+function getName(d Direction) returns String
+	return d.name
+end 'getName'
+
+function main() returns ExitCode
+	let d = Direction.west
+	let n = getName(d)
+	if n == "west" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-enum-string-rawvalue-from-function -->
+Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
+```maxon
+enum Planet
+	earth = "Earth"
+	mars = "Mars"
+	venus = "Venus"
+end 'Planet'
+
+function getName(p Planet) returns String
+	return p.rawValue
+end 'getName'
+
+function main() returns ExitCode
+	let p = Planet.mars
+	let n = getName(p)
+	if n == "Mars" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-discarded-self-return -->
+When a self-returning method's result is discarded, the refcount must remain balanced. Currently the cleanup code double-decrefs the struct, causing a segfault.
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Counter
+	export var value as Count
+
+	function increment() returns Counter
+		value = value + 1
+		return self
+	end 'increment'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	c.increment()
+	return c.value
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-borrow-field-from-param -->
+Extracting and returning a struct field from a borrowed parameter must not crash. Currently the cleanup code decrefs the returned borrowed field incorrectly, causing a segfault after printing the correct output.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Data'
+
+type Wrapper
+	export var data as Data
+
+	static function create(data Data) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Wrapper'
+
+function extractData(w Wrapper) returns Data
+	return w.data
+end 'extractData'
+
+function main() returns ExitCode
+	let d = Data.create(42)
+	let w = Wrapper.create(d)
+	let result = extractData(w)
+	return result.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-char-to-string-interpolation -->
+Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
+```maxon
+function main() returns ExitCode
+	let c = 'A'
+	let s = "{c}"
+	print(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A
+```
+
+<!-- test: rc-match-char-range-cleanup -->
+Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
+```maxon
+function main() returns ExitCode
+	let c = 'G'
+	match c 'classify'
+		'a' to 'z' then return 1
+		'A' to 'Z' then return 2
+		'0' to '9' then return 3
+		default then return 0
+	end 'classify'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: rc-string-backed-enum-compare -->
+Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
+```maxon
+enum ContentType
+	json = "application/json"
+	html = "text/html"
+	plain = "text/plain"
+end 'ContentType'
+
+function main() returns ExitCode
+	let ct = ContentType.json
+	if ct == ContentType.json 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-char-backed-enum-compare -->
+Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
+```maxon
+enum Escape
+	newline = '\n'
+	tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+	let e = Escape.newline
+	if e == Escape.newline 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: rc-nested-struct-clone-no-leak -->
+Cloning a struct with a nested struct field must not leak the inner clone. Currently the cloned Inner's refcount is 1 when freed via Outer cascade, leaving 1 leaked allocation.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var a as Inner
+	export var b as Integer
+
+	static function create(a Inner, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let x = Outer.create(Inner.create(42), b: 10)
+	var y = x.clone()
+	y.a.value = 99
+	return x.a.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-string-clone-no-leak -->
+Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
+```maxon
+function main() returns ExitCode
+	let a = "hello"
+	let b = a.clone()
+	print(b)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: rc-string-replace-no-leak -->
+String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replace("world", with: "there")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello there
+```
+
+<!-- test: rc-string-replacefirst-no-leak -->
+String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let result = s.replaceFirst("o", with: "0")
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell0 world
+```
+
+<!-- test: rc-string-concat-loop-no-leak -->
+Repeatedly appending strings in a loop must not leak memory. Each append grows the buffer in-place; any old buffer freed during reallocation must be properly cleaned up.
+```maxon
+function main() returns ExitCode
+	var s = ""
+	let a = "x"
+	var i = 0
+	while i < 5 'loop'
+		s.append(a)
+		i = i + 1
+	end 'loop'
+	return s.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: rc-string-slice-no-leak -->
+String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let start = s.startIndex()
+	let spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+	let sub = s.slice(start, endIndex: spaceIdx)
+	print(sub)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: rc-enum-name-no-leak -->
+Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
+```maxon
+enum Color
+	Red
+	Green
+	Blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.Green
+	// Printing `.name` still allocates + frees the name String (the leak check);
+	// the value can't be compared directly (E3097).
+	print("{c.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Green
+```
+
+<!-- test: rc-enum-name-reassign-no-leak -->
+Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
+```maxon
+enum Status
+	pending
+	active
+	done
+end 'Status'
+
+function main() returns ExitCode
+	var s = Status.pending
+	s = Status.done
+	print("{s.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
+```
+
+<!-- test: rc-array-of-structs-get-no-leak -->
+Getting a struct from an array via try/otherwise must not leak. When the array is freed, its element destructors must decref all contained structs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var first as Integer
+	export var second as Integer
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(10, second: 20)
+	let arr = [p]
+	let elem = try arr.get(0) otherwise Pair.create(0, second: 0)
+	return elem.first + elem.second
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-array-of-structs-literal-no-leak -->
+Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p1 = Point.create(1, y: 2)
+	let p2 = Point.create(3, y: 4)
+	let points = [p1, p2]
+	let pt0 = try points.get(0) otherwise Point.create(0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(0, y: 0)
+	return pt0.x + pt1.y
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: rc-global-array-push-local-no-leak -->
+Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+var globalArr = ItemArray.create()
+
+function pushLocal()
+	let item = Item.create(123)
+	globalArr.push(item)
+end 'pushLocal'
+
+function main() returns ExitCode
+	pushLocal()
+	let elem = try globalArr.get(0) otherwise Item.create(-1)
+	return elem.value
+end 'main'
+```
+```exitcode
+123
+```
+
+<!-- test: rc-global-array-push-remove-loop-no-leak -->
+Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+var globalArr = ItemArray.create()
+
+function main() returns ExitCode
+	var i = 0
+	while i < 10 'push'
+		globalArr.push(Item.create(i))
+		i = i + 1
+	end 'push'
+	var total = 0
+	while globalArr.count() > 0 'remove'
+		let elem = try globalArr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + elem.value
+		i = i + 1
+	end 'remove'
+	return total
+end 'main'
+```
+```exitcode
+45
+```
+
+<!-- test: rc-struct-field-overwrite-in-if-no-leak -->
+Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export type Inner
+		export var items as IntArray
+		export var value as Integer
+
+		static function create(items IntArray, value Integer) returns Self
+			return Self{items: items, value: value}
+		end 'create'
+end 'Inner'
+
+export type Outer
+		export var inner as Inner
+		export var initialized as bool
+
+		static function create(inner Inner, initialized bool) returns Self
+			return Self{inner: inner, initialized: initialized}
+		end 'create'
+end 'Outer'
+
+function initOuter(o Outer)
+		if not o.initialized 'init'
+				o.inner = Inner.create(IntArray.create(), value: 42)
+				o.initialized = true
+		end 'init'
+end 'initOuter'
+
+function main() returns ExitCode
+		var o = Outer.create(Inner.create(IntArray.create(), value: 0), initialized: false)
+		initOuter(o)
+		o.inner.items.push(1)
+		o.inner.items.push(2)
+		o.inner.items.push(3)
+		return o.inner.items.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-map-string-keys-no-leak -->
+A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
+```maxon
+function main() returns ExitCode
+		let m = ["hello": 42]
+		return try m.get("hello") otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-map-string-keys-multiple-no-leak -->
+A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
+```maxon
+function main() returns ExitCode
+		let m = ["a": 1, "b": 2, "c": 3]
+		let a = try m.get("a") otherwise 0
+		let b = try m.get("b") otherwise 0
+		let c = try m.get("c") otherwise 0
+		return a + b + c
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: rc-closure-capture-string-no-crash -->
+A closure that captures a string variable must properly manage the string's refcount. The closure environment holds a reference to the string; when the environment is freed, it must decref the string without crashing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function(Integer) returns String
+function apply(f FnTypeAlias1, x Integer) returns String
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let prefix = "hello"
+	let result = apply(function(_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: rc-managed-list-remove-single-no-leak -->
+Removing a node from a managed list must properly decref the node's value. The managed list node itself and the stored value must both be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemManagedList = __ManagedList with Item
+
+function main() returns ExitCode
+	var managedList = ItemManagedList.create()
+	let node = managedList.insertFirst(Item.create(50))
+	managedList.remove(node)
+	return managedList.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: rc-module-level-struct-nested-field-assign -->
+Assigning to a nested field of a module-level struct variable must not leak. The struct access chain must properly manage refcounts for intermediate accesses.
+```maxon
+typealias SmallInt = int(0 to 255)
+
+type Inner
+		export var x as SmallInt
+
+		static function create(x SmallInt) returns Self
+			return Self{x: x}
+		end 'create'
+end 'Inner'
+
+type Outer
+		export var inner as Inner
+
+		static function create(inner Inner) returns Self
+			return Self{inner: inner}
+		end 'create'
+end 'Outer'
+
+var state = Outer.create(Inner.create(0))
+
+function main() returns ExitCode
+		state.inner.x = 99
+		return state.inner.x
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-top-level-array-literal-no-leak -->
+A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
+```maxon
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: rc-array-append-no-leak -->
+Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
+```maxon
+function main() returns ExitCode
+	var a = [1, 2, 3]
+	let b = [4, 5, 6]
+	a.append(b)
+	var sum = 0
+	var i = 0
+	while i < a.count() 'loop'
+		sum = sum + (try a.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: rc-struct-with-string-enum-in-array -->
+Pushing structs that contain enums with string payloads into an array must not leak. The enum destructors must handle string payload cleanup during array destruction.
+```maxon
+export union QueryKey
+		sourceFile(path String)
+		allModule
+end 'QueryKey'
+
+export type Dependency
+		export var key as QueryKey
+
+		static function create(key QueryKey) returns Self
+			return Self{key: key}
+		end 'create'
+end 'Dependency'
+
+typealias DependencyArray = Array with Dependency
+
+function main() returns ExitCode
+		var deps = DependencyArray.create()
+		deps.push(Dependency.create(QueryKey.sourceFile("test.maxon")))
+		deps.push(Dependency.create(QueryKey.allModule))
+		deps.push(Dependency.create(QueryKey.sourceFile("other.maxon")))
+		return deps.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: rc-custom-hashable-map-key-no-leak -->
+A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type MyKey implements Hashable, Equatable
+		var value as Integer
+
+		function hash() returns HashValue
+				return self.value * 31
+		end 'hash'
+
+		function equals(other MyKey) returns bool
+				return self.value == other.value
+		end 'equals'
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
+end 'MyKey'
+
+typealias MyKeyMap = Map with (MyKey, Integer)
+
+function main() returns ExitCode
+		var m = MyKeyMap.create()
+		try m.insert(MyKey.create(1), value: 42) otherwise ignore
+		return m.count()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: may-return-arg-owned-result-no-over-release -->
+A function that returns its parameter on one path and a freshly-allocated OWNING box
+on another (`pickOr`: `return fallback` vs `return Tag.named(...)`) is a *mixed* returner
+whose call result owns a `+1`. When the caller passes a fresh box as that argument and the
+return-the-param path fires, the result ALIASES the argument. The caller releases BOTH the
+box argument and the result, so it must first ACQUIRE-AND-KEEP its own reference — else the
+box is decref'd twice (the self-hosted `enumLiteralTypeOr(fallback)` over-release, where a
+`MaxonType.float` box is `mm_drop`'d as the argument AND `decref`'d as the aliasing result).
+Summing across both the alias path and the fresh-box path must complete cleanly.
+```maxon
+typealias N = int(0 to u64.max)
+
+union Tag
+	integer
+	float
+	named(id N)
+end 'Tag'
+
+function pickOr(project N, useNamed bool, fallback Tag) returns Tag
+	if project > 999999 'never'
+		return Tag.integer
+	end 'never'
+	if useNamed 'named'
+		return Tag.named(project)
+	end 'named'
+	return fallback
+end 'pickOr'
+
+function tagCode(project N, useNamed bool) returns N
+	let t = pickOr(project, useNamed: useNamed, fallback: Tag.float)
+	return match t 'm'
+		integer gives 1
+		float gives 2
+		named(id) gives id
+	end 'm'
+end 'tagCode'
+
+function main() returns ExitCode
+	var sum = 0
+	sum = sum + tagCode(3, useNamed: false)
+	sum = sum + tagCode(5, useNamed: true)
+	sum = sum + tagCode(7, useNamed: false)
+	print("sum={sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sum=9
+```
+
+<!-- test: rc-snapshot-list-field-then-overwrite-no-uaf -->
+Snapshotting a struct's `List` field into a local, then overwriting that field with a
+fresh list, then iterating the SNAPSHOT (`let old = buf.ops; buf.ops = IntList.create();
+for x in old ...`). Overwriting `buf.ops` decrefs the old list. The snapshot `old` is an
+interior borrow of the old list, so its liveness must span the whole loop — otherwise the
+overwrite frees the old list while `for x in old` still walks it (use-after-free), and scope
+cleanup then decrefs it a second time (double-free). This is the self-hosted `IrModule.compactOps`
+double-free: `let oldOps = block.opRefs; block.opRefs = WordList.create(); for x in oldOps`.
+The fix has two halves — InsertRefcounts recognizes the field-overwrite as case (c) and acquires
+the live borrow even though `lowerFieldStore` already emits the decref-old, and StdLiveness roots
+the managed field-load snapshot at itself so the acquired borrow outlives the loop. The sum must
+be computed from the original three elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+type OpBuffer
+	export var ops as IntList
+
+	static function create() returns Self
+		return Self{ops: IntList.create()}
+	end 'create'
+end 'OpBuffer'
+
+function rewrap(buf OpBuffer) returns Integer
+	let old = buf.ops
+	buf.ops = IntList.create()
+	var total = 0
+	for x in old 'each'
+		total = total + x
+	end 'each'
+	return total
+end 'rewrap'
+
+function main() returns ExitCode
+	var buf = OpBuffer.create()
+	buf.ops.append(1)
+	buf.ops.append(2)
+	buf.ops.append(3)
+	let total = rewrap(buf)
+	print("total={total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total=6
+```
+
+<!-- test: borrowed-aggregate-forwarded-to-a-consuming-callee -->
+⭐⭐ **TRANSITIVE CONSUME: A BORROWED AGGREGATE AT A CONSUMING ARGUMENT POSITION TAKES ITS OWN REFERENCE**
+(the user ruling, 2026-08-04). `Box.create` stores its parameter into a field, so the analysis marks that
+position CONSUMED; `twice`'s own `item` is only ever FORWARDED, so nothing marks it consumed and it stays
+borrowed. Before this rung that pair was refused outright — *"passing a borrowed struct/union value at a
+CONSUMING argument position … the transitive-consume case handled by the call-graph fixpoint"* — and the
+answer is a refcount rather than a fixpoint: each box becomes a second owner, `item` is NOT poisoned (so
+the second `Box.create` and the later `item.n` are both legal), and each box's destructor releases exactly
+the reference its own construction took. Runs under the suite's leak gate, so an over-release or a leak
+fails it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+type Box
+	export let item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function total() returns Integer
+		return self.item.n
+	end 'total'
+end 'Box'
+
+function twice(item Item) returns Integer
+	var a = Box.create(item)
+	var b = Box.create(item)
+	return a.total() + b.total() + item.n
+end 'twice'
+
+function main() returns ExitCode
+	let item = Item.create(7)
+	return twice(item)
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: borrowed-field-read-moved-into-durable-storage -->
+The DIRECT half of the same rule, one call boundary in: `Self{item: other.item}` moves a value into durable
+storage in THIS frame rather than handing it to a callee that will. `other.item` is a borrowed field read —
+a struct has no `clone`, so the fresh box cannot take sole ownership of it — and the same co-ownership
+answers it, through the same door (`Parser.coOwnBorrowedForConsume`). The two doors were refused by two
+separately-worded `E2015`s and are now one rule, which is what keeps `f(x)` and `Self{f: x}` from
+disagreeing about the same value. The shared `Item` is released once by each holder and freed exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+type Holder
+	export let item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	static function copyOf(other Holder) returns Self
+		return Self{item: other.item}
+	end 'copyOf'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Item.create(5))
+	let b = Holder.copyOf(a)
+	return a.item.n + b.item.n
+end 'main'
+```
+```exitcode
+10
+```
+
+
+<!-- test: rc-repeated-self-append -->
+Appending a string to ITSELF: the source of the blit IS the buffer the grow has just replaced, so a
+copy that reads the pre-grow pointer reads freed memory and the string silently ends in the freed
+block's contents rather than its own. Every round must double the string.
+
+⭐⭐ **THREE ROUNDS, AND THE THIRD IS THE ONLY ONE THAT REACHES THE HAZARD (BATCH32 review).** Canonical's
+version stops at two and this case was ported with two, under the reason that *"the second grow frees the
+block it copies from"*. **That reason is FALSE, and it was measured false** by moving
+`emitReleaseOwedBase` ahead of the blit in `buildStrAppend` and rebuilding: rounds 1 and 2 stayed clean
+and round 3 came back `abcabcabcabc????????????` — `0x3F`, the free poison. The arithmetic says why.
+Growth is `2 * requiredLen` and the grow test is `capacity < requiredLen`, so round 1 detaches an `.rdata`
+literal onto an owned buffer and frees NOTHING (there was no owed allocation), leaving `len 6, cap 12`;
+round 2 needs exactly 12, `12 < 12` is false, so it appends IN PLACE and frees nothing either. Round 3 is
+the first whose owed base is the record's own buffer. ⇒ a two-round case — this one as ported, and
+`string-type-2.md`'s one-round `string-append-self` — cannot fail on the bug either of them describes.
+The third round is what makes this case pin its own claim.
+```maxon
+function main() returns ExitCode
+	var s = "abc"
+	s.append(s)
+	print("A={s}|{s.byteLength()}\n")
+	s.append(s)
+	print("B={s}|{s.byteLength()}\n")
+	s.append(s)
+	print("C={s}|{s.byteLength()}\n")
+	print("D=done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A=abcabc|6
+B=abcabcabcabc|12
+C=abcabcabcabcabcabcabcabc|24
+D=done
+```
+
+<!-- test: rc-clone-survives-the-source-growing -->
+`clone()` promises an INDEPENDENT string. Independence has two halves, and the second one is
+the easy one to lose: writing to the clone must not touch the original, AND the original
+growing must not touch the clone. A clone that merely VIEWS the original's bytes keeps the
+first promise and breaks the second — the original's next `append` reallocates and frees the
+very block the clone points at, and the clone silently reads the freed block afterwards.
+
+The string must OWN its buffer for the grow to free anything (a literal lives in read-only
+data, which is never freed), so it is appended to once before the clone is taken. It must also
+be long enough not to be carried inline.
+```maxon
+function main() returns ExitCode
+	var s = "0123456789abcdefghijABCDEFGHIJ"
+	s.append("+")
+	let c = s.clone()
+	s.append("TAIL")
+	print("clone={c}|{c.byteLength()}\n")
+	print("source={s}|{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+clone=0123456789abcdefghijABCDEFGHIJ+|31
+source=0123456789abcdefghijABCDEFGHIJ+TAIL|35
+```
+
+<!-- test: rc-append-a-clone-of-self -->
+The same aliasing as `rc-repeated-self-append`, one step removed: the source of the append is
+not the receiver's record but a SECOND record over the receiver's bytes. Growing the receiver
+frees those bytes, so an append that copies from wherever the clone points copies from a freed
+block — and the appended half comes out as the allocator's leftovers rather than the string.
+Re-reading the source record's buffer pointer after the grow does not help here, because that
+pointer belongs to a record the grow never updated. What makes it right is that the clone owns
+its own bytes.
+```maxon
+function main() returns ExitCode
+	var s = "0123456789abcdefghijABCDEFGHIJ"
+	s.append("+")
+	let c = s.clone()
+	s.append(c)
+	print("{s}\n")
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0123456789abcdefghijABCDEFGHIJ+0123456789abcdefghijABCDEFGHIJ+
+62
+```
+
+<!-- test: rc-alias-survives-inner-scope -->
+An outer `var` rebound to an inner block's allocation must keep that allocation alive past the
+block's exit: the inner scope releases the binding, not the object the outer one now owns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var result = Box.create(0)
+	if true 'blk'
+		let inner = Box.create(42)
+		result = inner
+	end 'blk'
+	return result.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: rc-clone-independent-refcount -->
+A clone carries its own record, so reassigning the source cannot reach the clone's fields.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var x = Pair.create(3, b: 4)
+	let y = x.clone()
+	x = Pair.create(0, b: 0)
+	return y.a + y.b
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: rc-struct-field-store -->
+Storing a parameter into a field is a durable store, so the field must take a reference the
+callee's scope exit cannot take back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var child as Inner
+
+	export function setChild(c Inner)
+		child = c
+	end 'setChild'
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create(0))
+	let i = Inner.create(55)
+	o.setChild(i)
+	return o.child.val
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: rc-error-propagation-cleans-refs -->
+A value returned through a `try` that propagates must arrive owned: the throwing frame's cleanup
+runs on the error path only, never on the value the success path hands back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
+	let result = try arr.get(0)
+	return result
+end 'getFirst'
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	arr.push(Wrapper.create(99))
+	let w = try getFirst(arr) otherwise Wrapper.create(0)
+	return w.n
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-decref-reclaims-inner-scope -->
+The inner alias holds the outer variable's original object alive across the outer variable being
+reassigned, so the read through the alias must see the old value, not freed memory.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	var a = Cell.create(10)
+	var result = 0
+	if true 'inner'
+		let b = a
+		a = Cell.create(20)
+		result = b.value
+	end 'inner'
+	return result + a.value
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-try-otherwise-struct -->
+Both arms of `try ... otherwise` yield a struct, and only the arm actually taken may own one —
+the untaken arm's allocation must never be constructed or must be released.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Fallback
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Fallback'
+
+typealias FallbackArray = Array with Fallback
+
+function main() returns ExitCode
+	var arr = FallbackArray.create()
+	arr.push(Fallback.create(10))
+	let a = try arr.get(0) otherwise Fallback.create(99)
+	let b = try arr.get(5) otherwise Fallback.create(42)
+	return a.n + b.n
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- test: rc-nested-call-return -->
+A returned temporary passed straight into another call has no binding to hold it, so ownership
+must transfer through the argument position rather than resting on a scope entry.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Num'
+
+function makeNum(n Integer) returns Num
+	return Num.create(n)
+end 'makeNum'
+
+function addOne(x Num) returns Num
+	return Num.create(x.v + 1)
+end 'addOne'
+
+function main() returns ExitCode
+	let result = addOne(makeNum(10))
+	return result.v
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: rc-function-param-incref -->
+A parameter is borrowed, not consumed: the caller's binding must still be readable after the
+callee returns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export var level as Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Config'
+
+function readLevel(c Config) returns Integer
+	return c.level
+end 'readLevel'
+
+function main() returns ExitCode
+	let cfg = Config.create(77)
+	let l = readLevel(cfg)
+	return l + cfg.level - 77
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: rc-return-move-nested-scopes -->
+A `return` from inside two nested blocks must move the returned value out through every scope it
+crosses; releasing it at any one of them frees a value the caller then reads.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var name as String
+	export var id as Integer
+
+	static function create(name String, id Integer) returns Self
+		return Self{name: name, id: id}
+	end 'create'
+end 'Item'
+
+function findItem(a Integer, b Integer, target Integer) returns Item
+	if a == target 'check_a'
+		let result = Item.create("first", id: a)
+		return result
+	end 'check_a'
+
+	if b == target 'check_b'
+		if true 'inner'
+			let result = Item.create("second", id: b)
+			return result
+		end 'inner'
+	end 'check_b'
+
+	return Item.create("default", id: 0)
+end 'findItem'
+
+function main() returns ExitCode
+	let item = findItem(10, b: 20, target: 20)
+	print("{item.name}\n")
+	return item.id
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+second
+```
+
+<!-- test: rc-release-labeled-break-nested -->
+A labeled break leaves two loop body scopes at once, so both must be released — the inner one it
+is standing in and the outer one it is jumping out of.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		let p = Pair.create(i, b: i * 10)
+		var j = 0
+		while j < 3 'inner'
+			let q = Pair.create(j, b: j * 10)
+			if p.a == 1 'check'
+				if q.a == 2 'found'
+					result = p.b + q.b
+					break 'outer'
+				end 'found'
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-release-break-for-in -->
+A for-in body is a scope like any loop body's, so a break out of it must release the iteration's
+allocation rather than relying on the normal end-of-body edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Item'
+
+function main() returns ExitCode
+	let items = [10, 20, 30, 40, 50]
+	var result = 0
+
+	for item in items 'search'
+		let wrapped = Item.create(item)
+		if wrapped.val == 30 'found'
+			result = wrapped.val
+			break
+		end 'found'
+	end 'search'
+
+	return result
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: rc-release-on-error-propagation -->
+Propagating an error out of a frame exits that frame's scope, so allocations made before the
+throwing call are freed on the way out.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Resource
+	export var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Resource'
+
+enum ResourceError
+	case notFound
+end 'ResourceError'
+
+function loadResource() returns Resource throws ResourceError
+	throw ResourceError.notFound
+end 'loadResource'
+
+function process() returns Integer throws ResourceError
+	@heap let marker = Resource.create(42)
+	let res = try loadResource()
+	return res.id + marker.id
+end 'process'
+
+function main() returns ExitCode
+	let result = try process() otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: rc-release-on-error-propagation-in-block -->
+The throwing call sits inside a nested block, so the error edge must unwind every intermediate
+scope as well as the function's own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(flag)
+
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: rc-generic-function-with-scope-ops -->
+Scope-enter, scope-exit and move ops live in the body a monomorphization clones, so the cloner
+must carry them across; a clone that drops them leaves the instantiation with no cleanup at all.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function firstOrDefault(arr WrapperArray) returns Wrapper
+	let fallback = Wrapper.create(0)
+	let result = try arr.get(0) otherwise fallback
+	return result
+end 'firstOrDefault'
+
+function main() returns ExitCode
+	var arr = WrapperArray.create()
+	let w = Wrapper.create(42)
+	arr.push(w)
+	let got = firstOrDefault(arr)
+	return got.value
+end 'main'
+```
+```exitcode
+42
+```

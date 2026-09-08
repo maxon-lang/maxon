@@ -1,0 +1,74 @@
+// Test: error.a-handler-may-not-read-a-module-global
+// Does a handler READING a module-level managed `var` while `main` reassigns it produce a
+// use-after-free, or merely a stale word? The store decrefs the record the slot held; an
+// interpolated value is a fresh HEAP record each time (a bare literal would be immortal
+// .rdata and free nothing, which would make this probe vacuous).
+typealias ReaderHandleArray = Array with Reader.handle
+typealias IntPromise = Promise with (Integer, ServiceError)
+typealias IntPromiseArray = Array with IntPromise
+
+var label = "alpha"
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function size() returns Integer
+		var odd = 0
+		var i = 0
+		while i < 4000 'spin'
+			let c = label.count()
+			if c < 5 or c > 40 'implausible'
+				odd = c
+			end 'implausible'
+			i = i + 1
+		end 'spin'
+		return odd
+	end 'size'
+end 'Reader'
+
+function main() returns ExitCode
+	var hs = ReaderHandleArray.create()
+	var i = 0
+	while i < 12 'sp'
+		hs.push(spawn Reader.create())
+		i = i + 1
+	end 'sp'
+
+	var ps = IntPromiseArray.create()
+	var k = 0
+	while k < 12 'send'
+		let h = try hs.get(k) otherwise panic("get")
+		ps.push(h.size())
+		k = k + 1
+	end 'send'
+
+	// Reassign while the readers are already running on worker Ms.
+	var r = 0
+	while r < 4000 'churn'
+		label = "bravo-{r}"
+		r = r + 1
+	end 'churn'
+
+	var worst = 0
+	var a = 0
+	while a < 12 'collect'
+		let p = try ps.get(a) otherwise panic("get p")
+		let v = try await p otherwise 0
+		if v != 0 'sawOdd'
+			worst = v
+		end 'sawOdd'
+		a = a + 1
+	end 'collect'
+
+	print("worst={worst}\n")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3143: <fragment>:23:12: the message `Reader.size` reads the module-level `label` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `label` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store. Keep it in a field of `self` and hand it back through a reply, or make `label` a `let`
+note: <fragment>:37:11: the `spawn` that makes `Reader` a service

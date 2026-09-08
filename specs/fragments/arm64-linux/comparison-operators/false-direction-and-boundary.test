@@ -1,0 +1,51 @@
+// Test: false-direction-and-boundary
+function main() returns ExitCode
+	let x = 5
+	var r = 0
+	if x == 6 'eqFalse'
+		r = r + 1
+	end 'eqFalse'
+	if x != 5 'neFalse'
+		r = r + 2
+	end 'neFalse'
+	if x > 5 'gtBoundary'
+		r = r + 4
+	end 'gtBoundary'
+	if x <= 5 'leBoundary'
+		r = r + 8
+	end 'leBoundary'
+	if x >= 5 'geBoundary'
+		r = r + 16
+	end 'geBoundary'
+	if x < 5 'ltFalse'
+		r = r + 32
+	end 'ltFalse'
+	return r
+end 'main'
+---
+ExitCode: 24
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  leBoundary:
+    arm64.add x0, x0, 8
+  geBoundary:
+    arm64.add x0, x0, 16
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at false-direction-and-boundary.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,74 @@
+// Test: string-array-literal-top-level-pass-to-function
+var items = ["hello"]
+
+function useString(s String) returns ExitCode
+	if s == "hello" 'check'
+		return 42
+	end 'check'
+	return 0
+end 'useString'
+
+function main() returns ExitCode
+	for item in items 'loop'
+		return useString(item)
+	end 'loop'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_items@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @useString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "hello"
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_items
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forexit
+  loop:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + rcx*8 + 0]
+  __im_cont:
+    x64.callDirect useString
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  forexit:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

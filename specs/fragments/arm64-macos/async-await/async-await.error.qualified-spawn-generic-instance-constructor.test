@@ -1,0 +1,18 @@
+// Test: async-await.error.qualified-spawn-generic-instance-constructor
+type Box uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let p = async StrBox.create("x")
+	return await p
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:23: Unsupported: `async StrBox.create(…)` — `StrBox` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly

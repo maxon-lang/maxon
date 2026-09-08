@@ -1,0 +1,66 @@
+// Test: callee-saved-double-survives-a-callee
+function leaf(x Integer) returns Integer
+	return x + 1
+end 'leaf'
+
+function inner(k Integer) returns Integer
+	let p = 2.0
+	var acc = k
+	acc = leaf(acc)
+	return acc + trunc(p)
+end 'inner'
+
+function outer(k Integer) returns Integer
+	let a = 42.5
+	var acc = k
+	acc = inner(acc)
+	return acc + trunc(a)
+end 'outer'
+
+function main() returns ExitCode
+	return outer(0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 45
+---
+func @inner {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.add x0, x0, 1
+  __il_cont:
+    arm64.add x0, x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @outer {
+  entry:
+    arm64.prologue 16
+    arm64.bl inner
+    arm64.add x0, x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl outer
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at callee-saved-double-survives-a-callee.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

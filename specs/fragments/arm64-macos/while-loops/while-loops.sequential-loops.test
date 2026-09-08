@@ -1,0 +1,57 @@
+// Test: while-loops.sequential-loops
+function big(n Integer) returns Integer
+	var i0 = 0
+	while i0 < n 'L0'
+		i0 = i0 + 1
+	end 'L0'
+	var i1 = 0
+	while i1 < n 'L1'
+		i1 = i1 + 1
+	end 'L1'
+	return i0 + i1
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 0
+  whilehdr#6:
+    arm64.cmp x0, 3
+    arm64.b.ge whileexit#8
+  L0:
+    arm64.add x0, x0, 1
+    arm64.b whilehdr#6
+  whileexit#8:
+    arm64.movImm x1, 0
+  whilehdr#9:
+    arm64.cmp x1, 3
+    arm64.b.ge whileexit#11
+  L1:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr#9
+  whileexit#11:
+    arm64.add x0, x0, x1
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.sequential-loops.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

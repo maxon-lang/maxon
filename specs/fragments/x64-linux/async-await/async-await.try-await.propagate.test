@@ -1,0 +1,166 @@
+// Test: async-await.try-await.propagate
+typealias Integer = int(i64.min to i64.max)
+
+enum TestError implements Error
+		failed
+end 'TestError'
+
+function mayFail(succeed bool) returns Integer throws TestError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				return 10
+		end 'ok'
+		throw TestError.failed
+end 'mayFail'
+
+function inner() returns Integer throws TestError
+		let p = async mayFail(true)
+		let result = try await p
+		return result
+end 'inner'
+
+function main() returns ExitCode
+		let r = try inner() otherwise 0
+		return r
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "noyield.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect File.exists
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.movRegImm32 r8, 10
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.leaRegFunc rcx, [rip + mayFail]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 r8, 0
+  trycont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_86]  ; "panic at async-await.try-await.propagate.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

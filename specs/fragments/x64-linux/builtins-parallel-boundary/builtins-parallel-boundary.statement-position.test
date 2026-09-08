@@ -1,0 +1,36 @@
+// Test: builtins-parallel-boundary.statement-position
+function checkpoint()
+	__Builtins.parallelBoundary()
+end 'checkpoint'
+
+function main() returns ExitCode
+	checkpoint()
+	checkpoint()
+	return 3
+end 'main'
+---
+ExitCode: 3
+---
+func @checkpoint {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __parallel_boundary
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect checkpoint
+    x64.callDirect checkpoint
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

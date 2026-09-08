@@ -1,0 +1,34 @@
+// Test: trim-result-discarded
+function main() returns ExitCode
+	let s = "  hi  "
+	_ = s.trim()
+	print("ok")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "  hi  "
+    x64.callDirect String.trim#
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+    x64.leaRegRdata rcx, [rip + __str_rec_10]  ; "ok"
+    x64.callDirect print
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,33 @@
+// Test: error.interface-returning-function-cannot-throw
+typealias Integer = int(i64.min to i64.max)
+
+enum MakeError
+	broken
+end 'MakeError'
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer throws MakeError
+	return Widget.create(seed)
+end 'make'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:24:10: Unsupported: a THROWING function's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register plus a second, but on a throwing function that second register already carries the error flag — there is exactly one of it and both halves want it. Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way

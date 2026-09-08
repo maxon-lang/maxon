@@ -1,0 +1,60 @@
+// Test: break.labeled-continue-outer
+function main() returns ExitCode
+	var x = 0
+	var count = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			count = count + 1
+			if y == 2 'check'
+				continue 'outer'
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return count
+end 'main'
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r8, 0
+  whilehdr#1:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, whileexit
+  outer:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegImm32 rcx, 0
+  whilehdr#4:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc greaterEqual, whilehdr#1
+  inner:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, whilehdr#1
+    x64.jmp whilehdr#4
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at break.labeled-continue-outer.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

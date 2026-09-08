@@ -1,0 +1,148 @@
+// Test: an-inner-break-in-a-fell-through-handler-releases-them
+typealias StrArray = Array with String
+typealias Integer = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function consume(argv StrArray, n Integer) returns Integer throws Boom
+	if n > 100 'big'
+		throw Boom.bad
+	end 'big'
+	return argv.count() + n
+end 'consume'
+
+function run(limit Integer) returns Integer
+	var seen = 0 as Integer
+	var i = 0 as Integer
+	while i < limit 'loop'
+		try consume(["x", "y"], n: i * 400) otherwise 'h'
+			if i > 1 'deep'
+				break
+			end 'deep'
+		end 'h'
+		seen = seen + 1
+		i = i + 1
+	end 'loop'
+	return seen
+end 'run'
+
+function main() returns ExitCode
+	return run(9) as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @consume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rdx
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.cmpRegReg r13, rbx
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.leaRegRdata r14, [rip + __str_rec_2]  ; "x"
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "y"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.imulRegRegImm32 rdx, r13, 400
+    x64.movRegReg rcx, r15
+    x64.callDirect consume
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc lessEqual, trycont
+  deep:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.jmp whileexit
+  trycont:
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 9
+    x64.callDirect run
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inner-break-in-a-fell-through-handler-releases-them.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

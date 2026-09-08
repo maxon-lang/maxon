@@ -1,0 +1,26 @@
+// Test: error.case-added-mid-span-is-named
+typealias Code = int(0 to 125)
+
+union Op
+	add
+	sub
+	fma
+	mul
+	halt
+end 'Op'
+
+function classify(op Op) returns Code
+	match op 'op'
+		add or
+			sub or
+			mul then return 1
+		halt then return 2
+	end 'op'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Op.add)
+end 'main'
+---
+CompilerError:
+error E2026: <fragment>:18:2: match on union 'Op' is not exhaustive, missing: fma

@@ -1,0 +1,130 @@
+// Test: an-empty-container-still-runs-the-hoisted-load
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function total(a WordArray) returns Word
+	var t = 0
+	for v in a 'loop'
+		t = t + v
+	end 'loop'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var empty = WordArray.create()
+	if total(empty) != 0 'emptyIsZero'
+		return 1
+	end 'emptyIsZero'
+
+	var one = WordArray.create()
+	one.push(7)
+	if total(one) != 7 'oneElement'
+		return 2
+	end 'oneElement'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+  __il_body#6:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+  forhdr#7:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont#5
+  loop#8:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont#11:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#9:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#7
+  __il_cont#5:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#2
+  emptyIsZero:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  __il_body#13:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+  forhdr#14:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont#12
+  loop#15:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont#18:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#16:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#14
+  __il_cont#12:
+    x64.cmpRegImm32 rax, 7
+    x64.jcc equal, ifcont#4
+  oneElement:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

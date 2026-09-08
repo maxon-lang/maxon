@@ -1,0 +1,21 @@
+// Test: error.cross-file-generic-alias-cycle-is-a-type-cycle
+// --- file: a.maxon
+typealias P = Array with Q
+typealias Q = Array with P
+
+export function fromA() returns ExitCode
+	return 1
+end 'fromA'
+
+// --- file: main.maxon
+typealias High = int(1000 to 2000)
+typealias P = Array with High
+typealias Q = Array with P
+
+function main() returns ExitCode
+	var q = Q.create()
+	return fromA() + q.count()
+end 'main'
+---
+CompilerError:
+error E3091: <fragment>:3:11: typealias 'P' forms a type cycle: its type arguments refer back to 'P'

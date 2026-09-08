@@ -1,0 +1,26 @@
+// Test: error.a-where-constraint-is-checked-at-an-INFERRED-instantiation
+typealias Whole = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Whole
+end 'Sized'
+
+type Box uses T where T is Sized
+	export var item as T
+
+	static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+
+	export function measure() returns Whole
+		return self.item.size()
+	end 'measure'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(5 as Whole)
+	return b.measure() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:21:14: Type 'int' does not satisfy constraint 'Sized' required by type parameter 'T' of 'Box'

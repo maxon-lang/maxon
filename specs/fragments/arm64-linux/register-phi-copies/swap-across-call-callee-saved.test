@@ -1,0 +1,66 @@
+// Test: swap-across-call-callee-saved
+function sink(x Integer) returns Integer
+	return x
+end 'sink'
+
+function swapAcrossCall(p Integer) returns Integer
+	var a = p + 1
+	var b = p + 2
+	var i = 0
+	while i < 3 'loop'
+		let t = a
+		a = b
+		b = t
+		i = i + sink(1)
+	end 'loop'
+	return a * 10 + b
+end 'swapAcrossCall'
+
+function main() returns ExitCode
+	let r = swapAcrossCall(0)
+	if r == 21 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @swapAcrossCall {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x0, x0, 2
+    arm64.movImm x2, 0
+  whilehdr:
+    arm64.cmp x2, 3
+    arm64.b.ge whileexit
+  __il_cont:
+    arm64.add x2, x2, 1
+    arm64.xchgRegReg x1, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x16, 10
+    arm64.mul x1, x1, x16
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl swapAcrossCall
+    arm64.cmp x0, 21
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

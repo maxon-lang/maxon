@@ -1,0 +1,41 @@
+// Test: divisor-live-across-call
+function bump(x Integer) returns Integer
+	return x + 1
+end 'bump'
+
+function main() returns ExitCode
+	let n = 500
+	var d = 6
+	let t = bump(d)
+	let q = n / d
+	let r = q + t
+	if r == 90 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 500
+  __il_cont:
+    arm64.movImm x1, 3074457345618258603
+    arm64.smulh x0, x1, x0
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, 7
+    arm64.cmp x0, 90
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,30 @@
+// Test: stdlib-overlay-write-stdout-alone-is-legal
+// --- stdlib-overlay: Builtins.maxon
+export typealias WrittenByteCount = int(0 to u64.max)
+
+export function __write_stdout(value String) returns WrittenByteCount
+	return value.byteLength()
+end '__write_stdout'
+
+export enum __UnprintedProbe
+	answer
+end '__UnprintedProbe'
+// --- file: main.maxon
+function main() returns ExitCode
+	return match __UnprintedProbe.answer 'which'
+		answer gives 42
+	end 'which'
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm:
+    x64.movRegImm32 r8, 42
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

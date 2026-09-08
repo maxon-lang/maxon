@@ -1,0 +1,20 @@
+// Test: immutable-instance-outranks-immutable-field
+
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export let version as Integer
+
+	static function create(version Integer) returns Self
+		return Self{version: version}
+	end 'create'
+end 'Config'
+
+function main() returns ExitCode
+	let c = Config.create(1)
+	c.version = 2
+	return c.version
+end 'main'
+---
+CompilerError:
+error E2013: <fragment>:15:2: cannot assign to immutable variable: 'c'

@@ -1,0 +1,29 @@
+// Test: ternary-expression.in-if-condition
+function main() returns ExitCode
+	let c = true
+	if (5 if c else 3) > 4 'g'
+		return 1
+	end 'g'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ternarytrue:
+    x64.movRegImm32 rax, 5
+  matchcont:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc lessEqual, ifcont
+  g:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

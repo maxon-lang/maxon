@@ -1,0 +1,2025 @@
+// Compiler — the build driver. Wires source loading → the query spine → the
+// pipeline (resolveTypes, semanticCheck, lowerMaxonToStd) → the backend
+// (buildBackend, writeExecutable).
+//
+// The mid + lowering passes run through `PassPipeline` (which owns the error
+// gate) and end at a StdModule — the compiler's last IR tier before the target dialect
+// (see StdDialect: there is no MIR tier). The backend runs backend-direct (a
+// CodeResult is not an IR module, so it does not fit the pass-dispatch model). On
+// any failure the accumulated diagnostics go to
+// `emitDiagnosticLine` — stderr for a command line, an open capture for a caller
+// compiling in process — so the exact `error EXXXX: ...` lines the spec compares
+// against reach the reader whichever of the two it is.
+//
+// ⭐ **TWO ENTRIES, ONE DRIVER.** `compileToProduct` is the whole build and hands its
+// products back as VALUES; `compile` is the command line's adapter over it and adds
+// only the `.ir` sidecar write. There is deliberately no second
+// `loadProject → compileToCodeResult → writeExecutable` sequence anywhere.
+
+// Compile the files and/or directories `inputPaths` for `target`, returning the path of
+// the produced executable. `outputOverride` (the `-o`/`--output` value, empty
+// when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
+// additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
+// `runtimeIrNames` (the `--emit-ir-runtime=` list) names the WITHHELD functions —
+// the compiler's emitted runtime, or a `stdlib/` body — that IR must also render,
+// and is empty for every build that names none.
+//
+// ⭐⭐ **THE COMMAND LINE'S ADAPTER OVER `compileToProduct`, AND THE ONE THING IT ADDS IS THE `.ir`
+// SIDECAR.** A `build` wants a FILE beside the exe; a caller compiling IN PROCESS wants the TEXT and
+// no filesystem round trip (see `CompileProduct`). The RENDER — which is the whole cost of that flag
+// — happens once, inside the core, so both callers read bytes from ONE renderer; only the WRITE is
+// the command line's, and it is the whole of this side of the seam.
+//
+// ⚠ **THE SIGNATURE IS UNCHANGED BY THAT SPLIT, AND THAT IS WHY THE SPLIT IS HERE**:
+// `Main.compileAndReport` calls this exactly as it always did, so nothing about the command line
+// moved when the compiler grew a second caller.
+//
+// A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
+// `compileToProduct`'s drain owns that reason.
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage)
+
+	if emitIr 'emitIr'
+		writeTargetIr(product.irText, outputPath: product.outputPath)
+	end 'emitIr'
+
+	return product.outputPath
+end 'compile'
+
+// ⭐⭐ **WHAT ONE COMPILE PRODUCED, HANDED BACK AS VALUES RATHER THAN PUBLISHED TO THE FILESYSTEM.**
+//
+// The command line's products are a binary and a sidecar; an in-process caller's are a String and
+// three numbers, and it must not have to read any of them back off disk. Every field is something the
+// build already computed for its own use — the IR the `--emit-ir` bracket renders, the code size
+// `--metrics` reports, the totals the timing table divides by — so nothing here is measured twice and
+// no caller re-derives one from outside.
+export type CompileProduct
+	export let outputPath as FilePath
+	// The rendered Target IR, or EMPTY when this build did not ask for one. Empty is not a sentinel
+	// standing in for a value that could not be produced: `emitIr` is the CALLER's own argument, so
+	// "no IR" is a thing the caller asked for and already knows. A union arm would cost a heap box on
+	// every compile to tell it something it decided one line earlier.
+	export let irText as String
+	// What `--metrics` reports as this build's emitted code size, and what the `Wrote N bytes` line
+	// names — read off the same `CodeResult`, so a caller cannot get a second answer.
+	export let codeBytes as CodeByteCount
+	// The whole compile's two costs, exactly as `CompileTimings` carries them. They are the
+	// denominator every phase's share divides by (see `compileToProduct`), so a caller reporting a
+	// per-compile cost reads the number the timing table read rather than clocking the call itself —
+	// which would include its own bookkeeping and could not agree with the table.
+	export let totalNanos as DurationNanos
+	export let totalCpuTicks as CpuTicks
+
+	export static function create(outputPath FilePath, irText String, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks) returns CompileProduct
+		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks}
+	end 'create'
+end 'CompileProduct'
+
+// ⭐⭐ **THE WHOLE BUILD — the ONE pipeline driver, for the command line and for an in-process caller
+// alike.** It loads the project, resolves and clears the output, drives `compileToCodeResult`, writes
+// the executable, renders the IR when asked, and reports the timings and `--metrics`. The one thing it
+// does NOT do is publish the IR, because its two callers want that in different forms (see `compile`).
+//
+// ⛔ **A SECOND `loadProject → compileToCodeResult → writeExecutable` SEQUENCE ANYWHERE IS THE ONE
+// SHAPE THIS SPLIT MUST NOT PRODUCE.** The pipeline-driving half of it already lives in
+// `compileToCodeResult` so the `verify-warm-rebuild` gate compiles through the EXACT same path — a
+// determinism gate over a divergent code path would prove nothing — and the steps unique to a real
+// build (load, clear the output, write the executable, render the IR) are here, once.
+//
+// `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
+// own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`).
+//
+// ⭐ **THE LAST THREE ARGUMENTS ARE ONE CALLER'S, AND THEIR DEFAULTS ARE EVERY OTHER BUILD'S ANSWER.**
+// `entryFunction` is where this build begins (`Project.entryFunctionName`), `compilerWrittenSources` names the
+// inputs this compiler WROTE, each with the reserved names it minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a
+// directory walk yields the `*.test.maxon` files too (`SourceSelection`). All three are what a
+// `maxon test` build states and what nothing else has any reason to; defaulted, this signature means
+// exactly what it meant before them.
+//
+// ⭐ **IT OWNS THE TOTAL: it is the only entry that spans a whole build**, so it is the only one that
+// can measure the denominator every phase's share is taken against (the warm-rebuild gate drives
+// `compileToCodeResult` directly and never reports). Every phase timed below and in the
+// passes/backend is a disjoint sub-interval of the wall time measured here, so they sum to at most the
+// total, and whatever they leave over is printed as `unattributed` rather than absorbed — see
+// CompileTimings.
+//
+// Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
+// diagnostics and propagate straight out, and the caller prints a specific message; (2) reported
+// diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
+// `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
+// re-signaled as a FRESH `compileError`.
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns CompileProduct throws CompileError
+	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
+	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
+	// second reading of the command line — so the pre-project `load` bracket and everything after it
+	// agree on which compile they are.
+	//
+	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`Logger.currentTraceUnit`), so it is last-writer-
+	// wins across compiles. That is EXACT rather than merely tolerated, for the reason the capture
+	// latch in Diagnostics.maxon states about itself: a compile is SERIAL, so there is no second
+	// compile running whose events this could misattribute. ⛔ That serialness is NO LONGER "the
+	// scheduler is single-M" — read the argument there before leaning on it again.
+	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
+	setTraceUnit(unit)
+
+	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
+	// brackets can throw — `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s
+	// chunk-label refusal — and none of them reaches the `record*Delta` that would emit its span's END. The
+	// split exists ONLY to give that drain one home: an END at each throw site would be the same fact
+	// written once per site, forgotten by the next throwing exit exactly as it was by the last two (see
+	// `PhaseProbe.openPhaseSpans`).
+	//
+	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER NOW SURVIVES A FAILED
+	// COMPILE AND THEN DOES THOUSANDS MORE (G20).** `openPhaseSpans` is process-wide, so a compile that
+	// threw with spans open leaves every later compile in that process reading as nested inside a phase
+	// that had already finished. The justification this drain used to be able to lean on — *"a throw out
+	// of it ends the process"* — is exactly what stopped being true when `spec-test` began compiling in
+	// process, so the drain sits at the entry EVERY whole build goes through.
+	//
+	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
+	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
+	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
+	// one.
+	//
+	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It
+	// needs no drain of its own — but that is now a claim about ITS caller rather than about compiles
+	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
+	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
+	// caller of THAT gate would need this drain too.
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, unit: unit) otherwise (e) 'compileFailed'
+		closeOpenPhaseSpans(unit)
+		throw e
+	end 'compileFailed'
+end 'compileToProduct'
+
+// The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
+// measures. It is a separate function for the single reason its caller states: one failure path to hang
+// the trace-span drain on, rather than one per `try` in this body.
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, stdlibDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, unit TraceUnit) returns CompileProduct throws CompileError
+	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
+
+	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
+	// probe — a second set of reads here would sample the same instant.
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
+	project.asyncTrace = asyncTrace
+	project.debugStream = debugStream
+	project.debugInfo = debugInfo
+	project.coverage = coverage
+	recordPhase(project, phase: CompilePhase.load, probe: whole)
+
+	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
+	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
+	//
+	// Bracketed as its own phase rather than left in `load`'s: these two touch the OUTPUT, `load`
+	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
+	// header is about.
+	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
+	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
+	recordCoverageDataPath(project, outputPath: outputPath)
+	try discardPreviousOutput(project, outputPath: outputPath)
+	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
+
+	let codeResult = try compileToCodeResult(project)
+
+	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
+	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
+
+	// ⭐⭐ **AN INSTRUMENTED IMAGE IS PUBLISHED TWICE, AND THE SECOND PASS IS WHAT GIVES ITS `.mxcov` THE SAME
+	// BUILD-ID THE SIDECAR RECORDS.** The id is a plain fold of the `.text` a driver reads back OUT OF THE
+	// FILE, and `.text` is not final until the writer has patched its IAT and `.rdata` relocations — which it
+	// does inside itself, past the point where it read the `.data` image it serializes. So the first pass
+	// settles the code, the stamp writes the real id into the counter image, and the second publishes it.
+	//
+	// ⚠ MEASURED without it: a `.mxcov` carrying a fold of the UNPATCHED code, which every report refuses as
+	// belonging to a different build. Repeating the write is safe because every patch is an absolute
+	// overwrite at a fixed offset and the stamp does not resize a section, so the second pass reproduces the
+	// first byte for byte apart from those eight.
+	if project.coverage 'stampTheCounterImage'
+		stampCoverageImage(project, codeResult: codeResult)
+		writeExecutable(codeResult, target: project.target, outputPath: outputPath)
+	end 'stampTheCounterImage'
+	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
+	try requireOutputWritten(project, outputPath: outputPath)
+
+	// ⭐ **AFTER THE EXECUTABLE IS PROVEN WRITTEN, because the sidecar describes THAT file** — its
+	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
+	// before trusting a single row. Written past `requireOutputWritten` so a build that produced no
+	// executable also leaves no sidecar claiming to describe one.
+	if debugInfo 'writeDebugInfo'
+		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
+		writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
+		recordPhase(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
+	end 'writeDebugInfo'
+
+	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
+	// not in it** (see `compile` and `writeTargetIr`). `printTargetModule` walks the whole Target
+	// module, every chunk and the data section; `File.writeText` is one call nobody ever read this
+	// row for.
+	//
+	// Two provenances are excluded, and for ONE reason — neither is code this program's author wrote,
+	// and both are invariant across every program that reaches them. The emitted runtime (the entry
+	// stub `mrt_start`, the allocator, the `__str_*`/`__managed_*` families) is the compiler's; the
+	// LIBRARY — every function the merged module got from `stdlib/` source — is the checkout's, and it
+	// is in this module at all only because `stdlib/` is compiled from source alongside the program. So
+	// both the fragment and `--emit-ir` show the program's own functions. `stdlibFacts.stdlibFunctions` is the per-function provenance the whole compiler
+	// asks this by (`StdlibSource.isStdlibFunction`), passed rather than re-derived.
+	//
+	// `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those withheld
+	// bodies anyway: it is the only route either has to a golden, and it is per-build so no fragment
+	// that does not ask for one moves a byte. The CHUNKS ride along for that same list's sake — a
+	// hand-assembled runtime piece has no `IrFunction` to print, so `printTargetModule` renders its
+	// assembled bytes instead, and this is the only place holding both the module and the chunks it was
+	// encoded into. See `printTargetModule`.
+	var irText = ""
+	if emitIr 'emitIr'
+		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
+		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, stdlibFunctions: project.stdlibFacts.stdlibFunctions)
+		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
+	end 'emitIr'
+
+	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
+	// reconciliation panics compare against them), and build the tables lazily behind
+	// logDebug so a build without `--log=compiler:debug` pays only for the handful of
+	// counter reads, never for formatting a row.
+	let total = whole.elapsed()
+	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
+	project.memory.total = total
+	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
+	logDebug(LogCategory.compiler, message: function() gives compileMemoryReport(project.memory))
+
+	// Read ONCE, for the three readers below — `--metrics`, the log line and the product. It is one
+	// fact about this build, and three calls are three places a later change could make it two.
+	let codeBytes = codeResult.code.count()
+
+	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
+	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
+	if not metricsPath.isEmpty() 'metrics'
+		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeBytes)
+	end 'metrics'
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeBytes} bytes of code to {outputPath}")
+	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
+end 'compileMeasured'
+
+// ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
+//
+// Truncate-on-open does NOT cover this, and believing it does is the trap. `File.writeBinary` opens
+// `CREATE_ALWAYS`, which truncates — but only at the instant the WRITER runs, and the writer is the
+// LAST step of a SUCCESSFUL compile. A parse error, a semantic error, an E5001 register overflow or
+// an encoder fault never reaches it, so the previous build's bytes survive untouched and keep
+// answering. Anything that checks the BINARY rather than the build's exit code then gets a confident
+// wrong answer from stale code, which is the one thing this compiler must never hand anybody.
+//
+// The `.ir` sidecar goes UNCONDITIONALLY, not only under `--emit-ir`: a build that does not produce
+// one must not leave the previous one behind either, or dropping the flag silently preserves a stale
+// answer beside a fresh exe — a mismatched pair that reads as a matched one.
+//
+// ⚠ AN OUTPUT THAT SURVIVES THE DELETE IS A HARD FAILURE, and that is what makes
+// `requireOutputWritten` exact. On Windows a running (or read-only) executable cannot be removed,
+// and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
+// LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
+// binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
+// afterwards is proof the writer put it there, and its absence is proof the writer did not.
+function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError
+	// Absence is the ordinary case (a first build), and `File.delete` signals it by throwing — so the
+	// throw carries no information here. The existence re-check below is the only test that can tell
+	// "it was not there" from "it would not go", which is the distinction that matters.
+	try File.delete(outputPath.changeExtension(IrFileExtension)) otherwise ignore
+	// UNCONDITIONALLY, for the `.ir` sidecar's reason exactly: ADDING `--no-debug-info` must not leave the
+	// previous build's debug info beside a fresh executable. The build-id would refuse that stale pair — but
+	// only at the moment somebody tried to debug it, which is the worst moment to find out.
+	discardDebugInfoSidecar(outputPath)
+	// And the counter file, for the sidecar's reason and under the same rule — see `discardCoverageData`.
+	discardCoverageData(outputPath)
+	try File.delete(outputPath) otherwise ignore
+
+	if File.exists(outputPath) 'undeletable'
+		// ⭐ **IT NAMES THE LIKELY CAUSE, BECAUSE THE MECHANICAL ONE IS NOT ACTIONABLE.** "Locked or
+		// read-only" is what the OS said and it is true; it is also indistinguishable, to whoever reads
+		// it, from a genuinely broken build. In this tree the cause is the same one every time — a
+		// `spec-test` or a `build` still running, holding its own image open — measured twice in one
+		// session, and both times the reader's first hypothesis was a compiler defect. The compiler
+		// cannot NAME the holder (that needs `RestartManager`/`NtQuerySystemInformation`, imported
+		// nowhere here), but it does not need to in order to say which way to look.
+		//
+		// ⚠ AND IT SAYS THE STALE BINARY SURVIVED, which is the one fact `File.exists` has just proved
+		// and the one the reader most needs: this function's whole contract is that a failed build
+		// leaves NOTHING at `outputPath`, and this is the single branch where that fails. A `;`-chained
+		// `build; suite` therefore runs the PREVIOUS binary and reports a false red — or a false green.
+		// Measured during A1: a false red of exactly four tests.
+		//
+		// The deadline is QUOTED from `WedgeWatchdogMs`, never re-spelled: a prose "~5 min" here would
+		// be a second copy of it, free to drift the moment the watchdog is retuned.
+		//
+		// ⚠⚠ AND IT IS ATTACHED TO THE ONE HOLDER IT ACTUALLY BOUNDS. `WedgeWatchdogMs` lives in the
+		// spec pool's dispatch loop and bounds exactly that loop; a plain `maxon build` runs under
+		// no deadline of any kind. This message names TWO possible holders, so a deadline stated over
+		// both of them is false for one — and falsely reassuring in the worse direction, because it
+		// tells the reader to WAIT. This row's own second incident is the counterexample: a stray
+		// `build --emit-ir` held the binary for ~30 minutes, a hundredfold past the number quoted here,
+		// and nothing was ever going to end it. So the two holders get two different sentences: the one
+		// that self-limits says so with the constant, and the one that does not says THAT.
+		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited. A spec-test that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file; a stalled build is bounded by nothing and has to be ended by hand. If no process holds it, clear the read-only flag."
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it, and the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
+		try refuseCompile(project)
+	end 'undeletable'
+end 'discardPreviousOutput'
+
+// The backend claimed to have written the executable; check that something is actually there.
+//
+// `discardPreviousOutput` emptied this path before the compile started, so this is not a heuristic —
+// it is an exact reading of whether the writer produced a file. It exists because the four backend
+// writers report a failed `File.writeBinary` by LOGGING it and returning, which left `compile` free
+// to announce "Wrote N bytes" and exit 0 while nothing had been written. Measured: with the output
+// made read-only, a build printed `[BIN] ERROR: Failed to write PE file`, then `Wrote 1512 bytes of
+// code`, then `Compiled -> …`, and exited 0 over the previous build's binary.
+function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
+	if File.exists(outputPath) 'written'
+		return
+	end 'written'
+
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
+	try refuseCompile(project)
+end 'requireOutputWritten'
+
+// ⭐ **WHAT A REFUSED COMPILE DOES, WRITTEN ONCE.** Five sites refuse a build after accumulating
+// diagnostics — the two output-path checks above, the name-index refusal, the pipeline gate and the backend
+// gate — and each carried its own copy of these two lines plus its own retelling of the second one's reason.
+//
+// ⚠ **A FRESH THROW, NEVER A RETHROW OF THE CAUGHT OBJECT.** Re-throwing the error a `try … otherwise`
+// caught risks a NULL incref on the rethrow, whereas a fresh
+// throw of the same arm propagates cleanly. That is the fact this function exists to hold in one place.
+function refuseCompile(project Project) throws CompileError
+	printDiagnostics(project)
+	throw CompileError.compileError
+end 'refuseCompile'
+
+// Publish the already-rendered Target IR beside the produced exe as `<output>.ir`, for
+// `build --emit-ir`.
+//
+// ⚠ **IT TAKES THE TEXT, NOT THE `CodeResult` — the RENDER belongs to the compile and the WRITE to
+// the command line.** A caller compiling in process reads the same text off `CompileProduct.irText`
+// and writes no file at all, so rendering here would either give it a second renderer or make it
+// read back a file this one just wrote. What the IR CONTAINS is stated at the render, in
+// `compileMeasured`.
+//
+// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain `build` emits
+// exactly what it did before. A write failure is logged and swallowed — mirroring `writePe`, which
+// treats the executable write the same way — because the IR sidecar is diagnostic, never a build
+// gate.
+function writeTargetIr(irText String, outputPath FilePath)
+	let irPath = outputPath.changeExtension(IrFileExtension)
+
+	try File.writeText(irPath, content: irText) otherwise 'writeErr'
+		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")
+		return
+	end 'writeErr'
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote Target IR to {irPath}")
+end 'writeTargetIr'
+
+// Create a project rooted at `inputPaths`' common ancestor and register every source file the
+// caller named with the query database — the shared "load" step before the pipeline runs.
+// Factored out so `build` and the warm-rebuild gate load a project identically
+// (the gate compiles the same input into several independent fresh projects).
+//
+// File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
+// diagnostics and propagate straight to the caller, which prints a specific
+// message. `loadSourceFiles` is what raises them.
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns Project throws CompileError
+	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
+	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
+	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try stdlibDirFor(stdlibDirOverride))
+	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
+	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
+	// load would classify every synthesized file as ordinary user source — the silent half of the reserved-
+	// name door, which fails by REFUSING a generated call rather than by admitting a written one.
+	project.entryFunctionName = entryFunction
+	project.compilerWrittenSources = compilerWrittenSources
+	// Set WITH them and before the load, for their reason: a diagnostic can be raised while a file is
+	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
+	// most of them — go on naming the staged copy.
+	project.stagedSourceOrigins = stagedSourceOrigins
+	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
+	// AFTER the user's own sources — so a directory build's output name still derives from a user
+	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
+	// above rather than compiling only stdlib.
+	try loadStdlibSources(project)
+	return project
+end 'loadProject'
+
+// ⭐ **WHICH `stdlib/` THIS COMPILE READS — the walk-up, or a directory the CALLER names.**
+//
+// Empty is the command line's answer and every build's answer until now: walk up from the compiler's
+// own executable (`locateStdlibDir`, whose header owns why it is the executable and not the working
+// directory). A non-empty override is a caller that STAGED a stdlib of its own and knows exactly
+// where it put it — which is what lets a `// --- stdlib-overlay:` case be compiled by this process,
+// instead of by a COPY OF THE COMPILER BINARY planted beside the overlay so that the walk-up would
+// land on it.
+//
+// ⚠⚠ **THE OVERRIDE IS RESOLVED AGAINST THE WORKING DIRECTORY, AND IT MUST BE — `Project.stdlibDir`
+// IS AN ABSOLUTE PATH BY CONTRACT, AND ITS READERS DO NOT RESOLVE IT.** `Queries.isStdlibSourceFile`
+// asks `resolvedPath.isInside(project.stdlibDir)`: it resolves the FILE and compares SPELLINGS, so a
+// relative `stdlibDir` matches nothing and every staged stdlib file reads as USER code — promoting
+// `module`-private declarations to global visibility and dropping the diagnostics they are owed. That
+// is the exact defect `isStdlibSourceFile`'s own header records from the other side of the same
+// comparison, and the walk-up cannot hit it because `Process.executablePath()` is absolute. So this
+// is the one place an override could introduce it, and the one place it is prevented.
+//
+// ⚠ An unspellable override PANICS rather than falling back to the walk-up. The path comes from a
+// directory the caller just created, so a bad one is a caller bug — and a silent fall-back would
+// compile the overlay case against the CHECKOUT's stdlib and report a confident wrong verdict, which
+// is the exact failure the override exists to remove.
+function stdlibDirFor(stdlibDirOverride String) returns FilePath throws CompileError
+	if stdlibDirOverride.isEmpty() 'walkUpFromTheCompiler'
+		return try locateStdlibDir()
+	end 'walkUpFromTheCompiler'
+
+	let staged = try FilePath.from(stdlibDirOverride) otherwise panic("stdlibDirFor: invalid stdlib directory '{stdlibDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
+	return staged.resolve(Directory.currentPath())
+end 'stdlibDirFor'
+
+// Drive the query spine + mid/lowering pipeline + backend for an already-loaded
+// `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
+// the single compile path both `compile` (which then writes the executable) and
+// `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
+// route through — no duplicated pipeline-driving code.
+//
+// The mid + lowering pipeline owns one of the three error gates below: it throws once a pass
+// (semanticCheck) reports a diagnostic. What each gate then DOES is `refuseCompile`'s, in one place
+// (including the reason it must be a fresh throw rather than a rethrow).
+export function compileToCodeResult(project Project) returns CodeResult throws CompileError
+	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** Nothing
+	// cleared this sink, which no `maxon build` could notice (a build gets a fresh `Project` and runs one
+	// compile) and which an editor notices immediately: re-check a file whose error you have just FIXED and
+	// the error is still standing, because it is still in the array. Safe to clear because everything that
+	// should be reported is RE-DERIVED — a parse that reported a diagnostic is never cached
+	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
+	// module below.
+	project.diagnostics.clear()
+
+	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a), and
+	// `resolveTypes` rewrites its signatures in place.
+	var module = try queryAllModule(project)
+
+	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
+	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
+	// module the pipeline had edited — measured as 5 invented E3016s on a 3-line program and a panic on a
+	// 71-file one. Dropped HERE, immediately after the read and before the first mutation, so a compile
+	// that throws part way through leaves no more behind than one that completes. The full argument, the
+	// measurements, and why this rather than a clone, are in `invalidateAllModuleCache`.
+	invalidateAllModuleCache(project)
+
+	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
+	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
+	// every file's `funcSignatures`, the arms are compared whole-program — catching a forward-referenced or
+	// cross-file mismatch a same-file check could not. It runs BEFORE the pipeline's `resolveTypes` so the
+	// diagnostic can print the source alias names (`Integer`) that resolution erases to `int`. Any diagnostic
+	// it emits is caught by the pipeline's own error gate below (after `resolveTypes`), exactly as an
+	// accumulated parse diagnostic is.
+	//
+	// ⭐ **THE FIRST OF `checkDeclarations`' TWO BRACKETS, AND THE SPLIT IS FORCED BY THE ORDER.**
+	// `queryProgramSignatures` runs between this check and the other five, and it owns the
+	// `signatures` phase — so one bracket spanning all six would swallow that phase whole and
+	// double-count it. `addPhaseCost` accumulates, so two disjoint intervals report as one row.
+	let mergeCheckProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.checkDeclarations)
+	checkValueMergeSignatures(project)
+	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: mergeCheckProbe)
+
+	// ⭐ **`implements`-CONFORMANCE CHECKING (P1.7a slice 1) — HERE, before the pipeline.** It reads the
+	// still-UNRESOLVED merged signatures so its E3016 message can print the source type spellings
+	// (`Integer`, `Float`, `void`) that `resolveTypes` erases — the same reason `checkValueMergeSignatures`
+	// runs here. Any E3015/E3016 it records is caught by the pipeline's error gate after `resolveTypes`.
+	// ⚠ `var`, because the index MEMOIZES: `mangleGenericInstance` derives each instance's compiled name
+	// on first ask and keeps it (`CompiledInstanceNameMap`), and every pass below asks. One binding, so
+	// the derivation is shared by all of them rather than repeated per pass.
+	//
+	// ⭐ **BOUND HERE, ABOVE `checkConformance`, AND IT COSTS NOTHING TO MOVE IT UP.** The query is memoized
+	// and `queryAllModule` above has already forced it — a `Parser` is CONSTRUCTED with the index it sweeps
+	// into, so no file can have been parsed without it. What needs it here is the conformance check: a method
+	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
+	// one without it spelled `Array with Integer` and `Array with String` as the same word.
+	var signatures = try queryProgramSignatures(project)
+
+	// The second of `checkDeclarations`' two brackets — see the first, above `checkValueMergeSignatures`.
+	let declCheckProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.checkDeclarations)
+
+	checkConformance(project, module: module, signatures: signatures)
+
+	// ⭐ **`<Type> from "…"` NEEDS `implements InitableFromStringLiteral`** — checked right beside the
+	// conformance pass it reads the same store as, and for the same reason it sits before the pipeline: its
+	// E3005 is caught by the pipeline's error gate after `resolveTypes`.
+	checkLiteralInitConformance(project)
+
+	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
+	// `queryProgramSignatures`.
+	//
+	// ⚠ That placement is the whole cost story. `queryProgramSignatures` is a whole-program query
+	// sitting UNDER a per-file one, so it is ASKED once per file; doing O(globals) work inside it
+	// would be O(files × globals), the exact shape of the two quadratics this query has already
+	// grown and had removed (ARCHITECTURE's warning on it). The query is memoized, so the ARENA is
+	// built once — but the layout is not the arena's business anyway: it is a BACKEND fact (offsets,
+	// an image, a section), and it belongs at the one point that runs once and knows a backend is
+	// about to run.
+	//
+	// It REBUILDS rather than appends, so it is idempotent: `verifyWarmRebuild` compiles the same
+	// project twice, and a layout that accumulated would double every slot on the second pass.
+	// Same discipline as `resetMergeTargets` — the arena is the source of truth, the derived table
+	// is rebuilt from it.
+	// ⭐ **WHERE-CONSTRAINT VALIDATION (P1.7a slice 2a — E3017) — HERE, after the instances are interned.**
+	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,
+	// else E3017 anchored on the `typealias`. It reads the interned generic instances (`queryProgramSignatures`)
+	// and the declared conformances (`checkConformance` already validated them), so it runs after both. Any
+	// E3017 it records is caught by the pipeline's error gate, exactly as an E3016 is.
+	// ⭐ **A CYCLIC GENERIC ALIAS IS REFUSED FIRST (P1.7, E3091)** — before the two checks below and before
+	// the pipeline. An alias whose type arguments lead back to it denotes an INFINITE type, so every later
+	// reader (the where-constraint check, the compiled-name space, the argument identity read) would be
+	// asking questions of a type that does not exist. Refusing here is what lets all of them assume it does.
+	checkGenericAliasCycles(project, signatures: signatures)
+
+	// ⭐ **A RECURSIVE TYPE IS REFUSED (E4014) — AFTER the alias check above, and for its reason one level
+	// up.** `specs/ownership.md` forbids a type that transitively contains itself through struct fields,
+	// union associated values or container element types, because a drop cascade over a cyclic type graph
+	// has no finite order. It reads the interned instances (`queryProgramSignatures`) and the merged
+	// declarations (`queryAllModule`), which are exactly the two halves its graph joins; any E4014 it records
+	// is caught by the pipeline's error gate, exactly as an E3017 is.
+	checkTypeReferenceCycles(project, signatures: signatures)
+
+	checkWhereConstraints(project, signatures: signatures)
+
+	// ⭐ **THE COMPILED TYPE-NAME NAMESPACE (E3006) — HERE, for `checkWhereConstraints`'s two reasons.**
+	// Every instantiation is interned by now (`queryProgramSignatures`) and every declaration is merged
+	// (`queryAllModule`), which are exactly the two halves it compares: a generic instantiation compiles
+	// to a name (`Box with String` ⇒ `Box_String`) that a declared `type Box_String` also claims, and
+	// every per-type symbol the backend emits is derived from it. Any E3006 it records is caught by the
+	// pipeline's error gate, exactly as an E3017 is.
+	checkTypeSymbolNamespace(project, signatures: signatures)
+
+	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: declCheckProbe)
+
+	// The ordinal guards' bracket, OUTSIDE the well-formedness gate below, so the phase reports on
+	// every compile: a row that vanished for a failing program would be indistinguishable from a
+	// phase that cost nothing.
+	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
+
+	// ⭐⭐ **THE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
+	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
+	//
+	// ⛔⛔ **THERE IS NO COUNT IN THIS HEADER, AND THAT IS THE THIRD TIME OF ASKING.** It read *"SEVEN
+	// FAMILIES, SIX CALLS"*, and its own next sentence recorded the previous correction — *"this line said
+	// SIX while the two comments below already numbered `StringError` the sixth and `MapError` the seventh —
+	// the count and the ordinals in one block, disagreeing."* Both numbers were stale AGAIN by the time the
+	// enum-lookup family arrived: W49 wave 3 retired `StringError`'s claim (the note below survives), leaving
+	// **five** calls over **six** families, and neither figure was decremented. A count of the lines directly
+	// beneath it is a fact written twice, which is this project's signature bug wearing a tally's clothes.
+	//
+	// ⇒ **THE RULE, WHICH DOES NOT ROT:** one call per family that TRANSCRIBES its enum's ordinals as
+	// literals, except that a family whose runtime shares another's claims through it (`ArrayError` and
+	// `__ManagedMemoryError` are both `verifyManagedMemoryRuntimeOrdinals`' — see its header) is one call for two.
+	// A family that stops transcribing loses its call and keeps a note saying why, as `StringError` did.
+	//
+	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
+	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
+	// handler arm). They used to run from four `install*Runtime` heads plus one free function; three of them
+	// now read a PARSED declaration out of `stdlib/Builtins.maxon` and so need the `Project`, and the
+	// installs run AFTER the pipeline where a diagnostic would have no gate left to fail against. Here they
+	// have both: `queryAllModule` has merged every declaration, and the pipeline's error gate below turns an
+	// E4016 into a failed build with no binary written.
+	//
+	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING (A1s wave 2).** A file whose parse failed merged none of
+	// its declarations, so `stdlib/Builtins.maxon` failing to parse leaves the three DECLARED families
+	// absent — and each would then report an E4016 saying the module was not loaded, on top of the real
+	// diagnostic that says why. MEASURED while sabotaging the shadow guard with a deliberately malformed
+	// addition to that module: one E3058 followed by two E4016s about a module the compile plainly HAD.
+	// It is the refusal `checkTypeSymbolNamespace` and `checkGenericAliasCycles` above make, for the same
+	// reason: a check whose inputs are half-built cannot produce a verdict worth reading.
+	if not projectHasErrors(project) 'wellFormedSoFar'
+		verifyManagedFileOrdinals(project)
+		verifyManagedDirectoryOrdinals(project)
+		verifyManagedSocketOrdinals(project)
+		verifyManagedMemoryRuntimeOrdinals(project)
+		verifyDivisionByZeroOrdinals(project)
+		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
+		// ANY MORE (W49 wave 3).** A check here holds a runtime's LITERAL error flag against the enum's case
+		// ORDER; `StringIndexRuntime` spelled `notFound` as 0 and `invalidIndex` as 1 to build the failure
+		// edges of `__strix_first`/`__strix_last`/`__strix_after`. All three members are `stdlib/String.maxon`'s
+		// now, so the corpus `throw StringError.notFound` resolves its ordinal from the declaration itself and
+		// there is no second half to drift from. Re-adding a throwing `__strix_` graph brings the claim back
+		// with it.
+		// ⚠ **`MapError` WAS A SEVENTH AND WENT THE WAY `StringError` DID (W105).** `MapRuntime` transcribed
+		// `keyNotFound`'s and `keyAlreadyExists`'s ordinals as literals to build `__map_get`'s and
+		// `__map_insert`'s failure edges; both entry points are deleted with the synthesized hash table, so the
+		// corpus `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
+		// there is no second half to drift from. Re-adding a throwing `__map_` graph brings the claim back with it.
+		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
+		// transcribes `noSuchRawValue`'s and `noSuchCaseName`'s ordinals as the literal error flags
+		// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
+		// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
+		verifyEnumLookupErrorOrdinals(project)
+		// ⛔ **`CharacterError` WAS THE ONE FAMILY THIS ROSTER'S OWN CRITERION SELECTS AND THIS ROSTER DID NOT
+		// LIST (W135 review).** The two paragraphs above retire `StringError` and `MapError` on a stated test —
+		// a family belongs here exactly while a throwing runtime graph transcribes its ordinals, and leaves when
+		// the corpus becomes the only producer. `__char_ascii` is such a graph and has never stopped being one
+		// (`GraphemeRuntime.buildCharAscii` returns `CharacterNotAsciiFlag` on its failure edge), while
+		// `stdlib/Character.maxon` declares the case order that flag encodes. MEASURED: a case inserted ahead of
+		// `notAscii` moved the declared ordinal to 1, `buildCharAscii` went on emitting 0, and the compile
+		// exited 0 with no diagnostic. Nothing could read the drift yet — `match e` over this enum is E2015 —
+		// which made it a wire format waiting for a reader rather than a family that needed no guard.
+		verifyCharacterErrorOrdinals(project)
+	end 'wellFormedSoFar'
+
+	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
+
+	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
+	// COMPILE IS ALREADY FAILING.** `deriveStdlibFacts` below reads each stdlib file's parse artifact
+	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
+	// stdlib file was parsed and cached by `queryAllModule` above. The single way to reach a miss here
+	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at
+	// the pipeline's error gate before anything stamps a total or reads a table. So the nesting the
+	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
+	// to know it was checked rather than assumed.
+	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
+
+	// ⭐ STDLIB SOURCE THIS PROGRAM CANNOT REACH MUST DECIDE NOTHING ABOUT IT. Stdlib is loaded into
+	// EVERY compile, so a `Clock` no path from `main` reaches must be invisible to every
+	// pre-elimination pass that examines a body — else its `__gt_now_ns`/`__clock_now_unix_s` calls
+	// would install the scheduler + wall-clock `.data` for a program that reads no clock
+	// (`scanRuntimeUsage`), and refuse to compile at all on wasm/arm64 (`checkCalls`'s E3104 target
+	// gate). Computed ONCE here — stdlib AND unreachable from `main`, plus which of the REACHABLE
+	// ones need the x64-windows substrate — and stored on the project so every consumer reads the
+	// identical derivation. USER functions are never in it, so nothing about a stdlib-free program
+	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
+	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
+	//
+	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
+	// (A1w).** `deriveStdlibFacts` reads every stdlib file's parse artifact back and builds a
+	// `FunctionNameIndex` over this module, either of which can throw. Without a gate here that throw would
+	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
+	// exit 1 with nothing said.
+	//
+	// ⚠⚠ **IT USED TO SIT ELEVEN LINES LOWER, AND MOVING IT ABOVE THE TWO STATEMENTS BELOW IS THIS RUNG
+	// (S2h).** `liveGlobalLabels` must not credit a stdlib body no back end will receive, so it needs
+	// `unreachable`; `liveGlobalLabels` must precede `installManagedGlobalInit` (see below); and
+	// `installManagedGlobalInit` consumed the answer this derivation needed. What tied the derivation to the
+	// LOWER position was a single duplicate-name refusal — its `FunctionNameIndex` was then the earliest
+	// index that could meet a `stdlib/Builtins.maxon` declaration of `__module_init` against the compiler's
+	// own — and that refusal is made by `PassPipeline.run`'s index one screen below over the SAME pair, and
+	// again by `DeadFunctionElimination.markCompilerOwnedRoot` for the case with no pair to count. So the
+	// cycle was cut where it was thinnest: nothing is refused later than before, and one derivation feeds
+	// both readers instead of one reader re-deriving it. See `FunctionNameIndex`, which records what each
+	// index site can actually see.
+	project.stdlibFacts = try deriveStdlibFacts(project, module: module, signatures: signatures) otherwise 'stdlibFactsRefused'
+		try refuseCompile(project)
+	end 'stdlibFactsRefused'
+
+	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
+	// slice 3, see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
+	// init run and a cleanup drop, and the three are dropped TOGETHER because all three are produced from
+	// this one filtered arena — `managedGlobals` below and `declaredGlobals` further down apply the SAME
+	// test, so there is nothing to remove afterwards and no ordering between three edits to get right.
+	//
+	// ⚠ **IT MUST PRECEDE `installManagedGlobalInit`, and not merely for the filtering.** `__module_init`
+	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
+	// after the synthesis would find every global keeping itself alive — the answer would be "everything
+	// is live", silently and always.
+	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, unreachableStdlib: project.stdlibFacts.unreachable)
+
+	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
+	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
+	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
+	// their `__str_clone`/`__str_decref`/`__managed_decref` calls and installs the runtime floor they need,
+	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
+	// the SAME `lowerMaxonToStd` that turns a `stringLiteral` op into an rdata record and a
+	// `constArrayLiteral` into an owned `Array`. Appending them after any of those would need a second copy
+	// of whichever one it skipped.
+	//
+	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
+	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
+	//
+	// ⭐⭐ **THE ORDER THE INITIALIZERS RUN IN IS SETTLED FIRST, AND A CYCLE IS REFUSED THERE** (see
+	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
+	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
+	// slot, so a dependency walk run after it would find every global depending on itself.
+	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise 'initOrderRefused'
+		try refuseCompile(project)
+	end 'initOrderRefused'
+
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals)
+
+	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
+	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged
+	// module, so everything below this line treats it as ordinary program code: `SemanticCheck` type-checks
+	// the handler calls it makes, `scanRuntimeUsage` sees its `__mbox_recv` / `__mm_decref` / `__destruct_<T>`
+	// calls and installs the floor they need, and the pipeline lowers it through the same `lowerMaxonToStd`
+	// that lowers the program that spawned it. That last property is what deletes the whole
+	// `declareAsyncReleaserNeeds`-shaped obligation a Std-tier synthesis would have owed.
+	//
+	// A program that spawns nothing builds nothing here and is byte-identical to before this rung.
+	installServiceLoops(module, project: project, signatures: signatures)
+
+	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
+
+	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the writable-record
+	// rung).** The Maxon-tier stage ends at `semanticCheck`, which is where
+	// `promoteArgsNeedingAWritableRecord` inserts the `__str_clone` / `__str_retain` / `__str_decref` calls
+	// that give a byte record handed to a writing parameter one the write may land in. The runtime-needs
+	// scan below then walks the FINAL Maxon module, and the lowering stage runs after it. Both neighbours
+	// are forced, and both were measured — see `buildMaxonTierPasses`.
+	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise 'duplicateFunctionName'
+		try refuseCompile(project)
+	end 'duplicateFunctionName'
+	try pipeline.run(buildMaxonTierPasses()) otherwise 'maxonTierFailed'
+		try refuseCompile(project)
+	end 'maxonTierFailed'
+
+	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
+
+	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
+	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
+	// committed golden is byte-for-byte what it was before this rung existed. That is not an
+	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
+	// with the program's needs rather than being unconditional.
+	//
+	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
+	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
+	// exist before the BACKEND resolves a `globalAddr`, which is what fixes this pair's position relative to
+	// everything below — and it stays `__mm_`-specific: a print-only program adds no `.data` slots and no
+	// leak check.
+	// `funcSignatures` rides along for ONE decision inside the walk — whether a `functionRef`'s `__` target is a
+	// compiler-emitted symbol or a `stdlib/Builtins.maxon` DECLARATION (`recordFunctionRefUsage`). Its KEY SET
+	// is final here: `mergeArtifact` filled it during the module build and `TypeResolution` only `upsert`s keys
+	// it already holds, so no pass can change the answer this walk reads.
+	// ⭐ **ONE COMPUTATION, TWO CONSUMERS.** Whether a blocking kernel call yields is a TARGET fact, and it is
+	// asked here so that `RuntimeUsage.parksOnIo` (which decides whether the scheduler is installed) and
+	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
+	// fields carry what a disagreement produces.
+	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
+	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
+	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
+	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
+	// its transitive bits by hand. It is EXACTLY TWO bits, and the third one this used to declare was read
+	// off a design that no longer exists:
+	//   • `__int_to_string` — the id's digits. `__gt_trace_emit` calls it directly.
+	//   • the heap — `__gt_init`'s `__slab_alloc` of the shared 24-byte digit scratch (`GtTraceDigitsLabel`),
+	//     which only a traced build makes.
+	// NOT `__str_decref`: `__int_to_string` fills that caller-owned scratch and returns a LENGTH, so no String
+	// is created and none is released — see `buildGtTraceEmit`, whose header once claimed the opposite.
+	if project.asyncTrace 'traceRuntimeNeeds'
+		usage.usesIntToString = true
+		usage.usesHeap = true
+	end 'traceRuntimeNeeds'
+	// ⭐ **AND A TRACED build THAT WRITES A `__DebugStream` LOG EVENT CARRIES THE PRODUCER'S OWN FLOOR** —
+	// the arm above's shape, one instrument over, and its two bits are equally invisible to the scan:
+	//   • the HEAP — `__ds_init` `__slab_alloc`s the ring lock and the env-name buffer, so a program that
+	//     emits an event but allocates nothing of its own would otherwise reach `buildCarriesDebugStream`'s
+	//     `usesHeap` conjunct as FALSE, install no producer, and emit its events into a function nothing
+	//     built. That is a link failure at best and a silently empty trace at worst.
+	//   • `__str_copy` — `__ds_emit_log_text` blits the message into the ring inside its SYNTHESIZED body,
+	//     which no walk of the Maxon module can see.
+	//
+	// ⚠ **BOTH ARE GATED ON THE FLAG, AND THAT IS WHAT KEEPS AN UNTRACED BUILD BYTE-IDENTICAL.** The markers
+	// are in the module either way — the parser cannot know which build this is — so declaring the heap
+	// unconditionally would hand an untraced program the allocator and the leak check for calls that lower
+	// to nothing.
+	//
+	// ⚠ It is also what lets `LowerMaxonToStd.lowerDebugStreamEmit` gate on the BARE flag rather than on the
+	// conjunction: after this line, a program holding a marker has `usesHeap`, so for exactly those programs
+	// the flag IS `buildCarriesDebugStream`. That function's header is where the four parties to that answer
+	// are listed; this is the fifth reading of it and it agrees by construction rather than by restatement.
+	if project.debugStream and usage.usesDebugStreamLog 'debugStreamLogRuntimeNeeds'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'debugStreamLogRuntimeNeeds'
+	usage.usesManagedGlobals = usesManagedGlobals
+	// ⭐ **THE HEAP NOW CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
+	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
+	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk above structurally cannot see, which
+	// is rule 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). It
+	// sits here rather than inside `scanRuntimeUsage` because the two arms above can still turn `usesHeap`
+	// ON after the walk has finished, and a closure that ran before them would miss exactly those programs.
+	closeSlabNeeds(usage)
+	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
+	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
+	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
+	// nesting and declare its transitive needs now — before `.data` layout reads `usesHeap` and before
+	// `installStringRuntime` reads `usesStrDecref`.
+	// ⭐ **A2: an `async` spawn's per-callee releaser is synthesized after the pipeline too**, so the scan
+	// above cannot see the `__str_decref` / `__destruct_<T>` calls its body will make. Collect the spawned
+	// callees from the MAXON module (which the pipeline leaves intact) and declare each plan's drop callees
+	// BEFORE `noteDestructorUsage` runs, so the destructors a releaser names are rooted in time for the
+	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
+	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
+	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// ⭐ **SV2: a REPLY CELL's releaser is the same obligation over a different plan** — it frees the managed
+	// result of a reply nobody took, so the drop callee its body will name has to be rooted here for the same
+	// reason and at the same moment. `serviceReplyReleasePlanFor` states what the two plans differ in.
+	let serviceReplyTargets = collectServiceReplyTargets(module)
+	declareServiceReplyReleaserNeeds(usage, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// ⚠ **`declareCharacterSetRuntimeNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME (W129).** It rooted the
+	// `__destruct_Set_Character` cascade `__cs_decref`'s body would name, which is the obligation any FUTURE
+	// synthesized body owning a declared generic's instance still carries — see `declareAsyncReleaserNeeds`
+	// above, which states it for the one family that still has one.
+	noteDestructorUsage(usage, project: project, signatures: signatures)
+	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
+	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
+	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesManagedMemory`/`usesHeap` needs
+	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
+	// `noteDestructorUsage` does for the drop cascades.
+	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
+	// The SOLENESS walks are the third cascade over that same node space and close in the same window
+	// for the same reason: a `__sole_<T>` calls `__managed_sole`/`__list_sole`/nested `__sole_<T>` inside a
+	// synthesized body, and `installMmRuntime` reads `usesSoleWalk` for the refcount leaf they all reach.
+	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
+	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
+	// the record it returns — all inside a body synthesized after the pipeline, which the scan above cannot
+	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
+	// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
+	noteEnumLookupUsage(usage, project: project)
+	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
+	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
+	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
+	// leaves intact — and the thunks are installed already-lowered below, like the destructor cascades
+	// (P1.5-A2b-2).
+	let fnRefThunkTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
+	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
+
+	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
+	// because it is the only step in this run whose cost is O(globals) rather than O(module).
+	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
+	// ⛔ **THE TRACE BIT IS RECORDED BEFORE THE FIRST `.data` PRODUCER RUNS, NOT BESIDE THE ONE THAT IS
+	// OBVIOUSLY ITS OWN.** A backend sees only this record, and the producer's synthesized body reaches the
+	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families are owed
+	// too: `LinuxRuntime.linuxEnvpGlobals` lays out `__mrt_envp` because the attach reads
+	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. Set after that producer, the word
+	// is absent and the backend panics at the relocation rather than diagnosing anything. `usesHeap` is
+	// final by here, which is what makes this the earliest honest place to ask.
+	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+	// ⭐ **AND THE COVERAGE BITS, IN THE SAME WINDOW AND FOR THE SAME REASON.** Nothing in a Maxon module
+	// names `__cov_dump`, so both are DECLARED here rather than discovered — and the file bit is what lays
+	// out the errno word and the host chunks every non-Windows lane's write goes through
+	// (`RuntimeUsage.usesCoverage`). Set after the first `.data` producer, either is a relocation against a
+	// label nothing laid out.
+	if project.coverage 'coverageWritesItsCounters'
+		usage.usesCoverage = true
+		usage.usesManagedFile = true
+	end 'coverageWritesItsCounters'
+	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
+	if usage.usesHeap 'heapGlobals'
+		for entry in runtimeGlobals(usage) 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'heapGlobals'
+	// The green-thread scheduler's `.data` slots (current GT, run-queue head/tail, init guard) — same
+	// pre-lowering timing and same reason as the heap slots: a `globalAddr` the backend resolves needs them
+	// laid out first. `usesGt` already implies `usesHeap` (spawn `__slab_alloc`s the GT struct), but the GT
+	// slots are its OWN, so they ride their own bit.
+	if usage.usesGt 'gtGlobals'
+		for entry in gtRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'gtGlobals'
+	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has THREE
+	// gates and asks them itself: the P machinery rides `usesGt`, the two worker counters also serve
+	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread, and the system
+	// monitor's one-shot rides the TARGET as well (`targetBracketsBlockingSyscalls`), which is why this call
+	// passes one. A gate spelled here as well would be a second copy of those conditions —
+	// `slabRuntimeGlobals`'s reasoning, two files over, and `commandLineRuntimeGlobals`' shape one call down.
+	for entry in schedRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// argv's two captured words plus the empty-argument word (MAC7). ⚠ **NO OUTER BIT TEST**, for
+	// `schedRuntimeGlobals`'s reason: the answer depends on the TARGET as well as on the bit — a Windows
+	// program fetches its command line by a call and lays out nothing — and that pair of conditions is asked
+	// where it is stated (`commandLineRuntimeGlobals`) rather than being copied here.
+	for entry in commandLineRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The arm64-Linux host surface's one `.data` word — the errno a raw `svc` reports and nothing stores
+	// (`Arm64LinuxRuntime.LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for `commandLineRuntimeGlobals`'
+	// reason: the answer depends on the TARGET as well as on the bits, and that pair of conditions is asked
+	// where it is stated rather than being copied here.
+	for entry in arm64LinuxRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The environment vector the Linux entry stub captured — BOTH Linux lanes, because a libc-less image has
+	// no other route to `NO_COLOR`, `TERM` or `MAXON_MAX_PROCS`. ⚠ **NO OUTER BIT TEST**, for its neighbours'
+	// reason: the answer depends on the TARGET as well as on the bits.
+	for entry in linuxEnvpGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The GREEN-THREAD floor's per-OS-thread slot counter, on BOTH Linux lanes. Its own producer beside the
+	// one above for the reason that one is separate from the scheduler's: the two ride different bits, and
+	// asking both conditions here would copy them.
+	for entry in linuxGreenThreadGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The x64-Linux host surface's one `.data` word — the errno a raw `syscall` reports and nothing stores
+	// (`X64LinuxRuntime.X64LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for its arm64 twin's reason: the
+	// answer depends on the TARGET as well as on the bits, and that pair of conditions is asked where it is
+	// stated rather than being copied here.
+	for entry in x64LinuxRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
+	// `.data` layout is unchanged — only a pipe-reading program lays them out.
+	if usage.usesIocp 'ioGlobals'
+		for entry in ioRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'ioGlobals'
+	// The streaming subprocess handle-table pointer (P1.5 slice 1b) rides its OWN bit, so a non-streaming IOCP
+	// program's `.data` layout is unchanged — only a streaming program lays out `__subp_table`.
+	if usage.usesStreaming 'subpGlobals'
+		for entry in subpRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'subpGlobals'
+	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host reads take FRAME scratch, which is what a
+	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here; the two `usage` bits gate
+	// only the two BODIES `installClockRuntime` builds.
+	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
+	// layer's one slot, the pointer to its lazily-committed state region. Each gate rides inside its producer
+	// (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals` asks `usesHeap`) rather than being
+	// spelled a second time here.
+	for entry in slabArenaRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	for entry in slabRuntimeGlobals(usage) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The DebugStream producer's own six `.data` slots, on the bit recorded at the top of this block —
+	// nothing in a program can ask for a trace, so `--debugstream` is the only thing that can set it.
+	if usage.usesDebugStream 'debugStreamGlobals'
+		for entry in debugStreamRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'debugStreamGlobals'
+	// ⭐⭐ **THE `--coverage` COUNTER IMAGE — ONE CONTIGUOUS RESERVED `.data` RUN, RESERVED HERE BECAUSE THIS
+	// IS THE LAST MOMENT IT CAN BE.** `layOut` below is the single writer of every `.data` offset and refuses
+	// a run registered after it, and the point COUNT is final only now: the parse mints points and
+	// `mergeArtifact` folds them, both of which finished with `queryAllModule`.
+	reserveCoverageImage(project)
+
+	project.globalData.layOut(declaredGlobals)
+	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
+
+	// ⭐ Hand the pipeline the ONE runtime fact a Std pass cannot derive from the Std module: whether this
+	// program runs green threads, and so whether any frame can be RELOCATED underneath a pointer into it.
+	// See `PassPipeline.usesGreenThreads`. It is set here because this is the seam where `scanRuntimeUsage`
+	// has answered and no Std pass has yet run.
+	pipeline.usesGreenThreads = usage.usesGt
+
+	try pipeline.run(buildLoweringPasses()) otherwise 'loweringFailed'
+		try refuseCompile(project)
+	end 'loweringFailed'
+
+	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END (W3).** The two runtime installs below
+	// that emit a `compare` — the builtin-conformance impls and the grapheme runtime's `__char_cmp` — turn
+	// its case names into TAGS, and the parser turned the same names into the tags those results are TESTED
+	// against. It is fetched here, at the one point both installs are reached from, so there is a single
+	// lookup and a single answer rather than one per builder; the layout is the corpus's own
+	// (`stdlib/Interfaces.maxon:34-38`), not a transcription of it.
+	//
+	// ⚠⚠ **BELOW THE ERROR GATE, AND THAT POSITION IS PAID FOR.** `requireCorpusDeclaredEnum` PANICS on an
+	// absent entry, and there is one way to be absent in a checkout that lists the declaring module: a stdlib
+	// file whose parse FAILED, since a failed parse is never cached and so never merged
+	// (`deriveStdlibFacts`' header records the same rule for the same reason). MEASURED with this line above
+	// the gate: any user program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s
+	// `extension Iterable` onto the conformer and so can fail inside that file — died with this panic INSTEAD
+	// of the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
+	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
+
+	// ⭐ **`__SubprocessStreamState`'s DECLARATION, FOR THE SAME REASON AND AT THE SAME POINT.** A streaming
+	// child's per-stream state word IS this enum's ordinal column, so reading the declaration keeps that wire
+	// value and the `match` arms the stdlib writes over it ONE fact — leaving no transcription for a drift
+	// check to hold.
+	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
+
+	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED (P1.7a-existentials slice
+	// 2).** Lowering is what decides which witness tables and layout descriptors a program gets, so the
+	// destructors those tables' `destroyFunc` words point at cannot be known before this line — and every
+	// install below reads the bits this sets. It sits after `pipeline.run()` and before the first install for
+	// exactly that reason; see `noteRelocatedFunctionUsage` for why the `.data` layout above is nonetheless
+	// safe. ⚠ It is deliberately OUTSIDE the install probe below: it decides WHAT gets installed, so billing
+	// it to `installRuntime` would report a decision as part of the cost it decides.
+	noteRelocatedFunctionUsage(usage, project: project, signatures: signatures)
+
+	// ONE bracket over every install below, not one per installer: each is a slice of a single runtime
+	// floor gated on its own usage bit, and the question a reader has is what CARRYING THE RUNTIME cost
+	// this program (see `CompilePhase.installRuntime`).
+	// ⭐ **ARM THE MODULE BEFORE THE FIRST INSTALL.** Every runtime builder below asks the module whether
+	// this build carries the DebugStream producer (see `IrModule.debugStream`), so it is set once here — at
+	// the seam where lowering has finished and nothing has been installed yet — rather than threaded
+	// through forty signatures that could each forget it. It is the FULL condition and not the bare flag,
+	// so the field means what its own header says: a heapless traced build installs no producer, and a
+	// module claiming one it does not have is what would put a `globalAddr __ds_base` into a build whose
+	// `.data` never laid that slot out.
+	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
+	// ⭐ **AND THE SUBPROCESS BIT, AT THE SAME SEAM AND FOR THE SAME REASON.** The PE writer needs it for the
+	// optional trailing import band (`PeWriter.isOptionalTrailingImport`) — `PeekNamedPipe` and
+	// `TerminateProcess` are referenced by the attached-collect runtime and by nothing else, so a program
+	// that spawns no child must not import them.
+	//
+	// ⚠⚠ **IT MUST BE SET *AFTER* `pipeline.run()`, AND SETTING IT BEFORE WAS A MEASURED SEGFAULT.**
+	// `lowerMaxonToStd` REPLACES `pipeline.stdModule` with a fresh module (`PassPipeline.maxon:335`), so a
+	// flag written beside the `.data` declarations above lands on a module that is then thrown away — the
+	// backend then emitted `iatCall`s at slot indices past the end of an import table that had dropped the
+	// band, and the first `GetEnvironmentVariableA` jumped through garbage. `debugStream` sits here for
+	// exactly this reason and its header says so; the second flag needed the same seam, not the same
+	// paragraph one screen earlier.
+	pipeline.stdModule.usesSubprocess = usage.usesStreaming
+	// ⭐ **AND THE ws2_32 IMPORT DIRECTORY, ON THE SAME SEAM AND FOR THE SAME MEASURED REASON.** It gates a
+	// WHOLE DLL rather than a trailing band (see `IrModule.usesSockets`), and it must be written AFTER
+	// `pipeline.run()` for the paragraph above's reason: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a
+	// flag set any earlier lands on a module that is thrown away — and the symptom is not a missing import but
+	// `iatCall`s at slot indices past the end of the table that was actually emitted.
+	pipeline.stdModule.usesSockets = usage.usesManagedSocket
+	// ⭐ **AND THE THIRD PRODUCER OF THE OPTIONAL TRAILING IMPORT BAND**, on the same seam and for the same
+	// measured reason as its two neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag set
+	// any earlier lands on a module that is thrown away, and the symptom is `iatCall`s at slot indices past
+	// the end of the table that was actually emitted. `__cpu_count` needs `GetActiveProcessorCount`, which
+	// lives at the end of kernel32's run (see `isOptionalTrailingImport`).
+	pipeline.stdModule.usesCpuCount = usage.usesCpuCount
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours: set any earlier and the flag lands on the `stdModule` `lowerMaxonToStd` threw away, and the
+	// symptom is `iatCall`s past the end of the table actually emitted. `__proc_bg_priority` needs
+	// `SetPriorityClass` and `GetPriorityClass`, both at the end of kernel32's run.
+	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
+	// the band — both at the end of kernel32's run.
+	pipeline.stdModule.usesTerminalDetection = usage.usesTerminalDetection
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__shm_create` needs `CreateFileMappingA` and `__shm_close` `UnmapViewOfFile`, both at the
+	// end of kernel32's run (see `isOptionalTrailingImport`).
+	pipeline.stdModule.usesSharedMemory = usage.usesSharedMemory
+	// ⭐⭐ **AND THE ONLY PRODUCER OF `ntdll.dll` IN THE LANGUAGE**, on the same seam and for the same measured
+	// reason as its neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
+	// lands on a module that is thrown away — and the symptom is not a missing import but `iatCall`s at slot
+	// indices past the end of the table that was actually emitted. The `__prof_*` family needs the whole
+	// optional kernel32 band AND `NtGetNextThread`, which no other bit can turn on
+	// (`PeWriter.ImportGates.threadWalk`).
+	pipeline.stdModule.usesProcessSampling = usage.usesProcessSampling
+	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
+	// kernel32's run (see `isOptionalTrailingImport`).
+	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__uptime_ms` needs `GetTickCount64`, which lives at the end of kernel32's run (see
+	// `isOptionalTrailingImport`) — and a monitor reaches it carrying no trace PRODUCER, so `debugStream`
+	// does not already answer for it.
+	pipeline.stdModule.usesUptimeClock = usage.usesUptimeClock
+	// ⭐ **AND THE FIFTH PRODUCER OF THAT BAND (G1)**, on the same seam and for the same measured reason as
+	// its four neighbours. The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and
+	// the machine's processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at
+	// the end of kernel32's run too — three separate reasons a green-thread image needs the whole band.
+	pipeline.stdModule.usesGt = usage.usesGt
+	// ⭐⭐ **AND WHETHER A RESERVATION IS FREE ON THIS TARGET**, which is what picks the slab arena's
+	// geometry (see `IrModule.hasPageReservation`). It sits on the same seam as its four neighbours for the
+	// same measured reason — `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
+	// lands on a module that is thrown away — and the symptom here would be an arena emitting its bitmap
+	// width from one geometry and its scan bound from another.
+	//
+	// ⚠ It is the FULL condition and not a usage bit, for `debugStream`'s reason above: the field means what
+	// its own header says, so it is answered from the TARGET, which is the only thing that knows. wasm32's
+	// `memory.grow` takes a range and BACKS it, so a reservation there is an allocation; every native lane
+	// reserves address space the OS neither charges nor faults in.
+	pipeline.stdModule.hasPageReservation = project.target.cpu != CpuArch.wasm32
+
+	// Where the APPENDED band begins. Every install below and every synthesizer under
+	// `synthesizeBodies` pushes onto `functions`, so this index is the boundary between what the
+	// pipeline optimized and what only exists after it — and it is what
+	// `CompilePhase.foldEmittedConstOperands` below folds over. Read BEFORE the first install for the
+	// obvious reason and stated here rather than recomputed there, so the two cannot disagree.
+	let firstEmittedFuncIndex = pipeline.stdModule.functions.count()
+
+	// The park's half of the one computation above. It is set HERE rather than beside it because
+	// `pipeline.run` REPLACES `stdModule` (`lowerMaxonToStd` builds a new one), exactly as `usesGt`'s own
+	// note two fields over records — so a value written before the pipeline would be on the module that gets
+	// thrown away. Every reader of it is an installer below.
+	pipeline.stdModule.parksOnIo = parksOnIo
+
+	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
+
+	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered. It still
+	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
+	// argument for building it as `StdOp`s rather than as bytes.
+	//
+	// ⛔⛔ **THIS COMMENT SAID THE RUNTIME WAS "DELIBERATELY NOT EXPOSED TO THE STD OPTIMIZATION PASSES"
+	// BECAUSE `foldConstOperands` "WOULD ONLY RE-DERIVE FOLDS IT ALREADY HAS". MEASURED FALSE (EC3-H).**
+	// A runtime builder emits a comparison against a literal as `emitConst` + `cmp`, which is exactly the
+	// unfolded form — `__managed_fill` alone carried SEVEN `movRegImm32 rcx, k ; cmpRegReg rax, rcx` pairs
+	// and `__managed_get` five, one materialized immediate and one register apiece, on bodies EVERY array
+	// program links. A hand-built body has no fold the pass could re-derive; it has the same const operands
+	// user code has, minted by a builder rather than by a parser. So the fold runs over the appended band
+	// too, once, after the last thing that appends to it (below `synthesizeBodies`).
+	//
+	// ⇒ ⭐⭐ **THIS HEADER IS THE ONE PLACE THAT SAYS WHAT DOES AND DOES NOT RUN OVER THE APPENDED BAND, AND
+	// EVERY INSTALLER POINTS HERE RATHER THAN RESTATING IT.** No PIPELINE pass sees the band — `pipeline.run`
+	// has finished before the first install below, so `inlineManagedPrimitives`, the two block-arg passes and
+	// `promoteStackRecords` are all behind it — and `foldConstOperands` ALONE runs a second time over it,
+	// below the last append. The installers used to carry a copy of that fact apiece, phrased as *"appended
+	// after the pipeline so it is never re-optimized"*; EC3-H falsified all fourteen at once and corrected
+	// only this one, which is this project's own signature bug (ONE FACT WRITTEN DOWN FOURTEEN TIMES) at
+	// comment level. A pointer at the owner cannot go stale, so they are pointers now.
+	if usage.usesHeap 'installMm'
+		installMmRuntime(pipeline.stdModule, usage: usage)
+	end 'installMm'
+
+	// The slab's PAGE LAYER (`__slab_arena_*` + `__slab_assert_os_alloc`) — the chunk arena the spans above
+	// it are cut from, installed the same already-lowered way on its OWN `usesSlabArena` bit. It sits
+	// beside the allocator because it is the layer BENEATH it, and the call is unconditional for a second
+	// reason: `installSlabArena` also runs the arena-geometry check, which must not be gated on an install
+	// (see its header).
+	installSlabArena(pipeline.stdModule, usage: usage)
+
+	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
+	// the allocator `__mm_alloc` takes its boxes from. Unconditional for `installSlabArena`'s reason (it
+	// runs the record-layout and size-class checks ahead of its own `usesHeap` gate), and it takes
+	// `globalData` because it REGISTERS as well as emits: its three `.rdata` tables must be in the table
+	// before the backend lays that section out, exactly as `installUnicodeCategoryRuntime`'s two are.
+	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
+	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
+	// installed the same way — already-lowered Std, appended after the pipeline (see this block's header for
+	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
+	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
+	if usage.usesGt 'installGt'
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target, streamState: subprocessStreamStateEnum)
+	end 'installGt'
+	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
+	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
+	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a
+	// print-only or string-`==`-only program pulls in NEITHER the allocator NOR the leak check.
+	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
+	installStringRuntime(pipeline.stdModule, usage: usage)
+
+	// The GRAPHEME runtime (`__gbp`/`__ext_pict`/`__utf8_*`/`__gr_*`/`__char_at`/`__str_to_bytes`, P1.8
+	// slice B) — installed the same already-lowered way, keyed on its OWN per-entry-point bits so a
+	// program that never segments a String carries none of it. It sits BEFORE the array install because
+	// `__str_to_bytes` sets `usesManagedMemory` transitively (`closeGraphemeNeeds`) — but that bit was already
+	// settled by `scanRuntimeUsage`, which runs before any install, so the order is readability, not a
+	// dependency. It sits AFTER the String install for the same reason `__char_at` needs no ordering: the
+	// functions are appended to one module and the backend resolves calls by name.
+	installGraphemeRuntime(pipeline.stdModule, usage: usage, ordering: orderingEnum)
+
+	// The two RAW Unicode table loads (`__ucd_bmp_at`/`__ucd_supp_at`, P1.8 Slice D / R2 / W64) — installed the
+	// same already-lowered way, on their own `usesUcdCategory` bit. Unlike every install above it, this one also
+	// REGISTERS `.rdata`: the two checked-in tables they read are ordinary read-only constants rather than a
+	// dedicated section (see `UnicodeCategoryRuntime`'s header), so they must be in `globalData` before the
+	// backend lays the section out. It needs `project.stdlibDir` because the tables are checked into
+	// `stdlib/helpers/string/` and are read at COMPILE time.
+	//
+	// ⚠ **THE WHOLE `General_Category` LOOKUP (`__ucd_cat`) WAS INSTALLED HERE TOO, AND WENT AT W129** with its
+	// one caller, `__cs_contains`. `stdlib/helpers/string/unicodeCategory.maxon` writes the same algorithm out
+	// of these two raw reads, so what the corpus reaches is the pair — never a third synthesized entry point.
+	try installUnicodeCategoryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, stdlibDir: project.stdlibDir)
+
+	// ⚠ **THE `CharacterSet` RUNTIME (`__cs_make`/`__cs_decref`/`__cs_contains`) WAS INSTALLED HERE AND IS
+	// DELETED (W129).** `W115` listed `stdlib/CharacterSet.maxon`, which declares the eleven presets, `from` and
+	// `contains` as ordinary Maxon; with the parser's interceptions gone nothing could emit any of the three
+	// callees, so all three bits were unsettable and this install could only ever install nothing.
+
+	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
+	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
+	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and
+	// `ManagedMemoryRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
+	installManagedFileRuntime(pipeline.stdModule, usage: usage)
+
+	// The directory runtime (`__md_open_search`/`__md_next`/…, R4.3) — installed the same already-lowered
+	// way, on its own `usesManagedDirectory` bit. It sits beside the file install because the two share this
+	// family's helpers (the path scratch copy, the errno classification, the raw alloc/free); it needs no
+	// ordering against the ARRAY install below even though `__md_filename` CALLS `__managed_create`, because the
+	// functions are appended to one module and the backend resolves calls by name — and the `usesManagedMemory` bit
+	// that makes the managed-memory runtime present was settled by `scanRuntimeUsage` before any install ran.
+	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
+
+	// The socket runtime (`__ms_tcp_connect`/`__ms_send_from`/…) — installed the same already-lowered way, on
+	// its own `usesManagedSocket` bit. It sits beside the two filesystem installs because it shares their
+	// helpers (the raw alloc/free, the cstring scratch copy, the `Array`-record byte extent, the closed-handle
+	// guard and the refcounted teardown), and it needs no ordering against the Array install below for the
+	// reason stated there.
+	installManagedSocketRuntime(pipeline.stdModule, usage: usage, target: project.target)
+
+	// The shared-memory runtime (`__shm_create`/`__shm_map`/…) — installed the same already-lowered way, on
+	// its own `usesSharedMemory` bit. It sits beside the three families above because it shares their helpers
+	// (the byte-element record builder and the forward copy), and it needs no ordering against the Array
+	// install below for the reason stated there.
+	installSharedMemoryRuntime(pipeline.stdModule, usage: usage)
+
+	// The process-sampling runtime (`__prof_open_target`/`__prof_sample`/…) — installed the same
+	// already-lowered way, on its own `usesProcessSampling` bit. It sits beside the shared-memory family
+	// because both reach the host through one op apiece and neither builds anything managed; unlike every
+	// install around it, it needs none of the array or string helpers, which is why it is a leaf here too.
+	installProfileRuntime(pipeline.stdModule, usage: usage)
+
+	// The command-line runtime (`__cl_count`/`__cl_arg`/`__cl_scan_one`) — installed the same already-lowered
+	// way, on its own `usesCommandLine` bit. It sits beside the two families above because it shares their
+	// helpers (the raw alloc/free, the cstring walk and the cstring-to-`__ManagedMemory` copy), and it needs
+	// no ordering against the Array install below even though `__cl_arg` CALLS `__managed_create`, for the reason
+	// stated there: one module, name-resolved calls, and the `usesManagedMemory` bit was settled before any install ran.
+	installCommandLineRuntime(pipeline.stdModule, usage: usage, target: project.target)
+
+	// The console and process-introspection runtimes (`__con_read_stdin`, `__proc_exe_path`, `__proc_pid`) —
+	// the same already-lowered way, each on its OWN bit, so a program that reads stdin carries no path walk,
+	// one that asks for its own path carries no read, and one that asks only for its pid carries neither (nor
+	// the heap and managed-memory runtimes both of those drag in). They sit beside the three families above
+	// because they share their helpers (the raw alloc/free, the Win32 out word, the byte-element record
+	// builder and the cstring copy), and they need no ordering against the Array install below for the reason
+	// stated there.
+	installConsoleRuntime(pipeline.stdModule, usage: usage)
+	installProcessRuntime(pipeline.stdModule, usage: usage)
+	// The terminal question (`__tty_stdout_wants_color`), on its own bit beside them. It is the one install
+	// in this block that needs `globalData`: its two environment names are `.rdata` constants, registered
+	// the way `installDebugStreamRuntime` registers its own. It also takes the TARGET, as
+	// `installCommandLineRuntime` does and for the same kind of reason — the lane decides which BODY the
+	// entry point gets (the real three-condition read, or the "not a terminal" answer a lane with no such
+	// notion gives) rather than whether the entry point exists at all.
+	installTerminalRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, target: project.target)
+
+	// The managed-memory runtime (`__managed_create`/`__managed_push`/`__managed_get`/…) — installed the same way and for the
+	// same reason: already-lowered Std, appended after the pipeline, see this block's header. Keyed on
+	// its own `usesManagedMemory` bit (any `__managed_*` reference), which also implied `usesHeap` above (the helpers
+	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
+	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,
+	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
+	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
+
+	// ⚠ **THE `Set` AND `Map` RUNTIMES STOOD HERE AND ARE DELETED (W105).** `__set_*` and `__map_*` were one
+	// shared hash-table graph under two names; `W41` made a corpus `Map` retire the synthesized one and `W90`
+	// did the same for `Set`, which took the last live reader — `CharacterSet`'s member probe — with it. Both
+	// containers are ordinary declared generics now, so their `create`/`insert`/`contains`/`remove`/`count`
+	// are compiled Maxon bodies the reachability walk finds for itself, exactly as `StringIndexRuntime`'s
+	// were after W49. The `usesSet`/`usesMap` bits went with them, and the `CharacterSet` install that was the
+	// last thing still declaring the `usesHeap` those two arms carried alongside went at W129.
+	//
+	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
+	// way, keyed on its own `usesList` bit. It shares no graph with the two above (a chain is not a table), so
+	// it is a plain third container install; the order is readability for their reason.
+	installListRuntime(pipeline.stdModule, usage: usage)
+
+	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
+	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesManagedMemory`, so a bare opaque `T` field reassignment in an
+	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
+	// one `__drop_type_param` for either case, exactly once (its sole install site).
+	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)
+
+	// Its co-ownership twin (`__retain_type_param`, W41-opaque), on its own bit for the same reason: a shared
+	// body that only STORES a borrowed opaque `T` never drops one.
+	installRetainTypeParamRuntime(pipeline.stdModule, usage: usage)
+
+	// The existential's drop (`__drop_existential`, P1.7a-existentials slice 2) — its sibling above's exact
+	// arrangement: the same emitter, its own bit, so a program with an interface-typed field but no generic
+	// instantiation links its drop and a program with neither carries neither.
+	installDropExistentialRuntime(pipeline.stdModule, usage: usage)
+
+	// Its co-ownership twin (`__retain_existential`), on its own bit for the same reason.
+	installRetainExistentialRuntime(pipeline.stdModule, usage: usage)
+
+	// The two host clocks that are not the scheduler's — the WALL clock (`__clock_now_unix_s`) and this
+	// THREAD's CPU consumption (`__thread_cpu_ticks`) — installed the same already-lowered way, each on its
+	// OWN bit. The monotonic sibling (`__gt_now_ns`) comes from `installGtRuntime` above instead, because the
+	// SCHEDULER owns that counter: its timer deadlines are expressed in it, and routing both the scheduler
+	// and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
+	installClockRuntime(pipeline.stdModule, usage: usage)
+
+	// The coverage dump (`__cov_dump`/`__cov_write_file`), on its own DECLARED bit beside them. It takes
+	// `globalData` because it REGISTERS as well as emits: the output path is an `.rdata` cstring that must
+	// be in the table before the backend lays that section out, exactly as `installTerminalRuntime`'s two
+	// environment names are.
+	installCoverageRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, dataPath: project.coverageDataPath, pointCount: project.covPoints.count() as MxcovPointIndex)
+
+	// The CPU-parallel checkpoint (`__Builtins.parallelBoundary`), on its own bit for the reason every other
+	// install here has one — and here the reason is at its strongest, since the entry point's body is a void
+	// return and filing it under the scheduler's `__gt_` band would have installed the whole green-thread
+	// runtime to link against it. See `ParallelBoundaryRuntime`'s header.
+	installParallelBoundaryRuntime(pipeline.stdModule, usage: usage)
+
+	// The deliberate access violation (`__Builtins.forceSegfault`), on its own bit beside the checkpoint above
+	// and for the identical reason — its body is a store and a return, and it exists so the FAULT HANDLER has
+	// a test that can reach it. See `FaultProbeRuntime`.
+	installFaultProbeRuntime(pipeline.stdModule, usage: usage)
+
+	// The CPU-parallel QUERIES, beside the checkpoint above — and, like it, each on its OWN bit, so a
+	// program that asks only how many worker Ms ran carries neither the machine
+	// query's entry point nor the Win32 import band that entry point turns on, and no `.data` word but the
+	// one it reads. WHICH queries those are is `CpuParallelRuntime`'s to say, not this call site's; its
+	// header also owns why they wear two `__` bands rather than one.
+	installCpuParallelRuntime(pipeline.stdModule, usage: usage)
+
+	// The synthesized builtin-type conformance impls (P1.7a slices 2b/2b-ii/2b-iii + P1.7b) — installed the
+	// same already-lowered-Std way, but keyed on neither a `usage` bit nor a pre-pipeline scan: BOTH ways of
+	// naming one are created too late for either.
+	// A witness slot's `funcAbs64` reloc is stamped DURING lowering (`ensureWitnessTable`), and a direct
+	// `i.compare(j)` on a concrete value is an ordinary `call int.compare` the parser emits (P1.7a direct
+	// dispatch). So the install reads the FINISHED module — every pending rdata reloc and every op that spells
+	// a function name — and builds an impl iff the program NAMES it and does not already DEFINE it.
+	// **REFERENCED-but-undefined ⟺ INSTALLED**; see `installBuiltinConformanceRuntime`'s own header, which
+	// owns this rule, for why the "does not already define" half is load-bearing and why the walk is the wide
+	// one. Golden-neutral for every program that names no impl (the conformance-free corpus and the whole
+	// wasm suite): the walk builds nothing.
+	//
+	// ⚠ **WHICH impls those are is deliberately NOT LISTED HERE, and the omission is the point.** The roster
+	// is one (type, protocol) pair per impl in `IrInterface.isIntrinsicBuiltinConformance`, and
+	// `installBuiltinConformanceRuntime` is its only reader. This comment used to carry a copy of that list,
+	// and the copy went stale in each of the two rungs that added a conformer — because a roster at a CALL
+	// SITE has no test between it and the original: nothing fails when it drifts, it simply starts lying to
+	// the next reader. A pointer at the owner cannot go stale, so this is one.
+	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData, ordering: orderingEnum, arrayConformerName: signatures.arrayRecordDeclaredName())
+
+	recordPhase(project, phase: CompilePhase.installRuntime, probe: runtimeInstallProbe)
+
+	// The bodies synthesized for THIS program get their own bracket beside the runtime's: the runtime
+	// above is a fixed library gated on usage bits, while everything below grows with the program's
+	// TYPES, and a single row over both would move for two unrelated reasons.
+	let synthesizeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.synthesizeBodies)
+
+	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
+	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
+	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade
+	// `noteDestructorUsage` closed the set over — are built (`usage.neededDestructors`).
+	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+	installStructDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+	// The per-instance destructor cascade (P1.6-B2) — the same already-lowered append as the struct/union
+	// ones. A managed generic instance OWNS its type arguments, so its `__destruct_<mangled>` drops each
+	// substituted managed field; only the REFERENCED instances (directly, or through a nested cascade
+	// `noteDestructorUsage` closed the set over) are built. It reads the instance registry, which lives on
+	// `signatures`, so it needs no `project`.
+	installGenericInstanceDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
+	// The DICTIONARY destructor cascade (BATCH41) — the same append, for the instance a SHARED generic body
+	// holds rather than the one a concrete call site names. A declaration view's slot standing at a bare
+	// parameter has no callee to drop through, so its cascade takes the enclosing instantiation's layout
+	// descriptor as a second parameter and releases that slot through `__drop_type_param`. Only the REFERENCED
+	// ones are built, exactly as above.
+	installGenericInstanceDictionaryDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
+	// Its DECLARED-RECORD twin (W183) — the same cascade for a record that is a `structRef` rather than an
+	// instance, which is what a TUPLE of the enclosing generic's own parameters is (`stdlib/Map.maxon`'s
+	// `Entry`, a `typealias Pair = (K, V)`). Only the REFERENCED ones are built, exactly as above.
+	installStructDictionaryDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+	// The per-struct and per-union DEEP-CLONER cascades (P1.7 slice 3b-vi-b) — the clone twins of the destructor
+	// installers, appended already-lowered after the pipeline for the same reason. Only the cloners the module
+	// references (directly through a `funcAddr(__clone_<T>)` element-cloner stamp, or through a nested cascade
+	// `noteCascadeUsage` closed the set over) are built (`usage.neededCloners`).
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+	// The per-instance DEEP-CLONER cascade (W162) — the clone twin of `installGenericInstanceDestructors` above,
+	// installed beside the struct/union cloners for the same reason they sit beside their own destructors. It
+	// takes `project` (which the destructor twin does not) for one fact the instance registry cannot answer: the
+	// MM tag index a fresh box is allocated under lives in `project.globalData`.
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+	// The per-type SOLENESS WALKS — the third twin of the two families above, over the same node space
+	// and installed in the same band. Only the walks the module references (a transfer door's emitted call, or
+	// a nested cascade `noteCascadeUsage` closed the set over) are built (`usage.neededSoleWalks`).
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
+	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
+	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
+	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+	// The `__gt_release_<callee>` helpers that give back the reference an `async` spawn took to each managed
+	// argument, and release the result-or-error of a promise nobody awaited (A2). Collected before the
+	// pipeline (see `asyncSpawnTargets`), installed here already-lowered like the cascades above; a callee
+	// with nothing managed to release gets none, which is why a scalar async program is unchanged.
+	installAsyncReleasers(pipeline.stdModule, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// The `__gt_reply_release_<message>` twins, for the managed RESULT of a reply cell nobody awaited (SV2).
+	installServiceReplyReleasers(pipeline.stdModule, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
+	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
+	// surface is a function while its four siblings expand in the parser.
+	installEnumLookupHelpers(pipeline.stdModule, project: project, needed: usage.neededEnumLookups)
+
+	// ⭐⭐ **THE DEBUGSTREAM PRODUCER, INSTALLED LAST OF EVERYTHING, BECAUSE IT RENDERS THE TAG BLOB.**
+	// `MXDS_TAGS` is the table the monitor resolves a 16-bit tag index against, and it is written ONCE, from
+	// whatever `globalData` holds at that moment — so every site that can intern a name must have run
+	// first. Two do, and they are far apart: the lowering's `__mm_alloc` arm (a user box's own type name)
+	// and the synthesized CLONERS just above (a `__clone_<T>` allocating a fresh box of the same type). An
+	// install placed with the MM family, where it reads naturally, would render the blob before the cloners
+	// existed and every cloned box would decode as `tag=<n>` against a table that had no such entry.
+	//
+	// ⚠ Gated on the module's own armed flag — `buildCarriesDebugStream`, set above — rather than on a
+	// second spelling of the same conjunction.
+	if pipeline.stdModule.debugStream 'installDebugStream'
+		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt, rawFree: rawSlabFreeCallee(usage))
+	end 'installDebugStream'
+
+	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
+
+	// ⭐ **THE STD OPTIMIZER, OVER THE BAND THE TWO BRACKETS ABOVE APPENDED.** See the install block's own
+	// header for the measurement that put it here. It runs ONCE, below the LAST thing that appends a
+	// function, so a body synthesized after an earlier fold could not slip past it — which is the failure
+	// mode a fold placed between the two brackets would have.
+	//
+	// ⚠ It is deliberately OUTSIDE both brackets above: billing an optimizer to the builder whose output it
+	// reads would report one cost as part of another, and the two scale with different things (see
+	// `CompilePhase.foldEmittedConstOperands`).
+	// ⭐ EC18 — BEFORE the fold, and for the pipeline's reason: the sequence it emits carries shift counts
+	// and a multiply-back that the fold then turns into IMMEDIATES. This band is where `__int_to_string`'s
+	// per-digit `div`/`mod` by 10 and `graphemeBreakProperty`'s `mod 28` live, neither of which any
+	// pipeline pass can reach.
+	let emittedReduceProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.strengthReduceEmittedDivision)
+	strengthReduceDivision(project, module: pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex)
+	recordPhase(project, phase: CompilePhase.strengthReduceEmittedDivision, probe: emittedReduceProbe)
+
+	let emittedFoldProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.foldEmittedConstOperands)
+	foldConstOperands(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex)
+	recordPhase(project, phase: CompilePhase.foldEmittedConstOperands, probe: emittedFoldProbe)
+
+	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
+	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
+	// overflows the register file, and the reachability prune reports E4015 and throws when a
+	// declaration takes a name the compiler owns — at its `FunctionNameIndex`, whose Std-tier site is the
+	// first point in the compile where BOTH sides of such a pair are present and hence the first that can tell
+	// them apart (A1t), and at its root set, for the half of that rule with no pair to count (A1w). Passing
+	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
+	// maps a Target ValueId back to its source span through.
+	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage) otherwise 'backendFailed'
+		try refuseCompile(project)
+	end 'backendFailed'
+	// ⭐ **THE DECLARATION-HYGIENE DRAIN (E3012 unused, E3077 var-should-be-let) — AFTER THE BACKEND, which
+	// is the first point at which nothing else has anything to say about a body.** See
+	// `reportBindingHygieneDiagnostics`.
+	try reportBindingHygieneDiagnostics(project)
+
+	return codeResult
+end 'compileToCodeResult'
+
+// ⭐⭐ **REPORT THE HYGIENE DIAGNOSTICS THE PARSER DECIDED, NOW THAT EVERY PASS THAT COULD EXPLAIN THE BODY
+// INSTEAD HAS RUN.** Both verdicts (E3012 unused, E3077 var-should-be-let) are facts about ONE function,
+// settled at its `end` during the parse; only the REPORTING waits, and `Project.bindingHygieneDiagnostics`
+// carries the measured cascade that makes it wait.
+//
+// ⭐⭐ **IT IS CALLED AFTER `buildBackend`, AND EACH STEP OF THAT POSITION WAS PAID FOR BY A MEASUREMENT.**
+// Reported where they are DECIDED, they gate the pipeline ahead of `resolveTypes`, and 26 committed
+// error-cases moved — `let x = 256 as Byte` reported *"unused variable: 'x'"* instead of the out-of-range
+// cast `type-casting.md` exists to pin, and that file is a canonical `/specs` port whose program may not be
+// edited to suit us. Moved to the end of `semanticCheck` that specific case STILL moved, because the
+// compile-time narrowing (E3005) is `InsertRangeChecks`, a Std-tier pass. And after the lowering stage two
+// BACKEND diagnostics still followed it: **E5001** (the register allocator out of registers) and **E4015**
+// (the reachability prune) — and the co-occurrence is not hypothetical, since `register-stress.md`'s whole
+// subject is a function stuffed with idle `var`s. Here there is nothing left below.
+//
+// The cost is that a doomed compile pays one codegen pass it will throw away. That is the right trade for a
+// diagnostic whose entire purpose is to be the LAST thing a reader is told.
+//
+// ⚠ **THE SUPPRESSION IS WHOLE-PROGRAM RATHER THAN PER FUNCTION.** A per-function rule needs a second
+// index from a diagnostic's position back to the body containing it, and every case in the suite that
+// reaches this point has ONE complaint in the whole program — so the finer
+// rule would cost an index to make a distinction nothing observes. It errs toward reporting LESS, which for
+// a hygiene diagnostic is the harmless direction.
+//
+// ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Every `otherwise` above
+// refuses the compile, so reaching this call means the sink is empty — but that is a property of the
+// CALLER, and a hygiene diagnostic stacked on top of a real one is precisely the defect this deferral
+// exists to prevent. The rule is written where the rule is, not left resting on the control flow above it.
+function reportBindingHygieneDiagnostics(project Project) throws CompileError
+	if project.bindingHygieneDiagnostics.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
+		return
+	end 'nothingToSayOrSomethingRealerSaidIt'
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
+	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for hygieneIndex in 0 upto project.bindingHygieneDiagnostics.count() 'each'
+		reportDiagnostic(project, diagnostic: try project.bindingHygieneDiagnostics.get(hygieneIndex) otherwise panic("reportBindingHygieneDiagnostics: hygieneIndex {hygieneIndex} is below project.bindingHygieneDiagnostics.count()"))
+	end 'each'
+
+	try refuseCompile(project)
+end 'reportBindingHygieneDiagnostics'
+
+// --- Source loading ---
+
+// ⭐⭐ **REGISTER EVERY SOURCE THE CALLER NAMED, IN THE ORDER THE CALLER NAMED IT (A3m).** A single
+// `.maxon` file loads directly; a directory loads every `.maxon` file beneath it (except
+// `build.maxon`, and except the subtrees a `.maxonignore` excludes — see `collectMaxonSources`).
+// Throws when a path does not exist or the whole list yields no sources. (`.test`-fragment stripping
+// grows back when the spec runner needs it.)
+//
+// ⭐ **A PATH THE CALLER NAMED IS LOADED WHATEVER A `.maxonignore` SAYS.** `maxon build
+// <ignored>/prog.maxon` compiles that file — it is how `maxon-bin/track0/`'s program is built at all,
+// and how `maxon fmt <file>` reaches a fixture inside a marked directory. The marker says *"do not SWEEP me into somebody else's
+// program"*, never *"this file may not be compiled"*, so it is a property of the WALK and belongs to
+// `collectMaxonSources` alone; naming a path is the explicit act it cannot override.
+//
+// ⚠⚠ **THE ORDER IS THE CALLER'S INPUT, AND IT IS NEVER A POLICY THIS LOADER APPLIES — SO NOTHING
+// HERE SORTS, AND NOTHING BELOW IT SORTS EITHER.** That is exactly the shape `StdlibLoader`'s header
+// asks for (user ruling 2026-07-24): a canonical input order imposed by the loader would HIDE an
+// order dependence instead of surfacing it, so *"where an ORDER genuinely matters it is canonicalized
+// at the point of emission … never by constraining what the loader was handed"*. Before A3m a
+// multi-file build had no way to STATE an order at all — `build` kept the first positional and
+// silently dropped the rest — so the answer came from raw `Directory.list`, i.e. from the staging
+// directory's on-disk state. Five `-either-order` spec pairs were written to pin BOTH walk orders of
+// one program and could pin neither: whichever order the host served, both halves got it, and the
+// pair was two tickets in one lottery (`specs/tuples.md`, `managed-memory-methods.md`,
+// `cross-file-signatures.md`).
+//
+// ⚠ A path named twice — directly and again through a directory that contains it — is registered
+// ONCE, at its FIRST position. That is not a rule this function applies: `fileChanged` upserts by
+// path and pushes onto `sourcePaths` only for a path it has not seen, so re-registering identical
+// content is a no-op all the way down. It is what makes `build a.maxon b.maxon <theirDirectory>`
+// mean "these two first, then whatever else is under there" — the form the spec runner uses to state
+// a case's declared file order while keeping the project rooted at the case's own directory.
+function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
+	for path in paths 'eachNamed'
+		if File.exists(path) 'isFile'
+			try loadOneSourceFile(project, path: path)
+		end 'isFile' else if Directory.exists(path) 'isDir'
+			try loadSourceDirectory(project, dir: path, selection: selection)
+		end 'isDir' else 'notFound'
+			throw CompileError.fileNotFound(path)
+		end 'notFound'
+	end 'eachNamed'
+
+	if project.db.sourcePaths.count() == 0 'noFiles'
+		throw CompileError.noSourceFiles(project.rootPath)
+	end 'noFiles'
+end 'loadSourceFiles'
+
+// ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
+// lies under.** It is what `Project.rootPath` becomes, and through it what
+// `Queries.namespaceAnchorFor` measures every file's MODULE DIRECTORY from (N1), so getting it wrong
+// re-anchors namespaces silently rather than failing.
+//
+// ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is why nothing moves for the builds that
+// existed before A3m.** The narrowing loop's first comparison is `first` against itself, which
+// `isInside` answers true for, so a lone `build <file>` or `build <directory>` keeps the root it has
+// always had — the spelling the caller TYPED, unresolved. Every downstream reader resolves it against
+// the cwd for itself (`namespaceAnchorFor`, `rootIsUnderStdlibDirectory`), and `resolveOutputPath`
+// derives a default output name from it, so resolving it here would silently rewrite that name for
+// every single-file build in the tree.
+//
+// ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
+// trap `Queries.isStdlibSourceFile` records: an absolute path and a relative one naming one file are
+// two different strings, and a root that misses its own members would narrow all the way to the drive.
+//
+// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE DRIVE, IT REFUSES — because `FilePath.parent()`
+// CANNOT EXPRESS A FILESYSTEM ROOT, so the step past the top yields a string that is not a directory
+// and not even absolute** (BATCH10 review). `lastSepPlusOne` returns the index AFTER the separator and
+// `parent` slices `(0, that - 1)`, so on Windows `parent("C:\\a")` is **`"C:"`** — two bytes, which
+// `isAbsolute` denies (its drive arm needs `len >= 3` with a separator at byte 2) — and on POSIX
+// `parent("/a")` is **`""`**.
+//
+// MEASURED on this tree before the guard below: `maxon build C:\a C:\b` answered
+// `error: no source files under C:`. That `"C:"` was becoming `Project.rootPath`, and because
+// `isAbsolute` says it is RELATIVE every downstream `.resolve(cwd)` — `namespaceAnchorFor`,
+// `rootIsUnderStdlibDirectory` — joined it onto the working directory as `<cwd>\C:`. The namespace
+// happened to come back right through `deriveModuleDirectory`'s not-under-root fallback, which is luck
+// and not a mechanism: the value handed downstream named a drive where a directory was promised.
+//
+// ⇒ **The narrowing stops where the path stops being ABSOLUTE**, which is the one property that marks
+// having walked off the top, and the same test answers for both spellings (`"C:"` and `""`). The two
+// platforms now agree: POSIX already refused here — `isInside("")` is false, so it narrowed once more
+// and `parent("")` threw — and Windows silently did not.
+//
+// ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
+// rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
+// so the honest answer is that root — but no `FilePath` in this tree can hold it, since `parent` cuts
+// the separator off and nothing reconstructs it. Modelling filesystem roots is `stdlib/FilePath`'s to
+// do and touches every path consumer; until it happens, a loud refusal naming both ends beats a
+// `Project.rootPath` that `isAbsolute` disowns. Nothing in the harness reaches this: a spec case's
+// paths are all under its own `testDir` (`SpecTestRunner.stageSourceFiles` names it last), and every
+// other caller passes exactly one path.
+export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath throws CompileError
+	let first = try paths.get(0) otherwise panic("commonAncestorOf: an empty path list — `Main.runBuild` refuses a `build` with no positional argument before any of this runs, and every other caller names exactly one path")
+	let cwd = Directory.currentPath()
+
+	// Absolute by construction — `resolve` returns the path itself when it is already absolute and
+	// joins it onto the cwd otherwise, and `Directory.currentPath()` is absolute. That is what makes
+	// "stopped being absolute" below mean "walked off the top" rather than "was never rooted".
+	var resolvedRoot = first.resolve(cwd)
+	var narrowed = false
+	for path in paths 'each'
+		let resolved = path.resolve(cwd)
+		while not resolved.isInside(resolvedRoot) 'narrow'
+			// Monotone, so the paths already checked stay inside: `resolvedRoot` only ever becomes an
+			// ancestor of what it was, and each of them was inside it.
+			let candidate = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
+			if not candidate.isAbsolute() 'walkedOffTheTop'
+				throw CompileError.noCommonRoot(first, other: path)
+			end 'walkedOffTheTop'
+
+			resolvedRoot = candidate
+			narrowed = true
+		end 'narrow'
+	end 'each'
+
+	if narrowed 'severalPaths'
+		return resolvedRoot
+	end 'severalPaths'
+
+	return first
+end 'commonAncestorOf'
+
+// Load every Maxon source file under `dir`, as `selection` defines "source file".
+function loadSourceDirectory(project Project, dir FilePath, selection SourceSelection) throws CompileError
+	var paths = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(dir, into: paths, selection: selection)
+
+	for path in paths 'each'
+		try loadOneSourceFile(project, path: path)
+	end 'each'
+end 'loadSourceDirectory'
+
+// ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
+// file beneath `dir`, subdirectories included, minus the build manifest (a project description, not
+// a compilation unit), minus every subtree a `.maxonignore` marker excludes, and — for an ordinary
+// build — minus every `*.test.maxon`. That last clause is the ONLY thing `selection` varies; see
+// `SourceSelection` for why it is a parameter rather than a second walk.
+//
+// ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
+// and the checkout's `stdlib/` (`loadStdlibSources`) — because that is ONE question, and two copies
+// of the answer are two copies that can come to disagree. The remaining clause this rule owes is
+// named in `loadSourceFiles`: `.test`-fragment stripping. Added to one walk and not the other, it
+// would read as correct at BOTH sites while a file was silently compiled on one side and silently
+// skipped on the other.
+//
+// ⚠ **`maxon fmt` HAS ITS OWN WALK AND IS NOT A THIRD CALLER OF THIS ONE**
+// (`Formatter.collectFormattableFiles`), because it is asking a DIFFERENT question: it formats
+// `*.test.maxon`, which no `selection` here admits alongside a plain build root, and it prunes any
+// subdirectory holding a `.git`, which this walk must NOT do — pruning there would change which files
+// get COMPILED. What the
+// two DO share — `BuildManifestName`, `MaxonSourceExtension`, `holdsIgnoreMarker`, `isIgnoredDirectory`
+// — it reaches through those same names rather than respelling any of them.
+//
+// ⭐⭐ **THE `.maxonignore` RULE, IN FOUR FACTS:**
+//
+//   • **the marker is a FLAG — its contents are never read.** A `.maxonignore` whose text is
+//     `!Skipped.maxon` still excludes `Skipped.maxon`, so the two markers in this repo carrying prose
+//     carry it for the human reading the tree and for nothing else.
+//   • **it excludes its directory AND EVERYTHING BENEATH IT**, at any depth.
+//   • **it applies when the marker sits AT or ABOVE the walk root**, not only below it: `No .maxon
+//     files found` is the answer to both `build <marked>` and `build <marked>/deeper`, because the
+//     per-file test climbs to the filesystem root.
+//   • **a path the CALLER NAMED escapes it entirely** — see `loadSourceFiles`. Not this walk's
+//     business: it only ever sees paths it discovered itself.
+//
+// ⚠ A DIRECTORY entry's upward walk starts at the directory ITSELF, not at `path.parent()`: a walk
+// from the parent asks about the ENCLOSING directory's marker and never about the entry's own, so
+// directory-level exclusion silently does not fire. A FILE entry may start at its parent, because a
+// file's parent IS its directory.
+//
+// It COLLECTS rather than loading, because the callers do different things with the answer: the user
+// walk registers every path it is given, while the stdlib loader filters first and records what it
+// kept.
+//
+// ⚠ IT RETURNS THE DIRECTORIES IT LISTED, WHICH IS A FACT ONLY THE WALK HOLDS. The files it found are
+// in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
+// a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
+// numbers so that a GITIGNORED directory — invisible to git, visible here, and not the same thing as a
+// `.maxonignore`d one, which this walk no longer lists at all — cannot go on being an unattributed
+// constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
+// the recursion rather than re-derived by a second traversal because a second traversal would be free
+// to disagree the moment this one grows an exclusion.
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns DirectoryWalkCount throws CompileError
+	if isIgnoredDirectory(dir) 'notACompilationUnit'
+		return 0 as DirectoryWalkCount
+	end 'notACompilationUnit'
+
+	return try collectMaxonSourcesUnder(dir, into: into, selection: selection)
+end 'collectMaxonSources'
+
+// The recursion, entered only for a directory whose ANCESTRY the entry above has already cleared.
+//
+// ⚠ **THE ANCESTRY QUESTION IS ASKED ONCE, FOR THE ROOT, AND THIS RECURSION MUST NOT RE-ASK IT.** Every
+// directory below an un-ignored root already knows everything above it is clear, so it needs only its
+// OWN marker — which is the whole reason the walk is two functions rather than one. Asking
+// `isIgnoredDirectory` at each level instead would make the marker probes O(directories × depth) where
+// this makes them O(directories), and each probe is a filesystem call on a walk the spec suite runs
+// thousands of times: re-deriving a fact the caller already established is exactly the cost curve this
+// compiler exists to not inherit.
+function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray, selection SourceSelection) returns DirectoryWalkCount throws CompileError
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+
+	// `dir` itself was listed, so a leaf directory answers 1.
+	var walked = 1 as DirectoryWalkCount
+
+	for entry in entries 'each'
+		if Directory.isDirectory(entry) 'isSubdir'
+			// Pruned rather than descended-into-and-filtered, so the exclusion costs ONE probe for a
+			// whole subtree and the "and everything beneath it" half of the rule is structural instead
+			// of being a condition every level has to remember to repeat.
+			if holdsIgnoreMarker(entry) 'ignoredSubtree'
+				continue
+			end 'ignoredSubtree'
+
+			let below = try collectMaxonSourcesUnder(entry, into: into, selection: selection)
+			walked = walked + below
+		end 'isSubdir' else 'isFile'
+			let name = entry.filename()
+			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
+				into.push(entry)
+			end 'isSource'
+		end 'isFile'
+	end 'each'
+
+	return walked
+end 'collectMaxonSourcesUnder'
+
+// Does `dir` ITSELF carry the marker that takes it, and everything beneath it, out of every project?
+//
+// ⚠ **ASKED WITH `File.exists`, SO THE FILESYSTEM DECIDES THE CASING** — insensitively on Windows,
+// exactly on POSIX. Folding the name by hand here would make this walk STRICTER than the filesystem is
+// on POSIX, which is the direction that invents refusals. `Testing/CompilerFreshness.maxon` records the
+// same reasoning for the same name.
+//
+// Shared with `Formatter`'s own walk: a second answer to "which directories are the project's" is how
+// two walks come to disagree about what a build contains.
+export function holdsIgnoreMarker(dir FilePath) returns bool
+	// Interpolated so the argument is a committed `String` — a bare module-`let` constant is ambiguous
+	// between `join`'s two overloads, the same reason `SpecTestRunner.stageStdlibOverlay` spells its
+	// directory name this way.
+	return File.exists(dir.join("{IgnoreMarkerName}"))
+end 'holdsIgnoreMarker'
+
+// Is `dir` excluded — by its own marker, or by one in ANY directory above it?
+//
+// The upward walk is unbounded, which is what makes
+// `maxon build <marked>` and `maxon build <marked>/deeper` both answer "no source files" rather than
+// only the first of the two. Asked ONCE per walk, for the root; see `collectMaxonSourcesUnder`.
+//
+// Exported for `Testing/SpecTestRunner.compilationUnitsAmong`, which has to answer the SAME question
+// about a staged file — and must answer it with this predicate rather than with "did the walk return
+// it", because the walk also drops a `build.maxon`, which naming DOES compile. See there.
+export function isIgnoredDirectory(dir FilePath) returns bool
+	// Resolved first: the climb runs out of parents at a RELATIVE spelling's own first component while
+	// the directories that could hold a marker are still above it — `maxon build maxon-bin` would ask
+	// about nothing at all.
+	//
+	// ⚠ The cost is ONE `Directory.currentPath()` per WALK — not per file, and not per directory, which
+	// is the whole reason the ancestry question is asked here and not inside the recursion. Skipping it
+	// for an already-absolute `dir` was written and then taken back out: `resolve` returns the receiver
+	// unchanged in that case, so the saving is the ARGUMENT alone, and buying two allocations with a
+	// `var` bound directly to a managed parameter is the wrong trade in a walk this shared.
+	var current = dir.resolve(Directory.currentPath())
+
+	while true 'upwards'
+		if holdsIgnoreMarker(current) 'ignored'
+			return true
+		end 'ignored'
+
+		let above = try current.parent() otherwise 'noParentLeft'
+			break
+		end 'noParentLeft'
+
+		// `FilePath.parent()` cannot express a filesystem root — it cuts the separator off, so on
+		// Windows `parent("C:\\x")` is `"C:"` and on POSIX `parent("/x")` is `""`. Neither names a
+		// directory, and `isAbsolute` denies both, which is the one test that marks having walked off
+		// the top on BOTH platforms. `commonAncestorOf` carries the measurement this is taken from.
+		if not above.isAbsolute() 'walkedOffTheTop'
+			break
+		end 'walkedOffTheTop'
+
+		current = above
+	end 'upwards'
+
+	return false
+end 'isIgnoredDirectory'
+
+// Read one source file and register its content with the query system. Exported so stdlib modules
+// are loaded through the identical read+register path a user file takes.
+export function loadOneSourceFile(project Project, path FilePath) throws CompileError
+	let content = try File.readText(path) otherwise throw CompileError.readError(path)
+	fileChanged(project, path: path, content: content)
+end 'loadOneSourceFile'
+
+// --- Output path resolution ---
+
+// The build manifest filename, the Maxon source extension, and the flag file that excludes a
+// directory. Named, not bare literals — all three are file-discovery contracts, so what a source file
+// is called, and what says a directory holds none, are stated once for the whole compiler. Every walk
+// this compiler makes over a source tree reads them from here: `collectMaxonSources` below (which
+// enumerates `stdlib/` as well as the user's own paths), and `Formatter.collectFormattableFiles`, which
+// is `maxon fmt`'s SEPARATE walk — it takes `*.test.maxon`, which a build does not, and prunes `.git`,
+// which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
+// two names. `module` visibility is what lets it, and a second spelling of either name would be a
+// file-discovery contract written down twice.
+module let BuildManifestName = "build.maxon"
+
+module let MaxonSourceExtension = ".maxon"
+
+// ⭐⭐ **A `test` DECLARATION'S FILE IS A SOURCE CATEGORY, NOT A FLAG INSIDE THE FILE** (see
+// `docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). A `*.test.maxon` file carries the project's tests and
+// is therefore NOT swept into an ordinary build: which declarations a build carries is answerable from the
+// file list alone, with nothing to read a body for. `maxon test` names those files explicitly, which is the
+// same act that lets `maxon build <ignored>/prog.maxon` compile an ignored file — naming a path overrides
+// every exclusion this walk applies (`loadSourceFiles`), and it is how the spec runner compiles a case's
+// `example.test.maxon` at all.
+//
+// ⚠ **MATCHED CASE-INSENSITIVELY**, so `Suite.TEST.maxon` is a test file and does not join an ordinary
+// build. A byte-exact match would be one clause NARROWER, which is the shape
+// `scripts/stale-binary-gate.sh`'s CHECK 5c exists to catch.
+let TestSourceSuffix = ".test.maxon"
+
+// ⭐⭐ **WHICH KIND OF SOURCE FILE A WALK IS BEING ASKED FOR — the ONE thing that differs between the two
+// questions `collectMaxonSources` answers.**
+//
+// ⛔ **A SECOND WALK WAS THE ALTERNATIVE AND IT IS THE ONE THIS FILE'S HEADER ALREADY REFUSES.** That header
+// says of the `.maxonignore` clause that both of a compile's directory walks go through one function
+// "because that is ONE question, and two copies of the answer are two copies that can come to disagree" —
+// and every clause a test-file walk needs is that same list: the build manifest, the `.maxon` extension,
+// the pruned `.maxonignore` subtrees, the directory count it returns. A `collectTestSources` beside this
+// one would restate all four to vary the fifth, and the day a sixth exclusion lands it goes into whichever
+// copy the author was looking at.
+//
+// ⇒ The selection is a PARAMETER, and it is the only thing the two answers differ by.
+export enum SourceSelection
+	// An ordinary build: `*.test.maxon` is NOT part of the program. This is the default at every existing
+	// call site and the reason the exclusion exists at all — a test file joins a build only when something
+	// asks for it by name or asks for it here.
+	productionOnly
+	// A `maxon test` build: the test files ARE the program, alongside everything an ordinary build compiles.
+	// The tests still have to be compiled WITH their project, because a `test` body calls the very
+	// declarations that project makes.
+	productionAndTests
+end 'SourceSelection'
+
+// Does this walk want a file with this name? Every OTHER clause of "is this a source file" is asked at the
+// walk itself and is the same for both selections; this is the one that varies, so it is the one that is
+// asked here — through `isTestSourceName`, so neither answer restates the rule.
+function selectionAdmits(selection SourceSelection, name String) returns bool
+	return match selection 'selection'
+		productionOnly gives not isTestSourceName(name)
+		productionAndTests gives true
+	end 'selection'
+end 'selectionAdmits'
+
+// ⭐ **THE ONE PLACE THAT ANSWERS "IS THIS FILE A TEST FILE?"** — the WALK asks it to leave such a file out
+// of an ordinary build, and `Parser.readTestDeclarationHead` asks it to refuse a `test` written anywhere
+// else (E2058). Two readers, one rule: a walk and a diagnostic that disagreed about which files may hold a
+// test would let a declaration be legal in a file no build compiles.
+export function isTestSourceName(name String) returns bool
+	return name.toLower().endsWith(TestSourceSuffix)
+end 'isTestSourceName'
+
+// ⭐ **THE NAME A FILE WOULD HAVE TO TAKE FOR A `test` TO BE LEGAL IN IT** — the fix E2058 names, derived
+// from the rule above rather than spelled a second time in the diagnostic. `regular.maxon` becomes
+// `regular.test.maxon`; a name carrying no `.maxon` at all (a path the caller named outright) simply gains
+// the whole suffix, which is still the true answer to "what would this have to be called?".
+export function testSourceNameFor(name String) returns String
+	if not name.endsWith(MaxonSourceExtension) 'noExtensionToReplace'
+		return "{name}{TestSourceSuffix}"
+	end 'noExtensionToReplace'
+
+	let bytes = name.toByteArray()
+	let stem = try bytes.slice(0, endIndex: bytes.count() - MaxonSourceExtension.toByteArray().count()) otherwise panic("testSourceNameFor: '{name}' ends with '{MaxonSourceExtension}', so it is at least that many bytes long")
+	return "{String.from(stem)}{TestSourceSuffix}"
+end 'testSourceNameFor'
+
+// A directory holding this file is not part of any program, and neither is anything beneath it. The
+// file's CONTENTS are never read; `collectMaxonSources` owns the rule.
+// EXPORTED because `maxon test` WRITES one: its staged tree lives under the project it copied, and
+// this marker is the only thing that keeps the copy out of that project's own walk (see
+// `TestCommand.prepareTestBuildRoot`). Spelled a second time there, a mismatch would be silent —
+// the marker would simply never be found.
+export let IgnoreMarkerName = ".maxonignore"
+
+// Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
+// produces and what `Project.stdlibSourcePaths` keeps. The ORDER is the fact this name carries and
+// `FilePathArray` does not, which is why it is its own alias and not a second spelling of that one.
+//
+// ⛔ **IT USED TO GIVE A SECOND REASON AND THAT REASON IS MEASURED FALSE (G17)**: *"whose name
+// collides with a member typealias inside stdlib's `type Directory` and so does not resolve from every
+// compiler file"*. There was no collision to have. A nested `typealias` was keyed
+// `Directory.FilePathArray` and under nothing else, so it could not contest a bare name at all — and the
+// shape the claim describes (one file exporting `typealias FilePathArray = Array with FilePath`, a
+// second naming it bare, a third calling `Directory.list`) COMPILES AND RUNS. `flat-namespace check`
+// reads the two as OK for the same reason: they are
+// declared in different projects, and only one of them is top-level.
+//
+// What WAS true is the thing that claim was mistaken for, and it is now fixed: `Directory`'s member had
+// no FILE-SCOPE spelling of any kind, so `FilePathArray` resolved only where `QueryDatabase`'s own
+// export was in the program — which is every compiler file and no other program, including the
+// extracted spec harness. `Parser.publishNestedGenericAlias` gives such a member its bare key; the name
+// here stays for the ordering fact above.
+export typealias MaxonSourcePathArray = Array with FilePath
+
+// ⭐⭐ **ONE STAGED SOURCE THIS COMPILE ITSELF WROTE, AND THE RESERVED NAMES IT MINTED INTO IT.** A
+// caller that GENERATES Maxon source (`TestDispatcher.stageTestBuild` is the only one) hands the
+// compile a row per generated file, and the two reserved-name doors read it — see
+// `Parser.fileMayUseReservedNames` for the call side and `Parser.requireUnreservedName` for the
+// declaration side.
+//
+// ⛔⛔ **THE NAMES ARE HERE BECAUSE A STAGED FILE IS HALF THE AUTHOR'S BYTES.** `maxon test` appends
+// its dispatcher to a COPY of the author's own `*.test.maxon`, so "this compiler wrote this file" is
+// true of the file and false of most of its lines. A per-FILE exemption on the DECLARATION door
+// therefore hands the author the reserved space: MEASURED before this list existed, an author's
+// `function __sneaky()` in a `*.test.maxon` compiled clean under `maxon test` while `maxon build`
+// refused the identical file with E2051. The stager knows exactly which names it minted; nothing
+// else may claim them.
+//
+// ⛔ **IT IS KEYED ON THE NAME AND NOT ON A LINE THRESHOLD.** "Everything below the author's last
+// line" is true only because the dispatcher is APPENDED, and it would invert silently the day
+// anything is prepended — which is a property of the generator, not of the door that trusts it.
+export type CompilerWrittenSource
+	// The staged file, spelled EXACTLY as the caller also puts it in the build's input list — so the
+	// loader registers this very spelling and the lookup is a `FilePath.equals` rather than a second
+	// derivation of one path.
+	export let path as FilePath
+	// The reserved names this compile declared in that file. NEVER EMPTY: a generated fragment always
+	// declares at least the symbol its caller reaches it by, and `stageTestBuild` refuses to stage one
+	// that does not — which is what lets emptiness mean "the author wrote every byte of this file"
+	// rather than needing a second flag to say so.
+	export let mintedNames as ByteArrayArray
+
+	export static function create(path FilePath, mintedNames ByteArrayArray) returns CompilerWrittenSource
+		return Self{path: path, mintedNames: mintedNames}
+	end 'create'
+end 'CompilerWrittenSource'
+
+export typealias CompilerWrittenSourceArray = Array with CompilerWrittenSource
+
+// ⭐⭐ **ONE SOURCE THIS COMPILE READ FROM A COPY, AND THE NAME EVERY DIAGNOSTIC ABOUT IT MUST USE
+// INSTEAD.** A caller that compiles a STAGED TREE rather than the user's own (`TestDispatcher
+// .stageTestBuild` is the only one) hands the compile a row per copied file, and the single diagnostic
+// sink rewrites the path through it — see `Project.reportDiagnostic` and `Diagnostic.reportedUnder`.
+//
+// ⛔⛔ **WITHOUT IT A COMPILE ERROR NAMES A FILE THE AUTHOR NEVER WROTE AND THE NEXT RUN DELETES.**
+// MEASURED 2026-09-02: an author's reserved-name declaration under `maxon test` was reported at
+// `<project>/.maxon/test/staged/sneaky.test.maxon:11:10` — a path that exists only between two runs,
+// under a directory this compiler itself marks as not part of the project. A diagnostic a reader cannot
+// open is not a diagnostic, so the author's own file is what must be named for those bytes.
+//
+// ⛔ **THE WHOLE FILE MAPS, INCLUDING THE LINES THE STAGER APPENDED, AND THAT IS A DECISION MADE
+// AGAINST A MEASUREMENT.** This row first carried a third field — the author's last line — so that a
+// diagnostic anchored in the appended dispatcher would keep the staged spelling and stay openable. It
+// had to go: the lexer emits its END-OF-INPUT sentinel one line PAST the last line of the file, so an
+// unterminated `function` in an ORDINARY copied source — a file with no appended bytes anywhere — landed
+// above the threshold and kept the staged path. MEASURED 2026-09-02 on a two-line `helper.maxon`:
+// `E2007 …/.maxon/test/staged/helper.maxon:3:1: Unexpected end of input`. A threshold that misfires on
+// the commonest diagnostic in the commonest file is worse than none.
+//
+// ⚠ **WHAT IS GIVEN UP, STATED:** a diagnostic genuinely anchored in the generated dispatcher now names
+// the author's file at a line their file does not reach. That is a bug in what this compiler WROTE, its
+// reader is a compiler developer, and the staged tree is sitting beside the project for them to open.
+export type StagedSourceOrigin
+	// The copy this compile READ, spelled exactly as the caller also puts it in the build's input list
+	// — so the loader registers this very spelling and the lookup is a `FilePath.equals` rather than a
+	// second derivation of one path. `CompilerWrittenSource.path` is the same spelling for the same
+	// reason.
+	export let stagedPath as FilePath
+	// The author's own file, as the project walk produced it. NOT display-formatted: The compiler renders every
+	// diagnostic path with the HOST's separators (a Windows `build temp/x.maxon` says
+	// `temp\x.maxon:3:9`), and a path spelled otherwise here would make `maxon test`'s diagnostics the
+	// one place in this compiler that reads differently from every other command's.
+	export let reportedPath as FilePath
+
+	export static function create(stagedPath FilePath, reportedPath FilePath) returns StagedSourceOrigin
+		return Self{stagedPath: stagedPath, reportedPath: reportedPath}
+	end 'create'
+end 'StagedSourceOrigin'
+
+export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
+
+// How many directories one `collectMaxonSources` call LISTED — itself plus everything it recursed
+// into. Named for that rather than for a tree's shape: it is the walk's own reach, which is what an
+// instrument comparing two checkouts needs, and not "how many directories exist" (a walk that grows an
+// exclusion stops answering that question and keeps answering this one).
+//
+// From 0, and 0 means exactly one thing: the directory the walk was handed is EXCLUDED — by its own
+// `.maxonignore` or by one above it — so the walk listed nothing, not even the root. Every other call
+// lists at least the directory it was handed and therefore answers 1 or more.
+typealias DirectoryWalkCount = int(0 to u64.max)
+
+// The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
+// instead of a scan — and each pair a scan would compare is about four String allocations, because
+// `FilePath.equals` canonicalizes both sides (on Windows it clones and lower-cases each).
+export typealias MaxonSourcePathSet = Set with FilePath
+
+// Extension of the `--emit-ir` Target-IR sidecar written beside the exe. A format
+// contract shared with the spec runner (which reads back the same file), so it is
+// named here rather than spelled inline.
+let IrFileExtension = ".ir"
+
+// Resolve the output executable path: an explicit `-o` override wins; otherwise
+// the output is the input's base name with the platform executable extension
+// (single-file build → next to the source; every other shape — a directory, or
+// several paths at once — → the FIRST registered source file's base name, which
+// for a list is the first path the caller named). Deriving a directory build's name from a `build.maxon`
+// `build("...")` manifest grows at M2, when directory builds become the norm;
+// the M1 verification gate is a single-file build (`basic.maxon` → `basic.exe`).
+//
+// ⚠ An override that ALREADY carries the target's extension is used as it is. This appended it
+// unconditionally, so `-o stage2.exe` wrote `stage2.exe.exe` — measured 2026-08-25 while timing the
+// self-host chain, where the doubled name then had to be spelled back into every `cmp` and profile
+// command. The bare spelling (`-o stage2` → `stage2.exe`) is unchanged, and on a host whose extension
+// is empty the two spellings were always one.
+function resolveOutputPath(project Project, outputOverride String) returns FilePath throws CompileError
+	let ext = executableExtension(project.target)
+
+	if not outputOverride.isEmpty() 'hasOverride'
+		var outputPath = "{outputOverride}{ext}"
+		if outputOverride.endsWith(ext) 'overrideCarriesExt'
+			outputPath = outputOverride
+		end 'overrideCarriesExt'
+
+		return try FilePath.from(outputPath) otherwise panic("resolveOutputPath: invalid -o/--output path '{outputOverride}'")
+	end 'hasOverride'
+
+	if File.exists(project.rootPath) 'singleFile'
+		return project.rootPath.changeExtension(ext)
+	end 'singleFile'
+
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("resolveOutputPath: sourcePaths empty — loadSourceFiles should have thrown noSourceFiles")
+	return firstPath.changeExtension(ext)
+end 'resolveOutputPath'

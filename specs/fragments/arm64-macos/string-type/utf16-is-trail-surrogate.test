@@ -1,0 +1,46 @@
+// Test: utf16-is-trail-surrogate
+function main() returns ExitCode
+	// 0xDE00 = 56832 (low surrogate for 😀)
+	if utf16IsTrailSurrogate(56832) 'c4'
+		print("1\n")
+	end 'c4'
+	if utf16IsTrailSurrogate(55357) 'c5'
+		print("0\n")
+	end 'c5'
+	if utf16IsTrailSurrogate(65) 'c6'
+		print("0\n")
+	end 'c6'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  andrhs:
+    arm64.movImm x0, 1
+  __il_cont#7:
+    arm64.cbz x0, __rc_ok#18
+  c4:
+    arm64.leaRdata x0, __str_rec_2  ; "1\x0a"
+    arm64.bl print
+  __rc_ok#18:
+    arm64.movImm x0, 0
+  __il_cont#14:
+    arm64.cbz x0, __rc_ok#25
+  c5:
+    arm64.leaRdata x0, __str_rec_3  ; "0\x0a"
+    arm64.bl print
+  __rc_ok#25:
+    arm64.movImm x0, 0
+  __il_cont#21:
+    arm64.cbz x0, ifcont
+  c6:
+    arm64.leaRdata x0, __str_rec_3  ; "0\x0a"
+    arm64.bl print
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

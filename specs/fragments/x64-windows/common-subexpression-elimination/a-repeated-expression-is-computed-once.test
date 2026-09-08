@@ -1,0 +1,56 @@
+// Test: a-repeated-expression-is-computed-once
+typealias Word = int(i64.min to i64.max)
+
+function work(x Word, y Word) returns Word
+	let a = x * 31 + y
+	let b = x * 31 + y
+	let c = x * 31 + y
+	return a + b + c
+end 'work'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 4 'feed'
+		seed = seed + work(i, y: i + 1)
+	end 'feed'
+	if seed != 588 'wrongSum'
+		return 1
+	end 'wrongSum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.leaRegRegImm32 rdx, rcx, 1
+  __il_body:
+    x64.imulRegRegImm32 rcx, rcx, 31
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rsi, rcx, rcx
+    x64.leaRegRegReg rcx, rsi, rcx
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rcx
+  forstep:
+    x64.movRegReg rcx, rdx
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, 588
+    x64.jcc equal, ifcont
+  wrongSum:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

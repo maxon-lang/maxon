@@ -1,0 +1,63 @@
+// Test: module-union-payload-free-union-stays-scalar
+union Mode
+	off
+	on
+end 'Mode'
+
+var mode = Mode.off
+
+function seed()
+	mode = Mode.on
+end 'seed'
+
+function main() returns ExitCode
+	seed()
+	return match mode 'm'
+		off gives 0
+		on gives 6
+	end 'm'
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __data_mode@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 1
+    arm64.leaGlobal x1, __data_mode
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+  __il_cont:
+    arm64.leaGlobal x0, __data_mode
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.movImm x0, 6
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at module-union-payload-free-union-stays-scalar.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}

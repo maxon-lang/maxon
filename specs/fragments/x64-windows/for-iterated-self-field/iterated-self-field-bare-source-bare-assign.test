@@ -1,0 +1,31 @@
+// Test: iterated-self-field-bare-source-bare-assign
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Self
+		var a = IntArray.create()
+		a.push(5)
+		a.push(7)
+		return Self{items: a}
+	end 'create'
+
+	function sum() returns Int
+		var total = 0
+		for it in items 'scan'
+			items = IntArray.create()
+			total = total + it
+		end 'scan'
+		return total
+	end 'sum'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	return b.sum() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2013: <fragment>:18:4: cannot assign to immutable variable: 'items'

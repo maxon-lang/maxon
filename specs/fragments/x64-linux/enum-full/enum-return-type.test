@@ -1,0 +1,61 @@
+// Test: enum-return-type
+enum Result
+	success
+	failure
+end 'Result'
+
+function getResult(succeed bool) returns Result
+	if succeed 'check'
+		return Result.success
+	end 'check'
+	return Result.failure
+end 'getResult'
+
+function main() returns ExitCode
+	let r = getResult(true)
+	let result = match r 'handle'
+		success gives 1
+		failure gives 0
+	end 'handle'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  check:
+    x64.movRegImm32 rax, 0
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.movRegImm32 r8, 0
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at enum-return-type.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

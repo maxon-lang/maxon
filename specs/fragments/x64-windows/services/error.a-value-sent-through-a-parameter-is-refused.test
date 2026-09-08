@@ -1,0 +1,27 @@
+// Test: error.a-value-sent-through-a-parameter-is-refused
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, buf String)
+	h.keep(buf)
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	forward(h, buf: "hello")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send

@@ -1,0 +1,48 @@
+/// Access to command line arguments passed to the program.
+/// @category System
+public type CommandLine
+	typealias StringArray = Array with String
+
+	/// Get all command line arguments.
+	/// Returns fresh array on each call.
+	public static function args() returns StringArray
+		let count = __Builtins.commandLineCount()
+		var result = StringArray.create()
+		for i in 0 upto count 'loop'
+			let managed = __Builtins.commandLineArg(i)
+			result.push(String.init(managed))
+		end 'loop'
+		return result
+	end 'args'
+
+	/// Extract the value from a "--key=value" argument string.
+	/// Returns EVERYTHING after the first "=" sign, including any further "=".
+	/// Throws StringError.notFound if "=" is not present.
+	///
+	/// It used to `split("=")` and return part 1 — which is the text between the
+	/// FIRST and SECOND "=", not the value. So any option value containing an "="
+	/// was SILENTLY TRUNCATED at the second one, and the caller could not tell.
+	/// It cost a committed row of `docs/optimization-log.md`: a `--note` explaining
+	/// why an allocation count moved was cut off mid-sentence at "N=128", so a
+	/// record whose entire job is to say WHY quietly stopped saying it. The doc
+	/// comment here was right all along; the code was not.
+	public static function optionValue(arg String) returns String throws StringError
+		// Only the FIRST "=" separates; every later one belongs to the value.
+		let optionSeparator = "="
+		let separator = try arg.findFirst(optionSeparator) otherwise throw StringError.notFound
+		let valueStart = try arg.indexAfter(separator) otherwise throw StringError.notFound
+		return arg.slice(valueStart, endIndex: arg.endIndex())
+	end 'optionValue'
+
+	/// Search the process command line for "--name=value" and return the value.
+	/// Throws StringError.notFound if no matching option is found.
+	public static function getOptionValue(name String) returns String throws StringError
+		let prefix = "--{name}="
+		for arg in args() 'scan'
+			if arg.startsWith(prefix) 'match'
+				return try optionValue(arg)
+			end 'match'
+		end 'scan'
+		throw StringError.notFound
+	end 'getOptionValue'
+end 'CommandLine'

@@ -1,0 +1,30 @@
+// Test: error.const-fold-union-case-into-enum-field
+typealias Num = int(0 to 1000)
+
+enum Colour
+	red
+	green
+end 'Colour'
+
+union Status
+	idle
+	busy(n Num)
+end 'Status'
+
+type Mixed
+	export var c as Colour
+	export var n as Num
+
+	export static function create(c Colour, n Num) returns Mixed
+		return Self{c: c, n: n}
+	end 'create'
+end 'Mixed'
+
+let Bad = Mixed.create(Status.idle, n: 4)
+
+function main() returns ExitCode
+	return Bad.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: :23:11: argument type mismatch for 'c': expected 'Colour', got 'Status'

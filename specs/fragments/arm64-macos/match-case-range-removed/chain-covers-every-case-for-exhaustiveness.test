@@ -1,0 +1,32 @@
+// Test: chain-covers-every-case-for-exhaustiveness
+typealias Code = int(0 to 125)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function pick(c Color) returns Code
+	match c 'c'
+		red or
+			green or
+			blue then return 4
+	end 'c'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Color.blue)
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm:
+    arm64.movImm x0, 4
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

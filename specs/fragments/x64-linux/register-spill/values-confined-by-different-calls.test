@@ -1,0 +1,178 @@
+// Test: values-confined-by-different-calls
+function sink(x Integer) returns Integer
+	return x
+end 'sink'
+
+function pick(k Integer) returns Integer
+	let v1 = k + 11
+	let v2 = k + 22
+	let v3 = k + 33
+	let v4 = k + 44
+	let v5 = k + 55
+	let v6 = k + 66
+	var out = 0
+	if k == 1 'b1'
+		let t = sink(1)
+		out = v1 + t
+	end 'b1' else if k == 2 'b2'
+		let t = sink(2)
+		out = v2 + t
+	end 'b2' else if k == 3 'b3'
+		let t = sink(3)
+		out = v3 + t
+	end 'b3' else if k == 4 'b4'
+		let t = sink(4)
+		out = v4 + t
+	end 'b4' else if k == 5 'b5'
+		let t = sink(5)
+		out = v5 + t
+	end 'b5' else 'b6'
+		let t = sink(6)
+		out = v6 + t
+	end 'b6'
+	return out
+end 'pick'
+
+function main() returns ExitCode
+	if pick(1) != 13 'a1'
+		return 1
+	end 'a1'
+	if pick(2) != 26 'a2'
+		return 2
+	end 'a2'
+	if pick(3) != 39 'a3'
+		return 3
+	end 'a3'
+	if pick(4) != 52 'a4'
+		return 4
+	end 'a4'
+	if pick(5) != 65 'a5'
+		return 5
+	end 'a5'
+	if pick(6) != 78 'a6'
+		return 6
+	end 'a6'
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 rax, rcx, 11
+    x64.leaRegRegImm32 rdx, rcx, 22
+    x64.leaRegRegImm32 rsi, rcx, 33
+    x64.leaRegRegImm32 rdi, rcx, 44
+    x64.leaRegRegImm32 r8, rcx, 55
+    x64.leaRegRegImm32 r9, rcx, 66
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, ifelse#2
+  __il_cont#16:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont#15
+  ifelse#2:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, ifelse#4
+  __il_cont#18:
+    x64.leaRegRegImm32 rax, rdx, 2
+    x64.jmp ifcont#14
+  ifelse#4:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc notEqual, ifelse#6
+  __il_cont#20:
+    x64.leaRegRegImm32 rax, rsi, 3
+    x64.jmp ifcont#14
+  ifelse#6:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc notEqual, ifelse#8
+  __il_cont#22:
+    x64.leaRegRegImm32 rax, rdi, 4
+    x64.jmp ifcont#14
+  ifelse#8:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc notEqual, __il_cont#26
+  __il_cont#24:
+    x64.leaRegRegImm32 rax, r8, 5
+    x64.jmp ifcont#14
+  __il_cont#26:
+    x64.leaRegRegImm32 rax, r9, 6
+  ifcont#14:
+    x64.movRegReg r8, rax
+  ifcont#15:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 13
+    x64.jcc equal, ifcont#2
+  a1:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 26
+    x64.jcc equal, ifcont#4
+  a2:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 39
+    x64.jcc equal, ifcont#6
+  a3:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 52
+    x64.jcc equal, ifcont#8
+  a4:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 65
+    x64.jcc equal, ifcont#10
+  a5:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 rcx, 6
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 78
+    x64.jcc equal, ifcont#12
+  a6:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

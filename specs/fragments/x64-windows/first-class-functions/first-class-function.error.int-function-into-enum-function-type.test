@@ -1,0 +1,22 @@
+// Test: first-class-function.error.int-function-into-enum-function-type
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ColorFn = function(Color) returns Color
+
+function bump(n Integer) returns Integer
+	return n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let f = bump as ColorFn
+	return f(Color.red) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3009: <fragment>:17:15: function type mismatch in cast: expected 'fn(Color) returns Color', got 'fn(int) returns int'

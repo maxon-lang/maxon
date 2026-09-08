@@ -1,0 +1,25 @@
+// Test: error.a-reply-in-an-integer-parameter
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function takesInt(n Integer) returns Integer
+	return n
+end 'takesInt'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return takesInt(h.total()) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)'

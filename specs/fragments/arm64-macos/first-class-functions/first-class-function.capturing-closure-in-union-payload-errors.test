@@ -1,0 +1,24 @@
+// Test: first-class-function.capturing-closure-in-union-payload-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+union Action
+	run(op UnaryOp)
+	idle
+end 'Action'
+
+function make(bump Integer) returns Action
+	return Action.run(function(n Integer) gives n + bump)
+end 'make'
+
+function main() returns ExitCode
+	let a = make(20)
+	match a 'go'
+		run then return 42
+		idle then return 1
+	end 'go'
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:12:54: cannot store a closure that captures in payload 'op' of case 'run': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

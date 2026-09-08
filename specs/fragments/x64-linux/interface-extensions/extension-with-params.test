@@ -1,0 +1,79 @@
+// Test: extension-with-params
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Scalable
+	function base() returns Integer
+end 'Scalable'
+
+extension Scalable
+	function scale(factor Integer) returns Integer
+		return self.base() * factor
+	end 'scale'
+end 'Scalable'
+
+type Amount implements Scalable
+	let amount as Integer
+
+	function base() returns Integer
+		return amount
+	end 'base'
+
+	static function create(amount Integer) returns Self
+		return Self{amount: amount}
+	end 'create'
+end 'Amount'
+
+function main() returns ExitCode
+	let a = Amount.create(7)
+	return a.scale(6)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Amount.scale {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+  __il_cont:
+    x64.imulRegReg r8, r8, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rdx, 6
+    x64.callDirect Amount.scale
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at extension-with-params.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

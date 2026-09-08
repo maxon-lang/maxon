@@ -1,0 +1,37 @@
+// Test: error.opaque-type-parameter-at-a-boxed-union-argument-explains-itself
+typealias Integer = int(i64.min to i64.max)
+
+union Message
+	silent
+	text(body String)
+end 'Message'
+
+function takeMsg(m Message) returns Integer
+	return match m 'm'
+		silent gives 1
+		text(b) gives b.count()
+	end 'm'
+end 'takeMsg'
+
+type Outer uses T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		return takeMsg(t) + n
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build(42)}")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:10: argument type mismatch for 'm': expected 'Message', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known

@@ -1,0 +1,41 @@
+// Test: keyword-named-enum-case-through-Self
+enum Kw
+	while
+	end
+
+	export function pick() returns Kw
+		if self == Self.while 'w'
+			return Self.end
+		end 'w'
+		return Self.while
+	end 'pick'
+end 'Kw'
+
+function main() returns ExitCode
+	let k = Kw.while
+	if k.pick() == Kw.end 'ok'
+		return 42
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  w:
+    x64.movRegImm32 rax, 1
+  __il_cont:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

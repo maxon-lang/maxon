@@ -1,0 +1,18 @@
+// Test: error.otherwise-outside-ranged-return
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function getScore() returns Score throws MyError
+	return 50 as Score
+end 'getScore'
+
+function main() returns ExitCode
+	let v = try getScore() otherwise -1
+	return v
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:13:10: otherwise value -1 is outside the range of 'Score' (int(0 to 100))

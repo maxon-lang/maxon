@@ -1,0 +1,33 @@
+// Test: survives-dead-function-elimination
+// --- file: kept.test.maxon
+test 'is kept alive'
+	throw TestFailure.assertion
+end 'is kept alive'
+
+// --- file: main.maxon
+typealias ExitCode = int(0 to 125)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @__test_is_kept_alive {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

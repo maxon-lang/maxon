@@ -1,0 +1,22 @@
+// Test: error.resize-struct-element
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(10))
+	arr.resize(3)
+	return arr.count()
+end 'main'
+---
+CompilerError:
+error E3106: <fragment>:17:6: 'resize' cannot grow an array of 'Slot': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'

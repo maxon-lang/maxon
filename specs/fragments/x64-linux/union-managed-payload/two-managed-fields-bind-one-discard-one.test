@@ -1,0 +1,85 @@
+// Test: two-managed-fields-bind-one-discard-one
+
+union Pair
+	none
+	both(a String, b String)
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.both("bound first string long enough to heap", b: "discarded second string also heap")
+	match p 'check'
+		none then return 0
+		both(a, _) then print(a)
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "bound first string long enough to heap"
+    x64.leaRegRdata r12, [rip + __str_rec_3]  ; "discarded second string also heap"
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 16], r8
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Pair
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+  matchcont:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Pair
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

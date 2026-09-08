@@ -1,0 +1,21 @@
+// Test: error.a-set-key-array-spelled-inline-is-refused-the-same-way
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+typealias OpaqueArrSet = Set with (Array with Opaque)
+
+function main() returns ExitCode
+	var s = OpaqueArrSet.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Element' of 'Set'
+error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Element' of 'Set'

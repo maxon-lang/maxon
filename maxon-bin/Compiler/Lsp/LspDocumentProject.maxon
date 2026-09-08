@@ -1,0 +1,83 @@
+// ⭐⭐ **THE COMPILER'S VIEW OF ONE OPEN BUFFER — the `Project` a document being edited makes, and the
+// path that document is known by.**
+//
+// Two features ask for it and they must get the same one: `textDocument/completion` asks the corpus
+// whether a member is VISIBLE from this file, and `textDocument/publishDiagnostics` asks the pipeline
+// what is WRONG with it. Two constructions would be two projects free to disagree about which file the
+// buffer even is, and a visibility answer is asked ON BEHALF OF a file.
+//
+// ⛔ **NOTHING IS READ FROM DISK, AND THAT IS FORCED RATHER THAN CHOSEN.** The document's text arrived
+// over the wire, and in general the file does not exist on disk at all — an unsaved buffer, a uri a
+// client invented. `loadProject` walks the filesystem for its sources, so it cannot serve here;
+// `fileChanged` registers content directly with the query database, which is the same door
+// `verify-recheck` edits a buffer through when it measures the editor scenario.
+//
+// ⚠ **ONE BUFFER, NOT A PROJECT ON DISK.** The server holds the open documents and nothing else, so the
+// compile sees this file plus `stdlib/` — never the user's other sources. A diagnostic that depends on
+// what a sibling file declares is therefore answered about a program the author did not write; the cure
+// is project discovery, which this server does not have.
+
+// `file:` — the one uri scheme a document this server checks can carry.
+let LspFileUriScheme = "file://"
+
+let LspUriRootSlash = "/"
+
+let LspDriveLetterSeparator = ":"
+
+// `/C` — the slash and the one letter in front of a `file:` uri's drive-letter colon.
+let RootedDriveLetterLength = 2
+
+// ⚠ **THE PATH IS AN IDENTITY, NOT A LOCATION — nothing ever opens it.** It answers `isVisibleFrom`'s
+// question (is the file asking the same file that declared the member, and is it in the same module
+// directory) and it is the compile ROOT, which is what a single-file `maxon build <file>` uses too;
+// neither reads a byte from it. So the scheme is stripped and a Windows drive letter is un-rooted
+// (`file:///C:/x` names `C:/x`, not `/C:/x`), and percent-escapes are left exactly as the client wrote
+// them: two uris that differ by an escape name two different documents to this server either way.
+module function lspDocumentPath(uri String) returns FilePath
+	var text = uri
+
+	if text.startsWith(LspFileUriScheme) 'fileScheme'
+		text = text.replaceFirst(LspFileUriScheme, with: "")
+	end 'fileScheme'
+
+	if driveRooted(text) 'windowsDriveLetter'
+		text = text.replaceFirst(LspUriRootSlash, with: "")
+	end 'windowsDriveLetter'
+
+	return try FilePath.from(text) otherwise panic("lspDocumentPath: '{uri}' does not spell a path, and every request that reaches here named a document this server has open")
+end 'lspDocumentPath'
+
+// `/C:/…` — a `file:` uri roots an absolute Windows path with a slash the path itself does not have.
+function driveRooted(text String) returns bool
+	let parts = text.split(LspDriveLetterSeparator)
+	if parts.count() < 2 'noDriveLetter'
+		return false
+	end 'noDriveLetter'
+
+	let head = try parts.get(0) otherwise panic("driveRooted: a split yielding two parts has a first one")
+	return head.startsWith(LspUriRootSlash) and head.count() == RootedDriveLetterLength
+end 'driveRooted'
+
+// The project an open buffer makes, or nothing when this compiler cannot assemble one. A failure is a
+// broken installation — no `stdlib/` beside the binary, or one that will not load — and each caller
+// says what it does with the absence; there is no half-built project to hand back.
+module union LspDocumentProject
+	loaded(project Project)
+	unavailable
+end 'LspDocumentProject'
+
+// A `Project` holding exactly this buffer plus `stdlib/`.
+//
+// ⚠ **THE ROOT IS THE DOCUMENT ITSELF, WHICH IS WHAT A SINGLE-FILE BUILD USES.**
+// `Compiler.commonAncestorOf` hands one input path straight back, so `maxon build <file>` roots at the
+// file — and every namespace this compile derives is measured from that root. A different root here
+// would give the same buffer a different namespace under the editor than under a build.
+module function lspDocumentProject(path FilePath, content String) returns LspDocumentProject
+	let stdlibDir = try locateStdlibDir() otherwise return LspDocumentProject.unavailable
+	var project = createProject(path, target: detectHostTarget(), stdlibDir: stdlibDir)
+
+	fileChanged(project, path: path, content: content)
+
+	try loadStdlibSources(project) otherwise return LspDocumentProject.unavailable
+	return LspDocumentProject.loaded(project)
+end 'lspDocumentProject'

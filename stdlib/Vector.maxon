@@ -1,0 +1,145 @@
+/// Fixed-size collection with stack allocation for small data.
+/// @category Collections
+// Bounded exactly as `stdlib/Array.maxon`'s is, and for the same reason: the backing
+// `__ManagedMemory` takes lengths and indices as a SIGNED `BufferCoordinate`. A vector is smaller still — its count is
+// `countof(Self)` — but the bound that is TRUE of the type is the buffer's, and an honest upper bound
+// is what makes this door guarded and pins an ordering comparison on it to the signed reading.
+typealias ElementIndex = int(0 to u64.max)
+
+public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (Element, VectorIter)
+	typealias ElementMemory = __ManagedMemory with Element
+	typealias VectorIter = ArrayIterator with Element
+	var managed as ElementMemory  // Storage for elements
+
+	// BuiltinArrayLiteral conformance - initialize Vector from managed memory directly
+	// Called by the compiler for `Vector from [1, 2, 3]` syntax
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	/// Create a zero-initialized vector with capacity from the typealias
+	public static function create() returns Self
+		return Self{}
+	end 'create'
+
+	// =========================================================================
+	// Properties
+	// =========================================================================
+
+	/// Get the fixed size of the vector.
+	///
+	/// ⭐ IT ANSWERS FROM THE TYPE, NOT FROM THE RECORD. The count is a coordinate of the instance —
+	/// a `Vector with 3 Int` is a different type from a `Vector with 4 Int` — so `countof(Self)` is
+	/// the number itself, folded to a literal by both compilers, and no load happens at all.
+	///
+	/// ⛔ `managed.length()` is NOT the same question, and it is what this used to read. It answers
+	/// out of the RECORD, by a route that can disagree with the type: the buffer under a vector is
+	/// grown through the array's policy, whose minimum is 4, so a three-element vector's record has
+	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
+	/// a fixed size. The two agree today for every vector `create()` builds, which is exactly why
+	/// the difference had to be closed by construction rather than left to a test to notice.
+	///
+	/// ⚠⚠ THE OTHER TWO READERS ANSWER OUT OF THE RECORD, SO THE INVARIANT BETWEEN THEM IS ESTABLISHED
+	/// BY CONSTRUCTION AND DEFENDED BY A REFUSAL (found by probing at review of W190; closed by W192).
+	/// `get` forwards to `managed.get`, which is LENGTH-bounded, and `createIterator` hands the raw
+	/// buffer to a cursor that walks the same length — so all three agree exactly while
+	/// `managed.length() == countof(Self)`, which every route into the record does establish:
+	/// `create()` grows then sets the length to the count, and `Vector from [...]` interns the
+	/// instance at the literal's own element count. `init(managed)` is not exported, so no program
+	/// can hand this type a buffer of its own choosing.
+	///
+	/// ⛔ WHAT WAS NOT DEFENDED UNTIL W192 WAS THE BUFFER BEING REACHED PAST THE SURFACE. `managed` is
+	/// visible to an `extension Vector`, and the buffer surface served the length-changing members, so
+	/// a program could move the record out from under the type. MEASURED on both compilers,
+	/// byte-identical output, over an `extension Vector` whose `bust()` called `managed.clear()` and
+	/// whose `walk()` ran `for e in self`, called on a `Vec3.create()`:
+	///     before=3 w0=3 after=3 walked=0 g0=-1
+	/// -- `count()` answered 3 from the type while iteration walked 0 and `get(0)` threw. The same
+	/// extension calling `try managed.grow(64)` then `try managed.setLength(64)` read
+	/// `count=3 walked=64 g40=0 refusedSet=1`: `set` held its bound (it is the guard below), `get`
+	/// and the walk did not. NOT a memory-safety hole -- `setLength` is refused past the capacity
+	/// (measured: `cap=4 len=3 count=3 refusedSetLength=1`), so every slot walked was a slot the
+	/// buffer really owns -- but it WAS an answer disagreeing with itself. The measurement is kept
+	/// because it is the record of what the defect was; every one of those programs is now a
+	/// diagnostic.
+	///
+	/// ⭐ NEITHER `get` NOR THE WALK IS GUARDED HERE, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
+	/// A guard on `get` would cost a compare on every vector read in every program to defend against
+	/// a state the type's own surface cannot produce -- unlike `set`'s guard, which defends a hole
+	/// (`v.set(3, ...)` on a `Vector with 3 Int`) that is reachable with no extension at all, because
+	/// the BUFFER's setter is CAPACITY-bounded. The seam closes by construction one level up instead,
+	/// the way `push` is already refused there.
+	///
+	/// ⭐⭐ WHAT DEFENDS IT NOW (W192): TWO refusals, and it takes both, because there are two ways to
+	/// break the invariant and they need two different sentences.
+	///
+	/// (1) THE LENGTH WRITERS ARE REFUSED ON A SIZED CONTAINER'S BUFFER -- `setLength`, `append`,
+	/// `clear`, `remove`, exactly the members that store the record's `length@8`, and no others.
+	/// `grow` is deliberately still served: it moves CAPACITY, not length, so the type and the record
+	/// go on agreeing, and refusing it would be an over-refusal, which is a wrong answer too.
+	/// (`Parser.sizedContainersBufferRefusal`, E2015.)
+	///
+	/// (2) THE RECORD MAY NOT LEAVE THE DECLARATION -- it may not be RETURNED, passed to ANY call, or
+	/// stored into a container, a tuple or a field. That second rule is not belt-and-braces: the read
+	/// that produces `managed` is RETYPED to `Array with Element` (which is what makes
+	/// `createIterator`'s `VectorIter.create(managed)` type-check at all, W189), so past any door
+	/// where the compiler's per-value mark cannot follow, the vector's storage is indistinguishable
+	/// from an ordinary growable array and `stdlib/Array.maxon`'s own `clear()` answers on it. Hand
+	/// out `managed.slice(...)` instead: a view's length is its own and can contradict nothing.
+	/// (`Parser.sizedContainersRecordEscapeRefusal`, E2015.)
+	///
+	/// The fact rides a per-VALUE mark written where the read is minted
+	/// (`Parser.bufferSurfaceOfDeclaredRecord`) and carried wherever a value is re-minted -- a
+	/// promotion (`carryDeclaredSurface`) and a ternary / `match … gives` / `try … otherwise` merge
+	/// (`propagateBufferSurfaceToPhi`). The one spelling that mints no value to mark is a fused
+	/// `managed.append(...)`, answered off the enclosing declaration
+	/// (`Parser.dispatchMethodOnBinding`). Rule (2) is exempt for source under `stdlib/`, which is
+	/// what lets THIS FILE's `createIterator` hand the record to its iterator: the declaring library
+	/// is where the invariant is established, and it is the only place the record legitimately
+	/// travels. `specs/vector.md` pins one case per route, plus the controls that say the rule
+	/// is neither too wide (the length-preserving members are still served; a `slice` may be stored,
+	/// passed and returned freely) nor too narrow (the growable `Array`'s buffer keeps all four -- as
+	/// it must, since this file's sibling `stdlib/Array.maxon` calls three of them on its own record).
+	///
+	/// ⚠ It is a rule about the CORPUS's `Vector` and no other declaration: a user's own
+	/// `type Vector` is shaped identically to the field and is deliberately excluded
+	/// (`SignatureIndex.declarationIsASizedContainerRecord`).
+	public function count() returns ElementIndex
+		return countof(Self)
+	end 'count'
+
+	/// Get element at index, throws if out of bounds
+	public function get(index ElementIndex) returns Element throws ArrayError
+		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+	end 'get'
+
+	/// Set element at index, throws if out of bounds.
+	///
+	/// ⛔ THE GUARD IS THE WHOLE OF THE VECTOR'S BOUND AND NOT BELT-AND-BRACES, WHICH IS
+	/// `stdlib/Array.maxon`'s `set` word for word one container over. The BUFFER's setter is bounded by
+	/// CAPACITY where this type is bounded by its fixed SIZE (the ruling recorded at the builtin: the wider
+	/// bound is what makes the stage-then-`setLength` idiom spellable), and a vector's capacity is not its
+	/// count — `create()` grows through the array's policy, whose minimum is 4, so a three-element vector's
+	/// record has a fourth slot the type does not have. MEASURED forwarding straight to the buffer:
+	/// `v.set(3, value: 99)` on a `Vector with 3 Int` SUCCEEDED, writing a slot the type has not got, with
+	/// `count()` unmoved and no diagnostic anywhere.
+	public function set(index ElementIndex, value Element) throws ArrayError
+		if index >= count() 'pastTheFixedSize'
+			throw ArrayError.indexOutOfBounds
+		end 'pastTheFixedSize'
+
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Vector.set: the buffer refused an index inside the fixed size, which is always within the capacity")
+		end 'setErr'
+	end 'set'
+
+	// =========================================================================
+	// Iterable Interface
+	// =========================================================================
+
+	/// Create a fresh iterator positioned at the first element.
+	/// Throws IterationError.exhausted if the vector is empty.
+	public function createIterator() returns VectorIter throws IterationError
+		return try VectorIter.create(managed)
+	end 'createIterator'
+end 'Vector'

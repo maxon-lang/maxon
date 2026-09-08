@@ -1,0 +1,201 @@
+// Test: module-var-byte-string-read-allocates-no-record-per-read
+var Buffer = b"critsplit"
+
+function main() returns ExitCode
+	let a = try Buffer.get(0) otherwise 0
+	let b = try Buffer.get(1) otherwise 0
+	let c = try Buffer.get(2) otherwise 0
+	return 0 if a + b + c == 318 else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_Buffer@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_envp@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __ds_base@48 = i64 0
+  __ds_buf_size@56 = i64 0
+  __ds_buf_mask@64 = i64 0
+  __ds_start_ts@72 = i64 0
+  __ds_lock@80 = i64 0
+  __mm_alloc_id@88 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_Buffer
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#20
+  __im_word#18:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#17
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#21
+  __im_stride#20:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#17
+  __im_byte#19:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#17
+  __im_load#23:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#21:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_cont#16
+  __im_empty#24:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#16
+  __im_slow#17:
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rsi, r10
+  __im_cont#16:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rbx, rax
+  trycont#3:
+    x64.leaRegGlobal rax, __data_Buffer
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#29
+  __im_word#27:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#31:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#30
+  __im_stride#29:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#26
+  __im_byte#28:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#30:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_cont#25
+  __im_empty#33:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#25
+  __im_slow#26:
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rsi, r10
+  __im_cont#25:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg r12, rax
+  trycont#6:
+    x64.leaRegGlobal rax, __data_Buffer
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 2
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#38
+  __im_word#36:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow#35
+  __im_load#40:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 16
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#39
+  __im_stride#38:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#35
+  __im_byte#37:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow#35
+  __im_load#41:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#39:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_cont#34
+  __im_empty#42:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_cont#34
+  __im_slow#35:
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.movRegReg rsi, r10
+  __im_cont#34:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, trycont#9
+  tryerr#8:
+    x64.movRegImm32 rax, 0
+  trycont#9:
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg rax, rcx, rax
+    x64.cmpRegImm32 rax, 318
+    x64.jcc notEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 1
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at module-var-byte-string-read-allocates-no-record-per-read.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

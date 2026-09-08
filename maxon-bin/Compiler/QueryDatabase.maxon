@@ -1,0 +1,310 @@
+// QueryDatabase — the incremental query system's storage: source inputs, the
+// per-query memo caches, and the dependency graph.
+//
+// **Content-hash-keyed, NOT revision-counter-keyed** (PLAN.md §78). Each memo
+// stamps the hash of the input it was derived from (`keyHash`), and a memo is
+// valid iff that stored hash still equals the input's current hash. This is
+// **parallel-safe** — there is no shared mutable counter for concurrent
+// per-file parse tasks to contend on; a file's cache key is a pure function of
+// its own bytes.
+//
+// **THERE IS NO DEPENDENCY GRAPH, AND THAT IS THE DESIGN — NOT A GAP.** A memo names its own
+// inputs in the ONE function that computes its key (`QueryEngine.parseMemoKey`), so validity is
+// an equality test on a hash and never a graph walk. Dependencies are DERIVED from the input,
+// not RECORDED as it is read; that is what makes the per-file caches trivially parallel-safe.
+//
+// A graph WAS recorded here — `depIndex` (a map from a query to the queries it read), fed by
+// `recordDependency` off an `activeQueryStack`. **Nothing ever read a bucket.** It was kept
+// against the day "a query genuinely depends on another file's DERIVED state, so the wiring is
+// already there".
+//
+// **THAT DAY CAME, on 2026-07-14, AND THE WIRING WAS NOT USED.** `queryParseOps` came to depend
+// on `queryProgramSignatures` — one file's parse against every other file's declarations, exactly
+// the case — and the fix was to MIX THE INDEX'S HASH INTO THE PARSE MEMO'S KEY. Not
+// one line consulted the graph. The commit did add an EDGE to it, under a comment explaining why
+// the edge mattered to a consumer that did not exist.
+//
+// So it went, for the reason its own other half went one commit earlier: **written, never read,
+// and therefore quietly wrong.** Unread, it had already rotted — `queryKeyString` advertised an
+// "edge dedup" nothing performed — and a graph nothing validates is not wiring, it is a structure
+// whose bugs are simply unpaid. It cost a `String` render plus two `Map` operations on every
+// dependency edge, on a compiler's hot path, to answer no question. If a query ever does need a
+// dynamic edge, add the index WITH its reader, in one commit, and let the two be reviewed
+// together.
+
+// Per-file memo: the tokenized form, stamped with the source hash it came from.
+export type TokenMemo
+	export var value as TokenArray
+	export var keyHash as HashDigest
+
+	export static function create(value TokenArray, keyHash HashDigest) returns TokenMemo
+		return Self{value: value, keyHash: keyHash}
+	end 'create'
+end 'TokenMemo'
+
+// Per-file memo: the parsed artifact (this file's IR fragment + registry
+// contributions), stamped with the source hash it came from.
+export type ParseMemo
+	export var value as FileParseArtifact
+	export var keyHash as HashDigest
+
+	export static function create(value FileParseArtifact, keyHash HashDigest) returns ParseMemo
+		return Self{value: value, keyHash: keyHash}
+	end 'create'
+end 'ParseMemo'
+
+// Whole-program memo: the function signature index (SignatureIndex.maxon), stamped
+// with the COMPOSITE hash folded over every source file's content hash — because the
+// index is read off every file's tokens, so ANY file's edit can move it. `computed`
+// marks emptiness for the same reason `ModuleMemo`'s does.
+//
+// Note the two hashes that meet on this memo and must not be confused: `keyHash` is
+// what makes the INDEX valid (has any source changed?), while the index's own
+// `ProgramSignatures.hash` is what makes a PARSE valid (have any DECLARATIONS
+// changed?). Keying a parse on this one would re-parse the whole program whenever a
+// single body was edited — see ProgramSignatures.hash.
+export type SignatureMemo
+	export var value as ProgramSignatures
+	export var keyHash as HashDigest
+	export var computed as bool
+
+	export static function create(value ProgramSignatures, keyHash HashDigest, computed bool) returns SignatureMemo
+		return Self{value: value, keyHash: keyHash, computed: computed}
+	end 'create'
+
+	// ⚠ **THE `Os` REACHES A SENTINEL'S INDEX, and it is threaded rather than defaulted on purpose
+	// (BATCH27).** `ProgramSignatures` holds a `RangedAliasRegistry`, whose builtin `ExitCode` bound is the
+	// compile TARGET's — and while `computed: false` means nothing ever reads THIS index, a site allowed to
+	// invent a bound is exactly the shape the mirror exists to prevent. It costs one enum, and it means no
+	// registry anywhere in the compiler is constructed without a target being named.
+	export static function empty(os Os) returns SignatureMemo
+		return Self{value: ProgramSignatures.create(os), keyHash: 0, computed: false}
+	end 'empty'
+end 'SignatureMemo'
+
+// Whole-program memo: the merged Maxon module, stamped with the COMPOSITE hash
+// folded over every source file's content hash in source-path order.
+// `computed` is the sentinel — false means "never built" (a zero hash is a
+// legitimate value, so a bool flag, not a hash sentinel, marks emptiness).
+export type ModuleMemo
+	export var value as MaxonModule
+	export var keyHash as HashDigest
+	export var computed as bool
+
+	export static function create(value MaxonModule, keyHash HashDigest, computed bool) returns ModuleMemo
+		return Self{value: value, keyHash: keyHash, computed: computed}
+	end 'create'
+
+	export static function empty() returns ModuleMemo
+		return Self{value: MaxonModule.create(), keyHash: 0, computed: false}
+	end 'empty'
+end 'ModuleMemo'
+
+// --- The memo that outlives a `Project` ---
+//
+// ⭐⭐ **EVERYTHING BELOW IS A PURE FUNCTION OF A FILE'S BYTES, AND THAT IS THE WHOLE ADMISSION
+// TEST.** A `Project`-scoped memo may hold anything, because it dies with the ids and the module it
+// was derived against. A PROCESS-scoped one may hold only what carries no identity — see
+// `QueryEngine.sharedFileMemos` for the argument, and for the two things that are deliberately NOT
+// here (a parse artifact, a swept declaration).
+//
+// The unit is the file's CONTENT HASH rather than its path: `tokenize` reads the bytes and nothing
+// else, so two files with the same bytes have the same tokens whatever they are called, and an
+// overlay stdlib staged at another path shares an entry exactly when it deserves to.
+
+// A build target reduced to ONE integer, so a memo shared across `Project`s can key on the target
+// without a second spelling of `Target`'s identity. See `QueryEngine.targetKeyOf`.
+export typealias TargetKey = bits(64)
+
+// One target's view of one file, and it is per target because the `#if` filter is.
+// `queryActiveTokens`' per-`Project` memo gets that for free from "a `Project` has exactly one
+// target for its whole life"; a process-wide memo does not, and a shared stdlib entry that omitted
+// the target would bake the build machine's OS into a cross-compiled binary's stdlib. Both fields
+// below are functions of (these bytes, this target) and of nothing else.
+export type SharedTargetView
+	export let targetKey as TargetKey
+	// The `#if`-resolved stream. Only a SUCCEEDING filter is ever published here — see
+	// `Queries.queryActiveTokens`, whose per-`Project` memo may hold a failure (its diagnostic is
+	// already on that compile's `project.diagnostics`) and whose shared one may not.
+	export let activeTokens as TokenArray
+	// `Parser.fileNamesProducerMask` over that stream — a bitmask, so a memo of it is one integer
+	// and there is nothing to alias. Filled on FIRST DEMAND rather than beside the tokens, because
+	// the two have different consumers: every token reader wants the stream, only the declaration
+	// sweep wants the mask.
+	export var producerMask as ProducerMask
+	export var producerMaskComputed as bool
+
+	export static function create(targetKey TargetKey, activeTokens TokenArray) returns SharedTargetView
+		return Self{targetKey: targetKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false}
+	end 'create'
+
+	// ONE writer for the mask and the bit that says it is there, so a filled mask can never be
+	// read as absent nor an absent one as zero — a producer mask of 0 is a legitimate answer (a
+	// file that names none of the five producers), which is why the bit exists at all.
+	export function rememberProducerMask(mask ProducerMask)
+		self.producerMask = mask
+		self.producerMaskComputed = true
+	end 'rememberProducerMask'
+end 'SharedTargetView'
+
+export typealias SharedTargetViewArray = Array with SharedTargetView
+
+// What one file's BYTES lex to, plus one view per target this process has been asked about.
+//
+// The views are an ARRAY walked linearly, not a map: a process compiles for ONE target in every
+// driver that exists today (`build` and `spec-test` both take a single `--target`), so the walk is
+// over one element and a `Map` would cost a hash to answer a question a compare answers.
+export type SharedFileMemo
+	// The RAW stream, target-independent: `tokenize` never sees a target.
+	export let tokens as TokenArray
+	export var views as SharedTargetViewArray
+
+	export static function create(tokens TokenArray) returns SharedFileMemo
+		return Self{tokens: tokens, views: SharedTargetViewArray.create()}
+	end 'create'
+
+	// This target's view, or nothing yet. A linear walk for the reason the field's comment gives:
+	// the array holds one element in every driver that exists.
+	export function viewOf(targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+		for view in self.views 'eachView'
+			if view.targetKey == targetKey 'thisTarget'
+				return view
+			end 'thisTarget'
+		end 'eachView'
+		throw SharedMemoMiss.notHeld
+	end 'viewOf'
+
+	export function addView(view SharedTargetView)
+		self.views.push(view)
+	end 'addView'
+end 'SharedFileMemo'
+
+// Raised when the process-wide memo is not holding what it was asked for. An ANSWER — "nothing in
+// this process has lexed these bytes yet", or "not for this target" — never a compiler bug, exactly
+// as `TypeNameInterner.idOf`'s `unknownName` is and unlike its `unknownId`.
+export union SharedMemoMiss implements Error
+	notHeld
+end 'SharedMemoMiss'
+
+export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
+
+// The byte-contents this compile is willing to hand to the process-wide memo — filled by
+// `StdlibLoader.loadStdlibSources`, which is the one place that knows a file came out of an
+// enumeration of `stdlib/`.
+//
+// ⚠ **IT IS AN ADMISSION LIST, NOT A CACHE, AND ITS ONLY JOB IS TO BOUND MEMORY.** A shared entry
+// lives for the life of the WORKER, so admitting every file would grow the store by one entry per
+// spec fragment — thousands of arrays nothing will ever read again. The stdlib's fifty-odd files
+// are re-lexed by every compile, so they are exactly the set worth keeping.
+export typealias HashDigestSet = Set with HashDigest
+
+// A source file input: its content plus the content hash all per-file memos key
+// against. The hash is computed once, at `fileChanged` time.
+export type SourceFileEntry
+	export var content as String
+	export var contentHash as HashDigest
+
+	export static function create(content String, contentHash HashDigest) returns SourceFileEntry
+		return Self{content: content, contentHash: contentHash}
+	end 'create'
+end 'SourceFileEntry'
+
+export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
+export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
+export typealias ParseCacheMap = Map with (FilePath, ParseMemo)
+export typealias FilePathArray = Array with FilePath
+
+// Running count of cache hits/misses. Wide range: unbounded over a long-lived
+// query session.
+export typealias QueryCount = int(0 to u64.max)
+
+export type QueryDatabase
+	// Source inputs (path -> content + hash) and insertion-ordered path list.
+	export var sourceFiles as SourceFileMap
+	export var sourcePaths as FilePathArray
+
+	// The composite whole-program source hash, MEMOIZED — every whole-program memo keys on it, and
+	// since the signature index landed it is asked once per FILE, which made re-folding it O(files²).
+	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
+	export var compositeHash as HashDigest
+	export var compositeHashValid as bool
+
+	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `HashDigestSet`).
+	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
+	// it admits into is the process's (`QueryEngine.sharedFileMemos`).
+	export var shareableTokenHashes as HashDigestSet
+
+	// Per-file memo caches (absence = not cached; validity via keyHash compare).
+	export var tokenCache as TokenCacheMap
+	// The same file's tokens with `#if` resolved — see `queryActiveTokens`. A SECOND cache rather
+	// than a filter folded into `tokenCache`, because the two answer different questions and only
+	// one of them is target-dependent: `tokenCache` holds what the file SAYS, this holds what this
+	// build READS. Keeping the raw stream memoized separately is also what lets the `lex` phase
+	// probe keep bracketing `tokenize` alone (see `queryTokens`).
+	export var activeTokenCache as TokenCacheMap
+	export var parseCache as ParseCacheMap
+
+	// ⭐⭐ **THE STDLIB FILES THIS COMPILE BUILDS FUNCTION BODIES FOR** — empty until `queryAllModule`'s
+	// fixpoint has walked a module, and grown by it once per round (`growStdlibBodyDemand`).
+	//
+	// It lives on the DATABASE rather than on `Project` because it is the third half of a parse memo's KEY:
+	// an artifact built when nothing reached this file is missing every body, and serving it to the round
+	// that has just reached one is the stale-memo failure `parseMemoKey`'s header is about.
+	export var demandedStdlibBodyFiles as MaxonSourcePathSet
+
+	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
+	// every parse reads it, and a parse memo is keyed on it (QueryEngine.parseMemoKey).
+	export var signatureCache as SignatureMemo
+
+	// Whole-program merged-module memo.
+	export var allModuleCache as ModuleMemo
+
+	// Cache hit/miss counters. **These are what the warm-rebuild gate reads** — the property
+	// "edit one file → only its queries re-run" is a statement about hits and misses, and it
+	// was always these that proved it, never the dependency graph that claimed to be here for
+	// it (see this file's header).
+	export var tokenHits as QueryCount
+	export var tokenMisses as QueryCount
+	export var activeTokenHits as QueryCount
+	export var activeTokenMisses as QueryCount
+	export var parseHits as QueryCount
+	export var parseMisses as QueryCount
+	export var signatureHits as QueryCount
+	export var signatureMisses as QueryCount
+	export var allModuleHits as QueryCount
+	export var allModuleMisses as QueryCount
+
+	// ⭐ **WHAT THIS COMPILE TOOK OUT OF THE PROCESS-WIDE MEMO.** Counted separately from
+	// `tokenHits`/`tokenMisses` and never folded into them, because the two answer different
+	// questions and one of them is already gated: `tokenHits` is the WARM-REBUILD property
+	// (`VerifyWarmRebuild` asserts exact deltas on it), and a shared hit is a per-`Project` MISS by
+	// construction — it is the miss that the store answered instead of the lexer. Folding them
+	// would move that gate's numbers while proving nothing about incrementality.
+	export var sharedTokenHits as QueryCount
+	export var sharedActiveTokenHits as QueryCount
+	export var sharedProducerMaskHits as QueryCount
+
+	// `os` is the TARGET's, and it reaches only the empty signature sentinel below — see
+	// `SignatureMemo.empty`. A database is filled for one target, exactly as the `Project` that owns it is
+	// aimed at one (`Project.target`'s header), so taking it here states that rather than assuming it.
+	export static function create(os Os) returns QueryDatabase
+		return Self{
+			sourceFiles: SourceFileMap.create(),
+			sourcePaths: FilePathArray.create(),
+			compositeHash: 0, compositeHashValid: false,
+			shareableTokenHashes: HashDigestSet.create(),
+			tokenCache: TokenCacheMap.create(),
+			activeTokenCache: TokenCacheMap.create(),
+			parseCache: ParseCacheMap.create(),
+			demandedStdlibBodyFiles: MaxonSourcePathSet.create(),
+			signatureCache: SignatureMemo.empty(os),
+			allModuleCache: ModuleMemo.empty(),
+			tokenHits: 0, tokenMisses: 0,
+			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0,
+			activeTokenHits: 0, activeTokenMisses: 0,
+			parseHits: 0, parseMisses: 0,
+			signatureHits: 0, signatureMisses: 0,
+			allModuleHits: 0, allModuleMisses: 0
+		}
+	end 'create'
+end 'QueryDatabase'

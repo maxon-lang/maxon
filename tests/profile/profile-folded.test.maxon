@@ -1,0 +1,135 @@
+// profile-folded.test.maxon — the MACHINE format: one line per path that ran, `root;child;leaf <samples>`,
+// which flamegraph.pl, inferno and speedscope all read.
+//
+// ⭐⭐ **`--folded` CARRIES NO REPORTING FLOOR, AND THAT IS THE POINT OF THIS CASE.** The printed tables
+// summarize everything under `--min-percent`; the collapsed-stack format deliberately does not, because a
+// flamegraph tool wants every path and does its own thresholding. So the run below asks for a floor of 90% —
+// high enough that a filtered format would have nothing left but the hottest path — and then requires the
+// SECOND path, worth about a sixth of the run, to still be there. ONE run answers that; a comparison across
+// two runs of a sampled program could not.
+//
+// ⛔⭐ **AND SO THE CASE MUST DO ITS OWN THRESHOLDING, WHICH IS THE FLAKIEST THING ABOUT THIS FORMAT.** With
+// no floor the long tail is REAL LINES: a stray sample caught in an allocator or a syscall entry adds a
+// whole row to a report that measured the program perfectly (MEASURED here — one run in three carried
+// `…;main;__mm_alloc;__slab_alloc 1`). Masking the count does not help, because what varies is a LINE that
+// exists rather than a number that moved. So this case keeps only the paths worth at least 20 samples — an
+// order of magnitude above the tail (one or two) and more than an order below the smaller asserted row
+// (~85) — which removes what varies and nothing else.
+//
+// ⚠ **A PATH ABOVE THE FLOOR HAS SEVERAL FRAMES; A PATH BELOW IT NEED NOT.** A single stray sample landing
+// in a foreign module is a whole collapsed stack of ONE segment — MEASURED here, `[KERNELBASE.dll] 1`, twice
+// in six runs — so the multi-frame shape is asserted of the paths this case keeps and never of every line
+// printed. What IS asked of every line is that it be a path and a count, because a consumer that cannot
+// split one line gets nothing from the run.
+//
+// ⛔ **THE ROOT SEGMENT IS NOT WRITTEN DOWN HERE.** Every stack bottoms out in runtime code whose symbol is
+// the emitted runtime's business, so a case that spelled it would go red for a rename that has nothing to do
+// with the profiler. What IS asserted is the fixture's own call chain as the path's TAIL, and that something
+// lies below it — the same claim without borrowing the runtime's vocabulary.
+//
+// Staging, spawning and the folds applied to a captured stream come from `ProfileHarness.maxon`.
+
+// The format's own separators: what joins two frames, and what separates a path from its count.
+let FoldedFrameSeparator = ";"
+let FoldedCountSeparator = " "
+
+// The fewest words a `<path> <samples>` line can be. It is a LOWER bound and not an equality: a frame name
+// may carry a space of its own (`[unnamed .text]`), and the count is the LAST word rather than the second.
+let FoldedMinimumFields = 2
+
+// ⭐ THE CASE'S OWN FLOOR — see the header for the margins on either side of it.
+let FoldedSampleFloor = 20
+
+// The floor handed to the TOOL, which this format must ignore. Well above the second path's real share, so
+// a `--folded` that honoured it would print one line.
+let FoldedIgnoredFloorShare = "90"
+
+// How many paths the fixture can produce above this case's floor: `work` calls exactly two leaves, and the
+// order it calls them in is the order they are printed.
+let FoldedPathCount = 2
+let HottestPathPosition = 0
+let SecondPathPosition = 1
+
+// The program's own entry point, which is NOT the bottom of any stack, and the frame between it and the two
+// leaves. Both are declarations the FIXTURE makes, which is why this case may spell them.
+let ProgramEntryFrameName = "main"
+let InteriorFrameName = "work"
+
+// Which of the fixture's collapsed paths a message is about.
+typealias FoldedPathPosition = int(0 to 1)
+
+test 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
+	let staged = stagedProgram("profile-folded", fixture: HotWarmFixtureName)
+	buildProgram(staged, label: HotWarmFixtureName, extraArguments: StringArray.create())
+
+	var arguments = profileRunArguments(builtExecutable(staged).toString())
+	arguments.push(FoldedFlag)
+	arguments.push("{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}")
+
+	let run = spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FoldedFlag}`")
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} … {FoldedFlag}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	let paths = try foldedPathsAboveFloor(run.stdout)
+
+	// ⭐ THE HEADLINE, and its own positive control: a `--folded` that honoured `--min-percent` would leave
+	// exactly one of these, and a run that measured nothing would leave none.
+	try Expect.equal(paths.count() as AssertedInt, expected: FoldedPathCount, message: "`{FoldedFlag}` printed {paths.count()} path(s) worth at least {FoldedSampleFloor} samples, and the fixture runs exactly {FoldedPathCount}: `{InteriorFrameName}` calls two leaves and nothing else in the program does work. ONE path would mean the format honoured the `{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}` it was handed, which it must not — a flamegraph tool wants every path and thresholds for itself. It printed:{LineFeed}{run.stdout}")
+
+	try requirePathEndsWith(paths, position: HottestPathPosition, leaf: HotFunctionName)
+	try requirePathEndsWith(paths, position: SecondPathPosition, leaf: WarmFunctionName)
+
+	// ⛔ AND THAT SOMETHING LIES BELOW `main`. A collapsed stack is a whole path from the outermost frame in,
+	// so a format that started at the program's own entry point would be dropping frames it walked.
+	let hottest = try paths.get(HottestPathPosition) otherwise panic("profile-folded.test: a list whose count was just asserted has a first element")
+	let root = try hottest.split(FoldedFrameSeparator).get(0) otherwise panic("profile-folded.test: a split always has a first element")
+	try Expect.notEqual(root, expected: ProgramEntryFrameName, message: "the collapsed path `{hottest}` opens at `{ProgramEntryFrameName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
+end 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
+
+// One path's tail, which is the part of it the FIXTURE decides: `…;main;work;<leaf>`.
+function requirePathEndsWith(paths StringArray, position FoldedPathPosition, leaf String) throws TestFailure
+	let path = try paths.get(position) otherwise panic("profile-folded.test: position {position} is inside a list whose count was just asserted")
+	let tail = "{FoldedFrameSeparator}{ProgramEntryFrameName}{FoldedFrameSeparator}{InteriorFrameName}{FoldedFrameSeparator}{leaf}"
+	try Expect.endsWith(path, needle: tail, message: "the collapsed path at position {position} is `{path}`, which does not end in `{tail}`. The chain is one the fixture DECLARES — `{ProgramEntryFrameName}` calls `{InteriorFrameName}` calls `{leaf}` — so a different tail is a walker that lost a frame or a symbolizer that named the wrong one, and the order of the two paths is the order `{InteriorFrameName}` calls them in.")
+end 'requirePathEndsWith'
+
+// The collapsed paths worth asserting about, in the order they were printed, with their counts dropped —
+// see this file's header for why a count here is a threshold and never a comparison.
+//
+// A line that is not `<path> <count>` is the FORMAT being wrong rather than the gate being unable to run, so
+// it is asserted rather than panicked over: a consumer that cannot parse a line gets nothing from the run.
+function foldedPathsAboveFloor(report String) returns StringArray throws TestFailure
+	var paths = StringArray.create()
+
+	for line in outputLines(report) 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let tokens = whitespaceTokens(line)
+		try Expect.atLeast(tokens.count() as AssertedInt, than: FoldedMinimumFields, message: "`{FoldedFlag}` printed '{line}', which is not the `path{FoldedCountSeparator}<count>` pair every consumer of this format splits on.")
+
+		let samples = try tokens.get(tokens.count() - 1) otherwise panic("profile-folded.test: a list whose count was just asserted has a last element")
+		let path = foldedPathIn(tokens)
+		if decimalValue(samples, what: "the sample count on the collapsed path '{path}'") >= FoldedSampleFloor 'worthAsserting'
+			paths.push(path)
+		end 'worthAsserting'
+	end 'eachLine'
+
+	return paths
+end 'foldedPathsAboveFloor'
+
+// One line's path: everything before the sample count, which is the LAST word. Runs of spacing are folded to
+// one so a name carrying its own space reads the same however the line was laid out.
+function foldedPathIn(tokens StringArray) returns String
+	var path = ""
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if iter.index() == tokens.count() - 1 'theCount'
+			break
+		end 'theCount'
+
+		path.append(token if path.isEmpty() else "{FoldedCountSeparator}{token}")
+	end 'eachToken'
+
+	return path
+end 'foldedPathIn'

@@ -1,0 +1,42 @@
+// Test: error.two-conformers-binding-one-associated-type-differently
+typealias Integer = int(i64.min to i64.max)
+typealias Score = int(0 to 100)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type A implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+type B implements Taker with Score
+	let base as Integer
+
+	function take(e Score) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'B'
+
+function useIt(t Taker) returns Integer
+	return t.take(5000)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(A.create(0)) + useIt(B.create(0))) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3119: <fragment>:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces

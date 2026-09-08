@@ -1,0 +1,34 @@
+// Test: error.a-duplicate-static-overload-names-the-suffixed-spelling
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 9
+	end 'getValue'
+
+	static function getValue(bump Integer) returns Integer
+		return 20 + bump
+	end 'getValue'
+
+	static function getValue(bump Integer) returns Integer
+		return 30 + bump
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(3)
+	return b.getValue()
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:19:18: duplicate definition of function 'Box.getValue#__static#Integer' — 'Box.getValue' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names

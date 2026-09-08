@@ -1,0 +1,120 @@
+// Test: an-inverted-signed-branch-keeps-its-arms
+var seed = 4
+
+function main() returns ExitCode
+	let a = seed
+	let b = seed + 1
+	var hits = 0
+
+	if a < b 'lt'
+		hits = hits + 1
+	end 'lt' else 'ltElse'
+		return 11
+	end 'ltElse'
+
+	if a > b 'gt'
+		return 12
+	end 'gt' else 'gtElse'
+		hits = hits + 1
+	end 'gtElse'
+
+	if a <= b 'le'
+		hits = hits + 1
+	end 'le' else 'leElse'
+		return 13
+	end 'leElse'
+
+	if a >= b 'ge'
+		return 14
+	end 'ge' else 'geElse'
+		hits = hits + 1
+	end 'geElse'
+
+	if a == b 'eq'
+		return 15
+	end 'eq' else 'eqElse'
+		hits = hits + 1
+	end 'eqElse'
+
+	if a != b 'ne'
+		hits = hits + 1
+	end 'ne' else 'neElse'
+		return 16
+	end 'neElse'
+
+	return 0 if hits == 6 else 17
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_seed
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x1, x1, 1
+    arm64.cmp x0, x1
+    arm64.b.ge ifelse#2
+  ifcont#3:
+    arm64.cmp x0, x1
+    arm64.b.le ifcont#6
+  gt:
+    arm64.movImm x0, 12
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.cmp x0, x1
+    arm64.b.gt ifelse#8
+  ifcont#9:
+    arm64.cmp x0, x1
+    arm64.b.lt ifcont#12
+  ge:
+    arm64.movImm x0, 14
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.cmp x0, x1
+    arm64.b.ne ifcont#15
+  eq:
+    arm64.movImm x0, 15
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#15:
+    arm64.cmp x0, x1
+    arm64.b.eq ifelse#17
+  ternarytrue:
+    arm64.movImm x0, 0
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-inverted-signed-branch-keeps-its-arms.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#17:
+    arm64.movImm x0, 16
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#8:
+    arm64.movImm x0, 13
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#2:
+    arm64.movImm x0, 11
+    arm64.epilogue 16
+    arm64.ret
+}

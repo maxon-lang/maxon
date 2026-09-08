@@ -1,0 +1,24 @@
+// Test: error.awaiting-shutdown-is-refused
+type Calc
+	var count as Whole
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump() returns Whole
+		self.count = self.count + 1
+		return self.count
+	end 'bump'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let n = try await h.bump() otherwise 0
+	try await h.shutdown() otherwise return 1 as ExitCode
+	return n as ExitCode
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+---
+CompilerError:
+error E2015: <fragment>:18:14: Unsupported: the value of `Calc.shutdown()` — `shutdown` is the HANDLE's own method and not a message of `Calc`, so no declaration says what it hands back and a `try await` has nothing to bind. Write `<handle>.shutdown()` as a statement: the pill goes in behind everything already queued, and dropping the last handle starts the same drain

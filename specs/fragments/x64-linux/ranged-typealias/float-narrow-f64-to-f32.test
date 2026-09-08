@@ -1,0 +1,66 @@
+// Test: float-narrow-f64-to-f32
+typealias Wide = float(f64.min to f64.max)
+typealias Narrow = float(f32.min to f32.max)
+
+function narrow(x Wide) returns Narrow
+	return x
+end 'narrow'
+
+function main() returns ExitCode
+	return trunc(narrow(1.0e300))
+end 'main'
+---
+ExitCode: 1
+---
+func @narrow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm1, [rip + __fconst_-3.4028234663852886E+38]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_3.4028234663852886E+38]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc belowEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at float-narrow-f64-to-f32.test:6: Range check failed: value outside typealias 'Narrow'\x0a"
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_1E+300]
+  __il_slow:
+    x64.callDirect narrow
+  __il_cont:
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at float-narrow-f64-to-f32.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

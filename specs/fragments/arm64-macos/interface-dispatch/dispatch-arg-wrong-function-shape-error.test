@@ -1,0 +1,37 @@
+// Test: dispatch-arg-wrong-function-shape-error
+
+typealias Integer = int(i64.min to i64.max)
+typealias OneArg = function(Integer) returns Integer
+
+interface Runner
+	function run(f OneArg) returns Integer
+end 'Runner'
+
+type Direct implements Runner
+	export var tag as Integer
+
+	static function create() returns Direct
+		return Self{tag: 0}
+	end 'create'
+
+	function run(f OneArg) returns Integer
+		return f(7)
+	end 'run'
+end 'Direct'
+
+function twoArg(a Integer, b Integer) returns Integer
+	return a + b
+end 'twoArg'
+
+function drive(r Runner) returns Integer
+	return r.run(twoArg)
+end 'drive'
+
+function main() returns ExitCode
+	let v = drive(Direct.create())
+	print("v={v}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:27:11: argument type mismatch for 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'

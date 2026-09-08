@@ -1,0 +1,29 @@
+// Test: error.let-global-accessor-result-to-field-writing-callee
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	var a = Box.get()
+	bump(a)
+	return Box.shared.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:24:2: cannot pass 'a' to function that mutates parameter 'b' (in main)

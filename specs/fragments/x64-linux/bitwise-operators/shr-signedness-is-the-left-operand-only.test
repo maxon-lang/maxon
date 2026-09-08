@@ -1,0 +1,59 @@
+// Test: shr-signedness-is-the-left-operand-only
+typealias Num = int(i64.min to i64.max)
+typealias ShiftBits = int(0 to 63)
+
+function shiftRight(value Num, distance ShiftBits) returns Num
+	return value shr distance
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftRight(-8, distance: 60) != -1 'rangedDistance'
+		return 1
+	end 'rangedDistance'
+	if shiftRight(-1, distance: 63) != -1 'allSign'
+		return 2
+	end 'allSign'
+	if shiftRight(8, distance: 2) != 2 'nonNegative'
+		return 3
+	end 'nonNegative'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok#9:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#7:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, __rc_ok#14
+  rangedDistance:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#14:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#12:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, __rc_ok#19
+  allSign:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#19:
+    x64.movRegImm32 rax, 2
+  __il_cont#17:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, ifcont
+  nonNegative:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

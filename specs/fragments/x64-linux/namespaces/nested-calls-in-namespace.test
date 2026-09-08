@@ -1,0 +1,57 @@
+// Test: nested-calls-in-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function sum_three(a Integer, b Integer, c Integer) returns Integer
+	return add(add(a, b: b), b: c)
+end 'sum_three'
+
+function main() returns ExitCode
+	return sum_three(1, b: 2, c: 3)
+end 'main'
+---
+ExitCode: 6
+---
+func @sum_three {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#3:
+    x64.leaRegRegReg rcx, rcx, rdx
+  __il_body#4:
+    x64.leaRegRegReg r8, rcx, rax
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+    x64.callDirect sum_three
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at nested-calls-in-namespace.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

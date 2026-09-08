@@ -1,0 +1,439 @@
+// Test: async-await.managed-args-many
+typealias StringArray = Array with String
+typealias StrPromise = Promise with String
+typealias StrPromiseArray = Array with StrPromise
+
+function joinArgs(label String, args StringArray) returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		var out = label
+		for a in args 'each'
+				out = "{out}|{a}"
+		end 'each'
+		return out
+end 'joinArgs'
+
+function main() returns ExitCode
+		var promises = StrPromiseArray.create()
+		for i in 0 upto 8 'spawn'
+				var argv = StringArray.create()
+				argv.push("arg{i}.a")
+				argv.push("arg{i}.b")
+				promises.push(async joinArgs("L{i}", args: argv))
+		end 'spawn'
+		var total = 0
+		for p in promises 'await'
+				let s = await p
+				if not s.isEmpty() 'good'
+						total = total + 1
+				end 'good'
+		end 'await'
+		return total
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @joinArgs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; "noyield.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect File.exists
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegImm32 rcx, rbx, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, rbx
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r14
+  forhdr:
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rax
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rdx + rax*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rcx + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_23]  ; "|"
+    x64.loadRegBaseDisp.word64 r14, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
+    x64.storeSlotReg slot5, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, r13, rcx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r13, slot6
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot5
+    x64.loadRegSlot r13, slot4
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegSlot rcx, slot3
+    x64.jmp forhdr
+  forexit:
+    x64.loadRegSlot r8, slot1
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 136
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot0, r8
+    x64.movRegImm32 rbx, 0
+  forhdr#1:
+    x64.storeSlotReg slot1, rbx
+    x64.cmpRegImm32 rbx, 8
+    x64.jcc greaterEqual, forexit#4
+  spawn:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRdata rax, [rip + __str_rec_24]  ; "arg"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_25]  ; ".a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot10
+    x64.loadRegSlot r12, slot7
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __str_rec_24]  ; "arg"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __str_rec_26]  ; ".b"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot8, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot11
+    x64.loadRegSlot r12, slot8
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot6
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __str_rec_27]  ; "L"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg r14, r8
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot12, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot12
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot9
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegSlot r12, slot2
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegFunc rcx, [rip + joinArgs]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.storeBaseDispReg.word64 [r13 + 208], r12
+    x64.leaRegFunc rax, [rip + __gt_release_joinArgs]
+    x64.storeBaseDispReg.word64 [r13 + 176], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  forstep#3:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr#1
+  forexit#4:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  forhdr#5:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc greaterEqual, forexit#8
+  await:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
+  __im_cont:
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect String.isEmpty
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  good:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+  forstep#7:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr#5
+  forexit#8:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_96]  ; "panic at async-await.managed-args-many.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

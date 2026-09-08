@@ -1,0 +1,145 @@
+// Test: block-keywords-as-function-names-beside-real-blocks
+typealias Integer = int(i64.min to i64.max)
+
+enum Grade
+	low
+	high
+end 'Grade'
+
+type Ops
+	export static function while(n Integer) returns Integer
+		return n * 2
+	end 'while'
+
+	export static function for(n Integer) returns Integer
+		return n + 3
+	end 'for'
+
+	export static function end(n Integer) returns Integer
+		return n - 1
+	end 'end'
+end 'Ops'
+
+function match(n Integer) returns Integer
+	return n + 1
+end 'match'
+
+function if(n Integer) returns Integer
+	if n > 4 'big'
+		return 2
+	end 'big'
+	return 1
+end 'if'
+
+function grade(n Integer) returns Grade
+	if n > 1 'high'
+		return Grade.high
+	end 'high'
+	return Grade.low
+end 'grade'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'count'
+		total = total + Ops.while(i)
+		i = i + 1
+	end 'count'
+
+	for j in 0 upto 3 'walk'
+		total = total + Ops.for(j)
+	end 'walk'
+
+	if total > 0 'positive'
+		total = total + Ops.end(10)
+	end 'positive' else 'negative'
+		total = total - 1
+	end 'negative'
+
+	let bonus = match grade(if(5)) 'pick'
+		low gives 5
+		high gives 15
+	end 'pick'
+
+	return total + bonus
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  whilehdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greaterEqual, whileexit
+  __il_body#20:
+    x64.imulRegRegImm32 rdx, rcx, 2
+  __il_cont#19:
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greaterEqual, forexit
+  __il_body#22:
+    x64.leaRegRegImm32 rdx, rcx, 3
+  __il_cont#21:
+    x64.leaRegRegReg rax, rax, rdx
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc lessEqual, ifelse
+  __il_cont#23:
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.jmp big
+  ifelse:
+    x64.leaRegRegImm32 rax, rax, -1
+  big:
+    x64.movRegImm32 rcx, 2
+  __il_body#30:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc lessEqual, ifcont
+  high:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont#25
+  ifcont:
+    x64.movRegImm32 rcx, 0
+  __il_cont#25:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#11:
+    x64.movRegImm32 rcx, 5
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#12:
+    x64.movRegImm32 rcx, 15
+  matchcont:
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at block-keywords-as-function-names-beside-real-blocks.test:64: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

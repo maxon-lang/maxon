@@ -1,0 +1,12 @@
+// Test: error.a-borrow-taken-out-of-a-borrow-holds-the-root
+function main() returns ExitCode
+	var xs = ["hello world this is a long string for heap allocation"]
+	let c = try xs.managed.createCursor() otherwise return 1
+	let s = c.current()
+	xs.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:6:5: cannot mutate 'xs' via 'clear' while it is borrowed by 's' (borrowed at line 5)

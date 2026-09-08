@@ -1,0 +1,37 @@
+// Test: float-full-range-guard-elided
+typealias Pct = float(0.0 to 100.0)
+typealias Wide = float(f64.min to f64.max)
+
+function widen(x Pct) returns Wide
+	return x * 1.0e299
+end 'widen'
+
+function main() returns ExitCode
+	let big = widen(10.0)
+	if big > 1.0e299 'huge'
+		return 42
+	end 'huge'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok:
+    x64.movsdRegRip xmm0, [rip + __fconst_1E+300]
+  __il_cont:
+    x64.movsdRegRip xmm1, [rip + __fconst_1E+299]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc belowEqual, ifcont
+  huge:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

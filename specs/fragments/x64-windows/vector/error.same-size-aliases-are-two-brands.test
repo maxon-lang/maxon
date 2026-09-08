@@ -1,0 +1,19 @@
+// Test: error.same-size-aliases-are-two-brands
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Triple = Vector with 3 Int
+
+function first(v Vec3) returns Int
+	return try v.get(0) otherwise 0
+end 'first'
+
+function main() returns ExitCode
+	var t = Triple.create()
+	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
+	let f = first(t)
+	print("{f} {t.count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:13:10: argument type mismatch for 'v': expected 'Vec3', got 'Triple'

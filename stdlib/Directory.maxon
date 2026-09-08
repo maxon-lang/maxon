@@ -1,0 +1,64 @@
+/// Directory listing and existence checking operations.
+/// @category System
+/// Error for directory list operations
+public enum DirectoryListError implements Error
+	notFound
+	accessDenied
+	listFailed
+end 'DirectoryListError'
+
+/// Static directory operations.
+public type Directory
+	typealias FilePathArray = Array with FilePath
+	var dir as __ManagedDirectory
+
+	/// List files and directories at a path
+	public static function list(path FilePath) returns FilePathArray throws DirectoryListError
+		let pattern = "{path.path}{FilePath.separator()}*"
+		var search = Directory{
+			dir: try __ManagedDirectory.openSearch(pattern.addressableBytes()) otherwise 'open'
+				throw DirectoryListError.notFound
+			end 'open'
+		}
+		var result = FilePathArray.create()
+		while (try search.dir.next() otherwise throw DirectoryListError.listFailed) != 0 'loop'
+			let name = String.init(search.dir.filename())
+			result.push(path.join(name))
+		end 'loop'
+		search.dir.close()
+		return result
+	end 'list'
+
+	/// Check if a path exists and is a directory
+	public static function exists(path FilePath) returns bool
+		return __ManagedDirectory.exists(path.path.addressableBytes())
+	end 'exists'
+
+	/// Alternative name for discoverability
+	public static function isDirectory(path FilePath) returns bool
+		return Directory.exists(path)
+	end 'isDirectory'
+
+	/// Create a directory at the given path, including any missing parent
+	/// directories (mkdir -p semantics). Returns true if the directory exists
+	/// after the call.
+	public static function create(path FilePath) returns bool
+		if Directory.exists(path) 'already'
+			return true
+		end 'already'
+		if let parent = try path.parent() 'hasParent'
+			if not parent.isEmpty() 'nonEmpty'
+				_ = Directory.create(parent)
+			end 'nonEmpty'
+		end 'hasParent'
+		try __ManagedDirectory.create(path.path.addressableBytes()) otherwise return false
+		return true
+	end 'create'
+
+	/// Get the current working directory as a FilePath
+	public static function currentPath() returns FilePath
+		let managed = try __ManagedDirectory.currentPath() otherwise panic("Directory.currentPath: GetCurrentDirectory failed")
+		let dirStr = String.init(managed)
+		return try FilePath.from(dirStr) otherwise panic("Directory.currentPath: invalid path")
+	end 'currentPath'
+end 'Directory'

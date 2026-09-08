@@ -1,0 +1,70 @@
+// Test: first-class-function.method-call-statement-still-direct
+var sideEffect = 0
+
+typealias Ticks = int(i64.min to i64.max)
+
+type Counter
+	export var n as Ticks
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function tick()
+		sideEffect = sideEffect + 3
+	end 'tick'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create()
+	c.tick()
+	c.tick()
+	return sideEffect as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __data_sideEffect@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+  __il_body#6:
+    arm64.leaGlobal x0, __data_sideEffect
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 3
+    arm64.leaGlobal x1, __data_sideEffect
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+  __il_body#7:
+    arm64.leaGlobal x0, __data_sideEffect
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 3
+    arm64.leaGlobal x1, __data_sideEffect
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+  __il_cont:
+    arm64.leaGlobal x0, __data_sideEffect
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.method-call-statement-still-direct.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

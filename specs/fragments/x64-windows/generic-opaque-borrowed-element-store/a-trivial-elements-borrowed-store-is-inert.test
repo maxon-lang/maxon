@@ -1,0 +1,321 @@
+// Test: a-trivial-elements-borrowed-store-is-inert
+typealias Idx = int(0 to u64.max)
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function count() returns Idx
+		return items.count()
+	end 'count'
+
+	export function copyFrom(other Items)
+		let n = other.count()
+		for i in 0 upto n 'copy'
+			let value = try other.get(i) otherwise 'getErr'
+				panic("Bag.copyFrom: get OOB — i < the count just read")
+			end 'getErr'
+			items.push(value)
+		end 'copy'
+	end 'copyFrom'
+
+	export function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+end 'Bag'
+
+typealias NumBag = Bag with Num
+
+function main() returns ExitCode
+	var b = NumBag.create()
+	var source = Nums.create()
+	source.push(4 as Num)
+	source.push(7 as Num)
+	b.copyFrom(source)
+	let second = try b.at(1) otherwise return 1
+	return second
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.copyFrom {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 r14, [r12 + 8]
+    x64.movRegImm32 rdx, 0
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegReg rdx, r14
+    x64.jcc greaterEqual, forexit
+  copy:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:21: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#15:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#16:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#18
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#19:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#18:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.movRegReg rcx, r10
+  __im_cont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:22: Bag.copyFrom: get OOB \xe2\x80\x94 i < the count just read\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __retain_type_param
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rdx, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.at {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:29: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#11:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#12:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 r10, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#14
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#15:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg rdx, rax
+    x64.jmp __im_cont
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __layout_Bag_Num]
+    x64.callDirect Bag.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __layout_Bag_Num]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Bag.copyFrom
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Bag_Num]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.at
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_Num
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_Num
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,93 @@
+// profile-hot-ordering.test.maxon — the profiler's THREE SECTIONS, and the ranking the fixture makes a fact
+// about the program rather than about the run.
+//
+// ⭐ WHAT MAKES THIS ASSERTABLE AT ALL. A sampling profiler reports what a thread happened to be doing at a
+// few hundred arbitrary instants, so no count here means anything on its own. What DOES mean something is
+// that `hot` is given ten times `warm`'s work: which of the two tops the self-time table is then a property
+// of the fixture, and anything else at the top is a real defect in the stack walker or the symbolizer.
+// Equal work would make the ordering a coin flip and this case a gate that fails about half the time.
+//
+// ⭐⭐ **THE CALL TREE'S NESTING IS ASSERTED THROUGH THE NAME COLUMN.** `work` calls both leaves and does
+// nothing itself, so the tree has a REAL interior node: root → main → work → {hot, warm}. A tree assembled
+// from the leaf end, or one that lost a frame, is a plausible-looking table with the wrong SHAPE — and the
+// shape lives entirely in how far right each name is pushed. So the case compares those columns to each
+// other (a child further right than its parent, two siblings level) and never to a number.
+//
+// ⛔ **THE STACKS SECTION IS NOT A THIRD COPY OF THE OTHER TWO.** A stack is named by its OUTERMOST frame,
+// so this single-threaded program has exactly ONE above the floor and its name is neither leaf. A reader
+// that keyed a stack on the frame it was sampled IN rather than on the stack it belongs to would produce a
+// stacks section that mirrored the hot-functions table, which is the failure this case's last two
+// assertions exist to catch — and which asserting `hot` above `warm` here would have been green over.
+//
+// Staging, spawning, the folds applied to a captured stream, and the corpus's own reporting floor come from
+// `ProfileHarness.maxon`, this directory's shared half.
+
+// How many stacks a single-threaded program has. Its worker-less shape is what makes this a property of the
+// fixture rather than of the host.
+let SingleThreadedStackCount = 1
+
+// The interior frame between `main` and the two leaves — the level a tree built from the leaf end loses.
+let InteriorFunctionName = "work"
+
+test 'the profiler ranks the busier function first in every section it reports'
+	let staged = stagedProgram("profile-hot-ordering", fixture: HotWarmFixtureName)
+	buildProgram(staged, label: HotWarmFixtureName, extraArguments: StringArray.create())
+
+	let run = runProfiler(staged, extraArguments: StringArray.create())
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` did not complete a measurement of the binary it built itself. This exit code answers ONE question — whether the MEASUREMENT completed — and the profiled program's own status is reported as data inside the report. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	let lines = outputLines(run.stdout)
+
+	// The positive control for everything below: a handful of readings can be ranked in any order at all,
+	// and the report says so itself rather than presenting confident shares over them.
+	try Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything: it collected {totalSamples(run.stdout, profilerLabel: TestedCompilerStem)}, and under a hundred the shares below are arithmetic on a handful of readings. Every ordering this case asserts would then be a coin flip. It printed:{LineFeed}{run.stdout}")
+
+	try Expect.isTrue(reportHasLine(lines, wanted: HotFunctionsHeader), message: "the report carries no '{HotFunctionsHeader}' section. The three sections and their order are the SHAPE a profile can be held to while none of its numbers can. It printed:{LineFeed}{run.stdout}")
+	try Expect.isTrue(reportHasLine(lines, wanted: CallTreeHeader), message: "the report carries no '{CallTreeHeader}' section, so nothing in it says how the sampled frames nest. It printed:{LineFeed}{run.stdout}")
+	try Expect.isTrue(reportHasLine(lines, wanted: StacksHeader), message: "the report carries no '{StacksHeader}' section, so nothing in it says how many stacks ran. It printed:{LineFeed}{run.stdout}")
+
+	let samples = totalSamples(run.stdout, profilerLabel: TestedCompilerStem)
+
+	// ⭐ THE HEADLINE, in the table the word "profile" means to most readers.
+	let selfTimeNames = rowNames(significantRows(sectionRows(lines, header: HotFunctionsHeader), totalSamples: samples))
+	try requireRankedAboveWarm(selfTimeNames, section: HotFunctionsHeader, report: run.stdout)
+
+	// The same ranking again where it is a statement about the TREE rather than about a table, plus the
+	// interior node the two leaves hang off.
+	let treeRows = significantRows(sectionRows(lines, header: CallTreeHeader), totalSamples: samples)
+	let treeNames = rowNames(treeRows)
+	try requireRankedAboveWarm(treeNames, section: CallTreeHeader, report: run.stdout)
+	try Expect.isTrue(treeNames.contains(InteriorFunctionName), message: "the call tree does not list `{InteriorFunctionName}`, which calls both leaves and does nothing itself. Its samples are CUMULATIVE, so it cannot fall below this corpus's floor while its children are above it — a tree missing it is one that lost a level. The tree listed:{LineFeed}{renderedRows(treeNames)}")
+	let interiorPosition = positionOf(treeNames, wanted: InteriorFunctionName)
+	let hotTreePosition = positionOf(treeNames, wanted: HotFunctionName)
+	try Expect.lessThan(interiorPosition as AssertedInt, than: hotTreePosition as AssertedInt, message: "the call tree lists `{InteriorFunctionName}` after `{HotFunctionName}`, though it is their caller. The tree is printed as a walk from the root down, so a caller below its callee means it was assembled from the leaf end. The tree listed:{LineFeed}{renderedRows(treeNames)}")
+
+	// ⭐ THE SHAPE, read off the one place it is written down.
+	let interiorColumn = nameColumn(rowAt(treeRows, position: interiorPosition))
+	let hotColumn = nameColumn(rowAt(treeRows, position: hotTreePosition))
+	let warmColumn = nameColumn(rowAt(treeRows, position: positionOf(treeNames, wanted: WarmFunctionName)))
+	let rootColumn = nameColumn(rowAt(treeRows, position: 0))
+	try Expect.lessThan(rootColumn as AssertedInt, than: interiorColumn as AssertedInt, message: "the call tree indents `{InteriorFunctionName}` no further than its own root, so the two read as siblings. Depth is the only thing the tree says that the self-time table does not. It printed:{LineFeed}{renderedRows(treeRows)}")
+	try Expect.lessThan(interiorColumn as AssertedInt, than: hotColumn as AssertedInt, message: "the call tree indents `{HotFunctionName}` no further than `{InteriorFunctionName}`, its caller, so the level between `main` and the leaves is not shown as a level at all. It printed:{LineFeed}{renderedRows(treeRows)}")
+	try Expect.equal(hotColumn as AssertedInt, expected: warmColumn as AssertedInt, message: "the call tree indents `{HotFunctionName}` and `{WarmFunctionName}` differently, though `{InteriorFunctionName}` calls both and they are siblings. It printed:{LineFeed}{renderedRows(treeRows)}")
+
+	// ⛔ AND THE SECTION THAT MUST NOT MIRROR THE OTHER TWO.
+	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
+	try Expect.equal(stackNames.count() as AssertedInt, expected: SingleThreadedStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor for a program that spawns nothing. One row per stack that RAN is what this section means, so a count above one is either a thread the fixture does not have or a stack keyed on something other than the stack. It listed:{LineFeed}{renderedRows(stackNames)}")
+	try Expect.isFalse(stackNames.contains(HotFunctionName), message: "a stack is named `{HotFunctionName}`, which is a LEAF the sampler landed in rather than the frame a stack bottoms out at. A section keyed on the sampled frame would mirror the self-time table exactly, and every ordering asserted above would still be green. It listed:{LineFeed}{renderedRows(stackNames)}")
+	try Expect.isFalse(stackNames.contains(WarmFunctionName), message: "a stack is named `{WarmFunctionName}`, which is a LEAF the sampler landed in rather than the frame a stack bottoms out at. It listed:{LineFeed}{renderedRows(stackNames)}")
+end 'the profiler ranks the busier function first in every section it reports'
+
+// `hot` present, `warm` present, and `hot` first — asked of two sections, so it is written once.
+function requireRankedAboveWarm(names StringArray, section String, report String) throws TestFailure
+	try Expect.isTrue(names.contains(HotFunctionName), message: "'{section}' does not list `{HotFunctionName}`, which the fixture gives ten times the work of anything else in the program. It listed:{LineFeed}{renderedRows(names)}{LineFeed}The whole report was:{LineFeed}{report}")
+	try Expect.isTrue(names.contains(WarmFunctionName), message: "'{section}' does not list `{WarmFunctionName}`, which the fixture gives a tenth of `{HotFunctionName}`'s work — several times this corpus's own floor, not a rounding error. It listed:{LineFeed}{renderedRows(names)}{LineFeed}The whole report was:{LineFeed}{report}")
+	let hotPosition = positionOf(names, wanted: HotFunctionName)
+	let warmPosition = positionOf(names, wanted: WarmFunctionName)
+	try Expect.lessThan(hotPosition as AssertedInt, than: warmPosition as AssertedInt, message: "'{section}' ranks `{WarmFunctionName}` above `{HotFunctionName}`, though the fixture gives `{HotFunctionName}` ten times the work. This ordering is a fact about the program, not about the run that was sampled. It listed:{LineFeed}{renderedRows(names)}")
+end 'requireRankedAboveWarm'
+
+// One row by the position a name was found at. The position came from the same list, so it is in range.
+function rowAt(rows StringArray, position RowPosition) returns String
+	return try rows.get(position) otherwise panic("profile tests: the gate could not run — position {position} came from this very list of {rows.count()} rows.")
+end 'rowAt'

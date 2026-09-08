@@ -1,0 +1,71 @@
+// definition-symbols.test.maxon — `textDocument/definition` on the things a NAME can be: a function call,
+// a `var`, a `let`, a parameter. Four of the thirteen recovered definition tests;
+// `definition-members.test.maxon` holds the three that jump to a TYPE's own declarations and
+// `definition-scope.test.maxon` the six whose answer depends on scope.
+//
+// The session, the release discipline and the two entry points all four run through are
+// `definition-probe.test.maxon`'s.
+//
+// ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/definition` with
+// `-32601`; the probe's refusal sentence is what says so when one fails.
+//
+// ⚠ **THE FIXTURES ARE BYTE-EXACT AND SPACE-INDENTED**, because the recovered `(line, character)` pairs
+// were hand-counted against exactly that text. A `b"…"` literal neither strips indentation nor appends a
+// trailing newline, so what stands between the quotes is what the server is told, byte for byte.
+
+function helperCallFixture() returns String
+	return String.from(b"function helper() returns int
+    return 42
+end 'helper'
+
+function main() returns int
+    return helper()
+end 'main'")
+end 'helperCallFixture'
+
+function counterVarFixture() returns String
+	return String.from(b"function test() returns int
+    var counter = 0
+    counter = counter + 1
+    return counter
+end 'test'")
+end 'counterVarFixture'
+
+function letValueFixture() returns String
+	return String.from(b"function test() returns int
+    let value = 42
+    return value
+end 'test'")
+end 'letValueFixture'
+
+function addParameterFixture() returns String
+	return String.from(b"function add(a int, b int) returns int
+    return a + b
+end 'add'")
+end 'addParameterFixture'
+
+test 'definition returns location'
+	// Request definition on 'helper' call at line 5, character 11 (inside "helper")
+	// Should point to helper() definition at line 0
+	let source = helperCallFixture()
+	try expectDefinitionAt(source, line: 5, character: 11, startLine: 0, note: "a call did not resolve to the function's own declaration line.")
+end 'definition returns location'
+
+test 'definition for var variable'
+	// Go to definition on 'counter' usage in assignment (line 2, col 4)
+	let source = counterVarFixture()
+	try expectDefinitionAt(source, line: 2, character: 4, startLine: 1, note: "a `var` usage did not resolve to the line that declares it.")
+end 'definition for var variable'
+
+test 'definition for let variable'
+	// Go to definition on 'value' usage in return (line 2, col 11)
+	let source = letValueFixture()
+	try expectDefinitionAt(source, line: 2, character: 11, startLine: 1, note: "a `let` usage did not resolve to the line that declares it.")
+end 'definition for let variable'
+
+test 'definition for function parameter'
+	// Go to definition on 'a' usage in return (line 1, col 11)
+	// A parameter is declared by the SIGNATURE, so its definition is line 0 rather than a `var` line.
+	let source = addParameterFixture()
+	try expectDefinitionAt(source, line: 1, character: 11, startLine: 0, note: "a parameter usage did not resolve to the signature that declares it.")
+end 'definition for function parameter'

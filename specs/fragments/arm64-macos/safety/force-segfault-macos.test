@@ -1,0 +1,26 @@
+// Test: force-segfault-macos
+function main() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl maxon_force_segfault
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @maxon_force_segfault {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.epilogue 16
+    arm64.ret
+}

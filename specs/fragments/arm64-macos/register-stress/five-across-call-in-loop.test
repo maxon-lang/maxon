@@ -1,0 +1,76 @@
+// Test: five-across-call-in-loop
+function bump(x Integer) returns Integer
+	return x + 1
+end 'bump'
+
+function fourAcross(p Integer) returns Integer
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var i = 0
+	while i < 3 'loop'
+		let d = bump(i)
+		a1 = a1 + d
+		a2 = a2 + d
+		a3 = a3 + d
+		a4 = a4 + d
+		i = i + 1
+	end 'loop'
+	return a1 + a2 + a3 + a4
+end 'fourAcross'
+
+function main() returns ExitCode
+	let r = fourAcross(0)
+	if r == 34 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @fourAcross {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x0, x0, 4
+    arm64.movImm x4, 0
+  whilehdr:
+    arm64.cmp x4, 3
+    arm64.b.ge whileexit
+  __il_body:
+    arm64.add x4, x4, 1
+  __il_cont:
+    arm64.add x1, x1, x4
+    arm64.add x2, x2, x4
+    arm64.add x3, x3, x4
+    arm64.add x0, x0, x4
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl fourAcross
+    arm64.cmp x0, 34
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

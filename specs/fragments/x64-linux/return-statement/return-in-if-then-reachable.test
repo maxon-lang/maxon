@@ -1,0 +1,24 @@
+// Test: return-in-if-then-reachable
+function classify(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 0
+end 'classify'
+
+function main() returns ExitCode
+	return classify(5)
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  positive:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}

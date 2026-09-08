@@ -1,0 +1,118 @@
+// Test: a-declared-float-element-array-crosses-a-call-boundary
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+
+type Samples
+	export var values as Reals
+
+	export static function create() returns Self
+		var v = Reals.create()
+		v.push(2.5)
+		return Self{values: v}
+	end 'create'
+end 'Samples'
+
+function total(xs Reals) returns Real
+	var sum = 0.0
+	for x in xs 'each'
+		sum = sum + x
+	end 'each'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let s = Samples.create()
+	return trunc(total(s.values) + 1.5)
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Samples.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm rdx, 4612811918334230528
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect Samples.create
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  forhdr:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, __il_cont
+  each:
+    x64.loadRegBaseIndexScale.word64 rsi, [rax + rcx*8 + 0]
+  __im_cont:
+    x64.movqXmmGpr xmm1, rsi
+    x64.addsdRegReg xmm0, xmm0, xmm1
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  __il_cont:
+    x64.movsdRegRip xmm1, [rip + __fconst_1.5]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.cvttsd2siRegReg rbx, xmm0
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_Samples
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-declared-float-element-array-crosses-a-call-boundary.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

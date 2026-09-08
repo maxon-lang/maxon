@@ -1,0 +1,75 @@
+// Test: closer-case-member-nested-two-deep
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < tagOf(Kw.end) 'outer'
+		if tagOf(Kw.end) == 2 'inner'
+			total = total + 21
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+  matcharm#12:
+    x64.movRegImm32 rcx, 2
+  __il_cont#9:
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, whileexit
+  matcharm#21:
+    x64.movRegImm32 rcx, 2
+  __il_cont#18:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, critsplit
+  inner:
+    x64.leaRegRegImm32 rcx, r8, 21
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rcx, r8
+  ifcont:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r8, rcx
+    x64.jmp matcharm#12
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at closer-case-member-nested-two-deep.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

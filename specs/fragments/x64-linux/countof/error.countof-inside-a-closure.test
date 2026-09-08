@@ -1,0 +1,22 @@
+// Test: error.countof-inside-a-closure
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+
+	export function viaClosure() returns Int
+		let f = function() gives countof(Self)
+		return f()
+	end 'viaClosure'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.viaClosure()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:28: Unsupported: countof of the sized container's own `Self` inside a closure — a closure is lifted to its own function, which carries none of the enclosing method's hidden parameters, so the count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that

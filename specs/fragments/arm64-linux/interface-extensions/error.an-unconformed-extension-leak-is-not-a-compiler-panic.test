@@ -1,0 +1,38 @@
+// Test: error.an-unconformed-extension-leak-is-not-a-compiler-panic
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	export var v as T
+
+	export static function of(x T) returns Box
+		return Box{v: x}
+	end 'of'
+
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Box'
+
+typealias BoxN = Box with Num
+
+interface Seq uses Element
+	function firstOne() returns Element
+end 'Seq'
+
+extension Seq
+	export function twice() returns Element
+		return self.firstOne()
+	end 'twice'
+end 'Seq'
+
+function f(x Element) returns BoxN
+	_ = x
+	return BoxN.of(7)
+end 'f'
+
+function main() returns ExitCode
+	return f(3).get()
+end 'main'
+---
+CompilerError:
+error E3011: Unknown type 'Element'

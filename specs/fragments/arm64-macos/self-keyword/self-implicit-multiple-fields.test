@@ -1,0 +1,59 @@
+// Test: self-implicit-multiple-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Rectangle
+	var width as Integer
+	var height as Integer
+
+	function area() returns Integer
+		return width * height
+	end 'area'
+
+	static function create(width Integer, height Integer) returns Self
+		return Self{width: width, height: height}
+	end 'create'
+end 'Rectangle'
+
+function main() returns ExitCode
+	let r = Rectangle.create(6, height: 7)
+	return r.area()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 6
+    arm64.movImm x1, 7
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x1
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 8]
+    arm64.mul x0, x0, x1
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at self-implicit-multiple-fields.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

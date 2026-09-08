@@ -1,0 +1,733 @@
+// Internal grapheme cluster helpers for string types
+//
+// Purpose: Centralize grapheme cluster operations (UAX #29 algorithm) for string types.
+//
+// Every scan here takes the `String` and reaches its bytes only through `String.byteAt` /
+// `String.byteLength` — the inline primitives — never through `managed`. Stage 4b-2 makes a small
+// `String` a 16-byte VALUE with no record to hand out, so a `__ManagedMemory` parameter would force
+// one to be MATERIALIZED per call. These are the per-codepoint scans behind `count`, `charAt`,
+// `trim` and `for c in s`, so that would be an allocation per character. See `String.byteAt`'s doc.
+//
+// The `offset`/`len` window these used to carry is GONE. It was never used: all eight call sites
+// passed `offset: 0` and `len` = the source's full byte length, so the window was generality nobody
+// had asked for — and with a `String` source it is meaningless, since a String IS its own window.
+// (Stage 4b-1 removed the identical dead window from `hashManagedStringRange`.)
+
+typealias BreakProperty = int(0 to 13)
+
+// BytePos and GraphemeIndex are exported by stdlib/String.maxon.
+// How many regional-indicator codepoints run consecutively — a count of codepoints inside one
+// string, so `String.BytePos`'s bound holds: a signed machine word.
+typealias RegionalIndicatorCount = int(0 to u64.max)
+
+typealias Utf8Byte = int(0 to u8.max)
+
+// The lowest byte that is NOT a single-byte UTF-8 codepoint: at or above it, a byte either begins or
+// continues a multi-byte sequence.
+let AsciiLimit = 128 as Utf8Byte
+
+// U+000D and U+000A. GB3 joins CR to a following LF, which makes `<CR><LF>` the ONE grapheme cluster
+// that spans two ASCII bytes — the whole reason `String.singleByteGraphemesFlag` has to be stronger
+// than "is ASCII", and the reason ten methods that read the old `isAsciiFlag` as "one byte per
+// character" split the cluster.
+//
+// ⚠ `String.CarriageReturnByte` states this byte a second time, because its classifier tests every
+// byte of every string at construction and a cross-file call per byte is not affordable (a second
+// WALK of the same bytes measured +90% on that path; a call per byte is worse). The two are held
+// together by a CHECK rather than by derivation: `specs/string-type-2`'s
+// `crlf-is-one-grapheme-when-iterating` fails if either side stops treating CR specially — dropping
+// GB3 here makes `count()` say 4, and dropping CR from the classifier makes it say 4 the other way.
+let CarriageReturnByte = 13 as Utf8Byte
+let LineFeedByte = 10 as Utf8Byte
+
+// ============================================
+// Find grapheme end helpers (UAX #29)
+// ============================================
+
+/// Find the end of the grapheme cluster that starts at `startPos`.
+public function findGraphemeEnd(s String, startPos BytePos) returns BytePos
+	let len = s.byteLength()
+	if startPos >= len 'atEnd'
+		return startPos
+	end 'atEnd'
+
+	// Fast path: ASCII bytes (< 0x80) are single-byte codepoints.
+	// However, a combining mark (Extend/ZWJ/SpacingMark) may follow an ASCII base,
+	// e.g. "e\u0301" (e + combining acute). Check the next byte before returning.
+	// CR may combine with LF per UAX #29 GB3.
+	let firstByte = try s.byteAt(startPos) otherwise 'firstByteErr'
+		panic("grapheme: firstByte OOB — caller guarantees startPos < len")
+	end 'firstByteErr'
+	if firstByte < AsciiLimit 'isAscii'
+		if firstByte == CarriageReturnByte 'isCR'
+			if startPos + 1 < len 'hasNext'
+				let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr'
+					panic("grapheme: nextByte OOB — startPos+1 < len checked above")
+				end 'nextByteErr'
+				if nextByte == LineFeedByte 'isCRLF'
+					return startPos + 2
+				end 'isCRLF'
+			end 'hasNext'
+		end 'isCR'
+		// Check if a non-ASCII byte follows that could be a combining mark
+		if startPos + 1 < len 'hasNextByte'
+			let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr2'
+				panic("grapheme: nextByte OOB — startPos+1 < len checked above")
+			end 'nextByteErr2'
+			if nextByte >= AsciiLimit 'nextIsMultibyte'
+				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
+				let nextCp = utf8DecodeAt(s, pos: startPos + 1)
+				let nextGbp = graphemeBreakProperty(nextCp)
+				// GB9: don't break before Extend(4) or ZWJ(5); GB9a: don't break before SpacingMark(8)
+				if nextGbp != 4 and nextGbp != 5 and nextGbp != 8 'notCombining'
+					return startPos + 1
+				end 'notCombining'
+			end 'nextIsMultibyte' else 'nextIsAscii'
+				return startPos + 1
+			end 'nextIsAscii'
+		end 'hasNextByte' else 'atStringEnd'
+			return startPos + 1
+		end 'atStringEnd'
+	end 'isAscii'
+
+	// Decode first codepoint at startPos
+	var pos = startPos
+	var prevCp = utf8DecodeAt(s, pos: pos)
+	let prevBytes = utf8ByteLengthAt(s, pos: pos)
+	pos = pos + (prevBytes as BytePos)
+
+	// Get grapheme break property for first codepoint
+	var prevGbp = graphemeBreakProperty(prevCp)
+	var state = graphemeStateInit()
+	state = graphemeStateUpdate(state, gbp: prevGbp, cp: prevCp)
+
+	// Scan forward until we find a grapheme break
+	while pos < len 'scan'
+		let currCp = utf8DecodeAt(s, pos: pos)
+		let currGbp = graphemeBreakProperty(currCp)
+
+		// Check if there's a break before current codepoint
+		if isGraphemeBreak(prevGbp, currGbp: currGbp, currCp: currCp, state: state) 'breakFound'
+			return pos
+		end 'breakFound'
+
+		// Update state and advance to next codepoint
+		state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
+		prevGbp = currGbp
+		prevCp = currCp
+		let currBytes = utf8ByteLengthAt(s, pos: pos)
+		pos = pos + (currBytes as BytePos)
+	end 'scan'
+
+	return pos
+end 'findGraphemeEnd'
+
+// ============================================
+// Find grapheme start helpers (backward scanning, UAX #29)
+// ============================================
+
+// findPrevCodepointStart - Find the start byte position of the codepoint before pos.
+// Walks backward skipping UTF-8 continuation bytes (10xxxxxx).
+function findPrevCodepointStart(s String, pos BytePos) returns BytePos
+	var p = pos - 1
+	while p > 0 'back'
+		let b = try s.byteAt(p) otherwise panic("findPrevCodepointStart: byteAt OOB — caller guarantees pos within the string")
+		if not utf8IsContinuation(b) 'notContinuation'
+			break
+		end 'notContinuation'
+		p = p - 1
+	end 'back'
+	return p
+end 'findPrevCodepointStart'
+
+// findGraphemeStart - Find the start of the grapheme cluster ending at beforePos.
+// Scans backward from beforePos applying UAX #29 rules in reverse.
+// Returns the byte position where the grapheme cluster begins.
+public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
+	if beforePos <= 0 'atStart'
+		return 0
+	end 'atStart'
+
+	// Step back one codepoint to get the last codepoint of this grapheme
+	var pos = findPrevCodepointStart(s, pos: beforePos)
+	var cp = utf8DecodeAt(s, pos: pos)
+	var gbp = graphemeBreakProperty(cp)
+
+	// The simple case: if this codepoint is Control/CR/LF, the grapheme is just this codepoint
+	// GB4/GB5: break around Control/CR/LF
+	if gbp == 3 or gbp == 1 or gbp == 2 'control_stop'
+		// Special case GB3: CR+LF is a single grapheme
+		if gbp == 2 and pos > 0 'check_crlf'
+			var prevPos = findPrevCodepointStart(s, pos: pos)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			if prevCp == 13 'is_crlf'
+				return prevPos
+			end 'is_crlf'
+		end 'check_crlf'
+		return pos
+	end 'control_stop'
+
+	// GB9: Extend(4) and ZWJ(5) don't break from what precedes them
+	// GB9a: SpacingMark(8) doesn't break from what precedes it
+	// Keep stepping backward through these combining characters
+	while pos > 0 and (gbp == 4 or gbp == 5 or gbp == 8) 'extend_back'
+		var prevPos = findPrevCodepointStart(s, pos: pos)
+		var prevCp = utf8DecodeAt(s, pos: prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+
+		// GB4: break after Control/CR/LF - the Extend attaches to nothing before
+		if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'control_before_extend'
+			return pos
+		end 'control_before_extend'
+
+		// GB11: Extended_Pictographic Extend* ZWJ x Extended_Pictographic
+		// We are scanning backward through Extend/ZWJ. If we find an Extended_Pictographic,
+		// check if it is part of an emoji ZWJ sequence by looking at what follows pos.
+		// The forward-facing check is: if the current trailing part (from pos to beforePos)
+		// starts with ZWJ followed by Extended_Pictographic, and we just found an
+		// Extended_Pictographic with possible Extend* before the ZWJ.
+		// But since we're accumulating backward, we handle this by just continuing
+		// to absorb the Extended_Pictographic as the base character.
+
+		pos = prevPos
+		cp = prevCp
+		gbp = prevGbp
+	end 'extend_back'
+
+	// Now pos points to the "base" character. Handle special base types.
+
+	// GB11: If we arrived at an Extended_Pictographic that might be part of an emoji ZWJ sequence,
+	// check if there's a ZWJ+Extend*+Extended_Pictographic before it.
+	if isExtendedPictographic(cp) and pos > 0 'check_emoji_zwj'
+		// Look backward for ZWJ (possibly preceded by Extend*)
+		let scanPos = pos
+		var prevPos = findPrevCodepointStart(s, pos: scanPos)
+		var prevCp = utf8DecodeAt(s, pos: prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+
+		// Skip Extend characters before ZWJ
+		while prevGbp == 4 and prevPos > 0 'skip_extend_before_zwj'
+			prevPos = findPrevCodepointStart(s, pos: prevPos)
+			prevCp = utf8DecodeAt(s, pos: prevPos)
+			prevGbp = graphemeBreakProperty(prevCp)
+		end 'skip_extend_before_zwj'
+
+		if prevGbp == 5 and prevPos > 0 'found_zwj'
+			// Found ZWJ, now check if Extended_Pictographic precedes it
+			let epPos = findPrevCodepointStart(s, pos: prevPos)
+			let epCp = utf8DecodeAt(s, pos: epPos)
+			if isExtendedPictographic(epCp) 'found_emoji_base'
+				// This is an emoji ZWJ sequence - recurse to find the full start
+				return findGraphemeStart(s, beforePos: pos)
+			end 'found_emoji_base'
+		end 'found_zwj'
+	end 'check_emoji_zwj'
+
+	// GB9b: Prepend x (don't break after Prepend)
+	if pos > 0 and gbp != 3 and gbp != 1 and gbp != 2 'check_prepend'
+		var prevPos = findPrevCodepointStart(s, pos: pos)
+		var prevCp = utf8DecodeAt(s, pos: prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+		if prevGbp == 7 'is_prepend'
+			pos = prevPos
+		end 'is_prepend'
+	end 'check_prepend'
+
+	// GB6-8: Hangul syllable sequences
+	if gbp == 11 'hangul_t'
+		// T can be preceded by T, LVT, LV, or V
+		while pos > 0 'hangul_t_back'
+			var prevPos = findPrevCodepointStart(s, pos: pos)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 11 'more_t'
+				pos = prevPos
+			end 'more_t' else 'not_t'
+				if prevGbp == 13 or prevGbp == 12 'lvt_or_lv'
+					pos = prevPos
+					gbp = prevGbp
+					break
+				end 'lvt_or_lv' else 'not_hangul_before_t'
+					if prevGbp == 10 'v_before_t'
+						pos = prevPos
+						gbp = prevGbp
+					end 'v_before_t'
+					break
+				end 'not_hangul_before_t'
+			end 'not_t'
+		end 'hangul_t_back'
+	end 'hangul_t'
+
+	if gbp == 10 or gbp == 12 'hangul_v_lv'
+		// V or LV can be preceded by V or L; LV can be preceded by L
+		while pos > 0 'hangul_v_back'
+			var prevPos = findPrevCodepointStart(s, pos: pos)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 10 and gbp == 10 'more_v'
+				pos = prevPos
+			end 'more_v' else 'not_v'
+				if prevGbp == 9 'l_before_v'
+					pos = prevPos
+					break
+				end 'l_before_v'
+				break
+			end 'not_v'
+		end 'hangul_v_back'
+	end 'hangul_v_lv'
+
+	if gbp == 13 'hangul_lvt'
+		// LVT can be preceded by L
+		if pos > 0 'check_l_before_lvt'
+			var prevPos = findPrevCodepointStart(s, pos: pos)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 9 'l_before_lvt'
+				pos = prevPos
+			end 'l_before_lvt'
+		end 'check_l_before_lvt'
+	end 'hangul_lvt'
+
+	if gbp == 9 'hangul_l'
+		// L can be preceded by more L
+		while pos > 0 'hangul_l_back'
+			var prevPos = findPrevCodepointStart(s, pos: pos)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 9 'more_l'
+				pos = prevPos
+			end 'more_l' else 'not_l'
+				break
+			end 'not_l'
+		end 'hangul_l_back'
+	end 'hangul_l'
+
+	// GB12-13: Regional Indicators pair up from the start of the run.
+	// Walk backward to find the start of the RI run, count total RIs.
+	// If even count, break at pairs; if odd, the first RI is unpaired.
+	if gbp == 6 'ri_check'
+		var riStart = pos
+		var riCount = 1
+		while riStart > 0 'ri_back'
+			var prevPos = findPrevCodepointStart(s, pos: riStart)
+			var prevCp = utf8DecodeAt(s, pos: prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 6 'more_ri'
+				riStart = prevPos
+				riCount = riCount + 1
+			end 'more_ri' else 'not_ri'
+				break
+			end 'not_ri'
+		end 'ri_back'
+		// RIs pair from the start. If total count is even, pos is the start of the last pair.
+		// If odd, the first RI is unpaired, then pairs follow.
+		// We need the start of the pair that contains 'pos'.
+		// The number of RIs from riStart to pos (inclusive of pos) = riCount.
+		// The number of RIs after pos up to beforePos = 1 (the one at pos).
+		// Actually, pos is the last RI before beforePos. Count how many from riStart to pos.
+		// Pairs form left-to-right: (0,1), (2,3), (4,5), ...
+		// pos is at index (riCount-1) from riStart. If riCount is even, pos is at an odd index
+		// (second of a pair), so the pair starts one RI before pos. If riCount is odd, pos is
+		// at an even index (first of a pair or unpaired).
+		if riCount mod 2 == 0 'even_count'
+			// pos is the second RI in its pair. Step back one RI for the pair start.
+			pos = findPrevCodepointStart(s, pos: pos)
+		end 'even_count'
+		// else: pos is already at the start of its pair (or unpaired)
+	end 'ri_check'
+
+	return pos
+end 'findGraphemeStart'
+
+// ============================================
+// Count grapheme helpers
+// ============================================
+
+// THE THREE BULK WALKS, AND THE ONE SHORTCUT THEY ARE ALLOWED.
+//
+// Each converts between byte positions and grapheme counts by stepping `findGraphemeEnd` one
+// cluster at a time — Θ(clusters), with a real call per step, since the bootstrap has no inliner.
+//
+// `String.hasSingleByteGraphemes()` collapses all three to arithmetic, and it is the ONLY predicate
+// that may: the string has already been classified, at construction, as one byte per grapheme, so
+// byte offsets and grapheme indices ARE the same number. That is applying a fact the string states
+// about itself, not a second opinion about where clusters end — which is exactly what the old
+// `isAscii` shortcut was, and why it split CR+LF ten different ways.
+//
+// The shortcut lives HERE, in the file that owns UAX #29, rather than in `String`'s methods. There
+// is one place that knows what the flag licenses, and callers stay unaware of it.
+//
+// Measured (100k-byte ASCII string, x64-windows): without it `findFirst`/`findLast`/`slice-by-length`
+// cost what `count()` costs — ×2.4 at 64 bytes rising to ×6.5 at 100k. `for c in s` does NOT get one
+// and does not need one: it steps a cluster at a time either way, and routing every step through
+// `findGraphemeEnd` measured +1.3%, inside noise, next to the Character it allocates per step.
+
+/// Count the total number of grapheme clusters in a String.
+///
+/// The private `countGraphemesManagedRange` this used to forward to is gone with the window: its
+/// only caller was this function, passing the whole string.
+public function countGraphemes(s String) returns GraphemeIndex
+	let len = s.byteLength()
+	// One byte per cluster, so the byte length IS the cluster count — the cast is the change of purpose.
+	if s.hasSingleByteGraphemes() 'oneByteEach'
+		return len
+	end 'oneByteEach'
+
+	var graphemeCount = 0
+	var pos = 0
+	while pos < len 'countLoop'
+		pos = findGraphemeEnd(s, startPos: pos)
+		graphemeCount = graphemeCount + 1
+	end 'countLoop'
+	return graphemeCount
+end 'countGraphemes'
+
+/// Convert a byte index to a grapheme (character) index
+/// Returns the number of grapheme clusters before the byte position
+public function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns GraphemeIndex
+	let len = s.byteLength()
+	// The byte offset IS the grapheme index. The walk below stops at the end of the string when
+	// `byteIdx` runs past it, so this must too. `byteIdx` needs no guard of the kind
+	// `graphemeOffsetToBytePos`'s `count` does: it is never caller-supplied, arriving only from
+	// `findIn`/`findLastIn`, which return a position inside the string they searched.
+	// One byte per cluster, so the byte offset IS the cluster index — clamped on the BYTE side, and the
+	// cast is the one change of purpose.
+	if s.hasSingleByteGraphemes() 'oneByteEach'
+		let clamped = byteIdx if byteIdx < len else len
+		return clamped as GraphemeIndex
+	end 'oneByteEach'
+
+	var graphemeIdx = 0
+	var pos = 0
+	while pos < byteIdx and pos < len 'count'
+		pos = findGraphemeEnd(s, startPos: pos)
+		graphemeIdx = graphemeIdx + 1
+	end 'count'
+	return graphemeIdx
+end 'byteIndexToGraphemeIndex'
+
+/// Advance from a byte position by a number of grapheme clusters
+/// Returns the byte position after advancing by `count` graphemes
+public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeIndex) returns BytePos
+	let len = s.byteLength()
+	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic.
+	// The comparisons need a non-negative `count`, and `GraphemeIndex`'s checked door supplies it
+	// before the body runs.
+	//
+	// Inside the guard the arithmetic is safe: `startBytePos < len` makes the subtraction positive,
+	// and the sum is only formed when it is already known to land below `len`.
+	if s.hasSingleByteGraphemes() and startBytePos < len 'oneByteEach'
+		let countBytes = count as BytePos
+		if countBytes < len - startBytePos 'inRange'
+			return startBytePos + countBytes
+		end 'inRange'
+		return len
+	end 'oneByteEach'
+
+	var pos = startBytePos
+	var i = 0
+	while i < count and pos < len 'advance'
+		pos = findGraphemeEnd(s, startPos: pos)
+		i = i + 1
+	end 'advance'
+	return pos
+end 'graphemeOffsetToBytePos'
+
+// Grapheme_Cluster_Break property values (used as return values):
+//   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,
+//   6 = Regional_Indicator, 7 = Prepend, 8 = SpacingMark,
+//   9 = L, 10 = V, 11 = T, 12 = LV, 13 = LVT
+
+// Get Grapheme_Cluster_Break property for a codepoint
+// Returns: 0=Other, 1=CR, 2=LF, 3=Control, 4=Extend, 5=ZWJ,
+//          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
+//          9=L, 10=V, 11=T, 12=LV, 13=LVT
+public function graphemeBreakProperty(cp Codepoint) returns BreakProperty
+	// CR (return 1)
+	if cp == 13 'cr'
+		return 1
+	end 'cr'
+
+	// LF (return 2)
+	if cp == 10 'lf'
+		return 2
+	end 'lf'
+
+	// Control characters (return 3)
+	if cp < 32 or (cp >= 127 and cp < 160) 'control'
+		return 3
+	end 'control'
+
+	// ZWJ U+200D (return 5)
+	if cp == 8205 'zwj'
+		return 5
+	end 'zwj'
+
+	// Regional Indicators U+1F1E6..U+1F1FF (return 6)
+	if cp >= 127462 and cp <= 127487 'ri'
+		return 6
+	end 'ri'
+
+	// Hangul syllables U+AC00..U+D7A3
+	if cp >= 44032 and cp <= 55203 'hangul'
+		let sindex = cp - 44032
+		if sindex mod 28 == 0 'lv'
+			return 12  // LV
+		end 'lv' else 'lvt'
+			return 13  // LVT
+		end 'lvt'
+	end 'hangul'
+
+	// Hangul Jamo L U+1100..U+115F (return 9)
+	if cp >= 4352 and cp <= 4447 'jamo_l'
+		return 9
+	end 'jamo_l'
+
+	// Hangul Jamo V U+1160..U+11A7 (return 10)
+	if cp >= 4448 and cp <= 4519 'jamo_v'
+		return 10
+	end 'jamo_v'
+
+	// Hangul Jamo T U+11A8..U+11FF (return 11)
+	if cp >= 4520 and cp <= 4607 'jamo_t'
+		return 11
+	end 'jamo_t'
+
+	// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
+	if cp >= 127995 and cp <= 127999 'skin_tone'
+		return 4
+	end 'skin_tone'
+
+	// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
+	if cp >= 65024 and cp <= 65039 'vs'
+		return 4
+	end 'vs'
+
+	// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
+	if cp >= 768 and cp <= 879 'combining'
+		return 4
+	end 'combining'
+
+	// Format characters that are Control (return 3)
+	// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
+	if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
+		return 3
+	end 'format_control'
+
+	// ZWNJ U+200C (return 4 = Extend)
+	if cp == 8204 'zwnj'
+		return 4
+	end 'zwnj'
+
+	// Other (return 0)
+	return 0
+end 'graphemeBreakProperty'
+
+// Check if codepoint has Extended_Pictographic property (emoji base)
+public function isExtendedPictographic(cp Codepoint) returns bool
+	// Basic emoji range U+1F600..U+1F64F
+	if cp >= 128512 and cp <= 128591 'emoji_faces'
+		return true
+	end 'emoji_faces'
+
+	// Emoji symbols U+1F300..U+1F5FF
+	if cp >= 127744 and cp <= 128511 'emoji_symbols'
+		return true
+	end 'emoji_symbols'
+
+	// Transport and map symbols U+1F680..U+1F6FF
+	if cp >= 128640 and cp <= 128767 'emoji_transport'
+		return true
+	end 'emoji_transport'
+
+	// Supplemental symbols U+1F900..U+1F9FF
+	if cp >= 129280 and cp <= 129535 'emoji_supp'
+		return true
+	end 'emoji_supp'
+
+	// Additional emoji U+1FA00..U+1FAFF
+	if cp >= 129536 and cp <= 130047 'emoji_extra'
+		return true
+	end 'emoji_extra'
+
+	// Miscellaneous symbols U+2600..U+26FF
+	if cp >= 9728 and cp <= 9983 'misc_symbols'
+		return true
+	end 'misc_symbols'
+
+	// Dingbats U+2700..U+27BF
+	if cp >= 9984 and cp <= 10175 'dingbats'
+		return true
+	end 'dingbats'
+
+	return false
+end 'isExtendedPictographic'
+
+// ⭐⭐ **THE SCAN STATE IS ONE PACKED WORD, AND IT USED TO BE A HEAP OBJECT ALLOCATED PER CODEPOINT.**
+// `GraphemeState` was a two-field `type` — i.e. a heap box — and `graphemeStateUpdate` minted a fresh one
+// for EVERY codepoint of every scan, so `"…".count()`, `for c in s`, `trim()` and every byte↔grapheme
+// conversion cost one allocation and one release per codepoint. Nothing in the algorithm needs an object:
+// the state is two bits' worth of information (a running count and a flag), it is purely local to a single
+// scan, and it never escapes the loop that threads it.
+//
+// Bit 0 is `inEmojiSeq`; the remaining bits are the regional-indicator count. The COUNT is carried in full
+// rather than just its parity, even though `isGraphemeBreak` reads only `riCount mod 2`: keeping the
+// field the rules are written against means a future GB rule that needs the count finds it, and a shift
+// costs exactly what a parity toggle would. A run long enough to overflow the shift is a run of 2^62
+// regional indicators.
+//
+// ⚠ **THE ENCODING IS SHARED WITH THE COMPILER'S OWN SYNTHESIZED SEGMENTER AND MUST STAY BIT-FOR-BIT
+// COMPATIBLE WITH IT.** That one states the same packing as `GraphemeStateRiShift` / `GraphemeStateEmojiBit`
+// / `GraphemeStateParityBit`, for its own reason (a Std runtime function returns exactly one value). The
+// two are held together by a CHECK rather than by derivation —
+// `specs/stdlib-loading.md`'s `the-corpus-segmenter-agrees-with-the-synthesized-one` runs both over the
+// same inputs and compares — because neither can read the other's constants.
+typealias GraphemeStateBits = bits(64)
+
+let GraphemeStateRiShift = 1
+let GraphemeStateEmojiBit = 1
+let GraphemeStateParityBit = 1
+
+// Create initial grapheme state: no regional indicators seen, not inside an emoji sequence.
+function graphemeStateInit() returns GraphemeStateBits
+	return 0
+end 'graphemeStateInit'
+
+// Whether the scan is inside an Extended_Pictographic…ZWJ sequence (GB11).
+function graphemeStateInEmojiSeq(state GraphemeStateBits) returns bool
+	return (state and GraphemeStateEmojiBit) != 0
+end 'graphemeStateInEmojiSeq'
+
+// Whether an ODD number of consecutive regional indicators has been seen (GB12-13). The rules ask only
+// for the parity, so this is the one reader of the count and the reason it is not stored as a bare flag.
+function graphemeStateRiIsOdd(state GraphemeStateBits) returns bool
+	return ((state shr GraphemeStateRiShift) and GraphemeStateParityBit) != 0
+end 'graphemeStateRiIsOdd'
+
+// Check if there should be a grapheme break between two codepoints
+// prevGbp: Grapheme_Cluster_Break property of previous codepoint
+// currGbp: Grapheme_Cluster_Break property of current codepoint
+// prevCp: Previous codepoint value (needed for Extended_Pictographic check)
+// currCp: Current codepoint value (needed for Extended_Pictographic check)
+// state: State for tracking RI counts and emoji sequences
+//
+// Returns true if there should be a break BEFORE the current codepoint
+function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Codepoint, state GraphemeStateBits) returns bool
+
+	// GB3: Do not break between CR and LF (CR × LF)
+	// prevGbp == 1 (CR) and currGbp == 2 (LF)
+	if prevGbp == 1 and currGbp == 2 'gb3'
+		return false
+	end 'gb3'
+
+	// GB4: Break after Control, CR, or LF
+	// prevGbp == 3 (Control) or prevGbp == 1 (CR) or prevGbp == 2 (LF)
+	if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'gb4'
+		return true
+	end 'gb4'
+
+	// GB5: Break before Control, CR, or LF
+	if currGbp == 3 or currGbp == 1 or currGbp == 2 'gb5'
+		return true
+	end 'gb5'
+
+	// GB6: Do not break Hangul syllable sequences (L × L/V/LV/LVT)
+	// prevGbp == 9 (L)
+	if prevGbp == 9 'gb6'
+		// currGbp == 9 (L), 10 (V), 12 (LV), or 13 (LVT)
+		if currGbp == 9 or currGbp == 10 or currGbp == 12 or currGbp == 13 'gb6_inner'
+			return false
+		end 'gb6_inner'
+	end 'gb6'
+
+	// GB7: Do not break Hangul syllable sequences (LV/V × V/T)
+	// prevGbp == 12 (LV) or 10 (V)
+	if prevGbp == 12 or prevGbp == 10 'gb7'
+		// currGbp == 10 (V) or 11 (T)
+		if currGbp == 10 or currGbp == 11 'gb7_inner'
+			return false
+		end 'gb7_inner'
+	end 'gb7'
+
+	// GB8: Do not break Hangul syllable sequences (LVT/T × T)
+	// prevGbp == 13 (LVT) or 11 (T)
+	if prevGbp == 13 or prevGbp == 11 'gb8'
+		// currGbp == 11 (T)
+		if currGbp == 11 'gb8_inner'
+			return false
+		end 'gb8_inner'
+	end 'gb8'
+
+	// GB9: Do not break before Extend or ZWJ (× Extend/ZWJ)
+	// currGbp == 4 (Extend) or 5 (ZWJ)
+	if currGbp == 4 or currGbp == 5 'gb9'
+		return false
+	end 'gb9'
+
+	// GB9a: Do not break before SpacingMark (× SpacingMark)
+	// currGbp == 8 (SpacingMark)
+	if currGbp == 8 'gb9a'
+		return false
+	end 'gb9a'
+
+	// GB9b: Do not break after Prepend (Prepend ×)
+	// prevGbp == 7 (Prepend)
+	if prevGbp == 7 'gb9b'
+		return false
+	end 'gb9b'
+
+	// GB11: Do not break within emoji ZWJ sequences
+	// \p{Extended_Pictographic} Extend* ZWJ × \p{Extended_Pictographic}
+	// prevGbp == 5 (ZWJ)
+	if prevGbp == 5 and isExtendedPictographic(currCp) 'gb11'
+		if graphemeStateInEmojiSeq(state) 'gb11_check'
+			return false
+		end 'gb11_check'
+	end 'gb11'
+
+	// GB12-13: Do not break within emoji flag sequences
+	// Only pair up RIs; odd-numbered RIs break before next RI
+	// prevGbp == 6 (Regional_Indicator) and currGbp == 6
+	if prevGbp == 6 and currGbp == 6 'gb12'
+		if graphemeStateRiIsOdd(state) 'gb12_odd'
+			return false
+		end 'gb12_odd'
+	end 'gb12'
+
+	// GB999: Otherwise, break everywhere
+	return true
+end 'isGraphemeBreak'
+
+// Update grapheme state after processing a codepoint.
+//
+// BOTH fields reset unless this codepoint extends them: the count survives only across an unbroken run of
+// Regional Indicators, and the emoji flag only while an Extended_Pictographic base is still being extended.
+// That reset is why the old object could never be reused in place and had to be re-minted per codepoint.
+function graphemeStateUpdate(state GraphemeStateBits, gbp BreakProperty, cp Codepoint) returns GraphemeStateBits
+	// Track Regional Indicator sequences (gbp == 6)
+	var riCount = 0 as RegionalIndicatorCount
+	if gbp == 6 'ri_update'
+		// The shift UNPACKS a count out of the bitfield, so the pattern becomes a quantity here — a
+		// zero-filling shift on an unsigned-topped operand, so the result cannot be negative.
+		riCount = ((state shr GraphemeStateRiShift) as RegionalIndicatorCount) + 1
+	end 'ri_update'
+
+	// Track emoji sequences for GB11
+	var inEmojiSeq = false
+	if isExtendedPictographic(cp) 'emoji_base'
+		inEmojiSeq = true
+	end 'emoji_base' else 'not_emoji_base'
+		if graphemeStateInEmojiSeq(state) 'emoji_continue'
+			// gbp == 4 (Extend) or 5 (ZWJ)
+			if gbp == 4 or gbp == 5 'emoji_extend'
+				inEmojiSeq = true
+			end 'emoji_extend'
+		end 'emoji_continue'
+	end 'not_emoji_base'
+
+	if inEmojiSeq 'packEmoji'
+		return (riCount shl GraphemeStateRiShift) or GraphemeStateEmojiBit
+	end 'packEmoji'
+
+	return riCount shl GraphemeStateRiShift
+end 'graphemeStateUpdate'

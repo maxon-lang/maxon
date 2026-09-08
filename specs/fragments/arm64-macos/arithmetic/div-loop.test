@@ -1,0 +1,72 @@
+// Test: div-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+function divLoop(n Integer) returns Integer
+	var sum = 0
+	var i = 1
+	while i <= n 'loop'
+		sum = sum + trunc(try (50 / i) otherwise panic("divLoop: i was 0"))
+		i = i + 1
+	end 'loop'
+	return sum
+end 'divLoop'
+
+function main() returns ExitCode
+	return divLoop(5)
+end 'main'
+---
+ExitCode: 113
+---
+func @divLoop {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+  whilehdr:
+    arm64.cmp x2, x0
+    arm64.b.gt whileexit
+  loop:
+    arm64.movImm x3, 50
+    arm64.cmp x2, 0
+    arm64.cset x4, eq
+    arm64.orr x5, x2, x4
+    arm64.sdiv x3, x3, x5
+    arm64.cmp x4, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at div-loop.test:9: divLoop: i was 0\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.add x1, x1, x3
+    arm64.add x2, x2, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl divLoop
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at div-loop.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

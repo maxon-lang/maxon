@@ -1,0 +1,76 @@
+// Test: builtins-clock.thread-cpu-ticks-advances-under-work
+function main() returns ExitCode
+	let before = __Builtins.threadCpuTicks()
+	var sum = 0
+	for i in 0 upto 2000000 'spin'
+		sum = sum + i
+	end 'spin'
+	let after = __Builtins.threadCpuTicks()
+	var score = 0
+	if sum > 0 'workHappened'
+		score = score + 1
+	end 'workHappened'
+	if after > before 'cpuAdvanced'
+		score = score + 3
+	end 'cpuAdvanced'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 2000000
+    x64.jcc greaterEqual, forexit
+  spin:
+    x64.leaRegRegReg r12, r12, rax
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.callDirect __thread_cpu_ticks
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r12, 0
+    x64.jcc lessEqual, ifcont#6
+  workHappened:
+    x64.movRegImm32 rax, 1
+  ifcont#6:
+    x64.cmpRegReg r8, rbx
+    x64.jcc lessEqual, critsplit
+  cpuAdvanced:
+    x64.leaRegRegImm32 r8, rax, 3
+    x64.jmp ifcont#8
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont#8:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-clock.thread-cpu-ticks-advances-under-work.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

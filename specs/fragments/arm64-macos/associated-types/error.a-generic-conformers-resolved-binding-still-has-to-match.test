@@ -1,0 +1,48 @@
+// Test: error.a-generic-conformers-resolved-binding-still-has-to-match
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Holder uses E implements Taker with E
+	let base as Integer
+	let seed as E
+
+	function take(e E) returns Integer
+		return self.base
+	end 'take'
+
+	function label() returns Integer
+		return self.base
+	end 'label'
+
+	static function create(base Integer, seed E) returns Self
+		return Self{base: base, seed: seed}
+	end 'create'
+end 'Holder'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let extra as Integer
+
+	export function run(t TakerOfT) returns Integer
+		return t.label() + self.extra
+	end 'run'
+
+	static function create(extra Integer) returns Self
+		return Self{extra: extra}
+	end 'create'
+end 'Box'
+
+typealias IntHolder = Holder with Integer
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.create(11).run(IntHolder.create(20, seed: 0)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:44:27: cannot widen 'IntHolder' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'IntHolder' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'

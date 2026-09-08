@@ -1,0 +1,76 @@
+// Where the compiler's binary lives, and what it cannot be asked to do.
+//
+// Its spec-test runner implements `--filter`, `--update-required`, `--log`,
+// `--network` and `--target` (`wasm32-wasi` cross-compiles and runs the emitted
+// component under the vendored wasmtime). It has no `--mm-trace`, and its driver
+// has no `--dump-stages`.
+//
+// A tool that re-derives "which binary, which flags" inline is how a flag the
+// compiler has never heard of ends up being handed to it anyway. This file is the
+// single place that knows.
+
+/// A flag the caller asked for that the compiler does not implement.
+///
+/// These are REJECTED rather than dropped. Silently ignoring a flag the caller
+/// explicitly set is the worse failure: an `mmTrace: true` run that never traced,
+/// reported back as a clean success, is indistinguishable from a leak-free run.
+/// The driver would not accept it anyway — it exits non-zero on an option it does
+/// not know.
+export enum UnsupportedFlag implements Error
+	mmTrace
+	dumpStages
+end 'UnsupportedFlag'
+
+/// Human-readable explanation for an `UnsupportedFlag`, naming the capability that
+/// is missing rather than merely the flag.
+export function unsupportedFlagReason(flag UnsupportedFlag) returns String
+	let capability = match flag 'f'
+		mmTrace gives "`mmTrace` (--mm-trace) — it has no memory-manager trace"
+		dumpStages gives "`dumpStages` (--dump-stages) — it emits no per-stage IR artifacts"
+	end 'f'
+
+	return "the compiler does not support {capability}."
+end 'unsupportedFlagReason'
+
+// =============================================================================
+// Binaries
+// =============================================================================
+
+/// Where the compiler's binary lives, whether or not it has been built. Use
+/// `compilerBinary` when the binary must actually exist.
+export function compilerBinaryPath(repoRoot FilePath) returns FilePath
+	let suffix = exeSuffix()
+	return childPath(repoRoot, segment: "maxon-bin/.maxon/maxon{suffix}")
+end 'compilerBinaryPath'
+
+/// Resolve the compiler's binary, throwing when it has not been built yet. Callers
+/// translate that into an `invalidRequest` pointing the user at the `build` tool.
+export function compilerBinary(repoRoot FilePath) returns FilePath throws NotFound
+	let path = compilerBinaryPath(repoRoot)
+	if not File.exists(path) 'missing'
+		throw NotFound.notFound
+	end 'missing'
+
+	return path
+end 'compilerBinary'
+
+// =============================================================================
+// Capabilities
+// =============================================================================
+
+/// Reject the spec-test flags the compiler cannot honour, BEFORE spawning it, so
+/// the caller reads the gap rather than a usage dump.
+export function checkSpecTestFlags(argsDoc JsonDoc, argsId JsonNodeId) throws UnsupportedFlag
+	let mmTrace = try argsDoc.getBool(argsId, key: "mmTrace") otherwise false
+	if mmTrace 'wantsMmTrace'
+		throw UnsupportedFlag.mmTrace
+	end 'wantsMmTrace'
+end 'checkSpecTestFlags'
+
+/// Reject `dumpStages: true`. The driver knows `--emit-ir` and nothing more, so it
+/// would exit non-zero on the unknown option.
+export function checkDumpStagesSupported(dumpStages bool) throws UnsupportedFlag
+	if dumpStages 'unsupported'
+		throw UnsupportedFlag.dumpStages
+	end 'unsupported'
+end 'checkDumpStagesSupported'

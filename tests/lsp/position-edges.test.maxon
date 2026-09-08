@@ -1,0 +1,92 @@
+// position-edges.test.maxon — the document shapes and boundary positions an editor actually sends, asked
+// as real requests.
+//
+// ⭐⭐ **A CARET SITS ONE PAST THE LAST CHARACTER, SO EVERY ONE OF THESE IS A NORMAL KEYSTROKE.** An
+// editor asks about a position past the end of a line, about a stale line number while a document is
+// being replaced, and about an empty buffer the moment a new file is opened — none of them is a
+// malformed request, and a server that threw or answered arbitrarily on any of them would be wrong at
+// the moment a user is typing fastest.
+//
+// ⚠ **CRLF IS ONE TERMINATOR, AND THE `\r` BELONGS TO THE LINE IT ENDS.** That is what makes a character
+// on a CRLF line count the same as it would on an LF one, and it is what a clamp to "the end of this
+// line" must respect: clamping onto the carriage return would put the caret one byte past every line's
+// last name.
+//
+// The session, the release discipline and the entry points are `definition-probe.test.maxon`'s.
+
+// The same seven lines under both terminators. The two literals are spelled with explicit `\r\n` and `\n`
+// rather than raw newlines so that WHICH terminator a fixture carries is visible in the source, and so
+// that the pair is provably the same text.
+function crlfDocument() returns String
+	return String.from(b"typealias EdgeProbeCount = int(0 to 300)\r\n\r\nfunction main() returns ExitCode\r\n    let alpha = 7 as EdgeProbeCount\r\n    let beta = alpha\r\n    return beta as ExitCode\r\nend 'main'")
+end 'crlfDocument'
+
+function lfDocument() returns String
+	return String.from(b"typealias EdgeProbeCount = int(0 to 300)\n\nfunction main() returns ExitCode\n    let alpha = 7 as EdgeProbeCount\n    let beta = alpha\n    return beta as ExitCode\nend 'main'")
+end 'lfDocument'
+
+// Line 4 is `    let beta = alpha`; `alpha` opens at character 15 and the line has nothing after it.
+let AlphaUseLine = 4 as LspCoordinate
+let AlphaUseCharacter = 15 as LspCoordinate
+
+// Line 3 is `    let alpha = 7 as EdgeProbeCount`, and `alpha` is five characters from 8.
+let AlphaDeclLine = 3 as LspCoordinate
+let AlphaDeclStart = 8 as LspCoordinate
+let AlphaDeclEnd = 13 as LspCoordinate
+
+// Far past the end of any line and of any document here. An editor sends a position past the end when a
+// pending edit has already shortened the buffer it is describing.
+let PastEveryLine = 999 as LspCoordinate
+
+test 'a CRLF break is ONE terminator, so a character counts the same as it would under LF'
+	// A server that let the `\r` open the next line starts every line one byte early, which puts this
+	// position on the space in front of `alpha` and answers nothing.
+	let document = crlfDocument()
+	try expectDefinitionRangeAt(document, line: AlphaUseLine, character: AlphaUseCharacter, startLine: AlphaDeclLine, startCharacter: AlphaDeclStart, endCharacter: AlphaDeclEnd, note: "a position on a line after a CRLF break did not resolve to the declaration.")
+end 'a CRLF break is ONE terminator, so a character counts the same as it would under LF'
+
+test 'a character past the end of a CRLF line clamps before the carriage return'
+	// ⭐ THE ROW THAT TESTS THE TERMINATOR RULE RATHER THAN ASSUMING IT. The clamp lands on the end of the
+	// line's CONTENT, which is where `alpha` ends — one byte further and it is on the `\r`, where no name
+	// ends and the answer is nothing.
+	let document = crlfDocument()
+	try expectDefinitionRangeAt(document, line: AlphaUseLine, character: PastEveryLine, startLine: AlphaDeclLine, startCharacter: AlphaDeclStart, endCharacter: AlphaDeclEnd, note: "a character past the end of a CRLF line did not clamp onto the name that ends it.")
+end 'a character past the end of a CRLF line clamps before the carriage return'
+
+test 'a character past the end of a line clamps to the end of that line'
+	// The LF twin, so the clamp is pinned for the ordinary case as well as the CRLF one. A server that
+	// clamped to the end of the DOCUMENT instead would answer about `end 'main'`.
+	let document = lfDocument()
+	try expectDefinitionRangeAt(document, line: AlphaUseLine, character: PastEveryLine, startLine: AlphaDeclLine, startCharacter: AlphaDeclStart, endCharacter: AlphaDeclEnd, note: "a character past the end of a line did not clamp onto the name that ends it.")
+end 'a character past the end of a line clamps to the end of that line'
+
+// The same document with one more declaration, whose last byte is the last byte of a NAME. That is what
+// makes the buffer-end clamp observable: the caret lands where `EdgeProbeCount` ends, and the name just
+// typed is what an editor is pointing at there.
+function trailingNameDocument() returns String
+	return String.from(b"typealias EdgeProbeCount = int(0 to 300)
+
+function main() returns ExitCode
+    let alpha = 7 as EdgeProbeCount
+    let beta = alpha
+    return beta as ExitCode
+end 'main'
+
+let EdgeProbeLimit = 100 as EdgeProbeCount")
+end 'trailingNameDocument'
+
+// `typealias ` is ten characters and `EdgeProbeCount` is fourteen.
+let ProbeCountDeclLine = 0 as LspCoordinate
+let ProbeCountDeclStart = 10 as LspCoordinate
+let ProbeCountDeclEnd = 24 as LspCoordinate
+
+test 'a line past the end of the buffer clamps to the buffer end'
+	let document = trailingNameDocument()
+	try expectDefinitionRangeAt(document, line: PastEveryLine, character: 0, startLine: ProbeCountDeclLine, startCharacter: ProbeCountDeclStart, endCharacter: ProbeCountDeclEnd, note: "a line past the end of the buffer did not clamp onto the last name in it.")
+end 'a line past the end of the buffer clamps to the buffer end'
+
+test 'an empty document answers absence rather than failing'
+	// A document with no bytes still has ONE line an editor can put a cursor in, and the answer there is
+	// "nothing is defined here" — not a refusal, and not a crash on an index into an empty buffer.
+	try expectNoDefinitionAt("", line: 0, character: 0)
+end 'an empty document answers absence rather than failing'

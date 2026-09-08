@@ -1,0 +1,104 @@
+// Track-0 SERVICE-ASYNC-STRAND torture (A5 / W226) — the shape no committed case had until now: a service
+// HANDLER that starts a coroutine and is shut down with that work still in flight.
+//
+// ⭐⭐ WHY IT READS `mmRawAllocLive()` AND NOT THE EXIT CODE, WHICH IS THE WHOLE REASON `W226` COULD NOT BE
+// SETTLED WHEN IT WAS OPENED. Since `EC10` a coroutine is published only to its OWNER's queue
+// (`GtOffCoroHead`) and driven only by that owner's chain of drivers. A service green thread is reclaimed
+// through the teardown ticket when `<T>.__loop` exits — so if the loop exits with coroutines still on its
+// `coroHead`, nothing drives them and nothing frees them. That is a STRAND, and a strand is invisible to the
+// exit gate: `__gt_promise_drop` already debited `__gt_live_count` at the drop, so the counter the 75 gate
+// reads is clean whether the coroutine ran or not. `async-scheduler.spawn-not-awaited` documents the same
+// blind spot. The raw allocation count is the one instrument that can see it.
+//
+// ⭐⭐ THE CONTROL IS HALF THE MEASUREMENT AND IT IS BUILT IN. `strandRounds` never awaits its coroutine;
+// `awaitRounds` awaits it, so nothing can possibly be stranded. Both run the same count of the same work
+// against the same service lifecycle, and the two growth figures are printed side by side. **A strand is a
+// DIFFERENCE between them, never the absolute size of either** — which matters, because the absolute number
+// is large and looks alarming on its own: a service's own teardown lags its handle drop until the exit
+// drain, so both columns grow by hundreds. Reading `strand=` alone is how this gets misreported.
+//
+// MEASURED 2026-08-31, 100 rounds, same box, same binary:
+//   MAXON_MAX_PROCS=1   strand 400   await 400
+//   MAXON_MAX_PROCS=4   strand 247   await 491
+//   MAXON_MAX_PROCS=8   strand 204   await (not taken)
+// ⇒ the two columns are the same order and the strand column is never the larger. **No strand leak.** The
+// coroutine's memory comes back on the same road the awaited one's does.
+//
+// ⚠ IT IS A STANDING GUARD RATHER THAN A CLOSED QUESTION. The day `<T>.__loop`'s exit block grows a
+// coroutine sweep — which is what `W226` proposes if a leak is ever found — this program is what says whether
+// the sweep freed too much (a crash or a 101) or too little (a growing `strand=` against a flat `await=`).
+
+typealias Integer = int(i64.min to i64.max)
+
+// Long enough that the service is reliably shut down while the coroutine is still parked on its timer, short
+// enough that 100 rounds do not dominate the run. The whole point of the shape is the OVERLAP.
+let WorkSleepMs = 30 as Integer
+
+// Enough rounds that a per-round strand would be unmistakable against the teardown lag, which is itself
+// per-round: a leak of one allocation per round shows up as +100 in one column and not the other.
+let Rounds = 100 as Integer
+
+// Taken past the one-time runtime allocations, so the baseline is a steady state rather than start-up.
+let WarmupRounds = 5 as Integer
+
+function slowWork(n Integer) returns Integer
+	sleep(WorkSleepMs)
+	return n * 2
+end 'slowWork'
+
+type Worker
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// THE SUBJECT: a coroutine on the service's own green thread that nobody ever awaits.
+	export function fire(v Integer) returns Integer
+		let p = async slowWork(v)
+		_ = p
+		self.n = self.n + 1
+		return self.n
+	end 'fire'
+
+	// THE CONTROL: the same coroutine, awaited, so the handler cannot return while it is still queued.
+	export function joinIt(v Integer) returns Integer
+		let p = async slowWork(v)
+		self.n = self.n + 1
+		return await p
+	end 'joinIt'
+end 'Worker'
+
+// One service per round, one message, then the handle dies — which sends `__shutdown` while the coroutine
+// started by that message is still parked on its 30 ms timer.
+function strandRounds(count Integer)
+	for round in 1 to count 'rounds'
+		let w = spawn Worker.create()
+		w.fire(round)
+	end 'rounds'
+end 'strandRounds'
+
+function awaitRounds(count Integer)
+	for round in 1 to count 'rounds'
+		let w = spawn Worker.create()
+		w.joinIt(round)
+	end 'rounds'
+end 'awaitRounds'
+
+function main() returns ExitCode
+	strandRounds(WarmupRounds)
+	awaitRounds(WarmupRounds)
+
+	let beforeStrand = __Builtins.mmRawAllocLive()
+	strandRounds(Rounds)
+	let afterStrand = __Builtins.mmRawAllocLive()
+
+	let beforeAwait = __Builtins.mmRawAllocLive()
+	awaitRounds(Rounds)
+	let afterAwait = __Builtins.mmRawAllocLive()
+
+	// `strand` materially above `await` is the leak `W226` predicted; the two being the same order is the
+	// measured answer that it is not there.
+	print("strand={afterStrand - beforeStrand} await={afterAwait - beforeAwait} rounds={Rounds}\n")
+	return 42 as ExitCode
+end 'main'

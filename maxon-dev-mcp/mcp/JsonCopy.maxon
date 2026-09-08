@@ -1,0 +1,65 @@
+// Deep-copying a JSON subtree from one `JsonDoc` arena into another. ONE implementation,
+// because this file is what two of them cost.
+//
+// A `JsonDoc` owns its nodes by id, so a node built in one arena cannot be referenced from
+// another: assembling a response out of pieces (a request's `id`, a tool's result, an
+// analyzer's parsed report) means copying them across. That is a single mechanical fact
+// about the arena, and it was written down TWICE — `Rpc.maxon` had `copyNode`/`copyArray`/
+// `copyObject`, `Server.maxon` had `copyJsonNode`/`copyJsonArray`/`copyJsonObject`, byte for
+// byte the same walk under two names.
+//
+// It did not drift; it just meant the `repoRoot` change wired the ERROR envelope through one
+// copy and the RESULT envelope through the other, and nothing in either file said the other
+// existed. A reader of one had no way to know they were looking at half the story — which is
+// the cost even when both copies are correct.
+//
+// It lives here rather than in `Util.maxon` on that file's own instruction ("anything that
+// grows past one obvious shape (e.g. JSON-builder helpers […]) should get its own file
+// rather than accreting here"), and rather than in `Server.maxon` because `Rpc.maxon` is the
+// layer BELOW dispatch: framing should not have to reach up into the server to copy a node.
+
+/// Deep-copy a JSON subtree across arenas. Returns the id of the new copy in `dst`.
+///
+/// Used to splice request `id`s and tool results into response envelopes without sharing
+/// arena slots, and to embed a document parsed elsewhere (an analyzer's reply) into a
+/// wrapper outcome.
+export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	match node.kind 'k'
+		jsonNull then return dst.add(JsonNode.nullNode())
+		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray then return copyJsonArray(src, node: node, dst: dst)
+		jsonObject then return copyJsonObject(src, node: node, dst: dst)
+	end 'k'
+end 'copyJsonNode'
+
+function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let childId = try node.children.get(i) otherwise 'cErr'
+			panic("copyJsonArray: children.get OOB — i bounded by n")
+		end 'cErr'
+		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyJsonArray'
+
+function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise 'kErr'
+			panic("copyJsonObject: keys.get OOB — i bounded by n")
+		end 'kErr'
+		let childId = try node.children.get(i) otherwise 'cErr'
+			panic("copyJsonObject: children.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		keys.push(k)
+		children.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'copyJsonObject'

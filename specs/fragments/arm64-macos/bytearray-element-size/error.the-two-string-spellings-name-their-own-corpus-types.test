@@ -1,0 +1,17 @@
+// Test: error.the-two-string-spellings-name-their-own-corpus-types
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takesArray(b Bytes) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'takesArray'
+
+function main() returns ExitCode
+	let viaCopy = takesArray("ß".toByteArray())
+	let viaView = takesArray("ß".bytes())
+	return viaCopy + viaView
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:10:16: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
+error E3005: <fragment>:11:16: argument type mismatch for 'b': expected 'Bytes', got 'ByteView'

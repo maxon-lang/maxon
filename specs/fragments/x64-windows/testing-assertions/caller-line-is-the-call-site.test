@@ -1,0 +1,119 @@
+// Test: caller-line-is-the-call-site
+// --- file: helper.maxon
+export function assertFromHelper() throws TestFailure
+	try Expect.equal(1, expected: 2)
+end 'assertFromHelper'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	try Expect.equal(10, expected: 20) otherwise ignore
+	try Expect.equal(30, expected: 40) otherwise ignore
+	try assertFromHelper() otherwise ignore
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @assertFromHelper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.callDirect __paramDefault#Expect.equal#2
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __str_rec_16]  ; "helper.maxon"
+    x64.movRegImm32 rsi, 2
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.movRegReg rbx, r10
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 10
+    x64.movRegImm32 r12, 20
+    x64.callDirect __paramDefault#Expect.equal#2
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __str_rec_17]  ; "main.maxon"
+    x64.movRegImm32 rsi, 2
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#3
+  trycont#3:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 30
+    x64.movRegImm32 r12, 40
+    x64.callDirect __paramDefault#Expect.equal#2
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __str_rec_17]  ; "main.maxon"
+    x64.movRegImm32 rsi, 3
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#6
+  trycont#6:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.callDirect assertFromHelper
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#9
+  trycont#9:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

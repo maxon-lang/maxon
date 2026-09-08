@@ -1,0 +1,44 @@
+// The one error-code invariant the language cannot enforce for itself: no two cases share a number.
+//
+// A duplicate NAME does not compile, and `ErrorCode.Foo` does not compile unless the enum declares
+// it — both are structural. A duplicate NUMBER is neither: two cases may carry one `"E3099"` and the
+// program is well-formed, while every reader who greps for that code finds whichever claimant they
+// happen to hit first.
+//
+// Asked of `allCases`/`allCaseNames` — the declaration itself, in declaration order — so it cannot
+// drift from the registry the way a list of codes kept beside it would. It rides `spec-test` because
+// it is pure and costs microseconds, and a check nobody runs is a claim.
+
+// Code text -> the case that claimed it first.
+typealias SeenErrorCodeMap = Map with (String, String)
+
+let DuplicateCodeRowIndent = "  "
+
+// Name BOTH claimants: a report naming only the second arrival leaves the reader grepping for the
+// first.
+export function requireErrorCodesUnique()
+	var broken = StringArray.create()
+	var seenNameForCode = SeenErrorCodeMap.create()
+
+	let names = ErrorCode.allCaseNames
+	for (iter, code) in ErrorCode.allCases.withIterator() 'eachCase'
+		// The two rosters are one enum read twice, so a missing index is a defect in the rosters
+		// rather than in the registry and must not be reported as a duplicate.
+		let name = try names.get(iter.index()) otherwise panic("ErrorCodeSelfTest: allCaseNames is shorter than allCases")
+		let number = code.rawValue
+
+		if let firstClaimant = try seenNameForCode.get(number) 'alreadyClaimed'
+			broken.push("{number} is claimed twice: `{firstClaimant}` and `{name}`\n")
+		end 'alreadyClaimed' else 'firstSighting'
+			seenNameForCode.upsert(number, value: name)
+		end 'firstSighting'
+	end 'eachCase'
+
+	if broken.isEmpty() 'everyCodeIsItsOwn'
+		return
+	end 'everyCodeIsItsOwn'
+
+	// `panic` takes a string LITERAL, so the list is built as text and interpolated.
+	let report = indentedList(broken, indent: DuplicateCodeRowIndent)
+	panic("ErrorCodeSelfTest: {broken.count()} error code(s) are claimed by more than one case. A number that means two things is read as whichever meaning the reader reached first.{report}")
+end 'requireErrorCodesUnique'

@@ -1,0 +1,18 @@
+// Test: error.an-adopted-element-is-still-range-checked
+typealias Unsigned = int(0 to u64.max)
+typealias UnsignedArray = Array with Unsigned
+
+function total(xs UnsignedArray) returns Unsigned
+	var t = 0 as Unsigned
+	for x in xs 'each'
+		t = t + x
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	return total([-1]) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:14:16: Value -1 is outside the range of 'Unsigned' (int(0 to 18446744073709551615))

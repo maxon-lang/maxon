@@ -1,0 +1,128 @@
+// hover-probe.test.maxon — one hover session, written once, for the three `hover-*` files that ask it.
+// It declares no tests: it holds what those three share, because one fact written twice is this
+// project's signature bug.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+// The single uri every hover test drives. It never touches the filesystem — full-text sync carries the
+// document text, so the server is told the source rather than asked to read it.
+let HoverDocumentUri = "file:///test.maxon"
+
+// What an editor would display at a position, asserted to be there.
+//
+// ⭐ PRESENT and NON-EMPTY are separate assertions: a server that answers with an empty rendering has
+// failed differently from one that answered `null`, and one message covering both would hide which.
+export function hoverRendering(source String, line LspCoordinate, character LspCoordinate) returns String throws TestFailure
+	var rendering = ""
+
+	match probeHover(source, line: line, character: character) 'outcome'
+		answered(result) then rendering = try presentRendering(result)
+		refused(code, message) then try Expect.fail(refusalNote(code, message: message))
+		broke(detail) then try Expect.fail(breakageNote(detail))
+	end 'outcome'
+
+	return rendering
+end 'hoverRendering'
+
+// Hovering something that is not a symbol — text inside a comment — answers ABSENCE: not an error, and
+// not an empty string. `isPresent` is the one shape both hover and definition use to say so; an
+// empty-string sentinel would fail silently the day a real rendering is empty.
+export function expectNoHover(source String, line LspCoordinate, character LspCoordinate, note String) throws TestFailure
+	match probeHover(source, line: line, character: character) 'outcome'
+		answered(result) then try Expect.isFalse(result.isPresent, message: "{note} It answered: {result.contents}")
+		refused(code, message) then try Expect.fail(refusalNote(code, message: message))
+		broke(detail) then try Expect.fail(breakageNote(detail))
+	end 'outcome'
+end 'expectNoHover'
+
+// What one hover probe observed.
+union HoverProbe
+	// The server answered `textDocument/hover`. Present or absent is then the test's own question.
+	answered(result HoverResult)
+	// The server refused the METHOD — a routing failure, kept apart from `broke` so the suite's red says
+	// which of the two it is.
+	refused(code JsonRpcErrorCode, message String)
+	// The session never reached an answer: the stream, a malformed reply, or a lifecycle refusal.
+	broke(detail String)
+end 'HoverProbe'
+
+// Spawn, open the document, ask once, release. The release is unconditional: the outcome is a VALUE, so
+// no assertion can run before the handle is freed.
+function probeHover(source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
+	var client = LspClient.start()
+	let outcome = collectHover(client, source: source, line: line, character: character)
+	client.release()
+	return outcome
+end 'probeHover'
+
+// The lifecycle and the document are kept apart from the hover request itself: a refusal HERE would be a
+// server that cannot hold a session at all, and reporting that as a hover refusal would name the wrong
+// subject.
+function collectHover(client LspClient, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
+	var outcome = HoverProbe.broke("the session ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(HoverDocumentUri, content: source)
+		outcome = askHover(client, line: line, character: character)
+	end 'session' otherwise (e) 'sessionBroke'
+		match e 'reason'
+			transportFailed(detail) then outcome = HoverProbe.broke("the framed stream broke before hover was asked — {detail}")
+			malformedResponse(detail) then outcome = HoverProbe.broke("a lifecycle reply was not the shape LSP defines — {detail}")
+			serverRefused(code, message) then outcome = HoverProbe.broke("a LIFECYCLE request was refused with {code}: {message}")
+		end 'reason'
+	end 'sessionBroke'
+
+	return outcome
+end 'collectHover'
+
+function askHover(client LspClient, line LspCoordinate, character LspCoordinate) returns HoverProbe
+	var outcome = HoverProbe.broke("the hover request ended without saying how")
+
+	try 'ask'
+		let answer = client.hover(HoverDocumentUri, line: line, character: character)
+		outcome = HoverProbe.answered(answer)
+	end 'ask' otherwise (e) 'notAnswered'
+		match e 'reason'
+			transportFailed(detail) then outcome = HoverProbe.broke("the framed stream broke during `textDocument/hover` — {detail}")
+			malformedResponse(detail) then outcome = HoverProbe.broke("the `textDocument/hover` reply was not the shape LSP defines — {detail}")
+			serverRefused(code, message) then outcome = HoverProbe.refused(code, message: message)
+		end 'reason'
+	end 'notAnswered'
+
+	return outcome
+end 'askHover'
+
+function presentRendering(result HoverResult) returns String throws TestFailure
+	try Expect.isTrue(result.isPresent, message: "the server answered `textDocument/hover` with nothing at this position. The position is transcribed from the recovered test and the ASCII ruler above the call is how it is checked.")
+
+	let blank = result.contents.isEmpty()
+	try Expect.isFalse(blank, message: "the server answered `textDocument/hover` with a PRESENT but EMPTY rendering. An editor would open a hover popup with nothing in it, which is a different defect from having no hover at all.")
+
+	return result.contents
+end 'presentRendering'
+
+function refusalNote(code JsonRpcErrorCode, message String) returns String
+	return "`textDocument/hover` was REFUSED with JSON-RPC {code}: {message}. The server serves hover, so a refusal means the method stopped being routed at all. Do not weaken the assertion below it to make this green."
+end 'refusalNote'
+
+function breakageNote(detail String) returns String
+	return "the hover session never reached an answer: {detail}. This is NOT the server refusing a method — it is the transport or a malformed reply, so it is a defect in the client or in this harness rather than a missing feature."
+end 'breakageNote'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing newline.
+// Fixtures are transcribed from the recovered tests, four-space indentation included, because every hover
+// position is a hard-coded column counted against these exact bytes.
+//
+// Two hover tests share this one: `hover shows array type` reads line 1 column 8 (`arr`) and
+// `hover shows array push method with doc comment` reads line 2 column 8 (`push`).
+export function arrayDocument() returns String
+	return String.from(b"function main() returns int
+    var arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'")
+end 'arrayDocument'

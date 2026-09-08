@@ -1,0 +1,153 @@
+// Test: a-threaded-jump-table-arm-still-reaches-its-block
+typealias Val = int(i64.min to i64.max)
+
+var seed = 4
+
+function classify(n Val) returns Val
+	if n > 3 'big'
+		return n * 10
+	end 'big' else 'small'
+		return n
+	end 'small'
+end 'classify'
+
+function pick(n Val) returns Val
+	match n 'sel'
+		0 then return 100
+		1 then return 101
+		2 then return 102
+		3 then return 103
+		4 then return 104
+		5 then return 105
+		default then return 199
+	end 'sel'
+end 'pick'
+
+function main() returns ExitCode
+	let a = classify(seed)
+	let b = pick(seed)
+	if a != 40 'aWrong'
+		return 51
+	end 'aWrong'
+	if b != 104 'bWrong'
+		return 52
+	end 'bWrong'
+	if classify(seed - 4) != 0 'zeroWrong'
+		return 53
+	end 'zeroWrong'
+	if pick(seed + 3) != 199 'defaultWrong'
+		return 54
+	end 'defaultWrong'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_seed@0 = i64 4
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body#11:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc lessEqual, __il_cont#10
+  big#12:
+    x64.imulRegRegImm32 rax, rax, 10
+  __il_cont#10:
+    x64.leaRegGlobal rcx, __data_seed
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  __il_body#15:
+    x64.jumpTable rcx, default=matchdefault#22 [[0]=matcharm#16, [1]=matcharm#17, [2]=matcharm#18, [3]=matcharm#19, [4]=matcharm#20, [5]=matcharm#21] @__jumptable_0
+  matchdefault#22:
+    x64.movRegImm32 rcx, 199
+    x64.jmp __il_cont#9
+  matcharm#16:
+    x64.movRegImm32 rcx, 100
+    x64.jmp __il_cont#9
+  matcharm#17:
+    x64.movRegImm32 rcx, 101
+    x64.jmp __il_cont#9
+  matcharm#18:
+    x64.movRegImm32 rcx, 102
+    x64.jmp __il_cont#9
+  matcharm#19:
+    x64.movRegImm32 rcx, 103
+    x64.jmp __il_cont#9
+  matcharm#20:
+    x64.movRegImm32 rcx, 104
+    x64.jmp __il_cont#9
+  matcharm#21:
+    x64.movRegImm32 rcx, 105
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 40
+    x64.jcc equal, ifcont#2
+  aWrong:
+    x64.movRegImm32 r8, 51
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.cmpRegImm32 rcx, 104
+    x64.jcc equal, ifcont#4
+  bWrong:
+    x64.movRegImm32 r8, 52
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, -4
+  __il_body#25:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc lessEqual, __il_cont#24
+  big#26:
+    x64.imulRegRegImm32 rax, rax, 10
+  __il_cont#24:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#6
+  zeroWrong:
+    x64.movRegImm32 r8, 53
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 3
+  __il_body#30:
+    x64.jumpTable rax, default=matchdefault#37 [[0]=matcharm#31, [1]=matcharm#32, [2]=matcharm#33, [3]=matcharm#34, [4]=matcharm#35, [5]=matcharm#36] @__jumptable_1
+  matchdefault#37:
+    x64.movRegImm32 rax, 199
+    x64.jmp __il_cont#29
+  matcharm#31:
+    x64.movRegImm32 rax, 100
+    x64.jmp __il_cont#29
+  matcharm#32:
+    x64.movRegImm32 rax, 101
+    x64.jmp __il_cont#29
+  matcharm#33:
+    x64.movRegImm32 rax, 102
+    x64.jmp __il_cont#29
+  matcharm#34:
+    x64.movRegImm32 rax, 103
+    x64.jmp __il_cont#29
+  matcharm#35:
+    x64.movRegImm32 rax, 104
+    x64.jmp __il_cont#29
+  matcharm#36:
+    x64.movRegImm32 rax, 105
+  __il_cont#29:
+    x64.cmpRegImm32 rax, 199
+    x64.jcc equal, ifcont#8
+  defaultWrong:
+    x64.movRegImm32 r8, 54
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

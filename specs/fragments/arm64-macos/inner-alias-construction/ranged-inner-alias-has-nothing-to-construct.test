@@ -1,0 +1,22 @@
+// Test: ranged-inner-alias-has-nothing-to-construct
+typealias ExitCode = int(0 to 125)
+
+type Plain
+	typealias Idx = int(0 to 10)
+
+	static function make() returns Idx
+		let n = Idx{}
+		return n
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	let c = Plain.make()
+	if c == 0 'ok'
+		return 7
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:11: Unsupported: a struct literal naming `Idx`, a ranged numeric typealias declared by `Plain` — a number declares no fields to write, so write the number itself. `{}` on an inner alias builds the EMPTY CONTAINER a container alias denotes, and a numeric alias denotes no container

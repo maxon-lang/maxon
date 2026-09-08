@@ -1,0 +1,32 @@
+// ProfileSampleContract.maxon — the handful of numbers `__prof_sample` and the profiler that calls it must
+// spell identically, stated ONCE.
+//
+// ⭐⭐ **THE TWO SIDES COMPILE ON DIFFERENT SETS OF LANES, WHICH IS WHY THIS FILE IS AT THE ROOT.**
+// `Compiler/Runtime/ProfileRuntime.maxon` builds the Std graphs on EVERY lane; `Profile/` is gated to the
+// one lane that can sample. `module` visibility reaches the declaring directory AND every subdirectory, so
+// the root is the only place both can read from — and the runtime's own read is what keeps these referenced
+// (E3094) on the lanes where `Profile/` is compiled away entirely.
+//
+// ⛔ **A DISPLACEMENT STATED TWICE IS A CONTRACT WITH NOTHING HOLDING IT.** The runtime bounds the stack
+// copy from the RSP it reads and the profiler places that copy's bytes against the same number; two copies
+// that drifted apart would leave every return address garbage, every walk truncated to its leaf, and a
+// profile with correct leaves and no callers — which reads as a plausible answer rather than as a failure.
+
+// The x64 `CONTEXT` displacement of RSP: the runtime reads it to bound the copy, the profiler to place it.
+module let ProfileContextRspOffset = 0x98
+
+// A `MEMORY_BASIC_INFORMATION`'s allocation base — the field the runtime clears before the region query and
+// the only one the profiler reads back, as the identity of a stack.
+module let ProfileRegionAllocationBaseOffset = 8
+
+// ⭐ **THE TWO NEGATIVE ANSWERS `__prof_sample` GIVES, AND THEY MEAN DIFFERENT THINGS TO THE CALLER.**
+// `SuspendThread`'s own documented failure says the THREAD IS GONE — nothing was suspended, so the caller
+// drops it and records no sample at all. A context read that fails says the thread is alive and this
+// INSTANT is unreadable, which is a real sample with nothing in it. Folding the two would let a thread
+// exiting mid-run add junk readings to the denominator every percentage is computed against.
+//
+// A third answer needs no constant: zero bytes copied is a leaf whose chain could not be walked, which
+// still attributes self time to a real function.
+module let ProfileSampleThreadGone = 0 - 1
+
+module let ProfileSampleNoRegisters = 0 - 2

@@ -1,0 +1,39 @@
+// Test: error.associated-return-bound-to-a-generic-instance
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	let v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+interface Maker uses Element
+	function make() returns Element
+end 'Maker'
+
+type Runner implements Maker with IntBox
+	let base as IntBox
+
+	function make() returns IntBox
+		return self.base
+	end 'make'
+
+	static function create(base IntBox) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(m Maker) returns Integer
+	return m.make() + 11
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(IntBox.create(20))) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3120: <fragment>:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved

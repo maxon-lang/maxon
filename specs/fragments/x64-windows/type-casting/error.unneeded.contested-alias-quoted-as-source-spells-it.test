@@ -1,0 +1,18 @@
+// Test: error.unneeded.contested-alias-quoted-as-source-spells-it
+
+typealias Byte = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Wide = int(0 to 1000)
+
+function takes(b Bytes) returns Wide
+	return (try b.get(0) otherwise 0) as Wide
+end 'takes'
+
+function main() returns ExitCode
+	var a = Bytes.create()
+	a.push(7)
+	return takes(a)
+end 'main'
+---
+CompilerError:
+error E3010: <fragment>:8:36: unneeded cast: 'Byte' already fits in 'Wide'

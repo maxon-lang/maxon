@@ -1,0 +1,21 @@
+// Test: void-call-statement-is-legal
+function noop()
+	return
+end 'noop'
+
+function main() returns ExitCode
+	noop()
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_cont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

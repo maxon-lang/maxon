@@ -1,0 +1,26 @@
+// Test: error.reassign-co-owned-trivial-in-shared-body
+typealias Coord = int(0 to 1000)
+type Point
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+end 'Point'
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+typealias PointBox = Box with Point
+function main() returns ExitCode
+	var b = PointBox.create(Point.create(7))
+	b.replace(Point.create(9))
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type

@@ -1,0 +1,34 @@
+// Test: seven-float-parameters
+function sumf7(a Real, b Real, c Real, d Real, e Real, f Real, g Real) returns Real
+	return a + b + c + d + e + f + g
+end 'sumf7'
+
+function main() returns ExitCode
+	let total = sumf7(1.0, b: 2.0, c: 4.0, d: 8.0, e: 16.0, f: 32.0, g: 64.0)
+	if total == 127.0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.fpLoadRdata d0, [rdata + __fconst_127]
+  __il_cont:
+    arm64.fpLoadRdata d1, [rdata + __fconst_127]
+    arm64.fcmp d0, d1
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

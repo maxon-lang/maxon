@@ -1,0 +1,152 @@
+// Test: or-chain.case-name-collision
+// The alternatives' case names (`lt`/`ge`) also exist on a DIFFERENT
+// enum (`Cond`) at other ordinals — here `ge` precedes `lt`, both high, the
+// way `Arm64CondCode` shadows `CmpPredicate` inside the compiler. The chain
+// endpoints must resolve against the SCRUTINEE's enum (`Pred`: lt=2..ge=5),
+// not whichever enum a type-blind name search happens to reach first. Binding
+// to `Cond` would yield the empty ordinal span [7,6], so the exhaustive match
+// would match no arm for `Pred.gt` and fall through to a nil result.
+union Cond
+	eqc
+	nec
+	mi
+	pl
+	hic
+	ls
+	ge
+	lt
+	gtc
+	lec
+end 'Cond'
+
+union Pred
+	eq
+	ne
+	lt
+	le
+	gt
+	ge
+end 'Pred'
+
+function classify(p Pred) returns String
+	return match p 'm'
+		eq gives "eq"
+		ne gives "ne"
+		lt or
+			le or
+			gt or
+			ge gives "ord"
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	let s = classify(Pred.gt)
+	if s.isEmpty() 'empty'
+		return 2
+	end 'empty'
+	return 0 if s == "ord" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext#5
+  matcharm#1:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "eq"
+    x64.jmp matchcont
+  matchnext#5:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchnext#6
+  matcharm#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "ne"
+    x64.jmp matchcont
+  matchnext#6:
+    x64.cmpRegImm32 rcx, 2
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 5
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matchdead
+  matcharm#3:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "ord"
+  matchcont:
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 4
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.isEmpty
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  empty:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __str_rec_5]  ; "ord"
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at or-chain.case-name-collision.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

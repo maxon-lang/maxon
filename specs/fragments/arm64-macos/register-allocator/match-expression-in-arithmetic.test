@@ -1,0 +1,35 @@
+// Test: match-expression-in-arithmetic
+function main() returns ExitCode
+	let x = 2
+	let doubled = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval' * 2
+	return doubled
+end 'main'
+---
+ExitCode: 40
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm:
+    arm64.movImm x0, 20
+  matchcont:
+    arm64.lsl x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at match-expression-in-arithmetic.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

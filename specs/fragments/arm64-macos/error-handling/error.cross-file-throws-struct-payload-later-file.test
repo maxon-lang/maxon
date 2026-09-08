@@ -1,0 +1,148 @@
+// Test: error.cross-file-throws-struct-payload-later-file
+// --- file: app.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(p) then result = p.mass
+			ok then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export type Payload
+	export var mass as Code
+
+	export static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.bad(Payload.create(7))
+	end 'big'
+	return n
+end 'risky'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 9
+    arm64.bl risky
+    arm64.movRegReg x20, x9
+    arm64.cmp x20, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#3:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#4:
+    arm64.movImm x19, 1
+    arm64.movRegReg x21, x19
+  matchcont:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Woe
+    arm64.movRegReg x0, x21
+    arm64.b trycont
+  matchdead:
+  tryok:
+    arm64.movRegReg x0, x19
+  trycont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at app.maxon:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Payload.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @risky {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 5
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x0, 7
+    arm64.bl Payload.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,19 @@
+// BlockOffsetTable — a block's CHUNK-LOCAL `.text` offset, keyed by BlockId, for the one chunk
+// being emitted. Written as each block is laid down, read when the chunk's branch fixups and jump
+// tables are resolved at the end of the chunk. Both native backends and the hand-assembled runtime
+// chunks use this ONE alias; it replaces the three aliases (`ChunkLabelOffsetMap`,
+// `Arm64BlockOffsetMap`, `BlockTextOffsetMap`) that were the same `Map with (BlockId, CodeOffset)`
+// written down three times.
+//
+// It is the encoder's instantiation of `BlockKeyedTable` (`Compiler/IR/BlockKeyedTable.maxon`),
+// which is where the measured quadratic that made this a dense array — and the reason a presence
+// column beats a sentinel offset — is written down ONCE for every user. What is specific to THIS
+// instantiation:
+//
+//   - The absent case is a LOWERING BUG, not a question. A fixup naming a block this chunk never
+//     laid down must panic at the fixup that names it: 0 is the offset of the chunk's FIRST block,
+//     so resolving silently to it would aim the branch at the top of the chunk.
+//   - It is the ONE user of `BlockKeyedTable.create()`. The hand-assembled runtime chunks
+//     (`X64RuntimeAsm.newLabel`, `X64GtRuntime`) mint their labels one at a time and have no block
+//     count to size from; every per-function chunk uses `forBlockCount(func.nextBlockId)`.
+export typealias BlockOffsetTable = BlockKeyedTable with CodeOffset

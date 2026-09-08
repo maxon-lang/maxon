@@ -1,0 +1,19 @@
+// Test: error.divide-by-a-loop-carried-merge-is-refused
+typealias NonZero = int(1 to i64.max)
+
+function seed(n NonZero) returns NonZero
+	return n
+end 'seed'
+
+function main() returns ExitCode
+	var d = seed(1)
+	var i = 0
+	while i < 1 'lp'
+		d = d - 1
+		i = i + 1
+	end 'lp'
+	return 100 / d
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (a / b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error

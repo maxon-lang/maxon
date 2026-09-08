@@ -1,0 +1,19 @@
+// Test: ternary-expression.error.function-arm-signature-mismatch
+typealias Integer = int(i64.min to i64.max)
+
+function unary(n Integer) returns Integer
+	return n * 2
+end 'unary'
+
+function binary(a Integer, b Integer) returns Integer
+	return a + b
+end 'binary'
+
+function main() returns ExitCode
+	let c = 1
+	let h = unary if c > 0 else binary
+	return h(21)
+end 'main'
+---
+CompilerError:
+error E2028: <fragment>:14:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'

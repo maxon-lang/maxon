@@ -1,0 +1,282 @@
+// Debug/CoverageCommand.maxon — `maxon coverage`: run a `--coverage` binary and report what it
+// executed, or report from a run that already happened.
+//
+// ⭐⭐ **EVERY REFUSAL HERE IS THE REFERENCE'S OWN SENTENCE, AND THAT IS A CONTRACT RATHER THAN A
+// STYLE.** A coverage report joins three artifacts made at three different moments — the binary's
+// `.text` hash, the `.mxdbg` sidecar's coverage-point table, and the `.mxcov` counters the program
+// wrote on its way out. A counter is an ANONYMOUS INDEX, so a join that is not exactly right names real
+// source lines with numbers belonging to other lines: an instrument that LIES, which is worse than no
+// instrument. That is why each of these is a refusal rather than a best effort, and
+// `tests/coverage/coverage-refusals.test.maxon` compares this driver's stderr against the reference's
+// byte for byte — so a "better" wording here is the failure, not a fix.
+//
+// ⚠ **THE BANNER SAYS `maxon` WHERE THE REFERENCE SAYS `maxon`, AND THAT IS THE ONE DIFFERENCE THE
+// CORPUS NORMALIZES.** A usage banner spells the command a user should type, so demanding byte identity
+// there would demand that this driver tell people to run a binary they do not have.
+//
+// ⭐ **STDOUT IS THE REPORT AND NOTHING ELSE.** Every refusal and every word the measured program says
+// goes to stderr, which is what keeps a coverage run machine-readable — so a banner printed on stdout
+// is a wrong stream AND a refusal a reader will parse as a report.
+//
+// ⭐ **THIS TOOL'S OWN EXIT CODE ANSWERS ONE QUESTION: DID THE MEASUREMENT COMPLETE.** The measured
+// program's status is DATA, reported as `target exit code:` in the text. One integer cannot answer both,
+// and merging them re-earns a defect this tree removed once.
+
+// How this driver names itself and its subcommand in everything it prints. The subcommand word is the
+// SUBJECT of every refusal (`coverage: …`) and the driver name is the one thing the corpus normalizes away
+// before comparing this tool's transcripts with the reference's.
+let CoverageDriverName = "maxon"
+let CoverageSubcommandName = "coverage"
+
+// The two verbs. Named because the parser, the banner and four refusals all spell them.
+let RunVerb = "run"
+let ReportVerb = "report"
+
+let JsonFlag = "--json"
+let DataFlag = "--data="
+let TimeoutFlag = "--timeout="
+
+// The tail position the verb sits at, and the first one an option or the executable can.
+let VerbArgument = 0
+let FirstOptionArgument = 1
+
+// How long a `run` waits before killing the program and refusing. Long, because the caller may be
+// something with no observer — CI, or an MCP host — and `TimeoutFlag` raises it.
+let DefaultRunTimeoutSeconds = 600.0 as CoverageSeconds
+
+// The half-sentence the deadline's refusal is built around, so the flag and its refusal describe one
+// rule alike.
+let PositiveSecondsRequirement = "needs a positive number of seconds"
+
+// The longest deadline accepted, in seconds — the reference's own ceiling, which is where its duration
+// conversion overflows. It is also what excludes an INFINITY: a float can carry one and a wait cannot.
+let MaxDeadlineSeconds = 922337203685.0 as CoverageSeconds
+
+// A deadline in seconds. Fractions are accepted so a gate can drive a sub-second deadline
+// deterministically; ZERO is excluded at the door below rather than by this range, which has no
+// exclusive-lower spelling.
+typealias CoverageSeconds = float(0.0 to f64.max)
+
+// What one `coverage` command line asked for. A record rather than a local per flag, for
+// `MaxonArgs.parse`'s reason: an accumulating chain carries one value across its joins instead of one
+// register per option.
+//
+// The three `*Given` fields are not derivable from their values. `--data=` and `--timeout=` are refused
+// for being on the WRONG VERB whatever they spell, so an empty `--data=` must still be seen as present;
+// and an empty argument is a perfectly bad executable name that is nonetheless one the caller supplied.
+type CoverageRequest
+	export let verb as String
+	export var json as bool
+	export var exePath as String
+	export var exeGiven as bool
+	export var dataPath as String
+	export var dataGiven as bool
+	export var timeoutSeconds as CoverageSeconds
+	export var timeoutGiven as bool
+	export var targetArgs as StringArray
+
+	static function create(verb String) returns CoverageRequest
+		return Self{verb: verb, json: false, exePath: "", exeGiven: false, dataPath: "", dataGiven: false, timeoutSeconds: DefaultRunTimeoutSeconds, timeoutGiven: false, targetArgs: StringArray.create()}
+	end 'create'
+end 'CoverageRequest'
+
+/// `maxon coverage <run|report> <exe> [--json] [--data=<file>] [--timeout=<seconds>] [args...]`.
+///
+/// The tail is this command's own, filed verbatim by `MaxonArgs.parse` so that a target argument
+/// spelled like one of this driver's flags cannot be consumed on its way past.
+export function runCoverage(args MaxonArgs) returns ExitCode
+	let verb = try args.paths.get(VerbArgument) otherwise 'noVerb'
+		return refuseCoverage("expected a verb")
+	end 'noVerb'
+
+	if verb != RunVerb and verb != ReportVerb 'unknownVerb'
+		return refuseCoverage("unknown verb '{verb}'")
+	end 'unknownVerb'
+
+	var request = CoverageRequest.create(verb)
+	for position in FirstOptionArgument upto args.paths.count() 'eachArgument'
+		let arg = try args.paths.get(position) otherwise panic("runCoverage: index {position} is past args.paths.count() despite the upto bound")
+
+		if arg == JsonFlag 'jsonFlag'
+			request.json = true
+		end 'jsonFlag' else if arg.startsWith(DataFlag) 'dataFlag'
+			request.dataPath = try CommandLine.optionValue(arg) otherwise ""
+			request.dataGiven = true
+		end 'dataFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
+			let raw = try CommandLine.optionValue(arg) otherwise ""
+			if not recordDeadline(request, raw: raw) 'notADeadline'
+				return refuseCoverage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
+			end 'notADeadline'
+		end 'timeoutFlag' else if not request.exeGiven and not arg.startsWith(OptionPrefix) 'theExecutable'
+			request.exePath = arg
+			request.exeGiven = true
+		end 'theExecutable' else if request.exeGiven 'aTargetArgument'
+			request.targetArgs.push(arg)
+		end 'aTargetArgument' else 'unknownOption'
+			return refuseCoverage("unknown option '{arg}'")
+		end 'unknownOption'
+	end 'eachArgument'
+
+	if not request.exeGiven 'noExecutable'
+		return refuseCoverage("expected an executable")
+	end 'noExecutable'
+
+	// Target arguments belong to the program a `run` launches. `report` launches none, so arguments
+	// given to it would be silently dropped.
+	if request.verb == ReportVerb and request.targetArgs.count() > 0 'argumentsWithoutALaunch'
+		return refuseCoverage("'{ReportVerb}' takes no target arguments — use '{RunVerb}' to launch the program")
+	end 'argumentsWithoutALaunch'
+
+	// A program writes to the path baked into it at BUILD time, so telling `run` to read somewhere else
+	// would delete that file, run, and then report on a file nothing wrote. Naming the combination is the
+	// honest answer; silently ignoring the flag is not.
+	if request.verb == RunVerb and request.dataGiven 'dataOnTheWrongVerb'
+		return refuseCoverage("'{DataFlag}' names where to READ counters, so it belongs to '{ReportVerb}' — '{RunVerb}' reports on the file the program itself just wrote")
+	end 'dataOnTheWrongVerb'
+
+	// Refused rather than ignored, for the reason the flag above is: a deadline handed to a verb that
+	// launches nothing is a setting the caller believes is in force and that nothing reads.
+	if request.verb == ReportVerb and request.timeoutGiven 'deadlineWithoutALaunch'
+		return refuseCoverage("'{TimeoutFlag}' bounds a RUN, so it belongs to '{RunVerb}' — '{ReportVerb}' launches nothing to wait for")
+	end 'deadlineWithoutALaunch'
+
+	if request.verb == ReportVerb 'readWhatIsAlreadyThere'
+		return printCoverageReport(request.exePath, dataPath: dataPathFor(request), targetStatus: CovTargetStatus.notObserved, json: request.json)
+	end 'readWhatIsAlreadyThere'
+
+	return launchAndReport(request)
+end 'runCoverage'
+
+// ============================================================================================
+// THE RUN
+// ============================================================================================
+
+// ⭐ Launch the instrumented program, then report on the counters IT wrote. The previous run's data file
+// goes FIRST: a run whose dump never happened would otherwise be reported from the PREVIOUS run's numbers,
+// which is a stale success where the caller is owed a refusal.
+function launchAndReport(request CoverageRequest) returns ExitCode
+	let dataPath = dataPathFor(request)
+
+	return match launchTarget(request, dataPath: dataPath) 'launched'
+		refused(reason) gives refuseLaunch(reason)
+		exited(code) gives printCoverageReport(request.exePath, dataPath: dataPath, targetStatus: CovTargetStatus.observed(code), json: request.json)
+	end 'launched'
+end 'launchAndReport'
+
+// What became of the launched target. `exited` carries the status it returned, which is DATA the report
+// prints and never this tool's own exit code.
+union CoverageLaunch
+	exited(code CovTargetExitCode)
+	refused(reason String)
+end 'CoverageLaunch'
+
+function launchTarget(request CoverageRequest, dataPath String) returns CoverageLaunch
+	let target = try FilePath.from(request.exePath) otherwise return CoverageLaunch.refused("'{request.exePath}' is not a spellable path")
+	if not File.exists(target) 'noSuchExecutable'
+		return CoverageLaunch.refused("no such executable: {request.exePath}")
+	end 'noSuchExecutable'
+
+	let data = try FilePath.from(dataPath) otherwise return CoverageLaunch.refused("'{dataPath}' is not a spellable path")
+	if File.exists(data) 'previousCounters'
+		try File.delete(data) otherwise return CoverageLaunch.refused("cannot remove the previous {dataPath}")
+	end 'previousCounters'
+
+	// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
+	// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
+	let capture = try runProcess(Executable.path(target.resolve(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDir(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
+		return CoverageLaunch.refused(launchFailureText(request, error: e))
+	end 'didNotFinish'
+
+	// ⭐ The program's own output goes to STDERR, which is what keeps stdout exactly the report and nothing
+	// else — so a coverage run of a chatty program stays machine-readable.
+	printError(capture.stdout)
+	printError(capture.stderr)
+
+	return CoverageLaunch.exited(capture.exitCode as CovTargetExitCode)
+end 'launchTarget'
+
+// ⚠ The recourse is offered only for the DEADLINE, which is the one failure here a caller can act on:
+// telling someone whose executable does not exist to lengthen a timeout is a refusal nobody can act on.
+function launchFailureText(request CoverageRequest, error SubprocessError) returns String
+	if timedOut(error) 'deadlineExpired'
+		return "{request.exePath} did not finish within {reportWholeNumberText(request.timeoutSeconds as ReportNumber)}s and was killed. It wrote no counters. Raise the deadline with {TimeoutFlag}<seconds> and run again."
+	end 'deadlineExpired'
+
+	return "could not run {request.exePath}: {error.displayReason()}"
+end 'launchFailureText'
+
+function timedOut(error SubprocessError) returns bool
+	return match error 'kind'
+		timeout gives true
+		executableNotFound gives false
+		spawnFailed gives false
+		ioFailed gives false
+		inputTooLarge gives false
+	end 'kind'
+end 'timedOut'
+
+// The deadline as the spawn takes it. Truncated to the millisecond and floored at one: a sub-millisecond
+// deadline the caller nonetheless asked for must still bound the run rather than becoming `Subprocess`'s
+// own wait-forever sentinel.
+function deadlineMs(seconds CoverageSeconds) returns DurationMs
+	let millis = trunc(seconds * MillisPerSecond)
+
+	return (millis if millis > 0 else 1) as DurationMs
+end 'deadlineMs'
+
+let MillisPerSecond = 1000.0
+
+function refuseLaunch(reason String) returns ExitCode
+	printError("coverage: {reason}\n")
+
+	return RefusedCoverageExit
+end 'refuseLaunch'
+
+// Where counters are read from: what `DataFlag` named, or the file the binary writes beside itself.
+function dataPathFor(request CoverageRequest) returns String
+	return request.dataPath if request.dataGiven else "{request.exePath}{MxcovDataExtension}"
+end 'dataPathFor'
+
+// Record a caller-spelled decimal number of seconds, held to the one rule: finite and strictly positive.
+// A non-number, a zero, a negative and an infinity all fail it, and a failure records NOTHING — the flag
+// is REFUSED rather than clamped, because a deadline that rounds away to zero expires before the program
+// could possibly finish and would then be reported as a setting the caller asked for.
+//
+// A door onto the request rather than a returned value: The compiler cannot lower a union carrying a float
+// payload (E2015), and a struct whose second field means nothing without its first is the sentinel that
+// shape exists to avoid.
+function recordDeadline(request CoverageRequest, raw String) returns bool
+	let seconds = try float.fromString(raw) otherwise 'notANumber'
+		return false
+	end 'notANumber'
+
+	if not (seconds > 0.0 and seconds <= MaxDeadlineSeconds) 'notAPositiveFiniteDuration'
+		return false
+	end 'notAPositiveFiniteDuration'
+
+	request.timeoutSeconds = seconds as CoverageSeconds
+	request.timeoutGiven = true
+
+	return true
+end 'recordDeadline'
+
+// One refusal: the problem, then the banner, then a non-zero exit. Both go to stderr — see this file's
+// header on why stdout stays empty.
+function refuseCoverage(problem String) returns ExitCode
+	printError("coverage: {problem}\n")
+	printError("Usage: {CoverageDriverName} {CoverageSubcommandName} <{RunVerb}|{ReportVerb}> <exe> [{JsonFlag}] [{DataFlag}<file>] [{TimeoutFlag}<seconds>] [args...]\n")
+	printError("  {RunVerb}     launch a {CoverageFlag} binary, then report what it executed.\n")
+	printError("           The program's own output goes to stderr so stdout is only the report.\n")
+	printError("  {ReportVerb}  report from the data an earlier run already wrote.\n")
+	printError("  {JsonFlag}   emit the report as JSON instead of an annotated source listing.\n")
+	printError("  {DataFlag}F  read counters from F instead of <exe>{MxcovDataExtension}.\n")
+	printError("  {TimeoutFlag}S  kill the program and refuse after S seconds (default {reportWholeNumberText(DefaultRunTimeoutSeconds as ReportNumber)}).\n")
+	printError("           This tool's own exit code says whether the MEASUREMENT completed;\n")
+	printError("           the program's own status is reported as `target exit code`.\n")
+
+	return RefusedCoverageExit
+end 'refuseCoverage'
+
+// A command line this tool could not act on, and a measurement that did not complete, are one answer:
+// something other than a finished report. Distinct from the MEASURED program's status, which is data.
+module let RefusedCoverageExit = 1 as ExitCode

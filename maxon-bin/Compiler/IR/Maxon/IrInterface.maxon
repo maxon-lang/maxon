@@ -1,0 +1,2430 @@
+// IrInterface.maxon — the parsed shape of an `interface` declaration and a type's
+// declared `implements` conformance (P1.7a slice 1 — the FRONT-END half of
+// interfaces + witness tables: declaration + conformance CHECKING, no witness
+// tables, no dictionary-passing, no existentials).
+//
+// ⭐ **TYPES ARE STORED AS RENDERED SOURCE STRINGS, not interned `MaxonType`s.** A
+// conformance check compares an interface method against a type's method by SOURCE
+// spelling (`Integer`, `Self`, `void`) and the E3016 message PRINTS that spelling,
+// so the string is exactly what the checker needs. It also buys two properties the
+// interned form would cost work to keep — the same two `paramAggregateNames` buys
+// (Project.maxon): the string carries no interner id, so `mergeArtifact` folds an
+// interface with NO remap; and it does not depend on `resolveTypes`, which erases
+// `Integer` to `int` — and `checkConformance` runs BEFORE resolution, so the alias
+// name is still there to print.
+//
+// ⭐ **The stdlib protocol interfaces (Stringable, Hashable, …) are SYNTHESIZED on
+// lookup, not parsed.** The compiler does not read `stdlib/`; it synthesizes `String`/`Array`
+// natively, and it synthesizes these the same way (`builtinInterface`). So a
+// `type X implements Stringable` resolves against a compiler-known interface rather
+// than raising a spurious E3015 — exactly as a `String` field resolves against a
+// compiler-known type. This keeps the builtins OUT of the merge/reset machinery:
+// `project.interfaces` holds only USER-declared interfaces.
+
+// The rendered spelling of a `Self` type in an interface signature — the conforming
+// type substitutes for it during a conformance check (`Movable.move returns Self`
+// matches `Point.move returns Point`). Named because the renderer that writes it and
+// the checker that substitutes it must agree on the exact bytes.
+export let InterfaceSelfTypeName = b"Self"
+
+// The rendered spelling of a void (no-`returns`) method result — `increment()` stores
+// this and the E3016 message prints `returns void`. Named for `InterfaceSelfTypeName`'s
+// reason: two sites depend on the exact bytes.
+export let InterfaceVoidTypeName = b"void"
+
+// The method a user struct must supply to be interpolated (`"{p}"` → `Pair.toString()`).
+// Exported because the interpolation lowering (Parser) dispatches to it by name and the
+// builtin `Stringable`/`FormattedStringable` interfaces declare it.
+export let ToStringMethodName = b"toString"
+
+// ⭐ **THE THREE FORMATTED RENDERERS `stdlib/Builtins.maxon` EXPORTS, AS THE METHOD HALF OF THE NAME
+// `primitiveStaticCallee` JOINS** — `__float_toStringPadded`, `__float_toStringFixed`,
+// `__int_toStringFormatted`. They sit beside `ToStringMethodName` because they are the SAME question
+// asked with a format specifier in hand, and because the join is what makes them resolvable: spelling
+// one of these anywhere but through that join would name a function `stdlib` does not export, and the
+// failure would be an unresolved callee inside an unrelated program's interpolation.
+export let FloatToStringPaddedMethodName = b"toStringPadded"
+export let FloatToStringFixedMethodName = b"toStringFixed"
+export let IntToStringFormattedMethodName = b"toStringFormatted"
+
+// --- Witness tables (P1.7a slice 2a — the dictionary-passing dispatch substrate) ---
+
+// The index of a `where`-constraint in a type's constraint list (P1.7a slice 2a) — which hidden witness
+// PARAMETER an instance method reads to dispatch through that constraint. A type has at most a handful of
+// constraints (each costs an ABI register), so a 16-bit index is ample.
+export typealias WitnessSlotIndex = int(0 to u16.max)
+
+// The index of a requirement within an interface's TRANSITIVE requirement list (P1.7a slice 2a; made
+// transitive by R10c) — slot `i` of the witness table holds `interfaceWitnessSlots(…)[i]`. An interface
+// declares a handful of methods, so 16 bits is ample.
+export typealias WitnessMethodIndex = int(0 to u16.max)
+
+// ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a): a header of
+// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, then `methods[N]@24` — one 8-byte function pointer per
+// requirement of the interface's TRANSITIVE list, each stamped by a `funcAbs64InRdata` relocation. The fused
+// `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
+// the emitter (the blob) and every reader (the x64, arm64 and wasm lowerings) must share these two
+// constants — which is why they are stated once, here, rather than per backend.
+//
+// ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
+// child table by `interfaceWitnessSlots`, so there is no runtime chain to follow. Slot 8 carries
+// `destroyFunc` (see `WitnessDestroyFuncOffset`) and slot 16 its inverse (see
+// `WitnessRetainFuncOffset`).
+export let WitnessTableHeaderBytes = 24 as ByteOffset
+export let WitnessSlotBytes = 8 as ByteOffset
+
+// ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF (P1.7a-existentials slice 2)** — the conformer's
+// `__destruct_<T>` / `__mm_decref` / `__str_decref`, or **0** when the conformer owns nothing droppable (an
+// `int`/`bool`/`float` widened to an interface). `__drop_existential(witness, value)` reads this word,
+// null-guards it and `callIndirect`s it — the identical shape `__drop_type_param` reads a layout
+// descriptor's `destroyFunc@40` with, which is why the two share one emitter.
+//
+// ⚠ **THE WITNESS TABLE IS THE ONLY PER-CONFORMER RECORD THAT EXISTS, so this could not reuse
+// `LayoutDescriptor`'s slot.** Descriptors are minted per `GenericInstanceId` alone
+// (`LowerMaxonToStd.ensureLayoutDescriptor`): a plain `type Marker implements Tagged` that is never a
+// generic argument has no descriptor at all, and an owned interface FIELD of it still has to be dropped.
+export let WitnessDestroyFuncOffset = 8 as ByteOffset
+
+// ⭐⭐ **HOW A FAT POINTER TAKES A SECOND OWNER OF ITS OWN VALUE HALF (P1.7a-existentials slice 2b)** — the
+// conformer's `__str_clone` / `__mm_retain`, or **0** when the conformer owns nothing (an `int`/`bool`
+// widened to an interface). `__retain_existential(witness, value) -> value` reads this word, null-guards it
+// and `callIndirect`s it, RETURNING WHAT IT HANDS BACK — the destroy word's exact inverse, and stamped from
+// the same one answer (`ProgramSignatures.existentialOwnershipProtocol`) so the two can never disagree about
+// a conformer.
+//
+// ⚠⚠ **IT IS NOT ONE CALLEE, AND ASSUMING IT WAS WAS A MEASURED ACCESS VIOLATION.** A `String` LITERAL is a
+// wholly IMMORTAL `.rdata` record and the compiler deliberately has no `MmImmortalRefcount` sentinel — the invariant
+// (`Parser.emitManagedConstant`, `StringRuntime.stringBufferSlots`) is that such a record never reaches a
+// refcount write at all. On the CONCRETE doors it is upheld at RUN TIME (borrowed
+// Strings are retained, not copied): `__str_retain` reads the record's own `capacity@16` and CLONES an
+// immortal one where it increfs a heap one (`StringRuntime.buildStrRetain`). ⚠ **THAT TEST IS NOT AVAILABLE
+// HERE, AND THE REASON IS THE LAYOUT AND NOT THE POINTER.** `capacity@16` is a capacity only in a record the
+// reader already knows to be a byte record; in an aggregate conformer's box that word is an arbitrary field
+// — or past the end of a box too small to have one — so a `capacity@16 == ImmortalRecordCapacity` test on an
+// existential would be reading a struct's own data and calling it a provenance. The split therefore happens
+// one level up, per CONFORMER at compile time where the type IS known: a byte-record conformer's protocol is
+// `__str_clone`, never the incref, and the
+// fresh OWNED heap record it hands back is what launders the literal. MEASURED with one hardcoded
+// `__mm_incref`: `widen("abc")` printed `A` and died with 0xC0000005 writing into `.rdata`.
+export let WitnessRetainFuncOffset = 16 as ByteOffset
+
+// ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS (P1.7a-existentials slice 1).**
+// The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
+// nothing else — which is why the size is stated HERE, beside the table it points at.
+//
+// ⚠ **IT IS A SIZE *AND*, SINCE SLICE 2, A MEMORY LAYOUT — but only in the ONE position that stores one.**
+// Everywhere a fat pointer flows it is two PARALLEL SCALARS (a local is two SSA values, a parameter two
+// adjacent ABI parameters), and there the halves are never adjacent in memory at all. A STRUCT FIELD is the
+// exception, and it has to be: the box is what outlives the frame, so both halves live in it, at `+0` and
+// `+8` of the field's own two-slot carve-out (`Project.fieldSlotCount`). Its other live reader is
+// `sizeof(<Interface>)` (`primitiveTypeByteSize`), which answers 16.
+export let InterfaceValueBytes = MachineWordBytes + MachineWordBytes
+
+// The displacement of the WITNESS half from the VALUE half inside a struct field's two-slot carve-out
+// (P1.7a-existentials slice 2). Stated here beside the size it splits, so the field READ
+// (`Parser.emitFieldLoad`), the field WRITE (`Parser.emitFieldStore`) and the field DROP
+// (`MmRuntime.emitNullGuardedDrop`) all reach the second word through one constant — three sites that
+// would otherwise each spell `+8` and be free to drift from the size above.
+export let InterfaceWitnessHalfOffset = MachineWordBytes
+
+// The byte offset of witness-table method slot `index` (P1.7a slice 2a) — `24 + 8*index`. The ONE place
+// the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
+// cannot drift.
+export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOffset
+	return WitnessTableHeaderBytes + WitnessSlotBytes * (index as ByteOffset)
+end 'witnessMethodSlotOffset'
+
+// ⭐⭐ **THE SECOND TABLE A HELD ASSOCIATED TYPE NEEDS, AND WHERE IT RIDES.** An interface with an
+// associated position the program HOLDS AT AN INTERFACE carries one further slot per associated position,
+// APPENDED past the method slots — `witnessMethodSlotOffset`'s twin, and the only place the two blocks'
+// arithmetic meets. Slot `methodCount + position` holds the nested table for whatever THIS conformer bound
+// that position to, which is what makes "conformers bind `Iter` differently" work: each conformer's table
+// names its own.
+//
+// ⭐ **THE WHOLE BLOCK IS ALLOCATED, NOT JUST THE HELD POSITIONS, AND THAT IS DELIBERATE.** A dense
+// held-position index would be a SECOND numbering beside `associatedTypeNames`, computed at the mint and
+// re-computed at every load, and the two would be free to disagree about a slot that is 8 opaque bytes to
+// every reader. `position` is the interface's own, so there is one numbering. An interface with NO held
+// position gets no block at all (`associatedSlotCount` is 0), so every witness table in a program that does
+// not use the feature is byte-identical to what it was.
+//
+// ⚠ **THE SLOT HOLDS A SELF-RELATIVE BYTE OFFSET, NOT AN ADDRESS** — see
+// `GlobalDataTable.recordRdataSelfRelativeOffset` for why `.rdata` cannot point at itself with any
+// relocation this compiler has, and why a distance can.
+export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position TypeParamPosition) returns ByteOffset
+	return witnessMethodSlotOffset(methodCount + (position as WitnessMethodIndex))
+end 'witnessAssociatedSlotOffset'
+
+// ⭐⭐ **THE SEPARATOR THE WITNESS LABEL JOINS ITS TWO NAMES WITH, AND THE CHARACTER CLASS *IS* THE
+// INJECTIVITY ARGUMENT.** The label identifies a `(conformer, interface)` PAIR, so a separator that a
+// name may itself contain does not identify one: `_` is a legal identifier byte (`Lexer.isAlphaNum`), so
+// an `_`-join spelled `(A_B, C)` and `(A, B_C)` as one `__witness_A_B_C`. That was not a collision the
+// mint could see — it MEMOIZES ON THE LABEL, so the second pair did not contest the first, it silently
+// BECAME it, and every method slot dispatched to the other conformer's impl with the other conformer's
+// `self`. MEASURED: exit 0, no diagnostic, the program returned 33 where the answer is 43.
+//
+// ⚠ **IT IS THE *SECOND* HALF THAT CARRIES THE PROOF, AND ONLY THE SECOND.** The split is exact as soon as
+// `interfaceName` holds no separator: the LAST separator after `__witness_` is then always the join, whatever
+// the conformer half holds. Stating it of BOTH halves would be stating it of the half that cannot promise it
+// — `ProgramSignatures.mangleTypeArg`'s `named` arm hands back a raw interned type name, and interned type
+// names include the QUALIFIED per-instance spellings `joinQualifiedName` builds (`IntWrapper.Idx`), which are
+// joined with a `.` of their own (`SignatureIndex.QualifiedAliasSeparator`). Nothing keeps those out of a
+// conformer position by CHARACTER CLASS; today they are kept out by E3017/E2015 refusing them a conformance
+// at all, which is a front-end gate and not a property of the lexer. **They are also harmless**, which is the
+// point: a conformer may carry a separator and the split still lands in one place.
+//
+// The interface half CAN promise it, and does so where a name is admitted rather than where it is used: an
+// interface name is a single `identifier` token — `where T is <ident>` (`Parser.readWhereClause`) and
+// `implements <ident>, …` (`Parser.parseTypeImplementsClause`) — or one of the compiler's own synthesized
+// protocol names below, and the lexer admits only `[A-Za-z0-9_]` inside an identifier. So injectivity is a
+// property of the LEXER rather than of a decoding algorithm a later reader has to get right — but of the lexer
+// acting on ONE half, which is why `requireSeparatorFreeLabelComponent` is asked of that half and not the
+// other — and, at `witnessSlotImplKey`, of the method half for the same reason.
+//
+// Escaping by DOUBLING the separator would not even have worked: with a one-byte separator, a run of five
+// underscores between two components admits three valid splits.
+//
+// ⚠ **DELIBERATELY NOT `Parser.MethodNameSeparator`, which holds the same byte, and the two have different
+// ADMISSIBLE SETS — which is what makes them two facts rather than one written twice.** That one is pinned to
+// exactly `.`: it is the separator the AUTHOR writes at a call site (`Point.create`), the mangled method name
+// carries it verbatim. This one is pinned only to *some* byte
+// outside the identifier alphabet — any of ~30 would do. A constant with a singleton admissible set and a
+// constant with a thirty-member one cannot be the same fact, and MEASURED: rebuilt with this separator alone
+// moved to `#`, the whole suite still returns every correct answer (60 goldens move, 0 wrong answers), so
+// nothing anywhere requires the two to agree. One constant would couple a `.rdata` label to a piece of surface
+// syntax so that a change to either silently moved the other. What the two genuinely share is only the lexer
+// property above — which is why each states it where its own value lives.
+let WitnessLabelSeparator = "."
+
+// The `.rdata` label of the witness table for `typeName` conforming to `interfaceName` (P1.7a slice 2a) —
+// `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
+// registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
+export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
+	requireSeparatorFreeLabelComponent(interfaceName, component: WitnessLabelComponent.interfaceName)
+
+	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
+end 'witnessTableLabel'
+
+// ⭐⭐ **THE KEY IDENTIFYING ONE WITNESS-TABLE SLOT — `(conformer, interface, method)` (R10).** It is what
+// `ConformanceCheck` files its SELECTED impl under and what `LowerMaxonToStd.ensureWitnessTable` reads that
+// selection back by, so the member a conformance ACCEPTED and the symbol a slot's relocation NAMES are one
+// value rather than two joins of the same names that happen to agree. Under D7 those two joins genuinely
+// diverge: a requirement satisfied by a later overload is registered `Type.method#Suffix` while an
+// un-suffixed join spells the FIRST declaration, and both sites minting their own was a silent wrong
+// dispatch waiting for conformance to be fixed.
+//
+// It is BUILT ON the table label rather than beside it, so the pair half of the key cannot drift from the
+// label the slot actually belongs to — and the method half is held to the same separator-freedom the
+// interface half is (below).
+//
+// ⚠ **WHAT THAT BUYS IS INJECTIVITY, NOT DECODABILITY, and the distinction matters because NOTHING SPLITS
+// THIS KEY** (R10 review — an earlier wording here claimed a "three-way split", which no reader performs
+// and no future reader should be invited to write). The property spent is that two DISTINCT triples never
+// spell one key: the conformer half may itself carry a separator (`mangleTypeArg`'s qualified per-instance
+// spellings do), so it is only the last two components that must be free of it — and each of those is a
+// single token the lexer keeps the separator out of. Both halves free ⇒ the join is a function of the
+// triple, which is the whole of what a map key needs.
+export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
+	requireSeparatorFreeLabelComponent(methodName, component: WitnessLabelComponent.methodName)
+
+	return "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}".toByteArray()
+end 'witnessSlotImplKey'
+
+// ⭐⭐ **THE `.text` NAME OF THE ABI ADAPTER A WITNESS SLOT MAY NEED (WASM3)** — a real function, one per
+// `(conformer, interface, method)` triple, whose signature IS the requirement's and whose body forwards to
+// the impl with the impl's hidden dictionary arguments supplied. See
+// `LowerMaxonToStd.witnessSlotAdapterCallee` for when a slot needs one and what it passes.
+//
+// It is BUILT ON `witnessSlotImplKey` rather than joining the triple a third time, for that function's own
+// stated reason: the triple's injectivity is a property of ONE join, and a second join free to drift from it
+// would put two distinct slots' adapters under one symbol — a silently mis-dispatched method, which is the
+// exact failure the separator exists to prevent. The prefix keeps the adapter's symbol out of the `.rdata`
+// label space the key it is built on belongs to, so a function and a blob can never contest a name.
+export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
+	return "__adapt_{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}".toByteArray()
+end 'witnessSlotAdapterSymbol'
+
+// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT INSTEAD OF ONLY ARGUED ABOVE IT.**
+// The property lives three files away — an interface name and a method name are each a single token, so the
+// lexer keeps the separator out of both — and a join whose correctness rests on a fact stated only in
+// someone else's file is the shape that already bit this label once. This is that fact, asked where it is
+// spent: once by `witnessTableLabel` of its interface half, once by `witnessSlotImplKey` of its method half.
+//
+// It is UNREACHABLE today and that is exactly what it is for: what it catches is a LATER widening of what
+// may name an interface — a namespaced `where T is Foo.Bar` is the obvious one — which would otherwise
+// silently restore the very bug the separator was introduced to fix, with no diagnostic and a wrong answer
+// at runtime. A PANIC and not a diagnostic, because the broken invariant would be the COMPILER's (two
+// conformances quietly sharing one dictionary), not anything the author could be told to write differently.
+//
+// The separator byte is read OUT of `WitnessLabelSeparator` rather than restated as a literal: a second
+// spelling would be free to drift from the join it is supposed to be checking, which is the whole failure
+// mode this function exists to prevent.
+//
+// ⚠ **THE CALLER NAMES ITS COMPONENT AND NOTHING ELSE — the sentence is BUILT ON THE FAILURE PATH, and that
+// is measured rather than tidy (R10 review).** Passing the join template and the "identifies" clause as
+// STRING arguments made every call build them: an interpolation over a `let` String is not folded, so
+// `join: "__witness_<Type>{WitnessLabelSeparator}<Iface>"` compiled to an `__mm_alloc` plus three
+// `__str_copy`s (measured in the emitted IR) at every `witnessTableLabel` and every `witnessSlotImplKey` —
+// one heap String per call, to describe a panic the header above documents as unreachable. A discriminator
+// costs nothing and puts each component's three facts (what it is called, which join spends it, what that
+// join would stop identifying) in ONE arm instead of scattering them across the two call sites. Same shape,
+// and for the same reason, as `Parser.nameExpectationOf`.
+function requireSeparatorFreeLabelComponent(name ByteArray, component WitnessLabelComponent)
+	let separator = try WitnessLabelSeparator.toByteArray().get(0) otherwise panic("requireSeparatorFreeLabelComponent: WitnessLabelSeparator is a one-byte literal")
+
+	for i in 0 upto name.count() 'scan'
+		if (try name.get(i) otherwise panic("requireSeparatorFreeLabelComponent: index {i} is below count {name.count()}, but get failed")) == separator 'contains'
+			panic("requireSeparatorFreeLabelComponent: {separatorFreedomSubjectOf(component)} '{String.from(name)}' contains the label separator '{WitnessLabelSeparator}', so `{separatorFreedomJoinOf(component)}` no longer identifies {separatorFreedomIdentitiesOf(component)} — two would spell one name and the second would silently take the first's dictionary. An interface name and a method name are each a single token today; whatever widened that has to pick a separator no component can hold")
+		end 'contains'
+	end 'scan'
+end 'requireSeparatorFreeLabelComponent'
+
+// Which half of a witness label the separator-freedom argument is being spent on (see
+// `requireSeparatorFreeLabelComponent`). The conformer half is deliberately absent: it MAY carry the
+// separator (`mangleTypeArg`'s qualified per-instance spellings do), which is exactly why it is the LAST TWO
+// components that have to be free of it.
+enum WitnessLabelComponent
+	// The `<Iface>` of `__witness_<Type>.<Iface>`, asked by `witnessTableLabel`.
+	interfaceName
+	// The `<method>` of `__witness_<Type>.<Iface>.<method>`, asked by `witnessSlotImplKey`.
+	methodName
+end 'WitnessLabelComponent'
+
+// What to CALL the offending component in the panic. Rendered on the FAILURE path only (see
+// `requireSeparatorFreeLabelComponent`), as are the two below.
+function separatorFreedomSubjectOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "interface name"
+		methodName then return "method name"
+	end 'which'
+end 'separatorFreedomSubjectOf'
+
+// The JOIN whose injectivity this component's separator-freedom is what buys — the one that stops being a
+// function of its parts the moment a component can hold the separator.
+function separatorFreedomJoinOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "__witness_<Type>{WitnessLabelSeparator}<Iface>"
+		methodName then return "__witness_<Type>{WitnessLabelSeparator}<Iface>{WitnessLabelSeparator}<method>"
+	end 'which'
+end 'separatorFreedomJoinOf'
+
+// What that join identifies, and would stop identifying.
+function separatorFreedomIdentitiesOf(component WitnessLabelComponent) returns String
+	match component 'which'
+		interfaceName then return "ONE (conformer, interface) pair"
+		methodName then return "ONE (conformer, interface, method) slot"
+	end 'which'
+end 'separatorFreedomIdentitiesOf'
+
+// --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
+let StringableInterfaceName = b"Stringable"
+let FormattedStringableInterfaceName = b"FormattedStringable"
+
+// `Hashable`/`Equatable`/`Comparable` are EXPORTED, the other protocol names are not, and the three consumers
+// are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
+// `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
+// (`requireBuiltinInterface`); and a witness table is MATERIALIZED by name
+// (`LowerMaxonToStd.materializeWitnessTableAddr` builds `rdataAddr(__witness_<conformer>.Hashable)`), whose
+// label must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of
+// keeping its own — the deleted `SetRuntime` used to keep a second copy of two of them.
+// ⚠ The third consumer was a compiler-owned runtime callee that threaded a container KEY's two tables as
+// hidden arguments (`withKeyWitnessArgs`); that whole route retired at W105 and W129, and the surviving
+// reader is the `where T is I` dictionary parameter, which names the same three spellings.
+let HashableInterfaceName = b"Hashable"
+export let EquatableInterfaceName = b"Equatable"
+export let ComparableInterfaceName = b"Comparable"
+let CloneableInterfaceName = b"Cloneable"
+
+// ⚠ **EXPORTED, BECAUSE A SYNTHESIZED ERROR ENUM HAS TO DECLARE THE SAME CONFORMANCE THE
+// DECLARATION IT STANDS IN FOR DOES.** `Project.builtinArrayErrorEnum` /
+// `builtinDivisionByZeroErrorEnum` stand in for declarations that spell `implements Error`
+// (`stdlib/Array.maxon:6`), and `EnumLayout.conformsTo` is what
+// `ConformanceCheck.requireImplErrorConformsAndIsScalar` now reads. Spelling `b"Error"` there
+// instead would be a second copy of the one name this file's `builtinInterface` answers for.
+export let ErrorInterfaceName = b"Error"
+
+// ⚠ **THE ONE PROTOCOL NAME HERE THAT IS *NOT* SYNTHESIZED — it is DECLARED, in `stdlib/Builtins.maxon:40`,
+// which the loader already lists.** So it needs no `builtinInterface` arm: a `type X implements
+// InitableFromStringLiteral` resolves through the ordinary user-interface lookup and `checkConformance`
+// validates its `static function init(value String) returns Self` like any other requirement. What this
+// spelling is for is the CONVERSE question — "may `X from "…"` be written?" — which
+// `checkLiteralInitConformance` asks of the declared-conformance index. Exported so that question is asked
+// with the same bytes the stdlib declares, never a second literal.
+export let InitableFromStringLiteralName = b"InitableFromStringLiteral"
+
+// ⭐ **`<Type> from 'A'` — THE SAME SUGAR OVER A CHARACTER LITERAL** (`stdlib/Builtins.maxon:47` —
+// `static function init(value Character) returns Self`). Its own name beside its String twin because the two
+// are two conformances with two `init` parameter types, and a site records WHICH it needs.
+export let InitableFromCharLiteralName = b"InitableFromCharLiteral"
+
+// The protocol methods + their result/param type spellings, verbatim from
+// stdlib/Interfaces.maxon.
+export let HashMethodName = b"hash"
+export let EqualsMethodName = b"equals"
+
+// ⭐ **THE CURSOR PROTOCOL'S TWO METHOD NAMES — what `for … in` over a USER type calls** (conditional
+// extensions), verbatim from `stdlib/Interfaces.maxon:144-145`'s `interface Iterator uses Element`.
+//
+// ⚠ **The compiler SYNTHESIZES NO `Iterator` INTERFACE FOR THEM TO BE READ OFF, and that is deliberate.** The
+// protocol interfaces above exist because a WITNESS TABLE has to be built for them; a `for` loop over a
+// concrete source needs no witness — it is a direct call to `<Conformer>.current` / `<Conformer>.advance`
+// — so what the parser needs is exactly these two names and nothing else. See
+// `ProgramSignatures.declaresCursorProtocol`, the one place they are joined to a type.
+export let CurrentMethodName = b"current"
+export let AdvanceMethodName = b"advance"
+
+// ⭐ **THE `Iterable` HALF OF THE TRAVERSAL PROTOCOL (W3)** — `stdlib/Interfaces.maxon:183`'s
+// `interface Iterable uses Element, Iter / function createIterator() returns Iter`. A `for … in` over a
+// conformer of THIS interface calls it once, in the preheader, and then walks what it returns through the
+// two names above; that is the whole difference between the two halves, and it is why one name is enough
+// here where the cursor needs two. See `Parser.materializeIterableIterationSource`.
+export let CreateIteratorMethodName = b"createIterator"
+
+// ⛔ **`create` AND `upsert` ARE NOT NAMED HERE, AND W41 NAMED THEM HERE (removed at review).** The two
+// methods a `[k: v, …]` literal desugars to once `Map` is the corpus type are the SAME two names the parser's
+// own method-name block already holds (`Parser.CreateMethod`, `Parser.UpsertMethod`) — and the only reader of
+// the copies was `Parser.emitMapLiteral{Create,Upsert}`, in the very file that declares the originals. So one
+// file named one method through two constants, which is the drift `Parser`'s block header forbids in its own
+// words: *"a second `b\"create\"` … would be exactly the drift the block above exists to prevent"*.
+
+// What a type's `createIterator()` declaration is worth to a `for … in` header — see
+// `ProgramSignatures.iterableFactory`, which owns the classification and the argument for the three arms.
+export union IterableFactory
+	notDeclared
+	infallible
+	throwsIterationError
+	throwsSomethingElse(errorName String)
+end 'IterableFactory'
+
+// All three are exported for ONE reason: `BuiltinConformanceRuntime` names each SYNTHESIZED impl it installs
+// (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.hash`/`String.equals`) by joining a conformer
+// name to the method name, and that symbol must be the one the witness-table reloc points at. The operator
+// lowerings do NOT name them — they read the method off the protocol `builtinInterface` synthesizes
+// (`requireBuiltinInterface`), so the method searched for and its result type stay one fact.
+export let CompareMethodName = b"compare"
+
+// ⚠ **`clone` IS EXPORTED FOR THE OPPOSITE REASON TO THE THREE ABOVE: NO `<type>.clone` SYMBOL EXISTS, AND
+// THE TOKEN IS STILL WHAT EVERY `clone` DOOR MATCHES ON.** `Cloneable.clone` is declared here
+// (`builtinInterface`) and advertised here (`builtinConformerLoweredMethodNames`); the primitive lowering,
+// the `String` surface and the `Array` surface each serve it, and only the last two copy anything.
+// It held these same bytes a SECOND time as `Parser.CloneMethod` until the primitive lowering arrived and
+// would have made the advertisement and the arm read different constants — the one-fact-written-twice
+// `Parser`'s own shared-method block is written against, across the file boundary that block cannot see.
+export let CloneMethodName = b"clone"
+
+let FormatParamName = b"format"
+
+// ⚠ Exported since array-hashable: `Parser.requireSameArrayInstanceArg` reports a bad `Array.equals`
+// argument under the formal name `Equatable.equals` DECLARES, which is this one. It is deliberately not
+// `SignatureIndex.ManagedMemoryOtherParamName` — that is `__ManagedMemory.append`'s own formal, a different
+// declaration that happens to have chosen the same word, and merging them would make one interface's
+// signature the authority for a buffer method's.
+let OtherParamName = b"other"
+export let HashValueTypeName = b"HashValue"
+
+// `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)` — the SECOND name
+// `isSynthesizedIntAliasName` answers for (see its header for why it cannot come from a registry). It sits
+// beside `HashValueTypeName` rather than in the parser or the loader because both readers of the
+// synthesized-alias set already live here, and a spelling kept anywhere else would be a second copy of the
+// name that only the day of a rename would show to be wrong.
+export let CodepointTypeName = b"Codepoint"
+
+// ⚠ There is deliberately no `StringTypeName`/`BoolTypeName` beside these: the rendered spelling of
+// `String` in `Stringable.toString() returns String` and of `bool` in `Equatable.equals(…) returns bool`
+// IS the CONFORMER NAME of that type (`StringConformerName` / `BoolConformerName` below) — one fact, "how
+// this type is spelled in source", wearing an interface signature's hat. They were two constants holding
+// the same bytes for `String`, which is precisely the shape that drifts.
+// Exported: `Comparable.compare`.s result type is an enum the compiler READS out of the corpus under this
+// exact name (`stdlib/Interfaces.maxon:34`, reached through `Project.requireCorpusDeclaredEnum`). One
+// spelling for the interface.s rendered return type, the registry key that declaration lands under, and the
+// declaration reject that keeps a USER from binding the name.
+export let OrderingTypeName = b"Ordering"
+
+// `Ordering`'s three cases, in DECLARATION order, verbatim from stdlib/Interfaces.maxon:34-38. Named
+// rather than spelled at each use because TWO parties depend on the exact bytes: the synthesized
+// `int`/`float`/`Character` `compare` impls that return their tags, and the `<`/`>`/`<=`/`>=` lowering that
+// tests its dispatch result against them.
+//
+// ⚠ **THEY ARE NAMES, NOT ORDINALS, AND THE THIRD PARTY IS GONE (W3).** A layout builder here used to
+// transcribe the ORDER as well (`Project.builtinOrderingEnum`); both readers now take the numbering off the
+// corpus declaration through `EnumLayout.tagOfCase`, so what is left to write down is which case each door
+// means — the `__Managed*Error` arrangement, whose case-name constants stayed for the same reason at A1s.
+export let OrderingLessThanCaseName = b"lessThan"
+export let OrderingEqualToCaseName = b"equalTo"
+export let OrderingGreaterThanCaseName = b"greaterThan"
+
+// One method SIGNATURE declared in an interface body (no body). Its type columns are
+// rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
+export type InterfaceMethodSig
+	export let name as ByteArray
+	export let paramNames as ByteArrayArray
+	export let paramTypeNames as ByteArrayArray
+	export let returnTypeName as ByteArray
+	// A `static function` in an interface body carries no receiver, so a conforming type
+	// need not supply it as an instance method — the conformance check SKIPS it.
+	export let isStatic as bool
+	// ⭐ **THE METHOD'S DECLARED `throws` (P1.7a slice 2b-v)** — the fact that decides which ABI a
+	// witness dispatch of this method uses. A `throwing` clause makes the dispatch a dual-register
+	// `witnessTryCall` that a `try` must cover (E3057 without one); `none` makes it the single-register
+	// `witnessCall`, which a `try` may not cover (E3055). Both directions of the conformance relation are
+	// checked against it (`validateThrowsConformance`), because the CALLER's ABI is picked from the
+	// INTERFACE while the callee's is picked from the IMPL: the two must agree or the flag register is
+	// written by one end and not read by the other.
+	export let throwsClause as ThrowsClause
+
+	// ⭐⭐ **WAS THIS PARAMETER SPELLED BARE `__ManagedMemory`? — ONE BOOL PER PARAMETER, PARALLEL TO
+	// `paramTypeNames`, AND IT IS THE ONLY PLACE THE SPELLING SURVIVES.**
+	//
+	// `paramTypeNames` is rendered from `MaxonType`s, and by then a bare `__ManagedMemory` has already
+	// resolved to the CONCRETE byte instance and prints `Array_Byte` — indistinguishable from a genuine
+	// `ByteArray` requirement. So the fact cannot be recovered downstream and has to be carried from the
+	// tokens; `parseInterfaceMethod` already computes it as the `paramSurfaces` column (A2j) and used to
+	// DROP it on the floor.
+	//
+	// ⚠ **WHY THE DISTINCTION IS LOAD-BEARING RATHER THAN COSMETIC.** `__ManagedMemory` is
+	// GENERIC over one `Element`, so a bare spelling inside a REQUIREMENT is that unbound parameter — it
+	// means *any* buffer, not *a buffer of bytes*. `stdlib/Builtins.maxon`'s `BuiltinDictionaryLiteral`
+	// declares `init(keys __ManagedMemory, values __ManagedMemory)` and `stdlib/Map.maxon` satisfies it with
+	// `__ManagedMemory with Key` / `with Value`. Read as `Array_Byte` those disagree, and `Map` is refused
+	// against the interface that exists for it.
+	//
+	// ⛔ **THE FIX MAY NOT BE "COMPARE MORE LOOSELY".** Widening the comparison for every `Array_Byte`
+	// requirement would silently accept a real `ByteArray` mismatch — a wrong ACCEPTANCE, which no
+	// diagnostic reports. This column is what keeps the widening scoped to the spelling that actually meant
+	// "any element".
+	export let paramIsBuffer as BoolArray
+
+	// A signature whose parameters carry no buffer spelling — every position plainly declared. The
+	// synthesized interfaces build one of these rather than passing an empty array, because a column that
+	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
+	export static function noBufferParams(count ParamCount) returns BoolArray
+		var out = BoolArray.create()
+		var filled = 0 as ParamCount
+		while filled < count 'each'
+			out.push(false)
+			filled = filled + 1
+		end 'each'
+		return out
+	end 'noBufferParams'
+
+	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer}
+	end 'create'
+end 'InterfaceMethodSig'
+
+export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
+
+// ⭐ **THE ONE `[static ]name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and
+// impl (actual) renderers so the two halves of a wrong-signature message cannot drift in format.
+// `paramNames` and `paramTypes` are parallel source-string columns.
+//
+// The `static ` prefix is what makes a RECEIVER-KIND disagreement readable (R9): without it a static
+// requirement met by an instance method of the same shape renders `tag() returns Code (expected tag()
+// returns Code)` — a rejection whose two halves are the identical string, telling the author to change
+// something that already looks right. It costs nothing on every other message, because until R9 no static
+// requirement could reach a diagnostic at all.
+//
+// ⚠ **IT LIVES BESIDE `InterfaceMethodSig` RATHER THAN IN `ConformanceCheck`, AND THE THIRD READER IS WHY
+// (R10c).** A witness dispatch's ambiguity and arity rejects have to spell a REQUIREMENT too, and they are
+// raised by the PARSER — so a renderer private to the conformance pass meant either a second format or a
+// diagnostic in one phase describing a requirement differently from a diagnostic in the other. The columns
+// stay four PARAMETERS and not one `InterfaceMethodSig`, because `formatActualSignature`'s caller renders an
+// IMPL, which has no `InterfaceMethodSig` to hand it.
+export function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool) returns String
+	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
+	for i in 0 upto paramNames.count() 'eachParam'
+		if i > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		let paramName = try paramNames.get(i) otherwise panic("assembleMethodSignature: paramNames.get OOB at {i}")
+		let paramType = try paramTypes.get(i) otherwise panic("assembleMethodSignature: paramTypes.get OOB at {i}")
+		rendered = "{rendered}{String.from(paramName)} {String.from(paramType)}"
+	end 'eachParam'
+	return "{rendered}) returns {String.from(returnType)}"
+end 'assembleMethodSignature'
+
+// ⭐⭐ **THE ONE RENDERER OF A DECLARED TYPE TO THE SOURCE STRING A CONFORMANCE COMPARES AND PRINTS.**
+// BOTH sides of the conformance relation come through here — the INTERFACE side at parse time
+// (`Parser.renderInterfaceTypeName`, which adds only the `Self` arm on top of it) and the IMPL side at
+// check time (`ConformanceCheck.signatureMatches` / `formatActualSignature`) — and it is ONE function
+// because a rendered name is a type IDENTITY, not a caption: `signatureMatches` decides conformance by
+// comparing two of these strings. A tag the two sides spell DIFFERENTLY is a false REJECT; a tag they
+// both spell as one KIND WORD is a false ACCEPT, which no positive test can see.
+//
+// ⚠ **`maxonTypeName` ALONE CANNOT BE THAT RENDERER — two of its arms name a KIND rather than a TYPE**,
+// and this is the one site where that difference is a wrong answer instead of a cosmetic one:
+//
+//   • a `typeParameter`'s id is a `(declaring type, parameter name)` DIGEST and not an interner id (W14;
+//     it was a bare POSITION, which is the identity defect that rung removed — the conclusion here is
+//     unchanged either way, because neither spelling is a name `maxonTypeName` could resolve), so
+//     `maxonTypeName` gives the literal `type parameter` for every one of them: `T` and `U` render alike
+//     and neither matches ITSELF, which rejected `type Box uses T implements Holder with T` — how every
+//     generic container in `stdlib/` declares conformance (R5).
+//   • a `genericInstance` renders as the literal `struct`, so `Array with Integer` and `Array with String`
+//     render alike — a FALSE ACCEPT: a type whose `take(xs Array with String)` would satisfy an
+//     interface requiring `take(xs Array with Integer)`, where E3016 is the right answer. An
+//     instance's identity is `ProgramSignatures.canonicalInstanceName` — the compiler's own answer
+//     to "are these two the same type?", which every OTHER comparison site already asks, and which
+//     collapses the two spellings of one instance to one string.
+//
+// The lists are the CALLER's because only the caller knows whose they are: the parser renders against the
+// declaration it is inside (`enclosingTypeParams`) and its file-local interner, the conformance check
+// against the conforming type's recorded `uses` names and the project interner. They are four PARAMETERS
+// and deliberately not one record: a record is a heap box, this is called once per rendered type, and the
+// ladder read the difference — +32/+48/+80/+144/+272/+528 allocations at 32 bytes each, measured A/B on
+// this branch, for nothing but a shorter call. The RULE lives here, once —
+// it was two copies for one rung, and the copies AGREED on the `genericInstance` hole, which is exactly why
+// the hole read as an acceptance rather than as a disagreement.
+//
+// ⛔⛔ **THIS FUNCTION IS THE ONE PLACE A COMPILER-MINTED NAME STILL REACHES A DIAGNOSTIC, AND THAT IS A
+// DECISION, NOT AN UNSWEPT DOOR (sweep of 2026-08-04).** Every other message that names a type now goes
+// through a DISPLAY renderer that quotes the author's `typealias` — `Parser.displayTypeNameOf`,
+// `SemanticCheck.typeDisplayName`, `ProgramSignatures.instanceArgDisplayName`. This one does not, because
+// the string it returns is not a caption at ALL: `signatureMatches` DECIDES conformance by comparing two of
+// them, and the interface side's copy was frozen into `InterfaceMethodSig.paramTypeNames` at parse time,
+// where the associated-type substitution then rewrites it BY NAME. So `specs/associated-types.md` shows
+// `take(xs Array_String) … (expected take(xs Array_Integer) …)` where the author wrote `StrArray`/`IntArray`.
+//
+// ⇒ **Converting it means SPLITTING that column into an identity and a display**, carried in lockstep through
+// the parse-time record, the `Self` substitution, the associated-type substitution and both formatters — and
+// a display column that the name-keyed substitution silently skipped would be a WRONG signature in a message
+// rather than an ugly one. It is a rung, it is scoped, and it is deliberately not a line of this sweep.
+// Both halves of every such message spell the type the SAME way today, which is what keeps it merely ugly.
+export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames ByteArrayArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+	let tag = maxonTypeTag(t)
+
+	// ⚠ **THE TOKEN IS RE-SPELLED AGAINST THIS DECLARATION'S OWN NAMES, NOT LOOKED UP (W14).** Both callers
+	// hold exactly the `(declarationName, typeParamNames)` pair `typeParamPositionIn` takes, and one of them —
+	// `Parser.renderInterfaceTypeName` — runs INSIDE `readInterfaceDeclaration`, before that interface is
+	// recorded anywhere, so a registry lookup could not answer for it at all. It is also the stronger check:
+	// where the old position subscript would have rendered ANOTHER declaration's parameter name for a token
+	// that happens to be in range, a token this declaration did not mint now fails loudly.
+	if tag == ValueTypeTag.typeParameter 'typeParameterType'
+		let position = try typeParamPositionIn(typeParamIdOf(t), declarationName: declarationName, paramNames: typeParamNames) otherwise panic("renderDeclaredTypeName: type-parameter token {typeNameIdOf(t)} names no parameter of '{String.from(declarationName)}', whose own `uses` list holds {typeParamNames.count()} — that list is what its signatures were resolved against")
+		return try typeParamNames.get(position) otherwise panic("renderDeclaredTypeName: typeParamNames.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
+	end 'typeParameterType'
+
+	// ⭐⭐ **THE DECLARATION'S OWN INSTANCE IS `Self`, SO IT RENDERS AS THE DECLARATION (W57)** — the
+	// generic-instance twin of the type-parameter arm above, and the same idea: a type is re-spelled against
+	// the names of the declaration whose signature is being read. Since `Parser.enclosingSelfType` gives a
+	// container whose record the compiler owns the INSTANCE rather than the base `structRef`, a `returns Self`
+	// on `stdlib/Array.maxon`'s `clone`/`init`/`equals` arrives here as `Array with Array.Element`, and the
+	// mangled `Array_Te3315404e8d3fd14` matched no requirement — **MEASURED, three simultaneous `E3016`s
+	// against `Cloneable`, `Equatable` and `BuiltinArrayLiteral`, each one of them a `Self` the declaration
+	// plainly wrote.** `ConformanceCheck.substituteSelf` puts the bare declaration name on the EXPECTED side,
+	// so this is the spelling the two sides have to meet at; it also keeps the mangled name out of the
+	// DIAGNOSTIC, where it named a type no author can write.
+	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
+		if signatures.instanceIsDeclarationSelf(genericInstanceIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
+			return declarationName
+		end 'theDeclarationsOwnInstance'
+
+		return signatures.canonicalInstanceName(genericInstanceIdOf(t))
+	end 'genericInstanceType'
+
+	return maxonTypeName(t, typeNames: typeNames).toByteArray()
+end 'renderDeclaredTypeName'
+
+// A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
+// whose methods a conforming type must ALSO supply (`interface D extends B` — the check
+// projects B's methods into D at decl order); `associatedTypeNames` are the `uses`
+// parameters, POSITIONALLY bound by a conformance's `with` arguments (R5) — the list
+// `InterfaceConformance.withArgs` lines up against, and the list an unbound name is
+// reported from.
+export type IrInterface
+	export let name as ByteArray
+	export let methods as InterfaceMethodSigArray
+	export let extendsInterfaces as ByteArrayArray
+	export let associatedTypeNames as ByteArrayArray
+
+	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray) returns IrInterface
+		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames}
+	end 'create'
+end 'IrInterface'
+
+// ⭐ **WHERE `name` SITS IN A LIST OF DECLARED NAMES** — the compiler's ONE positional scan over one, and the
+// POSITION is what every caller spends, each on a different registry:
+//
+//   • `ConformanceCheck.boundTypeName` — an interface's `uses` names, to pick the argument a conformance
+//     bound at that position;
+//   • `LowerMaxonToStd.witnessFormalType` — the same list, to ask `associatedAbiBindingOf` what the conformers
+//     bound THAT position to; the formal's type is the binding's, and the interface cannot state it;
+//   • `Parser.instanceBoundAssociatedType` — the same list again, against the receiver's own instantiation;
+//   • `SemanticCheck.conformerBindingThroughInstance` — a generic type's declared TYPE PARAMETERS, because a
+//     conformance's `withArgs` are source spellings and a generic conformer's names its own parameter
+//     (`type Array uses Element implements Iterable with Element`), which only its instance can reduce.
+//
+// ⚠ **IT WAS `associatedTypePositionOf` AND THE LAST OF THOSE IS WHY IT IS NOT ANY MORE.** The body never
+// looked at anything but a name list, and its sibling `namesInclude` had already been consolidated out of two
+// identically-bodied copies (`byteArrayContains`, `rosterHasMember`) into the one generally-named door. A
+// second copy under a general name beside a first under a specific one would have been that same duplication
+// back again; renaming is what keeps there being one.
+//
+// A linear scan and not a map, for the reason `boundTypeName` gave when it owned the scan: a declaration names
+// a handful at most, so the scan is cheaper than building a map would be and it allocates nothing. Absence is a
+// THROW rather than a sentinel index or a `count()`-means-no answer, both of which are exactly the shape this
+// project forbids; `MapError.keyNotFound` is the absence channel every other registry here already speaks.
+export function namePositionIn(names ByteArrayArray, name ByteArray) returns TypeParamPosition throws MapError
+	for i in 0 upto names.count() 'eachName'
+		if (try names.get(i) otherwise panic("namePositionIn: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
+			return i
+		end 'isThisOne'
+	end 'eachName'
+	throw MapError.keyNotFound
+end 'namePositionIn'
+
+// ⭐ **THE EXISTENCE HALF OF THE SCAN ABOVE — "is `name` in the list at all?"** —
+// for `SemanticCheck.witnessFormalDeclaredType`, which answers `opaque` and has no use for WHICH position.
+//
+// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE.** `namePositionIn` is PURE, and a
+// pure function's result may not be dropped in any spelling: `_ = f()` and `if let _ = try f()` are both
+// E3064, and the bare `if try f()` is E3124. A pure call whose answer nobody wants is the wrong call, so
+// the caller that wants only WHETHER is given the function that answers only that. This one is plain
+// membership in a name list — the general operation the scan above happens to also perform on its way to a
+// position — and both settle "is this the same name" with the ONE predicate, `ByteArray.equals`.
+//
+// ⭐ **AND IT IS THE COMPILER'S ONE MEMBERSHIP-IN-A-NAME-LIST PREDICATE.** `Parser` carried two more of it
+// with the identical six-line body and a transposed argument order — `byteArrayContains` for a parameter
+// list, `rosterHasMember` for a builtin surface roster — and both are gone. A linear scan is right for every
+// caller: a parameter list, an associated-type list, a surface roster and an overload set are all tiny, so a
+// membership Set would be a heap object bought for nothing.
+export function namesInclude(names ByteArrayArray, name ByteArray) returns bool
+	for i in 0 upto names.count() 'eachName'
+		if (try names.get(i) otherwise panic("namesInclude: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
+			return true
+		end 'isThisOne'
+	end 'eachName'
+	return false
+end 'namesInclude'
+
+// ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
+// held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
+// carries a width; EVERYTHING else it calls `named`, and a `named` here is not a residue to panic on — it
+// is a struct, a ranged alias, a generic instance or a type parameter, every one of which travels as the
+// MACHINE WORD. So `named` is reduced to `integer` at this one door.
+//
+// ⚠ **THE REDUCTION IS THE WHOLE POINT, AND OMITTING IT PANICS.** `maxonTypeToStdType` refuses a `named`
+// outright (it is a resolution residue THERE, where TypeResolution was required to have eliminated it),
+// so handing it a `maxonTypeOfTag(builtinTypeNameTag(name))` crashes the compiler on `with Integer` —
+// MEASURED, twice in one afternoon, at both sites that forgot it. `valueTagToStdType` makes the identical
+// reduction for the identical reason one column over; this is that rule for a NAME rather than a tag.
+// ⛔⛔ **A RANGED FLOAT ALIAS HAD TO BE ASKED FOR SEPARATELY, AND UNTIL IT WAS THIS DOOR PANICKED THE x64
+// EMITTER.** `builtinTypeNameTag` answers `named` for every name it does not own, and this collapsed all of
+// them to the machine word — which is right for `Self`, a user type and a ranged INT alias, and WRONG for the
+// one `named` type whose value lives in the other register file. MEASURED, `interface Scaled { scale(k Real)
+// returns Real }` over `typealias Real = float(f64.min to f64.max)`: `argFloatMask` cleared the argument's
+// bit, so the fused `witnessCall` declared a GPR against an impl declaring XMM and the backend died —
+// *"a register-to-register move from xmm0 to rdx crosses register files"*.
+//
+// ⭐⭐ **AND THE PREMISE THAT MADE THAT SOUND WAS FALSIFIED BY A CHANGE IN ANOTHER FILE ENTIRELY.**
+// `builtinTypeNameTag`'s header says its answer is valid *"only at a door that holds a RENDERED type name"*,
+// resting on `bool`/`int`/`float` being unreachable as a `named` reference *"because the first three are
+// KEYWORDS"*. That was true while an interface could write `scale(k float)` — and the ranged-typealias rule
+// makes the bare keyword ILLEGAL in exactly that position, so a float formal can now ONLY arrive as an alias
+// NAME. The corpus had hidden the hole by writing the keyword everywhere the rule did not yet forbid it.
+//
+// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE**, and `isFloatAlias`'s own header carries the reason: `named`
+// already reads as an integer everywhere, and its NAME is what carries the range and the signedness the range
+// checks read off it. A FLOAT alias is the ONE that cannot be left overloaded, because the overloading is a
+// register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfName`.
+export function renderedTypeNameAbiType(name ByteArray, signatures ProgramSignatures) returns MaxonType
+	let tag = builtinTypeNameTag(name)
+	if tag != ValueTypeTag.named 'aBuiltinSpelling'
+		return maxonTypeOfTag(tag, nameId: UnnamedTypeId)
+	end 'aBuiltinSpelling'
+
+	return MaxonType.float if signatures.isFloatAliasInAnyFile(name) else MaxonType.integer
+end 'renderedTypeNameAbiType'
+
+export union AssociatedAbiBinding
+	// Every conformer binds the SAME type. `binding` is the rendered name they all wrote, `declaredType` the
+	// resolved formal type that name denotes (ready for the same `paramFloatMask` collapse a function value's
+	// declared parameters go through), and `conformer` the declaration that settled it —
+	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
+	agreed(conformer ConformanceDecl, binding ByteArray, declaredType MaxonType)
+	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can
+	// name them and anchor on one; the FIRST is the one that settled the binding in source order, exactly as
+	// `checkTypeSymbolNamespace` reports a contested name.
+	disagreed(first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
+	// No type in the program conforms at all, so no dispatch through this requirement can ever be made and
+	// nothing constrains the type. A body that mentions it still has to lower, so the caller supplies the
+	// machine word and says why.
+	unconformed
+end 'AssociatedAbiBinding'
+
+// What every conformer binds `interfaceName`'s associated type at `position` to, folded over every
+// conformance in the program — the ONE derivation of that fact, asked by the whole-program CHECKS that refuse
+// a disagreement (E3119) and a non-machine-word return (E3120), and by the LOWERING that needs the type. Two
+// folds would be a check that passes and a lowering that emits something else.
+//
+// ⭐⭐ **IT COMPARES THE BOUND TYPE, NOT ITS ABI CLASS, AND THE NARROWER LINE WAS MEASURABLY WRONG.** The
+// first cut asked only whether two bindings TRAVEL the same way, on the reasoning that a witness call's
+// calling convention is all a shared body commits to. It is not: under dictionary passing there is no
+// per-conformer specialization at all, so the body is compiled once against ONE type and every other
+// conformer reinterprets those bits. MEASURED, both pairs same-ABI-class and both broken — `String` beside
+// `Integer` (one call site reachable by both) SEGFAULTED on x64 (exit 139) and silently answered 20 on wasm,
+// the `int` actual read as a String pointer; `Integer` beside `Score = int(0 to 100)` with the actual 5000
+// answered 5000 through one conformer and RANGE-PANICKED through the other. A dispatched requirement's
+// associated type therefore has exactly one legal binding across the program.
+//
+// A binding is a RENDERED type name (`InterfaceConformance.withArgs`), and comparing those names IS the whole
+// test — no resolution, no class. `declaredType` is resolved only so the LOWERING has the formal's type;
+// `renderedTypeNameAbiType` is that reduction, and it is the caller's business rather than the comparison's.
+// The pre-first-match seed for the fold below. It is never READ — `sawOne` gates every use — and it exists
+// because a `var` must hold something before the walk finds its first conformer. `NoSourceLine`/`NoSourceColumn`
+// and the empty path say "this names nothing" rather than pointing at line 1 of some file.
+function unreadConformanceSeed() returns ConformanceDecl
+	return ConformanceDecl.create(EmptySourceText, interfaces: InterfaceConformanceArray.create(), nameLine: NoSourceLine, nameColumn: NoSourceColumn, filePath: CompilerOwnedDeclFilePath)
+end 'unreadConformanceSeed'
+
+// The position a synthesized declaration reports from — no line and no column, so a reader can tell it from
+// a real one rather than seeing a confident `1:1`.
+let NoSourceLine = 0 as LineNumber
+let NoSourceColumn = 0 as ColumnNumber
+
+export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex) returns AssociatedAbiBinding
+	// The pre-first-match seed. It is never READ — `sawOne` gates every use — and it exists because a `var`
+	// must hold something before the walk finds the first conformer. `CompilerOwnedDeclFilePath` is the empty
+	// path the other synthesized declarations use, so the seed names no file rather than a wrong one.
+	var seenDecl = unreadConformanceSeed()
+	var seenBinding = EmptySourceText
+	var sawOne = false
+
+	for decl in conformances 'eachDeclaringType'
+		for entry in decl.interfaces 'eachInterface'
+			if not entry.interfaceName.equals(interfaceName) 'otherInterface'
+				continue
+			end 'otherInterface'
+
+			// A conformance that bound FEWER arguments than the interface declares is already E3016's to
+			// report; it constrains nothing here and is passed over rather than read out of bounds.
+			if position >= entry.withArgs.count() 'boundNothingAtThisPosition'
+				continue
+			end 'boundNothingAtThisPosition'
+
+			let binding = try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which the guard above excludes")
+
+			if not sawOne 'firstConformer'
+				seenDecl = decl
+				seenBinding = binding
+				sawOne = true
+				continue
+			end 'firstConformer'
+
+			if not seenBinding.equals(binding) 'bindingsDisagree'
+				return AssociatedAbiBinding.disagreed(seenDecl, firstBinding: seenBinding, second: decl, secondBinding: binding)
+			end 'bindingsDisagree'
+		end 'eachInterface'
+	end 'eachDeclaringType'
+
+	if not sawOne 'nothingConforms'
+		return AssociatedAbiBinding.unconformed
+	end 'nothingConforms'
+
+	return AssociatedAbiBinding.agreed(seenDecl, binding: seenBinding, declaredType: renderedTypeNameAbiType(seenBinding, signatures: signatures))
+end 'associatedAbiBindingOf'
+
+// ⭐ **WHAT *ONE NAMED CONFORMER* BINDS `interfaceName`'s associated type at `position` to — the per-conformer
+// read the FOLD above deliberately cannot give.** `associatedAbiBindingOf` answers for the program, because
+// its two callers are checking that the program agrees; a HELD position is the one place the program is
+// allowed to disagree, and there the answer that matters is this conformer's, since it is this conformer's
+// table being stamped and its own binding whose nested table goes in the slot.
+//
+// A miss — no such conformance, or one that bound too few arguments — is `MapError.keyNotFound` rather than
+// an empty name: both are E3016's to report, and a caller must not stamp a slot naming a type nobody bound.
+export function conformerAssociatedBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
+	for decl in conformances 'eachDeclaringType'
+		if not decl.typeName.equals(typeName) 'anotherType'
+			continue
+		end 'anotherType'
+
+		return try declAssociatedBinding(decl, interfaceName: interfaceName, position: position)
+	end 'eachDeclaringType'
+
+	throw MapError.keyNotFound
+end 'conformerAssociatedBinding'
+
+// ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
+// list holds. Split from the name-keyed door above rather than left inside it because the difference is a
+// COST, not a spelling: a walk that asked by name for each declaration it was already standing on would scan
+// the whole list per element — the quadratic this project's ladder exists to find — and the first cut of
+// `checkHeldAssociatedTypeBindings` did exactly that.
+export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
+	for entry in decl.interfaces 'eachInterface'
+		if not entry.interfaceName.equals(interfaceName) 'otherInterface'
+			continue
+		end 'otherInterface'
+
+		// A conformance that bound FEWER arguments than the interface declares is E3016's to report; it names
+		// nothing here, exactly as it constrains nothing in `associatedAbiBindingOf`.
+		if position >= entry.withArgs.count() 'boundNothingAtThisPosition'
+			continue
+		end 'boundNothingAtThisPosition'
+
+		return try entry.withArgs.get(position) otherwise panic("declAssociatedBinding: withArgs.get OOB at {position}, which the guard above excludes")
+	end 'eachInterface'
+
+	throw MapError.keyNotFound
+end 'declAssociatedBinding'
+
+export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
+
+// The per-file artifact contribution form — declaration order, folded into the
+// whole-program `IrInterfaceMap` by `mergeArtifact`.
+export typealias IrInterfaceArray = Array with IrInterface
+
+// The SHARED EMPTY `with` argument list every conformance that writes no `with` clause holds (R5) —
+// which is every conformance in the corpus but the associated-type specs. `InterfaceConformance` binds
+// it with `let` and the substitution only READS it, so one allocation serves them all, the discipline
+// `Project.sharedEmptyWhereConstraints` states in full. It is the reason `withoutBindings` exists as a
+// second constructor rather than each caller spelling `ByteArrayArray.create()`: a caller that allocated
+// its own empty list would pay one heap object per declared conformance and nothing would notice.
+let sharedEmptyWithArgs = ByteArrayArray.create()
+
+// ⭐ **ONE `I [with A, B]` ENTRY OF AN `implements` CLAUSE (R5).** The interface NAME and this
+// conformance's POSITIONAL bindings for that interface's `uses` names, kept together because they mean
+// nothing apart: `withArgs[i]` binds `iface.associatedTypeNames[i]`. Two parallel columns on the decl
+// would be the same data with an alignment hazard a record makes unrepresentable.
+//
+// The arguments are RENDERED SOURCE STRINGS for `InterfaceMethodSig`'s reason (see this file's header):
+// what they substitute INTO is a requirement's rendered type string, and the E3016 message prints the
+// result — `implements Typed with Float` must print `expected make() returns Float`.
+export type InterfaceConformance
+	export let interfaceName as ByteArray
+	export let withArgs as ByteArrayArray
+
+	export static function create(interfaceName ByteArray, withArgs ByteArrayArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs}
+	end 'create'
+
+	// A conformance that wrote no `with` clause at all — it binds nothing, and shares the one empty list.
+	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs}
+	end 'withoutBindings'
+end 'InterfaceConformance'
+
+export typealias InterfaceConformanceArray = Array with InterfaceConformance
+
+// A `type X implements I1, I2` conformance declaration. Carries the type NAME token
+// position (line/column/file) so the E3015/E3016 diagnostic lands ON the type name.
+export type ConformanceDecl
+	export let typeName as ByteArray
+	export let interfaces as InterfaceConformanceArray
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(typeName ByteArray, interfaces InterfaceConformanceArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
+		return Self{typeName: typeName, interfaces: interfaces, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'ConformanceDecl'
+
+export typealias ConformanceDeclArray = Array with ConformanceDecl
+
+// ⭐ **WHERE A `<Type> from "…"` CONSTRUCTION WAS WRITTEN** — the sugar for `<Type>.init(<literal>)`,
+// which the language allows only for a type declaring `implements InitableFromStringLiteral`.
+//
+// ⚠ **IT IS A SITE RECORD BECAUSE THE ANSWER IS NOT AVAILABLE WHERE THE QUESTION IS ASKED.** The
+// construction is PARSED in one file; the `implements` clause is recorded when its own DECLARING file is
+// parsed (`Parser.parseTypeImplementsClause` → `project.conformances`), and the compiler parses files in
+// source-path order with no ordering between the two. Asking at the construction site would therefore
+// answer "does not conform" or "conforms" depending on which file came first — an order dependence, which
+// is the one thing `queryProgramSignatures` exists to make impossible. So the parser records WHERE, and
+// `checkLiteralInitConformance` decides AFTER the merge, off the single conformance store
+// `checkConformance` and the E3017 where-constraint check already read. That is exactly
+// `GenericInstantiationSite`'s shape and exactly its reason.
+//
+// The position is the TYPE NAME token — the `Wrapper` of `let w = Wrapper from "hello"`.
+export type LiteralInitSite
+	export let typeName as ByteArray
+	// ⭐ **WHICH CONFORMANCE THIS SITE REQUIRES**, carried rather than assumed: `<Type> from "…"` needs
+	// `InitableFromStringLiteral` and `<Type> from 'A'` needs `InitableFromCharLiteral`, and the check runs
+	// over one array holding both. A checker that named one of them would silently hold every site to it.
+	export let interfaceName as ByteArray
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(typeName ByteArray, interfaceName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns LiteralInitSite
+		return Self{typeName: typeName, interfaceName: interfaceName, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'LiteralInitSite'
+
+export typealias LiteralInitSiteArray = Array with LiteralInitSite
+
+// The outcome of resolving an interface NAME to its definition — a synthesized builtin
+// or a user-declared one, else `notFound` (which `checkConformance` renders as E3015).
+export union InterfaceLookup
+	found(iface IrInterface)
+	notFound
+end 'InterfaceLookup'
+
+// ⭐ **THE RESOLVED TARGET OF A WITNESS DISPATCH (P1.7a slice 2a; both receiver kinds since
+// P1.7a-existentials slice 1)** — `self.item.digest()` resolved against the enclosing type's `where`
+// constraints, OR `b.run()` resolved against the interface a value is held at. `witnessValue` is the value
+// holding the table to jump through (see its own header — it is what makes the two receivers ONE
+// mechanism); `methodIndex` is the DECL-ORDER slot of the method in
+// that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
+// return type, used to type the dispatch result exactly as a direct call types its own. `paramTypeNames` are
+// the method's rendered formal parameter types (P1.7a slice 2b) — read to reject a concrete value marshalled
+// into a `Self`-typed formal (`Equatable.equals`'s and `Comparable.compare`'s `other Self`), which would fault
+// (a struct `equals` dereferences an int literal as its `other` pointer).
+export type WitnessDispatchTarget
+	// ⭐⭐ **THE VALUE HOLDING THE WITNESS TABLE THIS DISPATCH JUMPS THROUGH — a ValueId, not an index
+	// (P1.7a-existentials slice 1).** It is what makes ONE dispatch mechanism serve both receivers the
+	// language has:
+	//
+	//   • a CONSTRAINED TYPE PARAMETER (`self.item.digest()` under `where T is Digest`) — the enclosing
+	//     generic body's own hidden witness PARAMETER for that constraint, whose ValueId the parser knows
+	//     because the parser is what reserved it (`Parser.witnessParamValueId`);
+	//   • an EXISTENTIAL (`b.run()` on a `b Backend`) — the fat pointer's WITNESS HALF, which is an ordinary
+	//     SSA value the parser paired with the value half (`Parser.witnessOfValue`).
+	//
+	// ⚠ **IT USED TO BE A `constraintIndex`, AND THAT IS THE FIELD AN EXISTENTIAL HAS NO HONEST VALUE FOR.**
+	// An existential's witness comes from the VALUE, not from any constraint of an enclosing type — so the
+	// index form forced either a second op pair with a second lowering, or a `0` that means nothing. Naming
+	// the VALUE says exactly as much and says it for both. The index → ValueId step also moved to the party
+	// that owns the reservation: the parser reserved the witness parameters, so the parser resolving its own
+	// reservation cannot disagree with itself, where the lowering re-deriving the count whole-program could.
+	export let witnessValue as ValueId
+	export let methodIndex as WitnessMethodIndex
+	// ⭐ **WHICH INTERFACE'S SLOT LIST `methodIndex` INDEXES** — the declaration-order handle
+	// (`ProgramSignatures.interfaceNamesInDeclOrder`), which is the CONSTRAINT's or the EXISTENTIAL's interface
+	// and NOT `declaringInterfaceName` below. The two differ under `extends`: a dispatch of `Base`'s method
+	// through `where T is Derived` reads slot `k` of DERIVED's table while the requirement it binds against
+	// is Base's. `methodIndex` is meaningless without it, so the pair travels together onto the emitted op —
+	// it is what lets `LowerMaxonToStd` recover the requirement's declared FORMALS and derive the call's
+	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
+	export let interfaceDeclIndex as InterfaceDeclIndex
+	export let returnTypeName as ByteArray
+	export let paramTypeNames as ByteArrayArray
+	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH (P1.7a slice 2b-vi)** — parallel to
+	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
+	// INTERFACE's parameter names, never a conformer's, and it has to be: under dictionary-passing the shared
+	// body has no concrete callee to ask, and `ConformanceCheck.signatureMatches` compares arity and TYPES
+	// only (it reads `paramNames` to format E3016 and never compares it), so several conformers may spell
+	// their parameters differently and only the interface's names are common to all of them.
+	export let paramNames as ByteArrayArray
+	// The interface method's declared `throws` (P1.7a slice 2b-v) — carried through the resolution so the
+	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
+	// `(e)` binding it recovers. A witness method is in NO signature registry (there is no callee NAME to
+	// ask `throwsOf` about), so this is the only place the fact reaches the call site.
+	export let throwsClause as ThrowsClause
+	// The method NAME, for the E3055/E3057/E3059 diagnostics a witness `try` target reports. A direct call
+	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
+	export let methodName as ByteArray
+	// ⭐ **THE INTERFACE THAT DECLARED THE REQUIREMENT, WHICH IS NOT ALWAYS THE CONSTRAINT'S (R10c).** Under
+	// `where T is Derived` with `interface Derived extends Base`, a dispatch of `Base`'s `label()` reads a slot
+	// of `Derived`'s table while the requirement it binds against is `Base`'s. Every message about this
+	// dispatch names THIS interface — telling an author that `Derived.label` expects one argument is false of
+	// an interface that inherits a zero-argument `label()`, and the falsehood is exactly what the missing
+	// projection used to produce.
+	export let declaringInterfaceName as ByteArray
+	// The requirement's `static`ness, carried for ONE reason: `assembleMethodSignature` — the one spelling of
+	// a requirement, shared with the conformance diagnostics — prints it, and a target that answered `false`
+	// for every requirement would describe a `static` one as something the interface does not declare. It is
+	// the last field of the requirement the two R10c rejects need and the only one nothing else reads.
+	export let isStatic as bool
+
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
+	end 'create'
+end 'WitnessDispatchTarget'
+
+export typealias WitnessDispatchTargetArray = Array with WitnessDispatchTarget
+
+// ⭐⭐ **WHICH ONE OF THE CANDIDATE REQUIREMENTS A DISPATCH BINDS (R10c)** — the answer to the question both
+// witness-dispatch forms ask once they have filtered the constraints' requirements down to the ones they
+// could mean. It is a THREE-way answer and not a `found`/`notFound` pair, because the third arm is the one
+// that used to be missing: a search that returns on its FIRST hit reports `found` for a set of two, and a
+// silent pick between two witness slots is a wrong function pointer rather than a diagnostic.
+//
+// `ambiguous` carries BOTH claimants so the message can name them; the two arms' misses stay the CALLERS'
+// (a `.method()` miss is "no constraint provides this method", an operator's is E3005), exactly as the
+// `found`/`notFound` pair this replaced kept them.
+export union WitnessCandidatePick
+	one(target WitnessDispatchTarget)
+	none
+	ambiguous(first WitnessDispatchTarget, second WitnessDispatchTarget)
+end 'WitnessCandidatePick'
+
+// The sole surviving candidate, or why there is not exactly one. The list is already filtered by whatever
+// the caller can discriminate on (an argument COUNT for the `.method()` form, the protocol's own SHAPE for
+// an operator), so everything left is something the dispatch could equally well mean.
+export function pickSoleWitnessCandidate(candidates WitnessDispatchTargetArray) returns WitnessCandidatePick
+	if candidates.count() == 0 'noneSurvive'
+		return WitnessCandidatePick.none
+	end 'noneSurvive'
+
+	let first = try candidates.get(0) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(0) failed")
+	if candidates.count() == 1 'exactlyOne'
+		return WitnessCandidatePick.one(first)
+	end 'exactlyOne'
+
+	return WitnessCandidatePick.ambiguous(first, second: try candidates.get(1) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(1) failed"))
+end 'pickSoleWitnessCandidate'
+
+// ⭐⭐ **TWO CONSTRAINTS CAN REACH ONE REQUIREMENT, AND THAT IS NOT AN AMBIGUITY (R10c review).** `where T is
+// Left and Right` with `interface Left extends Root` and `interface Right extends Root` supplies `Root`'s
+// requirements through BOTH constraints, so a name search over the constraints collects each of them twice —
+// and `pickSoleWitnessCandidate` then read two entries as two claimants and refused a legal program with
+// E3114 naming ONE requirement as its own rival (**MEASURED: `'base' … provided by both Root.base() returns
+// Code and Root.base() returns Code`**, and the same sentence about `Equatable.equals` on the operator path
+// when two constraints each `extends Equatable`).
+//
+// ⚠ **THE TEST IS `witnessSlotImplKey`'S OWN KEY — the DECLARING interface and the method NAME — and that is
+// what makes dropping the second entry a fact rather than a preference.** `ConformanceCheck` files the
+// accepted member under exactly that pair (plus the conformer), and `ensureWitnessTable` stamps every slot
+// from that filing, so two slots sharing the key hold ONE function pointer at every instantiation: the two
+// entries are two ROUTES to one requirement, and either route binds the same code. The builtin-conformer
+// fallback (`qualifiedMethodName`) reads neither half beyond the method name, so it agrees too.
+//
+// A requirement cannot be collected twice from ONE constraint — `interfaceWitnessSlots`' `visited` set gives
+// each interface one run of slots, and `Parser.requireUnclaimedInterfaceRequirementName` forbids one
+// interface two requirements of a name — so every hit this discards came in through a LATER constraint, and
+// the entry kept is the earliest constraint's. Whichever is kept, the emitted `callMem` reads the same
+// address.
+export function witnessCandidateAlreadyCollected(candidates WitnessDispatchTargetArray, declaringInterfaceName ByteArray, methodName ByteArray) returns bool
+	for i in 0 upto candidates.count() 'eachCollected'
+		let collected = try candidates.get(i) otherwise panic("witnessCandidateAlreadyCollected: candidates.get OOB at {i} below count {candidates.count()}")
+		if collected.declaringInterfaceName.equals(declaringInterfaceName) and collected.methodName.equals(methodName) 'sameRequirement'
+			return true
+		end 'sameRequirement'
+	end 'eachCollected'
+
+	return false
+end 'witnessCandidateAlreadyCollected'
+
+// ⭐⭐ **THE ONE STATEMENT OF "COULD AN INSTANCE-SYNTAX CALL HAVE MEANT THIS REQUIREMENT?" (A2w, named in
+// its review).** `Parser.requireWitnessDispatchCandidates` asks it twice — once per candidate to build the
+// filtered list, and once over the whole list to decide whether it needs to build one at all — and those two
+// asks are the same rule, so it is written HERE and once. Spelled `not …isStatic` at both sites it was not:
+// a later rung widening "undispatchable" at the filter and not at the scan would leave the fast path
+// answering "nothing to filter" and hand the widened case straight through, with no diagnostic anywhere and
+// nothing that fails to compile. (`witnessTargetIsProtocol` deliberately does NOT route through this: its
+// question is `target.isStatic == want.isStatic`, an agreement with the FETCHED protocol, not a property of
+// the candidate alone. See its header.)
+export function witnessRequirementTakesReceiver(requirement WitnessDispatchTarget) returns bool
+	return not requirement.isStatic
+end 'witnessRequirementTakesReceiver'
+
+// Has the receiver-kind filter any work to do on this candidate list (A2w)? The question
+// `Parser.requireWitnessDispatchCandidates` takes its FAST PATH on: a `static` requirement is rare enough
+// that answering "no" without building a filtered array keeps the whole conformance corpus
+// allocation-identical, exactly as `witnessTargetHasFloatFormal` does for the float widening. Named for the
+// JOB rather than for the rule, so the rule stays stated in exactly one place above. It lives here beside
+// `witnessCandidateAlreadyCollected`, the other whole-candidate-list question, and takes no `self`.
+export function witnessCandidatesNeedReceiverFilter(candidates WitnessDispatchTargetArray) returns bool
+	for i in 0 upto candidates.count() 'eachCandidate'
+		if not witnessRequirementTakesReceiver(try candidates.get(i) otherwise panic("witnessCandidatesNeedReceiverFilter: candidates.get OOB at {i} below count {candidates.count()}")) 'undispatchable'
+			return true
+		end 'undispatchable'
+	end 'eachCandidate'
+
+	return false
+end 'witnessCandidatesNeedReceiverFilter'
+
+// Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
+// by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
+// by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
+// so a byte comparison is exact and no canonicalization is owed.
+//
+// ⚠ NOT `ConformanceCheck.signatureMatches`, and the two must not be merged: that one asks whether an IMPL
+// satisfies an interface method, so it substitutes `Self` for the conformer's own name and collapses ranged
+// aliases to their underlying primitive. This one asks whether one INTERFACE method is another — both sides
+// already in the interface's own vocabulary, where `Self` means `Self`.
+function interfaceFormalsMatch(a ByteArrayArray, b ByteArrayArray) returns bool
+	if a.count() != b.count() 'arityDiffers'
+		return false
+	end 'arityDiffers'
+
+	for i in 0 upto a.count() 'eachFormal'
+		let left = try a.get(i) otherwise panic("interfaceFormalsMatch: a.get OOB at {i} below count {a.count()}")
+		let right = try b.get(i) otherwise panic("interfaceFormalsMatch: b.get OOB at {i} below count {b.count()}")
+		if not left.equals(right) 'differs'
+			return false
+		end 'differs'
+	end 'eachFormal'
+
+	return true
+end 'interfaceFormalsMatch'
+
+// One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
+// method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
+// witness slot's relocation names the member filed under THAT interface's key
+// (`witnessSlotImplKey`, which is keyed by the declaring interface and not by the table's).
+export type CollectedInterfaceMethod
+	export let method as InterfaceMethodSig
+	export let sourceInterfaceName as ByteArray
+
+	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray) returns CollectedInterfaceMethod
+		return Self{method: method, sourceInterfaceName: sourceInterfaceName}
+	end 'create'
+end 'CollectedInterfaceMethod'
+
+export typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMethod
+
+export typealias InterfaceNameSet = Set with ByteArray
+
+// ⭐ **THE INTERFACE AN `interfaceRef` TYPE NAMES — the ONE place its id becomes a name
+// (P1.7a-existentials slice 1).** That name is what the witness label is built from
+// (`witnessTableLabel`), what the conformance answer is keyed by, and what every diagnostic about an
+// existential prints; three sites reading it their own way is three chances to spell one interface two ways.
+//
+// `typeNames` is the interner the id lives in — the PROJECT's for a merged signature or field type, the
+// signature index's for a swept one, the FILE's for a type the parser has just minted. The caller knows which
+// it holds, exactly as `maxonTypeName`'s does; passing the wrong one is the panic below rather than a
+// plausible other name.
+export function interfaceNameOfType(t MaxonType, typeNames TypeNameInterner) returns ByteArray
+	return try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("interfaceNameOfType: the interface name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
+end 'interfaceNameOfType'
+
+// ⭐⭐ **THE SLOT LIST OF AN INTERFACE — ITS TRANSITIVE REQUIREMENT SET, COMPUTED IN ONE PLACE (R10c).**
+// Slot `i` of `__witness_<Type>.<Iface>` holds requirement `i` of this list, and THREE readers depend on
+// that being ONE answer:
+//
+//   • `LowerMaxonToStd.ensureWitnessTable` — which stamps slot `i`'s relocation;
+//   • `Parser.findWitnessDispatchCandidates` — which compiles `[witnessAddr + 24 + 8*i]` into the CALLER;
+//   • `ConformanceCheck.checkInterfaceMethods` — which decides that a conformer supplies requirement `i`
+//     at all, and files the member each slot's relocation is then stamped from.
+//
+// ⚠ **THEY DISAGREED, AND ONLY ONE OF THE THREE HAD THE `extends` CHAIN.** The conformance check walked it
+// (so a conformer was REQUIRED to supply a parent's methods) while the builder and the resolver read
+// `iface.methods` alone (so no slot existed to hold one, and the resolver refused the call). The visible
+// half was a clean reject; the invisible half is the one that made this a single function rather than a
+// third walk: two spellings of "which slot is requirement M of interface I" cannot be caught by any
+// diagnostic — a disagreement binds a call to the WRONG FUNCTION POINTER and returns a wrong answer.
+//
+// ⭐ **ORDER: OWN REQUIREMENTS FIRST, THEN EACH PARENT DEPTH-FIRST IN `extends` DECLARATION ORDER.** It is
+// the order `ConformanceCheck` already collected in (and so the order a missing-method report already
+// lists), which is why adopting it moves no existing message and no existing golden.
+//
+// ⭐ **A DIAMOND GETS ONE SLOT, BY THE `visited` SET AND NOT BY A SECOND RULE.** `D extends B, C` where both
+// `B` and `C` extend `A` reaches `A` twice; the second arrival contributes nothing, so `A`'s requirements
+// occupy exactly one run of slots. The set is keyed by interface NAME — the same key the registry is — so
+// a cyclic `extends` chain terminates on the same test.
+// ⚠ **IT TAKES NO SEPARATE `ifaceName`, AND THAT IS A HAZARD REMOVED RATHER THAN AN ARGUMENT SAVED.** An
+// `IrInterface` carries its own `name`, every store keys it BY that name, and `extendsInterfaces` holds the
+// parent's declared spelling — so a name parameter would be one fact written twice with two consumers that
+// must not disagree: `visited` (which decides the diamond) and `sourceInterfaceName` (which becomes the
+// interface half of `witnessSlotImplKey`, and so which member a slot's relocation names).
+export function interfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface) returns CollectedInterfaceMethodArray
+	var slots = CollectedInterfaceMethodArray.create()
+	var visited = InterfaceNameSet.create()
+	appendInterfaceWitnessSlots(interfaces, iface: iface, slots: slots, visited: visited)
+	return slots
+end 'interfaceWitnessSlots'
+
+// The recursion `interfaceWitnessSlots` seeds. Separate only because the accumulator and the `visited` set
+// are the walk's own bookkeeping and no caller should have to supply them — the shape
+// `ConformanceCheck.checkInterfaceMethods` used to spell at its one call site.
+function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface, slots CollectedInterfaceMethodArray, visited InterfaceNameSet)
+	if visited.contains(iface.name) 'alreadySeen'
+		return
+	end 'alreadySeen'
+	visited.insert(iface.name)
+
+	for i in 0 upto iface.methods.count() 'eachOwn'
+		slots.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}"), sourceInterfaceName: iface.name))
+	end 'eachOwn'
+
+	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
+		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("appendInterfaceWitnessSlots: extendsInterfaces.get OOB at {j} below count {iface.extendsInterfaces.count()}")
+		match lookupInterface(interfaces, name: parentName) 'parent'
+			found(parentIface) then appendInterfaceWitnessSlots(interfaces, iface: parentIface, slots: slots, visited: visited)
+			// A parent named by `extends` that does not resolve is not diagnosed here (no slice reports a bad
+			// `extends` target); its requirements simply cannot be projected, and every reader of this list
+			// then agrees that they are absent — which is the property that matters.
+			notFound then break 'parent'
+		end 'parent'
+	end 'eachParent'
+end 'appendInterfaceWitnessSlots'
+
+// The slot-numbering agreement between the two stores that hold one interface declaration — the signature
+// index a witness dispatch is NUMBERED against and the merged registry it is RESOLVED against. It lives
+// here, beside the walk that produces both lists, so the one property `WitnessMethodIndex` rests on is
+// stated where the numbering is. See `LowerMaxonToStd.interfaceAtDeclIndex` for why two writers of one
+// declaration are a wrong-answer hazard rather than a tidiness one.
+//
+// It compares the slot NAMES and not merely the count. The count is what `methodIndex` is an index into, so
+// it is the property that must hold — but two lists of equal length whose slots are in different ORDERS
+// satisfy it and still recover a different requirement, and the names are already built and already in hand.
+// A strictly stronger check at the same cost.
+export function requireSameSlotNumbering(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
+	if parserSlots.count() != mergedSlots.count() 'countsDisagree'
+		panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has {parserSlots.count()} witness slots in the signature index a dispatch was numbered against and {mergedSlots.count()} in the merged registry it resolves through — `methodIndex` would recover a different requirement and set the wrong calling convention for the call, on every target and with no diagnostic")
+	end 'countsDisagree'
+
+	for i in 0 upto parserSlots.count() 'eachSlot'
+		let numbered = (try parserSlots.get(i) otherwise panic("requireSameSlotNumbering: parserSlots.get OOB at {i} below its own count")).method.name
+		let resolved = (try mergedSlots.get(i) otherwise panic("requireSameSlotNumbering: mergedSlots.get OOB at {i}, which the count check above excludes")).method.name
+		if not numbered.equals(resolved) 'slotsDisagree'
+			panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has '{String.from(numbered)}' at witness slot {i} in the signature index a dispatch was numbered against and '{String.from(resolved)}' in the merged registry it resolves through — `methodIndex` recovers a different requirement and sets the wrong calling convention for the call, on every target and with no diagnostic")
+		end 'slotsDisagree'
+	end 'eachSlot'
+end 'requireSameSlotNumbering'
+
+// ⭐⭐ **DOES A CONFORMANCE TO `declaredName` SATISFY A REQUIREMENT FOR `wanted`? — CONFORMANCE IS
+// TRANSITIVE THROUGH `extends` (P1.7a-existentials slice 1).** `type Impl implements Derived` with
+// `interface Derived extends Base` conforms to `Base` as well, and it must: `Derived`'s requirements INCLUDE
+// `Base`'s (`interfaceWitnessSlots` projects them in), the conformance check already made `Impl` supply them,
+// and `ConformanceCheck` files each accepted member under the DECLARING interface — so `__witness_Impl.Base`
+// has a real impl for every one of its slots. A non-transitive test would refuse a value the compiler is
+// already able to dispatch, which is exactly what `specs/interface-dispatch.md`'s
+// `dispatch-extended-interface` writes.
+//
+// It walks the same `extendsInterfaces` edges `appendInterfaceWitnessSlots` does and terminates on the same
+// `visited` test, so a cyclic `extends` chain answers rather than hangs — one walk shape, two readers.
+//
+// ⭐ **IT IS THE CLOSURE, PROBED — THERE IS ONE WALK OF THE `extends` RELATION IN THIS FILE AND THIS IS NOT A
+// SECOND ONE.** A search that pruned on `wanted` would be a second statement of the same edges, free to gain
+// a rule the enumeration never got: on the conformance side that is a false refusal, on `TypeCycleCheck`'s a
+// missing edge and therefore a LEAK, and neither is a compile error. What it gives up is the early exit, on
+// a walk that allocates the same one set either way and is asked once per declared conformance of a
+// discharged `where` clause.
+export function conformanceSatisfiesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray) returns bool
+	var closure = InterfaceNameSet.create()
+	collectInterfaceAndItsParents(interfaces, name: declaredName, into: closure)
+	return closure.contains(wanted)
+end 'conformanceSatisfiesInterface'
+
+// ⭐⭐ **DOES A WHOLE DECLARED CONFORMANCE SET REACH `wanted`? — THE ONE LIST-LEVEL HOME, above the one
+// pairwise home.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this answers for
+// everything one `implements` clause declared, which is the question every caller actually has. Both
+// sites that ask it — `ConformanceCheck.typeDeclaresInterface` (the E3016/E3017 conformance answer) and
+// `ProgramSignatures.conformersOf` (which types an `extension <Interface>` publishes onto) — reach it here.
+//
+// ⛔ **THEY DID NOT, AND THE TWO HALVES HAD ALREADY DRIFTED APART ON COST BEFORE EITHER WAS WRONG.** The
+// extension side asked a DIRECT name test and so did not walk `extends` at all: `type ArrayIterator
+// implements BidirectionalIterator` got `retreatBy` (declared on the interface its clause names) and not
+// `advanceBy` (declared on that interface's parent) — one of two methods written ten lines apart in
+// `stdlib/Interfaces.maxon`, and a WRONG program rather than a refused one. The conformance side did walk,
+// but allocated a fresh `visited` set per declared name. Two spellings of one orchestration, disagreeing
+// about cost, with the next edit to the rule landing in whichever one the editor opened.
+//
+// ⭐ **ONE CLOSURE FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT EITHER CALLER.** A DIAMOND
+// (`implements Left, Right` where both `extends Root`) is walked once, by the closure's own set and not by a
+// second rule, exactly as `appendInterfaceWitnessSlots` handles its own; a cyclic `extends` chain terminates
+// on the same test. The cost is one allocation per (type, interface) ASKED — fine at a caller that asks it
+// once per site, and quadratic at one that asks it per pair, which is what
+// `collectDeclaredInterfaceClosure` exists for.
+//
+// ⚠ **THE DIRECT HIT IS A SET PROBE AND IS ASKED FIRST.** Every conformance in the corpus but the `extends`
+// cases answers there, in O(1) and before the closure allocates anything. That is why the parameter is an
+// `InterfaceNameSet` rather than the raw `StructLayout.conformsTo` array: the fast path is only fast in the
+// set, and `ProgramSignatures.sweptConformanceIndex` is that array already in this shape.
+export function declaredInterfacesReach(interfaces IrInterfaceMap, declaredNames InterfaceNameSet, wanted ByteArray) returns bool
+	if declaredNames.contains(wanted) 'declaresItDirectly'
+		return true
+	end 'declaresItDirectly'
+
+	var closure = InterfaceNameSet.create()
+	collectDeclaredInterfaceClosure(interfaces, declaredNames: declaredNames, into: closure)
+	return closure.contains(wanted)
+end 'declaredInterfacesReach'
+
+// ⭐⭐ **EVERY INTERFACE ONE DECLARED CONFORMANCE SET REACHES — THE ONE WALK OF THE `extends` RELATION, which
+// the two predicates above are this PROBED.** They answer a (type, interface) pair and cost one allocation
+// each; a caller that must place one type against EVERY interface at once cannot use them, because asking
+// per candidate is one set per PAIR — quadratic, and `TypeCycleCheck.addConformerEdgesOf` is such a caller.
+// It asks here, and because the predicates are this walk rather than a second one, what they refuse and what
+// it credits cannot drift.
+//
+// `into` IS the walk's visited set as well as its result, so a diamond is walked once and a cyclic `extends`
+// chain terminates. ⚠ **A CALLER THAT SEEDS `into` WITH ANYTHING ELSE FIRST SUPPRESSES THAT NAME'S PARENTS**
+// — see `TypeCycleCheck.addConformerEdgesOf`, which runs this before its own union for that reason.
+export function collectDeclaredInterfaceClosure(interfaces IrInterfaceMap, declaredNames InterfaceNameSet, into InterfaceNameSet)
+	for declaredName in declaredNames 'eachDeclared'
+		collectInterfaceAndItsParents(interfaces, name: declaredName, into: into)
+	end 'eachDeclared'
+end 'collectDeclaredInterfaceClosure'
+
+// The recursion above seeds. Also the whole walk for a SINGLE declared name (`conformanceSatisfiesInterface`),
+// which is why it is a function rather than the loop body.
+function collectInterfaceAndItsParents(interfaces IrInterfaceMap, name ByteArray, into InterfaceNameSet)
+	if into.contains(name) 'alreadyWalked'
+		return
+	end 'alreadyWalked'
+	into.insert(name)
+
+	// The parent walk runs INSIDE the `found` arm rather than after it: bound and discarded, the declaration
+	// would have to be looked up a SECOND time to recover it — two `lookupInterface` calls per `extends` node,
+	// each of which may synthesize a protocol interface, for one question.
+	match lookupInterface(interfaces, name: name) 'decl'
+		found(iface) then collectParentInterfaces(interfaces, iface: iface, into: into)
+		// A conformance naming an interface no file declares reaches nothing further; E3015 reports it.
+		notFound then return
+	end 'decl'
+end 'collectInterfaceAndItsParents'
+
+// Each parent of one interface, split out because a `match` arm is one expression and this is a loop.
+function collectParentInterfaces(interfaces IrInterfaceMap, iface IrInterface, into InterfaceNameSet)
+	for parentName in iface.extendsInterfaces 'eachParent'
+		collectInterfaceAndItsParents(interfaces, name: parentName, into: into)
+	end 'eachParent'
+end 'collectParentInterfaces'
+
+// ⭐ **IS THIS RESOLVED DISPATCH TARGET THE PROTOCOL `want` DECLARES? (P1.7a slice 2b-ii; a PREDICATE since
+// R10c.)** A constraint declaring a method of the protocol's NAME is not the protocol — its RESULT, its
+// `throws` and its FORMALS have to agree too, and each of the three was a MEASURED silent wrong answer
+// before it was asked (see `Parser.requireOperatorWitness`, which owns the E3005 a miss becomes).
+//
+// It lives beside `interfaceFormalsMatch`, the comparison it is mostly made of, and takes no `self` — it was
+// a `Parser` member (`requireProtocolShape`) that both tested the shape and threw the reject, and splitting
+// the two is what let the test become the FILTER a candidate list is narrowed by, rather than a verdict on
+// whichever candidate a name search happened to reach first.
+//
+// ⚠⚠ **THE RECEIVER KIND WAS THE FIFTH HOLE IN THAT WALL, AND IT WAS A SILENT WRONG ANSWER TOO (A2w).** A
+// `static equals(other Self) returns bool` agrees with the protocol on all three of the tests above and is
+// still not `Equatable`: `Equatable.equals` takes a receiver and a static takes none, so the operator's
+// dispatch prepends one in front of a callee that declares no parameter for it and every actual shifts by a
+// slot. **MEASURED on `interface StaticEq { static function equals(other Self) returns bool }` under `where
+// T is StaticEq`: x64-windows compiled clean and the impl read the RECEIVER as its `other` — `self.a ==
+// self.b` answered on the LEFT operand twice, `true` where the answer is `false` — and wasm trapped
+// `indirect call type mismatch`.** The `.method()` form's twin of this is
+// `Parser.requireWitnessDispatchCandidates`, which needs a diagnostic naming the requirement (E3116) because
+// there is no protocol there to be measured against; here the protocol IS the yardstick, so a static
+// look-alike simply is not it and takes the same E3005 a throwing or wrong-arity one takes.
+//
+// Asked against `want.isStatic` rather than as a bare `not target.isStatic`, for this function's header
+// reason: every clause compares the candidate against the FETCHED protocol, so the protocol stays the one
+// place a requirement's shape is stated.
+export function witnessTargetIsProtocol(target WitnessDispatchTarget, want InterfaceMethodSig) returns bool
+	return target.returnTypeName.equals(want.returnTypeName) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames)
+end 'witnessTargetIsProtocol'
+
+// A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is
+// non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
+// runtime chunks with no error channel — so the throws clause is `none` at both helpers.
+function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
+	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0))
+end 'nullaryInterfaceMethod'
+
+// A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
+function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
+	var paramNames = ByteArrayArray.create()
+	paramNames.push(paramName)
+	var paramTypeNames = ByteArrayArray.create()
+	paramTypeNames.push(paramTypeName)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count()))
+end 'unaryInterfaceMethod'
+
+// An interface with exactly one method and no `extends`/`uses` — every synthesized
+// protocol interface but `Error`.
+function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
+	var methods = InterfaceMethodSigArray.create()
+	methods.push(method)
+	return IrInterface.create(name, methods: methods, extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+end 'singleMethodInterface'
+
+// A marker interface with NO methods (`Error`). A type conforms to it by declaring
+// `implements Error` alone; there is nothing to check.
+function markerInterface(name ByteArray) returns IrInterface
+	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+end 'markerInterface'
+
+// ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
+// AGREE WITH IT (P1.7a slice 2b-iv-B).** A witness table's method slot is typed by the INTERFACE, so three
+// parties have to spell one signature: the DISPATCH SITE (which derives it from the declarations just below,
+// through `Parser.interfaceReturnMaxonType` → `valueTagToStdType`), the synthesized IMPL that lands in the
+// slot (`BuiltinConformanceRuntime`, `StringRuntime.buildStrEq`), and the hand-built `Set` runtime whose
+// bodies dispatch `hash`/`equals` through witnesses of their own. Nothing makes a synthesized
+// impl obey a conformance check — there is none to run — so without this the three were three copies.
+//
+// ⚠ **THEY HAD ALREADY DRIFTED, AND ONLY ONE TARGET COULD SEE IT.** `equals` returns `bool` — an `i1`, a
+// wasm `i32` — while every impl and the `Set` runtime declared the uniform machine word `i64`. On x64/arm64 a
+// `bool` rides a 64-bit register as readily as a tag, so the disagreement computed the right answer
+// everywhere; on wasm, whose `call_indirect` checks the declared functype against the target's own EXACTLY,
+// it was a **`wasm trap: indirect call type mismatch`** across 18 spec cases (`set`, `equatable`,
+// `primitive-conformance`, `string-conformance`).
+//
+// It is keyed by the RENDERED RETURN-TYPE NAME each declaration below already carries, so adding a protocol
+// method means writing its return type once — in the declaration — and this answers for it.
+export function builtinProtocolResultStdType(returnTypeName ByteArray) returns StdType
+	// `bool` is the one sub-64 result: `valueTagToStdType(boolean)` is `i1`.
+	if returnTypeName.equals(BoolConformerName) 'boolResult'
+		return StdType.i1
+	end 'boolResult'
+
+	// `HashValue` is a ranged int alias and `Ordering` an enum — both collapse to a machine word
+	// (`valueTagToStdType`'s `named`/`integer` arms), which is what makes them agree with the impls already.
+	if returnTypeName.equals(HashValueTypeName) or returnTypeName.equals(OrderingTypeName) 'machineWordResult'
+		return StdType.i64
+	end 'machineWordResult'
+
+	panic("builtinProtocolResultStdType: '{String.from(returnTypeName)}' is not a synthesized protocol method's return type — the three below return `bool`, `HashValue` and `Ordering`, and a fourth must be given its Std type here rather than assumed to be a machine word")
+end 'builtinProtocolResultStdType'
+
+// The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
+// so `implements Stringable`/`Hashable`/… resolves without the compiler reading the stdlib (the
+// same reason `String`/`Array` are synthesized). Returns `notFound` for every other name,
+// leaving the user-declared registry as the only other source. `Iterator`/`Iterable`
+// (associated types) are slice-2 territory and are deliberately not synthesized here.
+function builtinInterface(name ByteArray) returns InterfaceLookup
+	match builtinInterfaceKind(name) 'which'
+		notABuiltin then return InterfaceLookup.notFound
+		stringable then return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName)))
+		formattedStringable then return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName)))
+		hashable then return InterfaceLookup.found(singleMethodInterface(HashableInterfaceName, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName)))
+		equatable then return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName)))
+		comparable then return InterfaceLookup.found(singleMethodInterface(ComparableInterfaceName, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName)))
+		cloneable then return InterfaceLookup.found(singleMethodInterface(CloneableInterfaceName, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName)))
+		error then return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
+	end 'which'
+end 'builtinInterface'
+
+// ⭐⭐ **EVERY SYNTHESIZED PROTOCOL'S NAME, IN ONE FIXED ORDER** — the prefix
+// `ProgramSignatures.interfaceNamesInDeclOrder` is seeded with, so that a `witnessDispatch` through
+// `Equatable` or `Comparable` has the same kind of scalar handle a dispatch through a user interface has. A
+// synthesized protocol is in NO registry (`lookupInterface` answers for it before consulting the map), so
+// without this it would have no position at all — MEASURED: `where T is Comparable` with `T = bool` panicked
+// at the parser's own guard, which is the guard doing its job.
+//
+// ⚠ **IT IS A DERIVED ROSTER, AND A ROSTER GOES STALE THE DAY A KIND IS ADDED.** The count is asserted
+// against `BuiltinInterfaceCount` below and every entry is asserted to CLASSIFY as a builtin, so a renamed
+// constant and a miscounted list both fail loudly at the first `ProgramSignatures.create` rather than
+// silently giving one protocol no index. What neither can catch is a new `BuiltinInterfaceKind` arm whose
+// name is not added here — which is why the count is a named constant beside the enum rather than a literal.
+export function builtinInterfaceNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(StringableInterfaceName)
+	names.push(FormattedStringableInterfaceName)
+	names.push(HashableInterfaceName)
+	names.push(EquatableInterfaceName)
+	names.push(ComparableInterfaceName)
+	names.push(CloneableInterfaceName)
+	names.push(ErrorInterfaceName)
+
+	if names.count() != BuiltinInterfaceCount 'rosterDrifted'
+		panic("builtinInterfaceNames: the roster lists {names.count()} protocols but `BuiltinInterfaceCount` says {BuiltinInterfaceCount} — a `BuiltinInterfaceKind` arm was added without giving its name a position, and a dispatch through it would have no handle")
+	end 'rosterDrifted'
+
+	for rosterName in names 'eachName'
+		if builtinInterfaceKind(rosterName) == BuiltinInterfaceKind.notABuiltin 'notAProtocolAfterAll'
+			panic("builtinInterfaceNames: '{String.from(rosterName)}' is in the roster but `builtinInterfaceKind` does not classify it as a protocol — the two read the same name constants and have drifted")
+		end 'notAProtocolAfterAll'
+	end 'eachName'
+
+	return names
+end 'builtinInterfaceNames'
+
+// One per `BuiltinInterfaceKind` arm EXCEPT `notABuiltin`, which classifies rather than names. Stated here so
+// `builtinInterfaceNames` can check itself against the enum instead of against a literal.
+let BuiltinInterfaceCount = 7
+
+// ⭐⭐ **WHICH SYNTHESIZED PROTOCOL A NAME IS, AS A SCALAR — the CLASSIFICATION half of `builtinInterface`
+// (P1.7a-existentials slice 1).**
+//
+// ⚠ **PAYLOAD-FREE ON PURPOSE, AND THE REASON IS MEASURED — it is `BuiltinConformer`'s reason, on a hotter
+// path.** A Maxon union value is HEAP-BOXED in every case, `notFound` included, so asking `builtinInterface`
+// merely to learn whether a name IS one costs an allocation per ask — and this rung put that ask on
+// `Parser.parseTypeReference`, i.e. on EVERY type annotation in the program. MEASURED on the scale ladder
+// (same binary path, same corpus, A/B against the branch base): **+24,396 allocations in `phase:parse` at
+// rung 5, doubling per rung** — one box per type reference, in a corpus that declares no interface at all.
+// Split this way the classification is a scalar and only a name that IS a protocol pays for a declaration.
+function builtinInterfaceKind(name ByteArray) returns BuiltinInterfaceKind
+	if name.equals(StringableInterfaceName) 'stringable'
+		return BuiltinInterfaceKind.stringable
+	end 'stringable'
+	if name.equals(FormattedStringableInterfaceName) 'formatted'
+		return BuiltinInterfaceKind.formattedStringable
+	end 'formatted'
+	if name.equals(HashableInterfaceName) 'hashable'
+		return BuiltinInterfaceKind.hashable
+	end 'hashable'
+	if name.equals(EquatableInterfaceName) 'equatable'
+		return BuiltinInterfaceKind.equatable
+	end 'equatable'
+	if name.equals(ComparableInterfaceName) 'comparable'
+		return BuiltinInterfaceKind.comparable
+	end 'comparable'
+	if name.equals(CloneableInterfaceName) 'cloneable'
+		return BuiltinInterfaceKind.cloneable
+	end 'cloneable'
+	if name.equals(ErrorInterfaceName) 'error'
+		return BuiltinInterfaceKind.error
+	end 'error'
+	return BuiltinInterfaceKind.notABuiltin
+end 'builtinInterfaceKind'
+
+// ⭐ **DOES THIS NAME DENOTE AN INTERFACE AT ALL? — the ALLOCATION-FREE half of `lookupInterface`.** Same
+// rule, same two sources in the same order (a synthesized protocol first, then the user registry), stated
+// once by DERIVING from the classifier above rather than by listing the names a second time. Every caller
+// that only needs the ANSWER — the parser's type reference, the swept-type normalization — asks this; a
+// caller that needs the DECLARATION asks `lookupInterface`.
+export function isInterfaceName(interfaces IrInterfaceMap, name ByteArray) returns bool
+	return builtinInterfaceKind(name) != BuiltinInterfaceKind.notABuiltin or interfaces.contains(name)
+end 'isInterfaceName'
+
+// The synthesized protocol a name denotes, or `notABuiltin`. A payload-free ENUM, so a classification is a
+// scalar — see `builtinInterfaceKind` for the measurement that made it one.
+// ⚠ NOT exported: `builtinInterfaceKind`'s answer is consumed in this file alone, and
+// `checkUnusedExports` (E3092) is what says so — the SELF-COMPILE runs that pass.
+enum BuiltinInterfaceKind
+	notABuiltin
+	stringable
+	formattedStringable
+	hashable
+	equatable
+	comparable
+	cloneable
+	error
+end 'BuiltinInterfaceKind'
+
+// ⭐ **WHICH INTERFACE DOES THIS NAME DENOTE, ASKED OF THE MERGED REGISTRY — ONE RULE, ONE HOME (R9).**
+// A synthesized builtin FIRST, then the user-declared registry, else `notFound`. Builtins win so a user
+// cannot shadow `Stringable` with a broken redeclaration, and the common protocol interfaces resolve
+// without the compiler reading the stdlib.
+//
+// ⚠ **IT TAKES THE MAP, NOT THE `Project`, AND THAT IS WHAT LETS BOTH POST-MERGE READERS SHARE IT.**
+// `ConformanceCheck` asks through `project.interfaces` and `LowerMaxonToStd` through the field it was
+// constructed with — the SAME object, aliased — so a `Project`-shaped parameter would have forced the
+// lowering to keep a second spelling of a rule stated here. The two callers still differ in what a MISS
+// MEANS (a user's typo'd interface name is `E3015`; a witness table naming an unresolvable interface is an
+// internal invariant break), so the miss stays theirs and only the lookup is shared.
+//
+// ⚠⚠ **THE PARSER ASKS THIS SAME FUNCTION, OF A DIFFERENT MAP (R10c).** It used to keep its own spelling of
+// the rule (`Parser.lookupInterfaceForParse`, over `ProgramSignatures.interfaceOf`), defended as a phase
+// split — and R10c turned that latent duplication into a live one, because a witness dispatch now resolves
+// its CONSTRAINT's interface through the parser's spelling and every `extends` PARENT through this one, a
+// single call apart. Two rules that agree today and would diverge silently: a parent that resolves for the
+// slot walk but not for the constraint is a wrong slot COUNT, and a wrong count is a wrong function pointer
+// rather than a diagnostic.
+//
+// **The PHASE distinction R8 defended is real and survives intact — it is carried by WHICH MAP the caller
+// holds** (`ProgramSignatures.interfaceMap` mid-parse, before any file has merged; `project.interfaces`
+// after), which is where it belongs, because the map IS the phase. What may not stand is two statements of
+// the RULE, and there is now one.
+export function lookupInterface(interfaces IrInterfaceMap, name ByteArray) returns InterfaceLookup
+	match builtinInterface(name) 'builtin'
+		found(iface) then return InterfaceLookup.found(iface)
+		notFound then break 'builtin'
+	end 'builtin'
+
+	if let userIface = try interfaces.get(name) 'userDeclared'
+		return InterfaceLookup.found(userIface)
+	end 'userDeclared'
+
+	return InterfaceLookup.notFound
+end 'lookupInterface'
+
+// ⭐ **THE SYNTHESIZED PROTOCOL UNDER `name`, FOR A CALLER THAT NEEDS ITS *DECLARATION* AND NOT MERELY ITS
+// NAME.** A consumer that must agree with a protocol about more than one fact — the comparison-operator
+// lowering needs `Comparable`'s METHOD NAME to search the `where` constraints for, AND that method's RESULT
+// TYPE to read the dispatch's verdict off — reads both off the interface `builtinInterface` synthesizes here,
+// instead of spelling them a second time at the consumer. Three parallel spellings of one interface (name,
+// method, result) are exactly the shape that drifts; one fetch cannot.
+//
+// It PANICS on a miss because the only legitimate caller names a protocol this function synthesizes; a
+// user-declared interface is resolved through the registries (`requireInterfaceForParse`), never here.
+export function requireBuiltinInterface(name ByteArray) returns IrInterface
+	match builtinInterface(name) 'lookup'
+		found(iface) then return iface
+		notFound then panic("requireBuiltinInterface: '{String.from(name)}' is not one of the synthesized protocol interfaces — only a caller naming a protocol `builtinInterface` declares may ask for its declaration")
+	end 'lookup'
+end 'requireBuiltinInterface'
+
+// The canonical conformer name of the primitive `int` — what `ProgramSignatures.conformerTypeArgName`
+// reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int.*`) and its
+// synthesized `int.hash`/`int.equals` impls. Named because the intrinsic-conformance predicate, the witness
+// materializer, and the impl installer must all spell it the same. It MUST equal
+// `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
+export let IntConformerName = b"int"
+
+// ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIASES — the names that erase to `integer` without
+// appearing in ANY alias registry.** `HashValue` is the declared result type of the synthesized
+// `Hashable.hash()` (`builtinInterface`), and the compiler reads no stdlib, so its `typealias HashValue =
+// int(0 to u32.max)` is nowhere a reader can look it up: every reduction that goes THROUGH an alias
+// registry answers "not an alias" and leaves the name nominal.
+//
+// TWO readers reduce a `named` type that way, and they must not answer differently:
+//
+//   • `TypeResolution.resolveNamedType` — erases it to `integer`, or every user `hash() returns HashValue`
+//     is E3011. It has known this since P1.7a slice 2a.
+//   • `Parser.rangedAliasTag` — the parse-time reduction the direct builtin-conformance dispatch classifies
+//     a receiver by (`builtinConformerOfType`).
+//
+// ⚠ **MEASURED: THEY DID DISAGREE.** The parser's copy knew only the registry, so `i.hash()`'s own result —
+// a `HashValue`, i.e. an int — was not an int to it, and `i.hash().hash()` was **E2015 "Unsupported: .
+// statement"** on a program the language has no rule against, while the header of `rangedAliasTag` named
+// `HashValue` as one of the four spellings that reduce to ONE conformer. The `→ integer` half of the fact
+// is stated in this function's NAME, which is what both readers now spell instead of the erasure.
+//
+// ⭐ **`Codepoint` JOINS IT AT P1.8 SLICE E, FOR EXACTLY THE STATED REASON AND NOT A NEW ONE.** It is
+// declared `export typealias Codepoint = int(0 to 1114111)` in `stdlib/Character.maxon` — which at the
+// time the compiler could NOT load, because it declares `type Character` and `Character` is a name this compiler
+// owns (`isCompilerOwnedTypeName`; measured then: loading it was one `E3005 Cannot return 'struct' from
+// function declared to return 'Character'` at its own `static function init`). ⚠ That module loads today
+// — the loader takes all of `stdlib/` — but the alias is still in no registry, for the same reason
+// `HashValue` is in none, and the same two readers still have to answer for it. It is what
+// `stdlib/helpers/string/utf16.maxon` spells its
+// codepoint parameters and `utf16DecodeSurrogates`'s result as; without this it is `E3011 Unknown type
+// 'Codepoint'` five times over, which is the ONLY thing that stood between that file and compiling.
+//
+// ⚠ The erasure DROPS THE RANGE. On the ARGUMENT side that costs nothing, because a REGISTRY alias's
+// range is dropped at this door too (`resolveNamedType`'s alias arm returns `alias.underlying`,
+// width-free): MEASURED on the unmodified compiler with a real `typealias Codepoint = int(0 to 1114111)`
+// in scope, `utf16Width(2000000)` compiles clean — the compiler does not range-check an argument against its
+// parameter's declared alias at all. A user's OWN `typealias Codepoint` also keeps its range wherever
+// ranges ARE enforced, because those readers ask `aliasOf`, which still finds the declaration (measured:
+// `500 as Codepoint` under a user `typealias Codepoint = int(0 to 10)` is E3005, naming `Codepoint`).
+//
+// ⚠⚠ **BUT "INDISTINGUISHABLE TO EVERY CHECK THAT EXISTS" IS NOT TRUE OF THE *RETURN* SIDE, AND THAT
+// ASYMMETRY IS LIVE INSIDE ONE STDLIB MODULE** (found at the P1.8 Slice E review). `insertRangeChecks`
+// guards a RETURN through a ranged alias, and it can only find a range a REGISTRY holds. So in
+// `stdlib/helpers/string/utf16.maxon`, a precondition violation is loud through one alias and silent
+// through the other: `utf16LeadSurrogate(1000000000)` — declared `returns CodeUnit16`, a registry alias —
+// panics `Range check failed: value outside typealias 'CodeUnit16'` (pinned by
+// `specs/string-views.md`), while `utf16DecodeSurrogates(0, low: 0)` — declared `returns Codepoint`,
+// this synthesized one — MEASURED returns **-56613888**, a negative number wearing a type whose declared
+// range starts at 0. Both are documented precondition violations, but only one of them says so.
+// Closing it means giving a synthesized alias its RANGE
+// and not merely its erasure, which is `HashValue`'s question too (`int(0 to u32.max)`, same silence) and
+// therefore its own rung rather than a line here.
+export function isSynthesizedIntAliasName(name ByteArray) returns bool
+	return name.equals(HashValueTypeName)
+end 'isSynthesizedIntAliasName'
+
+// The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the
+// String intrinsic conformance (P1.7b). It keys `String`'s witness tables (`__witness_String.*`) and its
+// synthesized `String.hash`/`String.equals` impls, and it MUST equal
+// `primitiveTypeTagName(ValueTypeTag.string)` — the one place a resolved `string` argument is rendered to a
+// name (`conformerTypeArgName` -> `mangleTypeArg` -> `primitiveTypeTagName`), so the conformance answer, the
+// witness-table label, and the impl symbol cannot drift on how they spell it.
+//
+// ⭐ **IT IS ALSO THE SPELLING `Parser.parseTypeReference` RECOGNIZES IN A TYPE POSITION (W1 review).** It had
+// a second constant for that — a `StringBuiltinName = b"String"` in `Parser.maxon` — which is what
+// `BoolConformerName` below forbids in so many words, and the two sides of one question: `parseTypeReference`
+// decides that `String` in a type position IS the builtin, and `builtinTypeNameTag` decides that a stored
+// `String` is. Those must be the same name or a rendered signature and a type reference stop agreeing.
+export let StringConformerName = b"String"
+
+// The canonical conformer name of the primitive `float` (P1.7a slice 2b-iii) — the key of its synthesized
+// `float.equals`/`float.compare` impls, and, like its two siblings, it MUST equal
+// `primitiveTypeTagName(ValueTypeTag.float)`.
+// ⭐⭐ **WHY NOTHING MAY RELATE TWO VALUES HELD AT ONE INTERFACE — ONE SENTENCE, TWO DOORS.** An
+// existential erases the dynamic type: two `Comparable`s may be a `Wrapped` and a `Point`, and no
+// compile-time fact distinguishes them. Every operation that needs the two to BE the same type therefore
+// has no honest answer, and both of the compiler's are refused rather than answered with a different question:
+//
+//   • the METHOD door — `Parser.requireWitnessSelfArgs`, a `Self`-typed requirement (`Equatable.equals`'s
+//     `other Self`) dispatched on an existential;
+//   • the OPERATOR door — `TypeRules.comparableOperands`, `==`/`!=`/`<`/`>`/`<=`/`>=` on a pair of them,
+//     which lowered to a compare of the two fat pointers' value halves and answered `7 == 7` FALSE.
+//
+// The sentence lives here rather than at either door because it is a fact about the REPRESENTATION, and
+// because the two doors are in different tiers and diagnose at different stages — which is exactly how one
+// of them came to be closed while the other stayed open for a whole rung.
+// ⭐⭐ **WHAT AN EXISTENTIAL IS, AS ONE CLAUSE** — the premise every refusal about an interface-typed slot
+// opens with. Four sites spelled it four ways (`a value held at an interface type is…`, `an interface value
+// is…`, `A value held at an interface is…`), which is the same one-fact-twice this rung removed from the
+// REMEDY and the ROOM and then left standing in the sentence they both hang off.
+//
+// It is the WIDTH fact and nothing more — what each position lacks room FOR is that position's own clause,
+// because the reasons genuinely differ (a field slot, a return register, a witness call's argument, a
+// value-producing merge's one word per branch).
+export let ExistentialIsFatPointerReason = "a value held at an interface type is a two-word fat pointer `(value, witness)`"
+
+export let ExistentialPairUnprovableReason = "two values held at one interface may have different dynamic types, and nothing here can prove they match"
+
+export let FloatConformerName = b"float"
+
+// The canonical conformer name of the managed concrete `Character` (P1.8 Slice D) — the key of its
+// `__witness_Character.*` tables and its synthesized `Character.hash`/`Character.equals` impls, and, like
+// every sibling above, it MUST equal `primitiveTypeTagName(ValueTypeTag.character)`.
+//
+// ⚠ **IT IS A SEPARATE CONFORMER FROM `String` EVEN THOUGH THE TWO IMPLS ARE THE SAME GRAPH.** A
+// `Character` and a `String` share the fused byte record (`TypeRules.tagIsByteRecord`), so hashing and
+// comparing them is byte-for-byte the same work — and `installBuiltinConformanceRuntime` builds both
+// pairs from the SAME two builders for exactly that reason. What may not be shared is the SYMBOL: a
+// witness slot is stamped `qualifiedMethodName(<conformer>, <method>)` from the conformer the TYPE
+// ARGUMENT reduces to, and a `Set with Character` reduces to `Character`. Pointing it at `String.hash`
+// would mean a program using only Character keys links a symbol whose name says String, and the day the
+// two representations diverge the mistake would be silent.
+//
+// ⭐ It is ALSO the type-position spelling `Parser.parseTypeReference` recognizes, and the name a `for c in s`
+// element binds under in a diagnostic — for `StringConformerName`'s reason above, and it replaced a second
+// `CharacterBuiltinName = b"Character"` constant in `Parser.maxon` at the same time (W1 review).
+export let CharacterConformerName = b"Character"
+
+// ⭐⭐ **WHICH BYTE-RECORD TAG A TYPE *NAME* DENOTES — the one table, and the inverse of
+// `Parser.baseStructNameOfType`.** `tagIsByteRecord` answers the question from the TAG side; this answers it
+// from the NAME side, which is what every door holding a type only as the bytes an author (or the corpus)
+// wrote has to ask. FOUR doors ask it: `Parser.parseTypeReference` (a written type reference),
+// `Parser.enclosingSelfType` (what `Self` and the enclosing type's own name denote),
+// `Parser.requireFusedWrapperTag` (which tag a `Self{…}` literal produces), and the byte-record roster's
+// implicit-self door (`Parser.implicitSelfTakesTheByteRecordRoster`).
+//
+// ⚠ **IT WENT TO FIVE AND BACK TO FOUR INSIDE ONE RUNG, WHICH IS WHY THE COUNT IS WRITTEN OUT AT ALL.**
+// W194's first cure added `Parser.selfFieldIsTheEnclosingByteRecord` — an admission test that turned the
+// FUSED RECORD door away from every non-byte record — and did not amend this line; its review caught the
+// stale census, and the cure was then replaced (the fused door hands each wrapper its OWN buffer instance
+// instead of turning any away, which is free where routing measured 1.65–1.9x on `Array.hash`). So the
+// fifth door is gone. A list of askers is a claim about the whole program and nothing can maintain it for
+// you: add a caller, amend this line — which is exactly why it is written where the table is.
+//
+// ⛔⛔ **THREE SPELLED THE TWO-NAME TEST THEMSELVES AND THE FOURTH SIMPLY LACKED IT, WHICH COST A WRONG
+// REJECTION OF THE CORPUS'S OWN `String` (W17).** `enclosingSelfType` had no byte-record arm, so inside
+// `stdlib/String.maxon`'s `type String` the receiver `self` was minted `structRef("String")` while a
+// DECLARED `String` parameter was settled `MaxonType.string` one routine over — two tags whose rendered
+// names are both `"String"`. MEASURED
+// with the cone listed: **25 × `E3005 argument type mismatch for 's': expected 'String', got 'String'`**, and
+// it DISCRIMINATED — `bytesEqual(self, aOffset: 0, b: other, …)` refused the `self` and accepted `other`, a
+// declared `String` arriving at the same `String` parameter in the same call. (Instrumented at the refusal:
+// `declaredTag=String argTag=struct`.) A refusal whose two halves render identically is what one name
+// carrying two tags always looks like.
+//
+// ⚠ **KEYED ON THE NAME ALONE, WHICH IS EXACT ONLY BECAUSE THE NAMES ARE RESERVED.** `String` and `Character`
+// are both on `TypeResolution.isCompilerOwnedTypeName`, and `Parser.requireTypeNameNotCompilerOwned` refuses
+// any USER declaration binding either (measured: `enum String` is `E2015 … a declaration of the type name
+// 'String', which the compiler owns`). So a body enclosed by one of these two names is the corpus's own
+// declaration and nothing else's — there is no second `String` for this table to answer wrongly about.
+//
+// `unresolved` is the "not a byte record" answer rather than a second sentinel: it is the tag's own no-answer
+// and is never a value's, so a caller that wants a `MaxonType` feeds the hit straight to `maxonTypeOfTag` and
+// a caller that wants a fallback tag tests against it.
+export function byteRecordTagOfTypeName(name ByteArray) returns ValueTypeTag
+	if name.equals(StringConformerName) 'theString'
+		return ValueTypeTag.string
+	end 'theString'
+	if name.equals(CharacterConformerName) 'theCharacter'
+		return ValueTypeTag.character
+	end 'theCharacter'
+	return ValueTypeTag.unresolved
+end 'byteRecordTagOfTypeName'
+
+// The canonical conformer name of the primitive `bool` (P1.7a slice 2b-iii) — the key of its synthesized
+// `bool.compare` impl, and it MUST equal `primitiveTypeTagName(ValueTypeTag.boolean)`. It doubles as the
+// rendered spelling of `Equatable.equals`'s `bool` RESULT type (`builtinInterface`), which is the same fact
+// and so must not become a second constant.
+export let BoolConformerName = b"bool"
+
+// ⭐⭐ **WHICH PRIMITIVE VALUE TAG A TYPE *NAME* DENOTES — `byteRecordTagOfTypeName`'s twin one type-class
+// over, and here for its reason (W133).** Two doors hold a primitive only as the bytes an author wrote and
+// have to ask: `ProgramSignatures.extensionTargetOf` (may an `extension` target this name?) and
+// `Parser.enclosingSelfType` (what does `Self` mean inside the body it opened?). ONE table, so an extension
+// can never be admitted over a name whose `Self` the other door cannot then type. Interning the
+// primitive as a NAMED type instead is what breaks an `extension float` body: its `__self` is then a
+// named Float rather than the float primitive, and `"{self}"` interpolation stops working.
+//
+// ⛔⛔ **`byte` IS DELIBERATELY ABSENT THOUGH `Parser.namesAPrimitiveType` CARRIES IT, AND THE TWO ANSWER
+// DIFFERENT QUESTIONS.** That predicate is about a STATIC call (`byte.fromString`), where the name is only a
+// qualifier on a reserved-space free function; this one is about VALUES, and `byte` HAS NO VALUE TAG OF ITS
+// OWN — a byte IS an `int(0 to 255)`, so it reaches every receiver door as `integer` and dispatches
+// `int.<method>` (`builtinConformerOfTag`'s header: *"`Integer`, `Byte` and a bare `int` all arrive here as
+// `integer`"*). An `extension byte` admitted here would publish `byte.<method>` symbols **no receiver can
+// ever reach**: a body declared, type-checked and never called — precisely the silent wrong answer W133
+// exists to close one door over, reintroduced by the door itself.
+//
+// ⚖ **THREE KEYWORDS, NOT FOUR: THERE IS NO `TokenKind.byte` AT ALL** (`Parser.ByteTypeName`'s
+// header), so a fourth spelling would have nothing under it. `extension byte` therefore keeps the
+// answer every other name no file declares gets, `undeclaredTarget`: no conformer, no body parsed,
+// no crash.
+//
+// `unresolved` is the "not a primitive" answer for `byteRecordTagOfTypeName`'s reason: it is the tag's own
+// no-answer and is never a value's, so a caller wanting a `MaxonType` feeds the hit straight to
+// `maxonTypeOfTag` and a caller wanting a predicate tests against it.
+//
+// ⭐⭐ **IT IS THE SINGLE HOME OF THE SET, AND `TypeResolution.builtinTypeNameTag` DELEGATES TO IT RATHER
+// THAN RESTATING IT (W133 review).** That function is the OTHER name→`ValueTypeTag` door — it answers for
+// `String` and `ExitCode` as well — and it carried its own `int`/`float`/`bool` rows with the identical
+// answers until this rung's review folded them into this one. So a fourth primitive is added HERE, once, and
+// both doors learn it in the same act; there is no second `equals` chain left that could be edited into
+// disagreeing, and the disagreement would not have been a compile error (see that function's ⛔ for the
+// shape of the wrong answer it would have produced).
+export function primitiveTagOfTypeName(name ByteArray) returns ValueTypeTag
+	if name.equals(IntConformerName) 'theInt'
+		return ValueTypeTag.integer
+	end 'theInt'
+	if name.equals(FloatConformerName) 'theFloat'
+		return ValueTypeTag.float
+	end 'theFloat'
+	if name.equals(BoolConformerName) 'theBool'
+		return ValueTypeTag.boolean
+	end 'theBool'
+	return ValueTypeTag.unresolved
+end 'primitiveTagOfTypeName'
+
+// ⭐⭐ **WHICH COMPILER-GRANTED CONFORMER A NAME IS — the half of the intrinsic-conformance answer that has
+// to be DISCOVERED FROM THE PROGRAM rather than read off the spelling.** Four of the rows below are keyed by
+// compiler-owned names this file may state (three keywords and `String`); the other two are keyed by a
+// declaration the corpus or the user wrote — the ARRAY RECORD, whose spelling is the corpus's to choose
+// (ARR6), and a payload-free `enum`, whose every spelling is the author's. Neither can be recognized by a
+// constant, so the caller discovers it once (`ProgramSignatures.discoveredConformerOf`) and hands the answer
+// in.
+//
+// ⚠ It replaced a bare `typeNamesTheArrayRecord bool`, and the shape is the point: a second parallel bool
+// would let a caller answer one question and forget the other, where a single value forces every door to
+// route through the one discovery.
+//
+// ⛔⛔ **APPEND ONLY — TWO MATCHES RANGE OVER THIS DECLARATION ORDER, AND AN INSERTED CASE WOULD JOIN THEM IN
+// SILENCE.** `isIntrinsicBuiltinConformance` reads `arrayRecord to payloadFreeEnum` (the granted rows) and
+// `LowerMaxonToStd.witnessSlotImpl` reads `none to arrayRecord` (the rows whose impl is their own join). A
+// case APPENDED after `payloadFreeEnum` falls outside both ranges and fails to compile at every exhaustive
+// reader — which is the guard. A case INSERTED between two existing members is swallowed by whichever range
+// spans it, and would silently inherit an answer nobody chose for it: a conformance granted, or an impl
+// symbol named by a join that does not exist. Both ranges consolidate arms that genuinely share a body, so
+// they are not splittable without duplicating one; the discipline is here instead, at the site an author
+// editing this enum reads first.
+export enum DiscoveredConformer
+	// The name is a keyword primitive, `String`, or a type whose conformances are all DECLARED — a struct's
+	// `implements`, which `typeDeclaresInterface` answers for and this table never speaks to.
+	none
+	arrayRecord
+	payloadFreeEnum
+end 'DiscoveredConformer'
+
+// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slices 2b/2b-ii/2b-iii + its last slice, + P1.7b) —
+// the SINGLE source of "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool`
+// AND the managed concrete `String` conform with NO user `implements`: The compiler synthesizes their
+// `int.hash`/`int.equals`/`int.compare`, `float.hash`/`float.equals`/`float.compare`, `bool.compare` and
+// `String.hash`/`String.equals` impls natively (the type-side twin of the synthesized
+// `Hashable`/`Equatable`/`Comparable` interfaces), so
+// `Box with Integer where T is Hashable`, `Pair with Integer where T is Comparable` and `Box with String
+// where T is Hashable and Equatable` are legal and their witness slots resolve to real `.text` symbols.
+// `typeConformsTo` ORs this with the user registry, and the install-need decision reads it too, so the E3017
+// answer, the witness table, and the synthesized-impl set cannot drift. `typeName` is the CANONICAL conformer
+// name (`Integer` already collapsed to `int`; a `String` argument already named `String`). `String` is a
+// MANAGED type, not a primitive — hence the neutral "builtin" spelling.
+//
+// ⚠ **THE TABLE IS DELIBERATELY RAGGED, and each hole is a mechanism that does not exist rather than an
+// oversight** — which is why the interface test is per conformer rather than one shared disjunction:
+//
+//   • **`String` is NOT `Comparable`** — a byte record has no ordering:
+//     `stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
+//     Cloneable`, and no extension adds `Comparable`.
+//   • **`bool` is NEITHER `Hashable` NOR `Equatable`** — `bool` arrays bit-pack
+//     (`specs/primitive-hashable.md:13`), and the canonical corpus contains no
+//     `bool.hash`/`bool.equals` case at all, positive or negative.
+//   • **`Character` is NOT `Comparable`** — `Character` declares `Hashable, Equatable,
+//     Cloneable` and no ordering, the same hole `String` has above.
+//
+// ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `f.equals(g)`) SHIPS**, and it is
+// gated on THIS predicate — see `builtinConformerMethod` below and `Parser.dispatchBuiltinConformanceMethod`.
+// So a receiver whose type has no intrinsic conformance gets a diagnostic instead of a call to a symbol
+// nothing installs, and the parser's dispatch, the E3017 conformance answer and the installed impl set
+// cannot drift: they are one function's three readers.
+//
+// ⭐ **DIRECT DISPATCH ON A `String` VALUE SHIPS TOO (BATCH2 slice 2)** — `s.hash()` and `s.equals(t)` reach
+// the very impls a `__witness_String.*` slot would, so the two spellings of one question land in one body.
+// It arrives through `Parser.dispatchStringMethod`'s FALL-THROUGH rather than through the conformer arm of
+// `dispatchMethodOnReceiver`, because a String receiver is routed to its own method table first and that
+// order is load-bearing (`s.byteLength()` must not be resolved against the intrinsic conformances).
+//
+// A `Set with String` is a THIRD reader of the same two symbols (P1.7b): its probe dispatches the key's
+// `hash`/`equals` through `__witness_String.*` slots, so all three doors land in the same two bodies — which
+// is why the reservation below (`TypeResolution.isCompilerOwnedTypeName`) had to cover `String` before any of
+// them could be trusted.
+export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
+	if typeName.equals(IntConformerName) 'int'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+	end 'int'
+	if typeName.equals(StringConformerName) 'string'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+	end 'string'
+	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record — and it is
+	// ALSO `Comparable`, which is the one place the two byte records part company (A5m-c).
+	//
+	// ⚠ **THIS ARM READ `Hashable`/`Equatable` ONLY, UNDER A COMMENT ASSERTING THE CORPUS AGREED, AND THE
+	// CORPUS SAID THE OPPOSITE.** `stdlib/Character.maxon:19` declares
+	// `implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable` and `:80-104`
+	// writes the order out — byte-lexicographic, shorter-prefix-first — while `stdlib/String.maxon:49`
+	// genuinely declares no `Comparable`. So `String`'s hole is real and `Character`'s never was; the
+	// comment that said otherwise is what made one look like the other.
+	if typeName.equals(CharacterConformerName) 'character'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+	end 'character'
+	if typeName.equals(FloatConformerName) 'float'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+	end 'float'
+	if typeName.equals(BoolConformerName) 'bool'
+		return interfaceName.equals(ComparableInterfaceName)
+	end 'bool'
+	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER AND THE FIRST *CONDITIONAL* ONE (array-hashable).**
+	// `stdlib/Array.maxon:630` declares it as `extension Array implements Hashable, Equatable where
+	// Element is Hashable and Equatable`, and the two halves of that declaration name the
+	// SAME two protocols, which is not a coincidence: a container promises exactly what it demands of its
+	// element. The array row is therefore the `where` clause as well as the `implements` list, and the doors
+	// that enforce the element constraint read it from here rather than transcribing it.
+	//
+	// ⚠ **THE `where` HALF IS NOT ASKED HERE, AND CANNOT BE — this predicate sees a NAME, not an instance.**
+	// It is discharged one door earlier, by the reduction that produces the name: an `Array with E` reduces
+	// to the conformer `Array` only when `E` conforms to both protocols, and otherwise keeps its mangled
+	// instance name, which conforms to nothing (`ProgramSignatures.conformerNameOfType`). So "the conformer
+	// is spelled `Array`" already means "its element satisfied the clause", and this arm may answer
+	// unconditionally.
+	//
+	// ⚠ **`Comparable` IS ABSENT for `String`'s reason one shape up**: `Array.equals` is a byte compare, and
+	// bytes have no ordering.
+	//
+	// ⭐⭐ **AND THIS ROW'S KEY IS THE ONE THE CALLER SUPPLIES, NOT A NAME THIS FILE HOLDS (ARR6).** The five
+	// rows above are keyed by COMPILER-OWNED spellings — three keywords and two names
+	// `TypeResolution.isCompilerOwnedTypeName` refuses to every declaration — so this file may state them.
+	// The array record's name is the CORPUS's to choose (`ProgramSignatures.arrayRecordDeclaredName`,
+	// discovered from the `BuiltinArrayLiteral` marker), and it was written here as the constant `b"Array"`
+	// while every caller arrived carrying the discovered answer. The two agreed only because
+	// `stdlib/Array.maxon` declares the record as `Array`; under any other spelling this arm answered FALSE,
+	// arrays silently stopped being `Hashable`/`Equatable` and the installer minted impls under a symbol
+	// nothing looks up — a wrong answer, never a compile error. MEASURED with the constant respelled: four
+	// cases across `array-conditional-conformance-withheld` and `array-contains`, one of them a conformance
+	// GRANTED where the corpus pins a refusal.
+	//
+	// ⚠ **IT IS A DISCOVERED SHAPE AND NOT THE NAME, BECAUSE ONE FAMILY OF CALLERS PROVABLY HAS NO PROGRAM
+	// TO ASK.** `builtinConformerMethod` and its siblings serve the DIRECT dispatch, whose conformer comes
+	// from `BuiltinConformer` — the four reserved spellings, never the record — and their own callers reach
+	// down from `MmRuntime.reservedCalleeReasonOf`, a per-callee predicate in the target lowering with no
+	// `ProgramSignatures` in reach. Handed a name they would have to invent one; handed the question they
+	// answer it exactly, with `none`, which is what their gate already guarantees.
+	//
+	// ⭐⭐ **AND A PAYLOAD-FREE `enum` IS THE SEVENTH CONFORMER, GRANTED THE SAME PAIR AND FOR A REASON THAT
+	// IS NOT THE ARRAY'S (enum-hashable).** `/specs/enum-hashable.md` states it outright — *"enums without
+	// associated values automatically conform to `Hashable` and `Equatable`"* — granted with no
+	// `implements` anywhere. It is `Hashable` and `Equatable` and emphatically NOT `Comparable`: `Box
+	// with Color` under `where T is Comparable` is `E3017` and `a.compare(b)` on an enum value is
+	// `E4006`.
+	//
+	// ⭐ **THE IMPLS IT NAMES ARE `int`'s, WHICH IS WHY THE GRANT COSTS NO SYNTHESIZED BODY** — an enum value
+	// IS its i64 tag (`TypeResolution.denotedNamedType`), so hashing and comparing one IS hashing and
+	// comparing that i64. `ProgramSignatures.enumConformanceImplName` is the one statement of that, read by
+	// the witness slot and by the direct dispatch alike; see its header for the two backings where the tag is
+	// not the declaration index and why that does not change the answer.
+	return match discovered 'discovered'
+		arrayRecord or
+			payloadFreeEnum gives interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+		none gives false
+	end 'discovered'
+end 'isIntrinsicBuiltinConformance'
+
+// --- Direct dispatch on a CONCRETE value (`i.compare(j)`) ---
+
+// The builtin conformer a receiver's RESOLVED value tag dispatches under, or `notAConformer` when that tag
+// has none.
+//
+// ⚠ **PAYLOAD-FREE ON PURPOSE, AND THE REASON IS MEASURED.** The obvious shape is a union carrying the
+// conformer's NAME (`conformer(typeName ByteArray)`), and it was written that way first. But this is asked
+// on the PER-METHOD-CALL path — `Parser.parseMethodCall` classifies every receiver that is not a String,
+// Array or Set, and the postfix loop classifies every value a `.` follows — and a union with an associated
+// value is heap-BOXED, so that shape allocated a 16-byte box at every one of those sites, including the
+// overwhelming majority (a plain struct receiver) whose answer is "no conformer at all". `scale-test` read
+// it as the WHOLE of this feature's per-rung cost: +32/+64/+128/+256/+512/+1,024 allocations across the
+// doubling ladder, exactly one per struct-method call site in the corpus, in `phase:parse` and nowhere
+// else. A payload-free enum is a scalar, so the classification is free and only a dispatch that is going
+// to HAPPEN pays for a name (`builtinConformerName`).
+export enum BuiltinConformer
+	notAConformer
+	intConformer
+	floatConformer
+	boolConformer
+	stringConformer
+end 'BuiltinConformer'
+
+// ⭐ **THE BUILTIN CONFORMER A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the
+// conformer the intrinsic-conformance answer and the impl symbol are keyed by.
+//
+// The caller resolves ranged ALIASES to their underlying tag first (`Parser.rangedAliasTag`), exactly as
+// `ProgramSignatures.conformerTypeArgName` reduces a witness type ARGUMENT — so `Integer`, `Byte` and a bare
+// `int` all arrive here as `integer` and all dispatch `int.*`.
+//
+// ⚠ **A TAG JOINS THIS MAP WHEN ITS DISPATCH DOES, and admitting one whose impl nothing installs would
+// name a symbol at LINK time in place of a clean diagnostic.** `string` joined at BATCH2 slice 2, with the
+// direct `s.hash()` / `s.equals(t)` door.
+//
+// ⭐ **AND `string`'S ENTRY IS READ BY THE `Self`-ARGUMENT CHECK, NOT BY THE RECEIVER SPLIT** — which is
+// worth stating, because the receiver split cannot reach it: `Parser.dispatchMethodOnReceiver` routes a
+// String receiver to `dispatchStringMethod` several arms ABOVE the conformer arm (that order is
+// load-bearing — `s.byteLength()` must not resolve against the intrinsic conformances), so a String
+// receiver never arrives at the classifier. What does arrive is `equals`'s ARGUMENT, through
+// `Parser.valueIsConformer`, and without this arm a perfectly good `"ab".equals("ac")` would be refused
+// for handing a `String` to a `Self` formal.
+//
+// ⚠ `character` is deliberately still out, and for a DIFFERENT reason than "no impl":
+// `Character.hash`/`Character.equals`/`Character.compare` are all installed and witness-reachable, but
+// `dispatchCharacterMethod` routes every Character receiver and does not fall through to a conformance
+// lookup, so an entry here would be unreachable rather than wrong. It joins when that dispatcher grows the
+// door `dispatchStringMethod` just did.
+//
+// ⚠ **AND THE `<` OPERATOR DID NOT PUT IT IN, WHICH IS WHY A5m-c LEFT THIS MAP ALONE.** Character ordering
+// calls `__char_cmp` — a `__`-prefixed symbol of the compiler's own — precisely so that it needs no entry
+// here and no qualifier in `isBuiltinConformanceImplName`: admitting `Character.` to that predicate would
+// wave a user's `Character.fromCodepoint(65)` past `SemanticCheck`'s E3004 into a link failure, because
+// unlike `String.` there is no parser interception in front of it. See `buildByteRecordCompare`.
+//
+// ⚠ A tag admitted here answers for the CONFORMER, not for a method: `bool` carries `compare` and NEITHER
+// `hash` NOR `equals`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod`
+// reads it and turns `b.hash()` into a positioned reject.
+export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
+	if tag == ValueTypeTag.integer 'int'
+		return BuiltinConformer.intConformer
+	end 'int'
+	if tag == ValueTypeTag.float 'float'
+		return BuiltinConformer.floatConformer
+	end 'float'
+	if tag == ValueTypeTag.boolean 'bool'
+		return BuiltinConformer.boolConformer
+	end 'bool'
+	if tag == ValueTypeTag.string 'string'
+		return BuiltinConformer.stringConformer
+	end 'string'
+	return BuiltinConformer.notAConformer
+end 'builtinConformerOfTag'
+
+// Does `conformer` carry a builtin conformance at all? The gate BOTH dispatch paths open with (a binding
+// receiver in `parseMethodCall`, a value receiver in the postfix loop), named once so the two cannot come
+// to disagree about it, and written as a comparison rather than a per-variant match so a conformer added
+// above is admitted by both paths without an edit here.
+export function isBuiltinConformer(conformer BuiltinConformer) returns bool
+	return conformer != BuiltinConformer.notAConformer
+end 'isBuiltinConformer'
+
+// ⭐ **THE CANONICAL NAME A CONFORMER IS KEYED BY** — the key of the intrinsic-conformance answer, of the
+// `__witness_<conformer>.*` tables and of the `<conformer>.<method>` impl symbols, so a direct dispatch and a
+// witness dispatch on the same type reach the same body. Each name's own header states the invariant this
+// rests on: it MUST equal whatever the compiler calls the tag it answers for — `primitiveTypeTagName` for the
+// three primitives (`int`/`float`/`bool` are what resolved `integer`/`float`/`boolean` tags are called
+// everywhere), and for `String` the one syntactic spelling `Parser.parseTypeReference` recognizes.
+//
+// Fetched only where a name is actually spelled — a dispatch that is going to be emitted, or a diagnostic
+// naming the receiver's type — never on the classification path. The match is EXHAUSTIVE, so a conformer
+// added to `BuiltinConformer` fails to compile here until it is given its name, which is the check that
+// keeps this map and the tag map above from drifting apart.
+//
+// It PANICS on `notAConformer` for `requireBuiltinInterface`'s reason: only a caller the gate above has
+// already admitted may ask for a name, so a miss is a driver invariant violation rather than user input.
+export function builtinConformerName(conformer BuiltinConformer) returns ByteArray
+	match conformer 'c'
+		intConformer then return IntConformerName
+		floatConformer then return FloatConformerName
+		boolConformer then return BoolConformerName
+		stringConformer then return StringConformerName
+		notAConformer then panic("builtinConformerName: asked for the name of a value that carries no builtin conformance — every caller is gated on `isBuiltinConformer`, so the gate and the name must read one classifier")
+	end 'c'
+end 'builtinConformerName'
+
+// ⭐⭐ **WHICH CONFORMER A DIRECT `<value>.<method>(…)` DISPATCH IS SERVING — the impl symbol it calls and
+// what its `Self`-typed formals accept, as ONE value because they are one decision.** Split, a door could
+// call `int.equals` while admitting an argument of some other type, which is precisely the silent wrong
+// answer `Parser.requireBuiltinConformanceSelfArgs` exists to refuse.
+//
+// It is a payload-carrying union and so a heap box, which `BuiltinConformer`'s header rules out for the
+// CLASSIFICATION path — this is not that path. One of these is built per conformance call the parser is
+// about to EMIT, never per receiver it classifies.
+export union DirectConformanceTarget
+	// A builtin conformer: the receiver IS a value of it, the impl is `<conformer>.<method>`, and a `Self`
+	// formal takes any value of the same conformer (`Parser.valueIsConformer`, which collapses `Byte` to
+	// `int`).
+	builtinValue(conformer BuiltinConformer)
+	// A payload-free `enum`, whose granted `Hashable`/`Equatable` is served by the impls of its i64 TAG
+	// (`ProgramSignatures.enumConformanceImplName`). A `Self` formal takes a value of THAT enum and nothing
+	// else — an `int` actual would compare a tag against an unrelated number, and another enum's would
+	// compare two case indices that mean different things.
+	enumTagValue(enumName ByteArray)
+end 'DirectConformanceTarget'
+
+// The type a `Self` formal of a direct conformance dispatch is quoted as requiring: the conformer's own
+// name, or the ENUM's — which is the name the author wrote and the only one that would help them.
+export function conformanceSelfTypeNameOf(target DirectConformanceTarget) returns ByteArray
+	match target 'target'
+		builtinValue(conformer) then return builtinConformerName(conformer)
+		enumTagValue(enumName) then return enumName
+	end 'target'
+end 'conformanceSelfTypeNameOf'
+
+// ⭐ **IS `name` A SYMBOL ONLY THE DIRECT BUILTIN-CONFORMANCE DISPATCH CAN HAVE MINTED?** The second half
+// of `MmRuntime.isCompilerInternalCallee`, and the reason that predicate needed one: a synthesized impl is
+// compiler-owned but wears NO `__` prefix — it carries a real `.text` symbol so a witness-table reloc can
+// name it (BuiltinConformanceRuntime's header) — so the prefix test cannot see it, and every reader that
+// asks "is this the compiler's own callee?" was answering `false` for `int.compare`.
+//
+// **It is a QUALIFIER test, and "the qualifier belongs to the compiler" is the whole soundness argument.**
+// It is one fact, which is why no method LIST is needed here and why one must not be added: "and these three
+// methods" would be a second copy of `builtinConformerMethod`'s answer.
+//
+// ⚠⚠ **THE FOUR QUALIFIERS BUY THAT FACT TWO DIFFERENT WAYS, AND THE SECOND WAY IS A DEPENDENCY, NOT A
+// RESTATEMENT.** `int`, `float` and `bool` are KEYWORDS (`Lexer.keywordTable`), so the LEXER makes a user
+// declaration under one impossible and nothing further is needed. `String` is an ordinary identifier and
+// buys it from the RESERVATION instead: `TypeResolution.isCompilerOwnedTypeName` refuses any declaration
+// that would bind the name (BATCH2 slice 2), so no user `type String` exists to carry a `hash()` and no user
+// method symbol can wear `String.`. **Remove `String` from that list and this line becomes false**, in the
+// silent direction — see that function for the two wrong answers measured before it covered the name.
+//
+// ⛔⛔ **ITS OTHER HALF USED TO BE DISCHARGED BY A DOOR, AND THAT DOOR IS GONE — SO THE HAZARD IT NAMED WAS
+// ALREADY LIVE BEFORE THE DOOR WENT.** This paragraph read *"a source-written `String.<member>(…)` is
+// intercepted by `Parser.parseStringStaticCall` at its own span and never reaches
+// `Parser.requireCalleeIsNotReservedName`, so admitting the qualifier here cannot turn a user's `String.`
+// call into an 'unknown compiler intrinsic'."* W17 gave that door a corpus fall-through, which forwards a
+// member `stdlib/String.maxon` declares STRAIGHT to `parseCallNamed` — so `String.hash(…)` had reached the
+// reserved-callee gate from that release onwards, with the door still standing. MEASURED on W55's base:
+// **`E3004 call to undefined function 'String.hash': the '__' prefix names a compiler intrinsic, and no
+// intrinsic of that name exists`** — a message whose stated REASON is false of a name carrying no `__`.
+//
+// ⚠ **W55 WIDENED WHICH SPELLINGS REACH IT, WHICH IS WHY THE MESSAGE IS THAT RUNG'S TO FIX.** Retiring the
+// door sent every `String.<member>(…)` down the ordinary qualified path, so a synthesized impl the corpus
+// does NOT declare arrives here too: `String.compare("a", "b")` was a positioned E2015 off the retired
+// static roster on that same base, and is the reserved-callee gate's now.
+//
+// ⇒ **THE MESSAGE IS DERIVED FROM WHICH CLAUSE OF `MmRuntime.reservedCalleeReasonOf` MATCHED**, so a
+// synthesized conformance impl named directly is refused for BEING one rather than for a prefix it does not
+// have. `character-conformance`'s twin does not arise here: `Character.` is absent below.
+//
+// The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
+// only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
+// ⛔⛔ **THE QUALIFIER ALONE IS NO LONGER THE ANSWER, AND THE PARAGRAPHS ABOVE SAID SO BEFORE IT HAPPENED.**
+// They rest the `String` arm on *"no user `type String` exists to carry a `hash()`"* — a premise about the
+// RESERVATION, and one that only ever excluded a USER declaration. **W16 made the CORPUS's declaration
+// admissible** (`SignatureIndex.recordStruct`'s provenance bit), and W17 listed the module, so
+// `stdlib/String.maxon` now carries thirty real methods whose registration names all wear `String.`.
+// MEASURED, in thirteen lines, on a corpus-provenanced file: a `type String` with a `byteLength()` and a
+// second method calling it reports
+// **`E3004 call to undefined function 'String.byteLength': the '__' prefix names a compiler intrinsic, and
+// no intrinsic of that name exists`** — the compiler claiming one of the corpus's own methods as an
+// intrinsic it does not have.
+//
+// ⇒ **THE CURE IS THE ONE THIS HEADER ALREADY PRESCRIBES, APPLIED RATHER THAN QUOTED.** It forbids adding
+// *"and these three methods"* here because that *"would be a second copy of `builtinConformerMethod`'s
+// answer"* — which is exactly right, and the conclusion is to ASK that function, not to keep answering on
+// the qualifier. A synthesized impl is precisely a `<conformer>.<method>` the ragged table SUPPLIES; a
+// `String.byteLength` the corpus declares is not one, and now there is a difference to tell.
+//
+// The `int`/`float`/`bool` arms are unchanged in effect — they are KEYWORDS, so no declaration can wear
+// their qualifier and every name reaching them was already one of the table's — but they are asked the same
+// way, because a predicate with one arm reasoning from a keyword and another from a lookup is how the two
+// come to disagree the next time a reservation moves.
+export function isBuiltinConformanceImplName(name ByteArray) returns bool
+	return match splitQualifiedName(name) 'parts'
+		notQualified gives false
+		parts(conformer, method) gives isSynthesizedConformerImpl(conformer, methodName: method)
+	end 'parts'
+end 'isBuiltinConformanceImplName'
+
+// ⭐⭐ **THE *QUALIFIER* QUESTION, WHICH IS NOT THE SYMBOL QUESTION — AND COLLAPSING THE TWO WAS A MEASURED
+// REGRESSION.** `isBuiltinConformanceImplName` above answers *"did the compiler MINT this symbol?"*, which
+// is what `MmRuntime.isCompilerInternalCallee` needs in order to wave a callee past E3004 — and narrowing
+// it to the methods actually synthesized is what stopped it claiming `stdlib/String.maxon`'s own methods.
+// **This one answers *"does the compiler OWN this qualifier?"***, which is what
+// `Parser.requirePrimitiveStaticIsResolvable` needs in order to say *"'int' has no static method named
+// 'frobnicate'"* in the author's own words instead of letting the reserved-callee gate describe a `__`
+// prefix the program does not have.
+//
+// ⚠ MEASURED, by making the second reader ask the first: `parsable-interface/error.unknown-primitive-static`
+// went from that E2015 to `E3004 call to undefined function 'int.frobnicate'` — the right code describing a
+// program the author does not have, which is the exact wrong answer that function's header was written to
+// close. One predicate cannot serve both, because the two answers only ever differed once a DECLARATION
+// could wear a compiler-owned qualifier, and that is precisely what W17 made possible.
+//
+// ⚠ **IT KEEPS ALL FOUR QUALIFIERS, INCLUDING `String`, AND WHAT MAKES THAT SAFE IS THE CALLER'S GATE.** Its
+// one caller (`Parser.requirePrimitiveStaticIsResolvable`) sits behind `namesAPrimitiveType`, which admits
+// `int`/`float`/`bool`/`byte` and no other spelling — so a `String.` qualifier cannot reach here whatever
+// door it came through. That is a fact about the CALLER and survives the removal of
+// `parseStringStaticCall` (W55), where the header above's version of the argument did not.
+export function isBuiltinConformanceQualifier(name ByteArray) returns bool
+	return match splitQualifiedName(name) 'parts'
+		notQualified gives false
+		parts(conformer, _) gives namesADirectDispatchConformer(conformer)
+	end 'parts'
+end 'isBuiltinConformanceQualifier'
+
+// ⭐⭐ **THE CONFORMER SPELLINGS A DIRECT `<value>.<method>()` DISPATCH CAN BE EMITTED UNDER — `BuiltinConformer`'s
+// cases as NAMES, in ONE place.** The two predicates on either side of it both need the set and both wrote
+// it out: the QUALIFIER question above and the SYMBOL question below, which is exactly the pair W55 measured
+// diverging one level up. Why the set is SOUND — two different arguments, neither covering the other — is
+// `isBuiltinConformanceImplName`'s header, not repeated here.
+//
+// ⛔ **THE ARRAY RECORD IS NOT IN IT AND MAY NOT JOIN**, though the compiler does mint `Array.hash` /
+// `Array.equals`: its name is the CORPUS's to choose and a user program may take it, so neither argument
+// covers it and admitting it would wave a USER's own `Array.hash` past E3004. That is the same bound
+// `builtinConformerMethod` states as its reason for carrying no array row.
+//
+// ⚠ **IT COMPARES THE FOUR SPELLINGS RATHER THAN WALKING THE ENUM, AND THAT IS A COST CONSTRAINT.** It sits
+// on `MmRuntime.reservedCalleeReasonOf`'s per-callee path (`SemanticCheck.validateCall`,
+// `LowerMaxonToStd.lowerCall`), which that function's header requires to be allocation-free; mapping
+// `<BuiltinConformer>.allCases` through `builtinConformerName` would allocate a case array per call.
+function namesADirectDispatchConformer(name ByteArray) returns bool
+	return name.equals(IntConformerName) or name.equals(FloatConformerName) or name.equals(BoolConformerName) or name.equals(StringConformerName)
+end 'namesADirectDispatchConformer'
+
+// Does the compiler SYNTHESIZE `<conformer>.<methodName>`? True exactly when the conformer is one the
+// parser can emit a direct dispatch under AND the ragged table supplies that method for it — one lookup,
+// so this predicate and the installer that builds the body cannot come to disagree about which symbols
+// exist.
+function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) returns bool
+	if not namesADirectDispatchConformer(conformer) 'notABuiltinConformer'
+		return false
+	end 'notABuiltinConformer'
+
+	return match builtinConformerMethod(conformer, methodName: methodName, discovered: DiscoveredConformer.none) 'lookup'
+		supplied gives true
+		notSupplied gives false
+	end 'lookup'
+end 'isSynthesizedConformerImpl'
+
+// The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
+export union BuiltinConformerMethodLookup
+	supplied(method InterfaceMethodSig)
+	notSupplied
+end 'BuiltinConformerMethodLookup'
+
+// The protocols a BUILTIN type can intrinsically conform to — the only interface names
+// `isIntrinsicBuiltinConformance` ever answers `true` for, listed once so the method search below covers
+// exactly the set that predicate admits and not one name more.
+function builtinConformableProtocolNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(HashableInterfaceName)
+	names.push(EquatableInterfaceName)
+	names.push(ComparableInterfaceName)
+	return names
+end 'builtinConformableProtocolNames'
+
+// ⭐⭐ **WHICH PROTOCOLS ONE BUILTIN CONFORMER ACTUALLY CONFORMS TO** — the ragged table's row for
+// `typeName`, read off the predicate rather than restated. It was the opening `if … continue` of the two
+// walks below, written twice; a third reader made it a function rather than a third copy.
+//
+// ⭐ **AND THAT THIRD READER IS THE CONDITIONAL CONFORMANCE'S `where` CLAUSE.** `Array`'s row IS the clause
+// its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
+// the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
+// `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
+export function intrinsicConformanceProtocolNames(typeName ByteArray, discovered DiscoveredConformer) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
+		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, discovered: discovered) 'conforms'
+			names.push(protocolName)
+		end 'conforms'
+	end 'eachProtocol'
+	return names
+end 'intrinsicConformanceProtocolNames'
+
+// ⭐ **THE METHOD A DIRECT `<value>.<name>(…)` DISPATCH RESOLVES TO ON A BUILTIN CONFORMER** — searched
+// through the conformer's INTRINSIC conformances, so the method set is DERIVED from
+// `isIntrinsicBuiltinConformance` plus the synthesized protocol declarations rather than listed a second
+// time. Two consequences are the point:
+//
+//   • the parser cannot route a method the installer will not install (`int.compare` resolves because `int`
+//     conforms to `Comparable`; a `Comparable`-less conformer's `.compare()` simply is not found), and
+//   • the returned `InterfaceMethodSig` carries the method's NAME (which spells the impl symbol), its
+//     formal TYPES (which the `Self`-argument check reads) and its RETURN TYPE (which types the call's
+//     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
+//     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
+//
+// ⭐⭐ **THE ARRAY RECORD IS NEVER ONE OF THE CONFORMERS ASKED ABOUT HERE, WHICH IS WHY IT CARRIES NO ARRAY
+// ROW (ARR6).** A `BuiltinConformer` caller's `typeName` is `builtinConformerName`'s — a closed, payload-free
+// enum of `int`/`float`/`bool`/`String` — or one of those two spellings written out. The array record is
+// deliberately not among them and may not become one: its direct `arr.hash()` / `a == b` dispatch calls
+// `__managed_hash`/`__managed_eq`, not `Array.<method>` (see `BuiltinConformanceRuntime`'s `Array` note), and
+// `namesADirectDispatchConformer` states the same bound from the reserved-callee side, where admitting a name
+// a user program may TAKE would wave that user's own `Array.hash` past E3004.
+// ⇒ every caller passing `DiscoveredConformer.none` is stating that bound, not taking a convenience: it holds
+// no program to discover a conformer from, and it must not.
+//
+// ⚠ **THE ENUM ROW IS THE ONE EXCEPTION, AND IT ARRIVES WITH ITS PROGRAM IN HAND (enum-hashable).**
+// `Parser.enumGrantedConformanceMethod` asks with whatever `discoveredConformerOf` answers for the receiver's
+// own type — `payloadFreeEnum` for an enum, and `none` for the UNION receivers reaching that same dispatch,
+// which is how the granted row stays withheld from one — so that `e.hash()` resolves against the very row the
+// E3017 answer and the witness slot read: one derivation for the three. It carries none of the array's
+// hazard: the symbol it reaches is `ProgramSignatures.enumConformanceImplName`'s, which is `int.<method>`
+// (a KEYWORD qualifier no declaration can wear) precisely when the enum declares no such method of its own.
+export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinConformerMethodLookup
+	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: discovered) 'eachProtocol'
+		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
+		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
+		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
+		// table slot, so it has nothing to keep in step with a witness table's numbering.
+		let iface = requireBuiltinInterface(protocolName)
+		for i in 0 upto iface.methods.count() 'eachMethod'
+			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'")
+			if method.name.equals(methodName) 'declaresMethod'
+				return BuiltinConformerMethodLookup.supplied(method)
+			end 'declaresMethod'
+		end 'eachMethod'
+	end 'eachProtocol'
+
+	return BuiltinConformerMethodLookup.notSupplied
+end 'builtinConformerMethod'
+
+// ⭐ **THE METHODS A BUILTIN CONFORMER ACTUALLY SUPPLIES** — DERIVED from the very walk
+// `builtinConformerMethod` searches, so nothing downstream can advertise a method the dispatch would then
+// fail to find. That is not hypothetical: the reject below used to name "`hash`, `equals` and `compare`" as
+// a fixed list, which became a WRONG answer the moment a conformer with a ragged conformance row arrived —
+// `b.hash()` would be told `bool` supplies `hash` while `isIntrinsicBuiltinConformance` withholds `Hashable`
+// from it (see that predicate's ragged-table warning). The row that first made this concrete was `float`,
+// which had `equals`/`compare` and no `hash`; `float` is fully `Hashable` now, and the derivation is what let
+// that change land with no edit at all.
+//
+// ⚠ **IT IS A LIST RATHER THAN A SENTENCE BECAUSE TWO CONSUMERS NEED IT AND ONLY ONE OF THEM IS PROSE
+// (A2q).** `Parser.stringSurfaceMemberNames` pushes these onto the `String` MEMBER ROSTER that
+// `dispatchStringMethod` GATES on — so the conformance door cannot offer a name the gate would refuse, and
+// the day `String` gains `Comparable` its `compare()` joins gate, message and dispatch together. Rendering
+// first and re-reading the prose would be parsing a diagnostic; re-walking the protocols beside it would be
+// a second copy of this answer.
+//
+// ⚠ It carries no array row for the reason `builtinConformerMethod` states in full — the walk it is derived
+// from serves the four reserved direct-dispatch conformers and nothing else.
+export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
+		let iface = requireBuiltinInterface(protocolName)
+		for method in iface.methods 'eachMethod'
+			names.push(method.name)
+		end 'eachMethod'
+	end 'eachProtocol'
+	return names
+end 'builtinConformerMethodNameList'
+
+// ⭐ **THE METHODS `Parser.dispatchBuiltinConformanceMethod` LOWERS INSTEAD OF CALLING** — the arms that sit
+// AHEAD of the conformance lookup, each because the body is one expression and the compiler has no
+// `extension` mechanism to hang it on: `toString` is the conversion `"{x}"` already performs
+// (`stdlib/PrimitiveExtensions.maxon`'s `return "{self}"`), and `clone` on a value type is the IDENTITY
+// (that same file's three `return self` bodies). Neither emits a call, so neither owes a symbol.
+//
+// ⚠⚠ **THESE ARE APPENDED TO THE ADVERTISEMENT AND NOT PUSHED INTO `builtinConformerMethodNameList`, and
+// the two are different questions rather than two spellings of one.** That list answers *"which INTRINSIC
+// CONFORMANCE methods does this type supply?"* — every entry names an installed `<type>.<method>` impl a
+// witness slot can be stamped with, and a lowering names none. Pushing one in would also be read by
+// `Parser.stringSurfaceMemberNames`, which GATES the `String` dispatcher on that list — admitting the name
+// at the gate and then finding no supplier behind it.
+//
+// ⇒ **AND THAT IS WHY `Stringable` AND `Cloneable` ARE BOTH DELIBERATELY ABSENT FROM
+// `isIntrinsicBuiltinConformance`** (see its header): that predicate is the WITNESS-TABLE answer, so
+// admitting either would make `where T is Stringable`/`is Cloneable` typecheck against a slot nothing can
+// fill — a link-time panic in place of today's clean refusal. The language-level conformance is real; the
+// dictionary-passing one is not built, and the two are kept apart on purpose.
+//
+// It is a LIST rather than two appended lines so that the advertisement and the arms grow together: a third
+// lowering joins here and is named by the refusal in the same edit.
+function builtinConformerLoweredMethodNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ToStringMethodName)
+	names.push(CloneMethodName)
+	return names
+end 'builtinConformerLoweredMethodNames'
+
+// ⭐ **EVERYTHING A DIRECT `<value>.<name>(…)` DISPATCH ON A BUILTIN CONFORMER RESOLVES, as a diagnostic
+// prints it** — "`hash`, `equals`, `compare`, `toString`, `clone`". Joined from the conformance list rather
+// than walked a second time, for the reason stated there, plus the LOWERED names above, which that list
+// structurally cannot carry.
+export function builtinConformerDispatchMethodNames(typeName ByteArray) returns String
+	var names = builtinConformerMethodNameList(typeName)
+	for loweredName in builtinConformerLoweredMethodNames() 'eachLowered'
+		names.push(loweredName)
+	end 'eachLowered'
+
+	var phrases = StringArray.create()
+	for methodName in names 'eachMethod'
+		phrases.push("`{String.from(methodName)}`")
+	end 'eachMethod'
+	return renderPhraseList(phrases)
+end 'builtinConformerDispatchMethodNames'
+
+// ⭐ **JOIN ALREADY-RENDERED PHRASES INTO A DIAGNOSTIC'S LIST** — `", "`, in one place, for the rosters that
+// are DERIVED from the very table their door tests against and so cannot be written out as prose. Its
+// entries are phrases rather than names because not every admitted thing HAS a name: a hash table's key
+// roster (`Parser.hashTableAdmittedKeys`) ends in a SHAPE, and quoting that as an identifier would print a
+// type nobody declared.
+function renderPhraseList(phrases StringArray) returns String
+	var rendered = ""
+	for phrase in phrases 'eachPhrase'
+		if not rendered.isEmpty() 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		rendered = "{rendered}{phrase}"
+	end 'eachPhrase'
+	return rendered
+end 'renderPhraseList'

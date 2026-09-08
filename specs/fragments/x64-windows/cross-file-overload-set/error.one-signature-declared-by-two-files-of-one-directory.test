@@ -1,0 +1,22 @@
+// Test: error.one-signature-declared-by-two-files-of-one-directory
+// --- file: a.maxon
+function pick(s String) returns String
+	return s
+end 'pick'
+
+export function useA(s String) returns String
+	return pick(s)
+end 'useA'
+
+// --- file: main.maxon
+function pick(s String) returns String
+	return "x{s}"
+end 'pick'
+
+function main() returns ExitCode
+	print("{useA("a")} {pick("b")}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:12:10: duplicate definition of function 'pick#String' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names

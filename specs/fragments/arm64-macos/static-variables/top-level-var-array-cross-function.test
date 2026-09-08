@@ -1,0 +1,228 @@
+// Test: top-level-var-array-cross-function
+
+typealias Integer = int(i64.min to i64.max)
+
+var scores = [10, 20, 30]
+
+function getTotal() returns Integer
+	let a = try scores.get(0) otherwise 0
+	let b = try scores.get(1) otherwise 0
+	let c = try scores.get(2) otherwise 0
+	return a + b + c
+end 'getTotal'
+
+function setScore(index Integer, value Integer)
+	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
+end 'setScore'
+
+function main() returns ExitCode
+	setScore(1, value: 12)
+	return getTotal()
+end 'main'
+---
+ExitCode: 52
+---
+data {
+  __data_scores@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @getTotal {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_scores
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow#11
+  __im_load#12:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#22
+  __im_empty#13:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#23
+  __im_slow#11:
+    arm64.bl __managed_get
+    arm64.b __im_cont#10
+  critsplit#23:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#10
+  critsplit#22:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#10:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x19, 0
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x19, x0
+  trycont#3:
+    arm64.leaGlobal x0, __data_scores
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#15
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 8
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#24
+  __im_empty#17:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#25
+  __im_slow#15:
+    arm64.bl __managed_get
+    arm64.b __im_cont#14
+  critsplit#25:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#14
+  critsplit#24:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#14:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#4
+  tryerr#5:
+    arm64.movImm x20, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.movRegReg x20, x0
+  trycont#6:
+    arm64.leaGlobal x0, __data_scores
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 2
+    arm64.b.ls __im_slow#19
+  __im_load#20:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#26
+  __im_empty#21:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#27
+  __im_slow#19:
+    arm64.bl __managed_get
+    arm64.b __im_cont#18
+  critsplit#27:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#18
+  critsplit#26:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#18:
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#9
+  tryerr#8:
+    arm64.movImm x0, 0
+  trycont#9:
+    arm64.add x1, x19, x20
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @setScore {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x3, x1
+    arm64.leaGlobal x0, __data_scores
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x2, 0
+    arm64.b.ge __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at top-level-var-array-cross-function.test:15: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_slow
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x2, x1
+    arm64.b.hs __im_slow
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow
+  __im_viewed:
+    arm64.sub x4, x1, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_store
+  __im_slow:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.storeBaseIndexScaleReg.word64 [x1 + x2*8 + 0], x3
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at top-level-var-array-cross-function.test:15: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 12
+    arm64.bl setScore
+    arm64.bl getTotal
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at top-level-var-array-cross-function.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

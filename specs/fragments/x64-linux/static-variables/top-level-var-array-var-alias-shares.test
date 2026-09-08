@@ -1,0 +1,60 @@
+// Test: top-level-var-array-var-alias-shares
+var A = [1, 2]
+
+function main() returns ExitCode
+	var b = A
+	b.push(9)
+	return A.count()
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_A@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_A
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegGlobal rax, __data_A
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at top-level-var-array-var-alias-shares.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

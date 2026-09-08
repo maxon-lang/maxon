@@ -1,0 +1,162 @@
+// Test: an-eight-byte-ranged-element-is-adopted-too
+typealias NonNeg = int(0 to i64.max)
+typealias NonNegArray = Array with NonNeg
+typealias Unsigned = int(0 to u64.max)
+typealias UnsignedArray = Array with Unsigned
+
+function total(xs NonNegArray) returns NonNeg
+	var t = 0 as NonNeg
+	for x in xs 'each'
+		t = t + x
+	end 'each'
+	return t
+end 'total'
+
+function size(ys UnsignedArray) returns Unsigned
+	return ys.count() as Unsigned
+end 'size'
+
+function main() returns ExitCode
+	let viaArgument = total([1, 2, 3]) as ExitCode
+	let viaHead = size(UnsignedArray from [1, 2, 3]) as ExitCode
+
+	return viaArgument + viaHead
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  forhdr:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rax*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg r8, r8, rsi
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:12: Range check failed: value outside typealias 'NonNeg'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect total
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 3
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [r8 + 24], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegImm32 rbx, rax, 0
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.leaRegRegReg r8, r12, rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

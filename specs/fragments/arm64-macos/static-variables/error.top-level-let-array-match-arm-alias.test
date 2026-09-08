@@ -1,0 +1,21 @@
+// Test: error.top-level-let-array-match-arm-alias
+let A = [1, 2]
+var M = [5, 5]
+
+enum Which
+	fixed
+	live
+end 'Which'
+
+function main() returns ExitCode
+	let w = Which.fixed
+	var pick = match w 'w'
+		fixed gives A
+		live gives M
+	end 'w'
+	pick.push(9)
+	return A.count()
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:16:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)

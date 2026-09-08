@@ -1,0 +1,95 @@
+// Test: eleven-live-floats-through-rounding-intrinsics
+typealias Wide = float(f64.min to f64.max)
+
+function scatter(a Wide) returns Wide
+	let v0 = floor(a + 0.5)
+	let v1 = ceil(a + 1.5)
+	let v2 = round(a + 2.5)
+	let v3 = sqrt(a + 3.0)
+	let v4 = floor(a + 4.5)
+	let v5 = ceil(a + 5.5)
+	let v6 = round(a + 6.5)
+	let v7 = sqrt(a + 7.0)
+	let v8 = floor(a + 8.5)
+	let v9 = ceil(a + 9.5)
+	let v10 = round(a + 10.5)
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10
+end 'scatter'
+
+function main() returns ExitCode
+	return trunc(scatter(1.0))
+end 'main'
+---
+ExitCode: 64
+---
+func @scatter {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d1, [rdata + __fconst_0.5]
+    arm64.fadd d1, d0, d1
+    arm64.frintm d1, d1
+    arm64.fpLoadRdata d2, [rdata + __fconst_1.5]
+    arm64.fadd d2, d0, d2
+    arm64.frintp d2, d2
+    arm64.fpLoadRdata d3, [rdata + __fconst_2.5]
+    arm64.fadd d3, d0, d3
+    arm64.frintn d3, d3
+    arm64.fpLoadRdata d4, [rdata + __fconst_3]
+    arm64.fadd d4, d0, d4
+    arm64.fsqrt d4, d4
+    arm64.fpLoadRdata d5, [rdata + __fconst_4.5]
+    arm64.fadd d5, d0, d5
+    arm64.frintm d5, d5
+    arm64.fpLoadRdata d6, [rdata + __fconst_5.5]
+    arm64.fadd d6, d0, d6
+    arm64.frintp d6, d6
+    arm64.fpLoadRdata d7, [rdata + __fconst_6.5]
+    arm64.fadd d7, d0, d7
+    arm64.frintn d7, d7
+    arm64.fpLoadRdata d16, [rdata + __fconst_7]
+    arm64.fadd d16, d0, d16
+    arm64.fsqrt d16, d16
+    arm64.fpLoadRdata d17, [rdata + __fconst_8.5]
+    arm64.fadd d17, d0, d17
+    arm64.frintm d17, d17
+    arm64.fpLoadRdata d18, [rdata + __fconst_9.5]
+    arm64.fadd d18, d0, d18
+    arm64.frintp d18, d18
+    arm64.fpLoadRdata d19, [rdata + __fconst_10.5]
+    arm64.fadd d0, d0, d19
+    arm64.frintn d0, d0
+    arm64.fadd d1, d1, d2
+    arm64.fadd d1, d1, d3
+    arm64.fadd d1, d1, d4
+    arm64.fadd d1, d1, d5
+    arm64.fadd d1, d1, d6
+    arm64.fadd d1, d1, d7
+    arm64.fadd d1, d1, d16
+    arm64.fadd d1, d1, d17
+    arm64.fadd d1, d1, d18
+    arm64.fadd d0, d1, d0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.bl scatter
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at eleven-live-floats-through-rounding-intrinsics.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,90 @@
+// Test: a-float-division-by-a-constant-zero-is-not-folded
+typealias Real = float(f64.min to f64.max)
+
+function pickF(a Real) returns Real
+	return a
+end 'pickF'
+
+function main() returns ExitCode
+	let one = pickF(1.0)
+	if (try (one / pickF(0.0)) otherwise -77.0) != -77.0 'positiveZeroStillThrows'
+		return 1
+	end 'positiveZeroStillThrows'
+	if (try (one / pickF(-0.0)) otherwise -78.0) != -78.0 'negativeZeroStillThrows'
+		return 2
+	end 'negativeZeroStillThrows'
+	if (try (one / pickF(4.0)) otherwise -79.0) != 0.25 'anOrdinaryDivisionStillFolds'
+		return 3
+	end 'anOrdinaryDivisionStillFolds'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+  __il_cont#17:
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+  __il_cont#16:
+    x64.movsdRegRip xmm2, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm1, xmm2
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.movRegReg xmm2, xmm0
+    x64.divsdRegReg xmm2, xmm0, xmm1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok
+  tryerr#2:
+    x64.movsdRegRip xmm1, [rip + __fconst_-77]
+    x64.jmp trycont#3
+  tryok:
+    x64.movRegReg xmm1, xmm2
+  trycont#3:
+    x64.movsdRegRip xmm2, [rip + __fconst_-77]
+    x64.ucomisdRegReg xmm1, xmm2
+    x64.jcc parity, positiveZeroStillThrows
+  fordered#24:
+    x64.jcc equal, ifcont#5
+  positiveZeroStillThrows:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movsdRegRip xmm1, [rip + __fconst_-0]
+  __il_cont#20:
+    x64.divsdRegReg xmm0, xmm0, xmm1
+  tryerr#7:
+    x64.movsdRegRip xmm0, [rip + __fconst_-78]
+  trycont#8:
+    x64.movsdRegRip xmm1, [rip + __fconst_-78]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, negativeZeroStillThrows
+  fordered#25:
+    x64.jcc equal, __il_cont#22
+  negativeZeroStillThrows:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_cont#22:
+    x64.movsdRegRip xmm0, [rip + __fconst_0.25]
+  trycont#13:
+    x64.movsdRegRip xmm1, [rip + __fconst_0.25]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, anOrdinaryDivisionStillFolds
+  fordered#26:
+    x64.jcc equal, ifcont#15
+  anOrdinaryDivisionStillFolds:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,249 @@
+// TypeNameInterner — the id ↔ name table behind `MaxonType.named(TypeNameId)`.
+//
+// The parser never stores a type-name String on an op; it interns the name into
+// this table and stores the resulting `TypeNameId` (a single integer). Identical
+// named references (`ExitCode` used twice) share one id, so structural type
+// identity is a single integer compare and the name backing is stored once.
+//
+// PARSE-STAGING (parallel-ready): each `FileParseArtifact` owns its OWN local
+// interner, populated during that file's parse — so a file's parse touches no
+// shared state (see ParseStaging.maxon). `mergeArtifact` folds a file's local
+// interner into the project's interner in source-path order (`foldInto`),
+// returning a `TypeNameRemap` from the file-local ids to the project-global ids
+// it was assigned, which the merge then applies to the file's ops and registry
+// contributions. For M1 (one file, one named type `ExitCode`) the project
+// interner starts empty, so the fold assigns identical ids and the remap is the
+// identity — but the machinery is real from commit one, per PLAN.md.
+
+// Wide range: the interner is unbounded (one id per distinct named reference).
+// `TypeNameIdArray` is declared beside `TypeNameId` itself, in `IR/Maxon/MaxonDialect.maxon`; this
+// file used to redeclare it identically, which the flat namespace check refuses.
+export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
+
+// Raised when a `TypeNameId` is looked up that this interner never assigned —
+// always a compiler bug (an id must come from the same interner it is resolved
+// against), never user input.
+export union TypeNameInternerError implements Error
+	unknownId(id TypeNameId)
+	// `idOf` was asked for a name this interner never saw — an ANSWER ("no type of that name has been
+	// interned"), not a bug, unlike `unknownId`.
+	unknownName(name ByteArray)
+end 'TypeNameInternerError'
+
+export type TypeNameInterner
+	// id -> name (index is the TypeNameId). The names are zero-copy slices of the
+	// source the parser interned them from, never copies.
+	var names as ByteArrayArray
+	// name -> id, for O(1) interning of an already-seen name.
+	var ids as TypeNameIdMap
+
+	// ⭐ **ID 0 IS THE EMPTY NAME, IN EVERY INTERNER.** `UnnamedTypeId` is the filler a scalar's slot and an
+	// unbranded value's slot carry, and interning the empty name first is what makes that filler a NAME
+	// rather than a collision with whichever real name a file happened to intern first. `foldInto` then
+	// maps it to itself, so a remap needs no special case for it either.
+	export static function create() returns TypeNameInterner
+		var interner = Self{names: ByteArrayArray.create(), ids: TypeNameIdMap.create()}
+		_ = interner.intern(EmptySourceText)
+		return interner
+	end 'create'
+
+	// Intern `name`, returning its stable id. Idempotent: a name already present
+	// returns its existing id without appending a duplicate.
+	export function intern(name ByteArray) returns TypeNameId
+		if let existing = try ids.get(name) 'seen'
+			return existing
+		end 'seen'
+		let id = names.count()
+		names.push(name)
+		ids.upsert(name, value: id)
+		return id
+	end 'intern'
+
+	// Resolve an id back to its name. Throws for an id this interner never
+	// assigned (a compiler bug — see TypeNameInternerError).
+	export function nameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
+		return try names.get(id) otherwise throw TypeNameInternerError.unknownId(id)
+	end 'nameOf'
+
+	// Resolve a NAME to its id WITHOUT interning it — the read-only half of `intern`, for a caller
+	// that has a name and needs the id some id-keyed index is filed under (the generic-instance
+	// registry's by-base buckets). It must be separate from `intern`: interning on a miss APPENDS,
+	// which moves `count()` and every id assigned after it, and those ids reach the emitted mangling —
+	// so a mere lookup by a caller holding a name that is not a type would silently rewrite output.
+	// Unlike `nameOf`'s, this throw is not a compiler bug: "no such type name" is a legitimate answer.
+	export function idOf(name ByteArray) returns TypeNameId throws TypeNameInternerError
+		return try ids.get(name) otherwise throw TypeNameInternerError.unknownName(name)
+	end 'idOf'
+
+	export function count() returns TypeNameId
+		return names.count()
+	end 'count'
+
+	// Fold every name of `source` (a file-local interner) into `self` (the
+	// project interner) in id order, returning the remap from each source id to
+	// the (possibly different) id it was assigned in `self`. The result's
+	// `isIdentity` short-circuits the ops/registry rewrite in `mergeArtifact`
+	// when no ids actually moved (always the case for the first file merged).
+	export function foldInto(source TypeNameInterner) returns TypeNameRemap
+		var mapping = TypeNameIdArray.create()
+		var identity = true
+		for srcId in 0 upto source.names.count() 'each'
+			let name = try source.names.get(srcId) otherwise panic("foldInto: source.names.get OOB at {srcId}")
+			let dstId = self.intern(name)
+			mapping.push(dstId)
+			if dstId != srcId 'moved'
+				identity = false
+			end 'moved'
+		end 'each'
+		return TypeNameRemap.create(mapping, isIdentity: identity)
+	end 'foldInto'
+end 'TypeNameInterner'
+
+// The id translation produced by `TypeNameInterner.foldInto`: `mapping[srcId]`
+// is the project-global id that the source's `srcId` was folded to. `isIdentity`
+// is true when every id maps to itself (the merge can then skip rewriting).
+export type TypeNameRemap
+	var mapping as TypeNameIdArray
+	export let isIdentity as bool
+
+	export static function create(mapping TypeNameIdArray, isIdentity bool) returns TypeNameRemap
+		return Self{mapping: mapping, isIdentity: isIdentity}
+	end 'create'
+
+	// Translate a source-local id to its project-global id.
+	export function apply(srcId TypeNameId) returns TypeNameId
+		return try mapping.get(srcId) otherwise panic("TypeNameRemap.apply: id {srcId} out of range (this remap was built from a smaller interner)")
+	end 'apply'
+end 'TypeNameRemap'
+
+// Rewrite the named-type references a `MaxonType` may carry through a remap.
+// Only the `named` and `structRef` arms are id-bearing; every other arm passes through unchanged.
+// Shared by the artifact's function-signature and registry rewrites at merge.
+export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonType
+	return match t 'r'
+		boolean gives t
+		integer gives t
+		float gives t
+		exitCode gives t
+		named(id) gives MaxonType.named(remap.apply(id))
+		unresolved gives t
+		// A struct reference carries a name id for the same reason `named` does — it is the key
+		// `StructLayoutMap` is read by — so it moves through a merge for the same reason and by the
+		// same rule. Missing it would leave a `Point` reference in a second file indexing the
+		// project interner at whatever name happened to take that id first.
+		structRef(id) gives MaxonType.structRef(remap.apply(id))
+		// A `String` builtin carries no name id, so a merge's id remap has nothing to rewrite — like a
+		// primitive, it passes through unchanged.
+		string gives t
+		// A function value carries a name id (its governing function/alias name) for the same reason
+		// `named`/`structRef` do, so it moves through a merge by the same rule — remap the id.
+		function(id) gives MaxonType.function(remap.apply(id))
+		// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param TOKEN and a
+		// `GenericInstanceId` keyed on the whole-program registry, NOT a per-file interner id — so a
+		// merge's id remap has nothing to rewrite: they pass through unchanged, like a primitive.
+		// Remapping the id (as `named` does) would corrupt the token / instance key.
+		//
+		// ⚠ **THE REASON THE TOKEN IS GLOBAL CHANGED AT W14, AND THE CONCLUSION DID NOT.** It used to be a
+		// POSITION, global because every declaration numbers its parameters from zero — which is also why
+		// two declarations' first parameters were one value, the defect W14 removed. It is now a DIGEST of
+		// `(declaringTypeName, paramName)` (`ProgramSignatures.typeParamTokenFor`), global because it is a
+		// pure function of source text and so is computed identically by every file, the tolerant sweep and
+		// the real parse alike. Both spellings are interner-independent; only the second is injective.
+		typeParameter gives t
+		genericInstance gives t
+		// A Character carries no interner id (its identity is the tag), so a merge's remap has nothing
+		// to rewrite — it passes through unchanged, exactly as `string` does.
+		character gives t
+		// An existential carries the interned INTERFACE name — a per-file interner id exactly as `named`'s
+		// is — so a merge's id remap must rewrite it, or the dispatch would resolve its method slot against
+		// whatever name the pre-merge id folded to.
+		interfaceRef(id) gives MaxonType.interfaceRef(remap.apply(id))
+		cstring gives t
+	end 'r'
+end 'remapMaxonType'
+
+// `remapMaxonType` folded over a LIST of types — a function's parameter column, a struct's field column, a
+// swept declaration's parameter types. TWO callers had written this loop out by hand (`remapArtifact` and
+// `remapStructLayoutFieldTypes`) and the swept parameter column would have been a third; the rule all three
+// rest on is stated at `remapStructLayoutFieldTypes` (every arm is TAG-PRESERVING), and it is worth exactly
+// once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
+// LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
+export function remapMaxonTypes(types MaxonTypeArray, remap TypeNameRemap) returns MaxonTypeArray
+	var remapped = MaxonTypeArray.create()
+	for t in types 'each'
+		remapped.push(remapMaxonType(t, remap: remap))
+	end 'each'
+	return remapped
+end 'remapMaxonTypes'
+
+// Rewrite the name id of ONE entry of a dense per-value type column (`IrFunction.valueNameIds`)
+// through a remap, TAG-AWARE — the column half of a `MaxonType` that `remapMaxonType` cannot reach,
+// because the value's type is carried as the parallel (tag, nameId) columns the parser keeps rather
+// than a materialized union.
+//
+// ⚠ A scalar's slot holds the `UnnamedTypeId` FILLER, not a real name — so it must NOT be remapped:
+// `remap.apply(0)` would rewrite the filler to whatever id 0 folded to (a real name), and a later
+// reader gated on a name-bearing tag would then resolve a wrong name. Reconstructing the `MaxonType`
+// from the tag and running it through `remapMaxonType` is what makes this filler-safe WITHOUT a second
+// copy of "which tags bear names": `typeNameIdOf` already encodes it, and this is its exact inverse
+// composed with the remap. `void` names no value (its slot is filler too) and `maxonTypeOfTag` panics
+// on it, so it short-circuits.
+export function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap TypeNameRemap) returns TypeNameId
+	if tag == ValueTypeTag.void 'void'
+		return nameId
+	end 'void'
+	return typeNameIdOf(remapMaxonType(maxonTypeOfTag(tag, nameId: nameId), remap: remap))
+end 'remapValueNameId'
+
+// Rewrite the named-type id a `MaxonReturnType` may carry (its `value` inner).
+export function remapMaxonReturnType(rt MaxonReturnType, remap TypeNameRemap) returns MaxonReturnType
+	return match rt 'r'
+		void gives rt
+		value(inner) gives MaxonReturnType.value(remapMaxonType(inner, remap: remap))
+	end 'r'
+end 'remapMaxonReturnType'
+
+// Rewrite a declared struct's field types through a remap, IN PLACE.
+//
+// Two callers reconcile a file's struct layouts into a bigger table — `mergeArtifact`'s
+// `remapArtifact` (into `Project`) and `ProgramSignatures.foldFile` (into the signature index) —
+// and they must not come to disagree about what a field's declared type means. One mechanism, two
+// callers, exactly as `foldInto` + `remapMaxonReturnType` already are for a signature.
+//
+// It mutates rather than returning a copy because `StructLayout` is a heap `type` and both callers
+// own the array they are folding: rebuilding the record would allocate a second layout per declared
+// type to hold data neither caller keeps. The struct's NAME needs no remap — it is a `ByteArray`,
+// and names travel (see SignatureIndex's header on the id problem).
+//
+// ⚠ **THE HAND-OFF IS `StructLayout.replaceFieldTypes` AND NOT A BARE ASSIGNMENT, BECAUSE THE LAYOUT NOW
+// CACHES GEOMETRY DERIVED FROM THIS COLUMN** (`fieldOffsets`/`slotBytes`, the two-slot prefix sum of
+// P1.7a-existentials slice 2). This function is the THIRD writer of `fieldTypes` — the header over those
+// columns asserted there were only two — and it wrote the column without rebuilding them. It was harmless
+// only because `remapMaxonType` is TAG-PRESERVING in every arm, which is a property of the function above
+// that nothing here states and nothing checks; a single arm that changed a tag would move a field's slot
+// count and every later field in that struct would read one slot short, silently. Handing the column back
+// through the type that owns it is what makes the rebuild unmissable rather than remembered.
+export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeNameRemap)
+	layout.replaceFieldTypes(remapMaxonTypes(layout.fieldTypes, remap: remap))
+end 'remapStructLayoutFieldTypes'
+
+// Rewrite a declared union/enum's PAYLOAD field types through a remap, IN PLACE — the enum twin of
+// `remapStructLayoutFieldTypes`, and it exists for the identical reason: a payload field declared
+// `walk(dir Direction)` carries a `named(Direction)` id into the file-local interner, and a merge
+// that moves ids leaves it pointing at whatever name took that id first. `PayloadField` is an
+// immutable record (`let` fields), so a rebuilt array of rebuilt fields replaces the column rather
+// than mutating each in place — the `remapArtifact` interner rule (build fresh, assign) applied one
+// registry deeper. Both callers that reconcile a file's enum layouts into a bigger table
+// (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
+// the two cannot disagree about what a payload's declared type means.
+export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeNameRemap)
+	var remappedCases = PayloadFieldArrayArray.create()
+	for casePayloads in layout.casePayloads 'eachCase'
+		var remappedFields = PayloadFieldArray.create()
+		for field in casePayloads 'eachField'
+			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand))
+		end 'eachField'
+		remappedCases.push(remappedFields)
+	end 'eachCase'
+	layout.casePayloads = remappedCases
+end 'remapEnumLayoutPayloadTypes'

@@ -1,0 +1,98 @@
+// Test: extension-body-inner-alias-builds-the-container
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+interface Tagged
+	function tag() returns ExitCode
+end 'Tagged'
+
+export extension Tagged
+	typealias TagArray = Array with ExitCode
+
+	export function tags() returns Count
+		var result = TagArray{}
+		result.push(self.tag())
+		return result.count()
+	end 'tags'
+end 'Tagged'
+
+type Box implements Tagged
+	export var v as ExitCode
+
+	export static function create() returns Self
+		return Self{v: 2}
+	end 'create'
+
+	export function tag() returns ExitCode
+		return self.v
+	end 'tag'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let c = b.tags()
+	if c == 1 'ok'
+		return 6
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.tags {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+  __il_cont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.leaRegSlot rcx, slot0
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.callDirect Box.tags
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

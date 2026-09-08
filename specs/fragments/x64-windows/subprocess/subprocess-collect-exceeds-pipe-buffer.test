@@ -1,0 +1,290 @@
+// Test: subprocess-collect-exceeds-pipe-buffer
+function main() returns ExitCode
+	// A child writing FAR more than one OS pipe buffer (65,536 bytes on macOS,
+	// ~4 KiB on Windows), on BOTH streams at once. 20,000 numbered lines is
+	// ~108 KB per stream. The child blocks in write() the moment the buffer
+	// fills, so the parent has to be reading both streams WHILE it waits for the
+	// child to exit: a runtime that waits first and drains afterwards deadlocks
+	// here, and one that drains stdout to EOF before touching stderr deadlocks on
+	// whichever stream it left alone. Both were real (arm64-macOS reported the
+	// deadlock as the caller's timeout).
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("(for /L %i in (1,1,20000) do @echo %i) & (for /L %j in (1,1,20000) do @echo %j 1>&2)")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("i=1; while [ $i -le 20000 ]; do echo $i; echo $i 1>&2; i=$((i+1)); done")
+	#endif
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
+	if not result.succeeded() 'check-success'
+		return 3
+	end 'check-success'
+	// Well past the largest pipe buffer either host uses, so neither count can be
+	// satisfied by a single buffer's worth of output.
+	if result.stdout.byteLength() < 100000 'check-stdout-size'
+		return 4
+	end 'check-stdout-size'
+	if result.stderr.byteLength() < 100000 'check-stderr-size'
+		return 5
+	end 'check-stderr-size'
+	// The LAST line, which only arrives if the capture ran to the child's exit
+	// rather than stopping at the first buffer.
+	if not result.stdout.contains("20000") 'check-stdout-tail'
+		return 6
+	end 'check-stdout-tail'
+	if not result.stderr.contains("20000") 'check-stderr-tail'
+		return 7
+	end 'check-stderr-tail'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __io_iocp@248 = i64 0
+  __io_done_event@256 = i64 0
+  __io_init_done@264 = i64 0
+  __io_pending@272 = i64 0
+  __io_pipe_seq@280 = i64 0
+  __subp_table@288 = i64 0
+  __subp_last_error@296 = i64 0
+  __slab_arena_list@304 = i64 0
+  __slab_arena_map_l1@312 = i64 0
+  __slab_state@320 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_27]  ; "cmd"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_28]  ; "/c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; "(for /L %i in (1,1,20000) do @echo %i) & (for /L %j in (1,1,20000) do @echo %j 1>&2)"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect Subprocess.run
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect CollectedOutput.succeeded
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#4
+  check-success:
+    x64.movRegImm32 r14, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#15
+  __il_slow#16:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont#13
+  __rc_ok#15:
+    x64.movRegReg r8, rax
+  __il_cont#13:
+    x64.cmpRegImm32 r8, 100000
+    x64.jcc greaterEqual, ifcont#6
+  check-stdout-size:
+    x64.movRegImm32 r14, 4
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 16]
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#19
+  __il_slow#20:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont#17
+  __rc_ok#19:
+    x64.movRegReg r8, rax
+  __il_cont#17:
+    x64.cmpRegImm32 r8, 100000
+    x64.jcc greaterEqual, ifcont#8
+  check-stderr-size:
+    x64.movRegImm32 r14, 5
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+    x64.leaRegRdata rdx, [rip + __str_rec_30]  ; "20000"
+    x64.callDirect String.contains
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#10
+  check-stdout-tail:
+    x64.movRegImm32 r14, 6
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 16]
+    x64.leaRegRdata rdx, [rip + __str_rec_30]  ; "20000"
+    x64.callDirect String.contains
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#12
+  check-stderr-tail:
+    x64.movRegImm32 r14, 7
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Executable
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

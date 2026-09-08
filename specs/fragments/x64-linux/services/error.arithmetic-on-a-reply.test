@@ -1,0 +1,24 @@
+// Test: error.arithmetic-on-a-reply
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let bumped = p + 1
+	print("bumped {bumped}")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E2004: <fragment>:17:17: Cannot operate on struct and int

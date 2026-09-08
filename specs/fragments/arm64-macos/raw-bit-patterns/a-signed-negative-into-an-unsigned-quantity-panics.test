@@ -1,0 +1,33 @@
+// Test: a-signed-negative-into-an-unsigned-quantity-panics
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function main() returns ExitCode
+	let c = opaque(-1) as Count
+	print("{c}\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-signed-negative-into-an-unsigned-quantity-panics.test:10: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

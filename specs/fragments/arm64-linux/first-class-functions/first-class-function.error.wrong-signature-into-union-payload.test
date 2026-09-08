@@ -1,0 +1,29 @@
+// Test: first-class-function.error.wrong-signature-into-union-payload
+
+typealias Integer = int(i64.min to i64.max)
+typealias OneArg = function(Integer) returns Integer
+
+union Box
+	held(f OneArg)
+	empty
+end 'Box'
+
+function twoArg(a Integer, b Integer) returns Integer
+	return a + b
+end 'twoArg'
+
+function call(x Box) returns Integer
+	return match x 'm'
+		held(f) gives f(7)
+		empty gives 0
+	end 'm'
+end 'call'
+
+function main() returns ExitCode
+	let v = call(Box.held(twoArg))
+	print("v={v}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:23:19: function type mismatch storing into union payload 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'

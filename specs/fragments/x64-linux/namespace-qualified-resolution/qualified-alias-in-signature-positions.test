@@ -1,0 +1,86 @@
+// Test: qualified-alias-in-signature-positions
+// --- file: lib/inner/deep.maxon
+typealias Integer = int(0 to 125)
+
+export function from(v Integer) returns Integer
+	return v + 1
+end 'from'
+
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: app/main.maxon
+function take(v api.Score) returns api.Score
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let a = take(41 as api.Score)
+	return lib.inner.from(a)
+end 'main'
+---
+ExitCode: 42
+---
+func @from {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 125
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at deep.maxon:3: Range check failed: value outside typealias 'Integer'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at deep.maxon:4: Range check failed: value outside typealias 'Integer'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 41
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#9:
+    x64.cmpRegImm32 rcx, 125
+    x64.jcc greater, __il_slow
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk#11:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect from
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

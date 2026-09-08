@@ -1,0 +1,1850 @@
+// InsertRangeChecks — the P1.9 ranged-typealias guard pass. A Std→Std pass that turns the parser's
+// recorded range-check sites (`project.rangeChecks`) into the compile-time E3005s and runtime panics a
+// ranged typealias promises at EVERY position a value meets one: a narrowing `as` cast, a ranged
+// `return`, a struct-literal field, a field store, a field's declared default, an array element and a
+// call argument. It runs right after `lowerMaxonToStd`, before the other Std passes.
+//
+// ⚠ **WHICH HALVES A POSITION OWES IS `RangeCheckGuard`'S TO SAY, NOT THIS PASS'S.** The compile-time
+// E3005 is owed EVERYWHERE and is raised by the one decision function (`needsRuntimeGuard`); the runtime
+// cascade is skipped at exactly ONE position, the CALL ARGUMENT AT A CONCRETE PARAMETER, whose alias is not
+// known where the argument is written and whose runtime half is therefore enforced at the callee's entry
+// instead. An argument at an OPAQUE `T` parameter has no such entry to be enforced at — the body is
+// compiled once and knows no range — so it records an ordinary alias-named site and takes both halves here
+// (ARRR, `Parser.recordOpaqueArgRangeChecks`).
+//
+// ⭐ **A CALL ARGUMENT USED TO BE ON THAT LIST, AND A1f TOOK IT OFF — BY MOVING THE GUARD, NOT BY
+// DEFEATING THE OBSTACLE.** The obstacle is real and unchanged: a check is a BRANCH, so a guard emitted
+// where the argument is WRITTEN lands past the call with the callee already run. The cure is that the
+// argument door's runtime half belongs to the CALLEE'S ENTRY — one guard per narrowed parameter per
+// function, in front of every caller including the indirect ones — so the argument site keeps owing only
+// the compile-time half and the premise is enforced all the same. See `guardRangedParams`.
+//
+// ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
+// primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
+// only way to add one at the Maxon tier is a new `MaxonOp` variant, which forces a fresh arm into EVERY
+// exhaustive `MaxonOp` match, including the escape-analysis functions in `SemanticCheck.maxon` /
+// `FnRefThunk.maxon` that the closures/async rung owns and is actively editing. So the guard is emitted
+// HERE instead, where the panic is a PLAIN `StdOp.call` to the `mrt_panic` runtime chunk (no new op in
+// any dialect) and the compare cascade is the ordinary `cmp`/`condBranch` the tier already carries. The
+// cast alias name and source spans — which the Std tier's ops do not carry — ride the parser's
+// `project.rangeChecks` side table instead of an op.
+//
+// ⭐ ONE GUARD EMITTER, one unsigned strategy, one panic-message builder, serving BOTH the cast sites and
+// the return sites (`emitGuardAt`). Two emitters drift on unsigned handling; here there is one.
+//
+// ⚠ SIGNED COMPARES, in a CASCADE — and the CASCADE's reason and the SIGNED's reason are two different
+// facts. The cascade is because the Std tier has no `setcc`: a bound's verdict can only be a `cmp` fused
+// into a `condBranch`, one block per bound, never a `cmp`+`cmp`+`or` over materialized bools.
+//
+// ⛔ **THE "SIGNED" HALF USED TO SAY "the compiler's Std tier has NO UNSIGNED INTEGER COMPARE (`StdCmpPred` is
+// signed only)", AND THAT IS FALSE.** `StdCmpPred` carries no signedness either way; the compare's
+// `operandType` does, since upstream's X11 (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and
+// all three backends read it. What is true is that the checks below CHOOSE signed, and the choice is
+// deliberate — see the paragraph after next for the `int(N>0 to u64.max)` shape that depends on it.
+//
+// ⚠ **AND THAT MAKES A ONE-COMPARE FORM POSSIBLE FOR THE ORDINARY SHAPE, WHICH THIS PASS DOES NOT TAKE
+// AND WHICH IS FILED RATHER THAN ASSUMED.** For a range whose bounds are both representable,
+// `(value - lo) >u (hi - lo)` is the whole two-bound test in one unsigned compare — the same idiom
+// `ManagedMemoryRuntime.BoundsCompareOperandType` took for the array guard (row `A2`), which measured
+// 7 x64 instructions down to 2 there. It is NOT a comment-only change here: the subtraction is an extra
+// op, the `u64` relabelling has a precondition of its own (`hi - lo` must not wrap, which needs the
+// bound ARITHMETIC checked and not just the bounds), and the unsigned-max-upper shape below must be
+// exempted by name. Measure it before building it.
+//
+// A check usually branches to the shared panic on violation; the one exception is the unsigned-max-upper
+// shape's sign check, whose TRUE edge is IN RANGE (see `RangeCheckEdge`). Signed compares give the
+// correct in/out verdict for every ordinary range, and for the `int(N>0 to u64.max)` shape they give the
+// correct UNSIGNED verdict — see `TypeRules.rangeIsUnsignedMaxUpper` / `boundChecks`.
+
+// Where a cascade check's TRUE edge (the predicate SATISFIED) goes. Almost every check means
+// "out of range past this bound", so its true edge is the shared `panic`. The one exception is
+// the unsigned-max-upper shape's FIRST check (`value < 0`), whose satisfied predicate proves the
+// value is a huge unsigned that the range ADMITS — its true edge is `inRange`, jumping past the
+// remaining checks to the ok block.
+enum RangeCheckEdge
+	panic
+	inRange
+end 'RangeCheckEdge'
+
+// One bound of a range check: the predicate that means "the check FIRED past this bound", the bound
+// itself, and where a fired check leads. `lt`/`lo` for the lower bound (panic when `value < lo`),
+// `gt`/`hi` for the upper — both leading to `panic`. `create` builds the common panic-edge check;
+// `createInRange` the one check whose satisfied predicate means IN range (see `RangeCheckEdge`).
+type RangeBoundCheck
+	export var pred as StdCmpPred
+	export var bound as ParsedInt
+	export var onTrue as RangeCheckEdge
+
+	static function create(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic}
+	end 'create'
+
+	static function createInRange(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange}
+	end 'createInRange'
+end 'RangeBoundCheck'
+
+typealias RangeBoundCheckArray = Array with RangeBoundCheck
+
+// The op list each guarded block held BEFORE its first guard split it, one entry per block id — see
+// `RangeCheckEmitter.guardChainSource`. A row is filled the moment a split takes that block's list
+// away from it; every other row stays the empty list the column was created with.
+typealias PreSplitOpsByBlock = Array with OpIndexArray
+
+// A guard's insertion point: the block to split and the `opRefs` position to split it at (ops before
+// stay in the head, ops from here on move to the continuation). The position is what makes the guard
+// fire AT its site rather than at the end of its block — see `guardSiteAt`.
+type GuardSite
+	export var block as IrBlock
+	export var position as BlockOpPos
+
+	static function create(block IrBlock, position BlockOpPos) returns GuardSite
+		return Self{block: block, position: position}
+	end 'create'
+end 'GuardSite'
+
+// ⭐ WHICH CHAIN THE EMITTED GUARD EXTENDS — the one thing an alias-named site owes after its split
+// that a `return` site does not. Every guard in ONE source block splits that block, so the k-th guard
+// must anchor inside the (k-1)-th's continuation; anchoring them all in the ORIGINAL head instead
+// threads the cascades in REVERSE (see `guardSiteAt`). An alias-named site therefore moves its block's
+// chain end — and its chain BASE, the offset that continuation begins at — to its own continuation. A
+// `return` site records neither, and the reason is that IT HAS NO CHAIN TO RECORD: a block carries
+// exactly ONE terminator, so a block holds at most one live `ret` and therefore owes at most one return
+// guard. A return site READS the chain (`retBlockOf` resolves its recorded block to the chain end an
+// alias-named guard may have moved its `ret` onto) and does not extend it — and that asymmetry is what
+// makes "this block's `ret` is already guarded" derivable rather than tracked: the split leaves a
+// CONDITIONAL BRANCH where the `ret` was, so a second site naming the same block finds no `ret` of its
+// own — a program E3071 has refused at the parse since W118 (see `RetBlockLookup`).
+union GuardChain
+	blockChain(blockId BlockId)
+	retChain
+end 'GuardChain'
+
+// What the shared site rule answers (`guardVerdict`): whether the RUNTIME half is owed, and against
+// WHICH range. A union rather than a bool beside an alias, because "no guard" has no range to hand back
+// — the two `noGuard` reasons are a full-range alias and a value settled at compile time, and neither
+// leaves an alias for a caller to misread.
+union RangeGuardVerdict
+	noGuard
+	guard(alias RangedTypeAlias)
+end 'RangeGuardVerdict'
+
+// ⭐⭐ **WHAT THE CASCADE COMPARES: THE VALUE ITSELF, OR WHAT A BY-REFERENCE PARAMETER'S CELL HOLDS.**
+//
+// A parameter its callee REASSIGNS arrives as the ADDRESS of a caller-owned cell (PBR-2 —
+// `IrFunction.reassignedParamMask`, and `LowerMaxonToStd`'s `stdTypeOf` types that slot `i64` for exactly
+// this reason). Its `param` op's ValueId therefore holds a POINTER, and the entry guard was comparing THAT
+// against the declared bounds: `function bump(n Int)` over `typealias Int = int(0 to 1000000)` panicked
+// *"value outside typealias 'Int'"* on every call, because a heap address is not in `0 to 1000000`. The
+// bounds describe what the CALLER passed, which lives one dereference away.
+//
+// ⚠ **A FULL-RANGE ALIAS HID IT, AND THAT IS WHY IT READ AS A TYPE PROBLEM RATHER THAN AN ABI ONE.** A
+// `int(i64.min to i64.max)` parameter is `noGuard` (`rangeIsFull`), so the identical program with a wide
+// alias ran correctly — the split was never between two types, it was between guarded and unguarded.
+//
+// It is a union rather than a bool beside a ValueId because the two carry different things: `asIs` names
+// the value to compare, while `pointeeOf` names an address whose loaded contents do not exist yet and are
+// minted by the guard itself.
+union GuardedOperand
+	asIs(value ValueId)
+	pointeeOf(cell ValueId)
+end 'GuardedOperand'
+
+// The block whose terminator is this site's own `ret` — the return site to guard.
+//
+// ⭐⭐ **W118 CLOSED TWO OF `notFound`'s CAUSES AND MEASURED A FOURTH THAT IS STILL OPEN.** `notFound`
+// means "this site's `ret` is not there any more". Two of its causes were the same program shape — a
+// second `return` in ONE block, which compiled only because the compiler did not emit E3071, a block holding ONE
+// terminator in a slot `setTerminator` overwrites:
+//
+//   * `return n` twice ⇒ the second `setTerminator` overwrote the first with an identical `ret(n)`, the
+//     FIRST site guarded it, and that guard left a conditional branch where the `ret` stood — so the
+//     second site found no `ret`.
+//   * `return a` then `return b` ⇒ the block's terminator was `ret(b)`, so site `a` found a `ret` naming
+//     a value that was not its own.
+//
+// **Both are refused at the parse** (`ParseError.unreachableCode`, plus the structural backstop in
+// `ParseStaging.emitTerminator`). Neither can reach here again.
+//
+// ⛔⛔ **BUT THE SKIP STAYS, BECAUSE TURNING IT INTO A PANIC IMMEDIATELY FOUND A FOURTH CAUSE ON ORDINARY
+// SOURCE — A RETURN WHOSE VALUE IS *PROMOTED* AT THE HAND-OFF.** MEASURED: with the panic in place the
+// whole `specs` suite raised it exactly once, on
+// `array-declared-record/the-self-spelling-of-a-corpus-served-member-reaches-the-same-body`, in a
+// corpus-declared `Array.at` whose `returns Num` body hands back an opaque `Element`.
+// `parseCheckedValueReturn` records the site's ValueId BEFORE calling `emitOwnedValueReturn`, which
+// SHADOWS the name: `coOwnBorrowedOpaque` (and `promoteBorrowedToOwned`) replaces the value, and it is
+// the REPLACEMENT the `ret` terminator carries. So `retMatchesValue` correctly answers `false` about a
+// perfectly ordinary program, and the guard the pass had already decided it needed is dropped in
+// silence. The surrounding comment at that push site states the opposite premise — *"a ranged int return
+// is never an owned value, so `emitOwnedValueReturn` passes it through unwrapped"* — which a corpus
+// GENERIC body falsifies, its declared return being a ranged alias while its value's tag is
+// `typeParameter`.
+//
+// ⛔ **AND IT IS A LIVE WRONG ANSWER, not merely a dead cascade dropped.** In the corpus case the element
+// type IS the declared alias, so the lost guard could not have fired; widen the instance and it can.
+// MEASURED: a `Holder uses Element` whose `narrowedAt(i) returns Num` reads `try managed.get(i)`, held as
+// `Holder with Wide` (`Num = int(0 to 1000)`, `Wide = int(0 to 100000)`), pushed `5000` and PRINTED
+// `5000` — where every non-promoted spelling of the same narrowing panics *"Range check failed: value
+// outside typealias 'Num'"*. **Its fix is its own rung**, because it is not one line: recording what the
+// `ret` actually carries is the mechanical half, and the other half is a design question with a cost —
+// whether an opaque `T`'s range is provable from the enclosing instance, or whether every corpus generic
+// body gains a cascade that can never fire. Reported to the coordinator, not fixed here.
+//
+// ⚠ **G14 IS WHY THE SKIP IS THE COST IT IS, NOT A REASON TO KEEP IT COMFORTABLY.** A `throws` function's
+// `return` leaves through `errorReturn`, `retMatchesValue` did not recognise it as a return, and so EVERY
+// ranged return in EVERY throwing function came back `notFound` and was dropped here — a wrong answer on
+// ordinary source, absorbed in silence. The set of Std terminators that RETURN A VALUE is still written
+// twice — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
+// which has no reader in the compiler) — and the two are held in agreement by hand. `retMatchesValue`'s
+// match is exhaustive, so a NEW variant is a compile error there; what defeated it was a variant that
+// already existed being swept into a RANGE arm, which exhaustiveness cannot see. ⇒ **The panic is the
+// right end state and the fourth cause is the one thing standing between here and it.**
+union RetBlockLookup
+	notFound
+	found(block IrBlock)
+end 'RetBlockLookup'
+
+// The parameter alias a call-argument site resolves to, once the callee's own `FunctionRangeChecks` is
+// in hand: the alias NAME, and the FILE whose declaration of it applies — the CALLEE's, never the
+// caller's (`RangedAliasRegistry` resolves a name per declaring file, and a parameter's range is the one
+// visible where the function was written).
+union ParamAliasLookup
+	none
+	found(aliasName ByteArray, declFilePath FilePath)
+end 'ParamAliasLookup'
+
+// Run the pass over every function that has recorded range-check sites. Functions with none are skipped
+// without touching their blocks.
+export function insertRangeChecks(project Project, module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED, AND THE REASON IS NOT MERELY
+		// WASTED WORK — IT IS THE LOADER'S BYTE-NEUTRALITY INVARIANT (P1.8 Slice E).** Dead-function
+		// elimination drops such a function before the back end, so its guard blocks never reach isel; but
+		// this pass registers the guard's PANIC MESSAGE as an `.rdata` constant
+		// (`emitPanicBlock` → `registerStringBlob`), and DFE prunes FUNCTIONS, never `.rdata`. The blob
+		// therefore survives its own function — and `GlobalDataTable.nextStringId` is ONE counter shared by
+		// every rdata prefix, so a surviving blob RENUMBERS every later `__str_blob_`/jump-table label in the
+		// program. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left the
+		// counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two
+		// prefixes that remain.)
+		//
+		// ⚠ MEASURED, and it is exactly what `StdlibLoader`'s "adding a module to `stdlib/` changes NOTHING for
+		// a program that does not reach it" forbids: bringing `helpers/string/utf16.maxon` into the load — whose
+		// `utf16LeadSurrogate`/`utf16TrailSurrogate` each `return` a computed value through a ranged
+		// `CodeUnit16` — moved a two-float program from `__fconst_0`/`__fconst_1` to `__fconst_2`/`__fconst_3`
+		// and shifted **193 committed goldens** across the suite, for two functions nothing calls. ⚠ THAT
+		// MEASUREMENT PREDATES VALUE-NAMED FLOAT LABELS and its two-float program would no longer move; the
+		// same arrival would move the `__str_blob_`/`__jumptable_` labels beside them instead. Kept as
+		// measured — the mechanism it demonstrates is what this skip exists for, and the prefixes it can
+		// still reach are the ones the case below names.
+		//
+		// It is the SAME reachability fact `SemanticCheck.checkCalls` skips on and `scanRuntimeUsage` is
+		// handed, stated the same way — never "is this whitelisted", which would not have outlived the filter.
+		// ✅ That prediction is CASHED: the whitelist has been deleted and this skip did not move. A
+		// REACHABLE stdlib function is not in the set, so its guards and its compile-time E3005 are emitted
+		// exactly as before, and no user function is ever in it.
+		//
+		// ⚠⚠ **THIS SHUTS ONE DOOR ONTO `nextStringId`; THERE ARE THREE, AND THE OTHER TWO ARE BOTH
+		// `lowerMaxonToStd`'s — A1s SHUT ONE AND W69 THE OTHER.** ⛔ This paragraph said "the OTHER ONE" for
+		// six rungs and the count was WRONG, which is this project's signature bug with a number as the
+		// fact: `registerProgramLiteralBlobs` runs EARLIER THAN EITHER of the two named here and had no
+		// reachability test at all, so it registered the very blob they exist to prevent. Found when
+		// `stdlib/Json.maxon` joined the load: its `export var stringValue as String = ""` mints a nullary
+		// field-default helper, and a `return 7` program grew a `.rdata` SECTION it had never had (5,567 ⇒
+		// 6,115 bytes on disk, `codeBytes` unmoved at 1,592, 13 committed goldens shifted by one label).
+		// `registerProgramLiteralBlobs` is the gate.
+		//
+		// The door A1s shut runs one pass EARLIER than this one and is equally pre-elimination, and its
+		// `lowerStringLiteral`/`lowerConstArrayLiteral` registered `.rdata` for the body of ANY function —
+		// including a stdlib function no path from `main` reaches. It was MEASURED when filed (an
+		// unreachable string-returning function appended to `stdlib/helpers/string/utf16.maxon` moved a
+		// two-float program's md5 `765a309c…` → `57d2a6cd…`, the literal's blob displacing both float
+		// payloads — an OFFSET shift, which value-named labels do not prevent), and it came DUE the moment
+		// `stdlib/Builtins.maxon` joined the load — the first module carrying literals to do so — which moved
+		// **317 committed goldens**. `lowerMaxonToStd` now skips an
+		// unreachable stdlib BODY with this same test, stated the same way, and `eliminateDeadFunctions`
+		// PROVES the skip (`requireUnreachableStdlibStayedDead`) rather than assuming it.
+		//
+		// ⚠ **THE CLASS IS NOT CLOSED — only the three PRE-ELIMINATION doors are.** A dead `.rdata` payload
+		// registered by a REACHABLE function is untouched, and so is the debt
+		// `DeadFunctionElimination`'s header files — *"it prunes FUNCTIONS, never `.rdata`. Dead-`.rdata`
+		// elimination is a separate rung with its own goldens"*. What holds today is narrower and exact: no
+		// pass that runs before elimination lets a function the program cannot reach register anything.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+		if not project.rangeChecks.contains(func.name) 'noChecks'
+			continue
+		end 'noChecks'
+		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func)
+		emitter.run(checks)
+	end 'eachFunc'
+end 'insertRangeChecks'
+
+// The `guardChainTail` an emitter starts with, SHARED and never mutated — `guardSiteAt` REPLACES
+// the field with a freshly built index rather than filling this one.
+//
+// ⚠ It is shared for the reason `Parser`'s `sharedEmptyInstanceAliasNames` is: an emitter is built for
+// every function carrying ANY range-check side data, which includes every function that merely passes a
+// constant argument or constructs a generic instance, so an unconditional `ValueIdArray.create()` in
+// `create` is one allocation per such function across the whole program. MEASURED on the scale ladder:
+// as a per-emitter `create()` it cost +45 / +66 / +108 / +192 / +360 / +696 allocations across the six
+// rungs — a linear cost, but a real one, paid entirely by functions that never emit a guard. Only ONE
+// function in the whole generated corpus ever builds a real index (`scaleCoverCast`).
+let sharedEmptyGuardChainTail = ValueIdArray.create()
+
+// The `guardChainBase` companion to it, shared for the identical reason and replaced in the identical
+// place — the three chain columns are built together and are empty together, so
+// `guardChainTail.isEmpty()` is the one test that decides for all of them.
+let sharedEmptyGuardChainBase = BlockOpPosArray.create()
+
+// One pre-split op list per block id — see `RangeCheckEmitter.guardChainSource`. Shared and replaced
+// exactly as the two columns above are.
+let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
+
+// Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
+// ops draw from (seeded past every id the function already uses).
+type RangeCheckEmitter
+	var project as Project
+	var module as StdModule
+	var func as IrFunction
+	var nextId as ValueId
+	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
+	// number, a float `const`'s is an IEEE-754 bit pattern, and the two must never be read as each
+	// other. Filled by `collectConsts` at the top of `run`; a site consults the map that matches its
+	// alias's domain, so a domain mismatch simply is not a literal and falls through to the runtime
+	// guard — see `needsRuntimeGuard`.
+	var intConsts as ConstValueMap
+	var floatConsts as ConstValueMap
+	// ⭐ **WHICH OF THIS FUNCTION'S CONSTANTS THE SOURCE WROTE AS NEGATIVE NUMBERS** — the one fact about a
+	// constant that this tier cannot recover from the constant, because `-1`, `u64.max` and
+	// `0xFFFFFFFFFFFFFFFE` are the same 64 bits. Handed over by the parser on `FunctionRangeChecks` and
+	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
+	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
+	var writtenNegativeLiterals as ValueMarkColumn
+	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
+	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
+	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
+	// minted, so the next guard in that source block lands after it rather than before it. Starts as the
+	// SHARED empty one and is REPLACED by a real index on first use — see `sharedEmptyGuardChainTail`
+	// and `guardSiteAt`.
+	var guardChainTail as ValueIdArray
+	// ⭐ **WHERE EACH CHAIN-END BLOCK BEGINS, IN ITS ORIGINAL BLOCK'S COORDINATES** — one position per
+	// block id, and the other half of what makes site positions and the guard CHAIN compose. A site's
+	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the
+	// LOWERING left it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the
+	// continuation at `position - base`, where `base` is where the last split cut. Zero until a block's
+	// first guard splits it, and moved to the split point by every split after that. Built and shared
+	// exactly as `guardChainTail` is — the three chain columns are one index in three columns, so one
+	// `isEmpty` decides all of them.
+	var guardChainBase as BlockOpPosArray
+	// ⭐⭐ **THE OP LIST EACH GUARDED BLOCK HELD BEFORE ITS FIRST GUARD SPLIT IT — THE ONE LIST EVERY
+	// SEGMENT OF ITS CHAIN IS CARVED OUT OF, AND THE REASON THIS PASS IS LINEAR IN ITS BYTES.** A
+	// chain-end block is carved by copying out the ops between the previous split point and this one; the
+	// ops PAST this split point are not touched at all, and the continuation is left EMPTY until
+	// `materializeChainTails` places them, once, when no further split can move them. Over k guards in a
+	// block of B ops that copies B op refs in total rather than Θ(k × B) — see `splitChainEnd`.
+	//
+	// It is also the coordinate space a site's recorded `stdOpPos` is written in, which is why
+	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have carved
+	// away. Built and shared exactly as the two columns above are.
+	var guardChainSource as PreSplitOpsByBlock
+
+	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+	end 'create'
+
+	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
+	// fit the highest id, so a monotonically increasing id past the function's current maximum is all
+	// that is required.
+	function mintId() returns ValueId
+		let id = self.nextId
+		self.nextId = self.nextId + 1
+		return id
+	end 'mintId'
+
+	// Process one function's sites. The alias-named sites FIRST (they split blocks and move terminators
+	// onto new continuation blocks), then the call-argument sites — which emit nothing, so their order is
+	// free — then returns, which therefore read the chain index those splits have already advanced
+	// (`retBlockOf`). The literal/const map is built ONCE over the original ops — the values a site checks
+	// are original, never the guard consts this pass appends afterward.
+	function run(checks FunctionRangeChecks)
+		self.collectConsts()
+		// The parser's answer to the one question a constant's 64 bits cannot answer — stashed beside the
+		// const maps because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
+		// `writtenNegativeLiterals`.
+		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
+		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
+		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
+		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
+		// guards at the top of its block, silently, with only a golden to say so.
+		if not checks.sites.isEmpty() and not checks.positionsResolved 'unlowered'
+			panic("run: '{String.from(self.func.name)}' has {checks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
+		end 'unlowered'
+
+		// ⚠ **BEFORE EVERY OTHER SITE IN THE FUNCTION, AND THAT IS AN ORDERING REQUIREMENT RATHER THAN A
+		// preference.** An entry guard splits the entry block at the end of its `param` ops, which is a
+		// position at or before every body site's — and `guardSiteAt` refuses a position that has fallen
+		// BEHIND its block's chain base, because sites are consumed in source order.
+		self.guardRangedParams(checks)
+
+		for site in checks.sites 'eachSite'
+			self.processSite(site, filePath: checks.filePath)
+		end 'eachSite'
+		// ⚠ **AFTER THE LAST ALIAS-NAMED SITE AND BEFORE THE RETURN SITES, AND BOTH HALVES ARE
+		// LOAD-BEARING.** A chained split leaves its continuation's ops PENDING (`splitChainEnd`), so
+		// until this runs the last continuation of every guarded block is empty — and `guardReturns`
+		// splits the block it finds AT ITS END, an end that is not where that block ends yet. Running it
+		// after the loop is what makes the pending tail cost one placement per block instead of one per
+		// guard.
+		self.materializeChainTails()
+
+		for argSite in checks.argSites 'eachArgSite'
+			self.processArgSite(argSite, filePath: checks.filePath)
+		end 'eachArgSite'
+		if not checks.returnAliasName.isEmpty() 'rangedReturn'
+			self.processReturnSites(checks)
+		end 'rangedReturn'
+	end 'run'
+
+	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
+
+	// The site rule, asked ONCE for every position — an `as`, a field, a field default, and the call
+	// argument that resolves into one. It raises the compile-time E3005 on its way to its answer and says
+	// whether the RUNTIME half is owed too.
+	//
+	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A POSITION THAT WILL NEVER
+	// EMIT ONE**, because raising that E3005 for a folded literal is what it does on the way to its answer.
+	// Both halves of the rule are one decision (`range-check-panic.md` says so outright), and splitting
+	// them so a `compileTimeOnly` position could skip the call would be two deciders that can drift.
+	//
+	// ⭐ **TWO FILES, AND THEY ARE NOT THE SAME QUESTION.** `aliasFilePath` picks WHICH declaration of the
+	// name applies — a file's own `Limit` governs it even where another file declares that name over a
+	// wider range (`RangedAliasRegistry`). `filePath` is where the DIAGNOSTIC and the runtime panic message
+	// point. They are one file at every door the parser resolved for itself; they DIFFER at a call
+	// argument, where the parameter's range is the CALLEE's to declare and the error belongs to the line
+	// that wrote the argument. Conflated, `utf16LeadSurrogate(1000000000)` reported the caller's line and
+	// column against the STDLIB's path — a position that names a `typealias` declaration, in a file the
+	// program never wrote a call in. (Measured, on `string-views`.)
+	//
+	// It takes the position's parts rather than a `RangeCheckSite` because the call-argument door has no
+	// site to hand it: synthesizing one there would have to invent a `maxonOpPos` the position does not
+	// have and no reader would ever spend — a magic value one refactor away from being believed.
+	//
+	// `undeclared` — a builtin like `ExitCode`, or an alias no loaded file declares — is the "not a
+	// checkable range" case and guards nothing.
+	function guardVerdict(value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, aliasFilePath FilePath, filePath FilePath) returns RangeGuardVerdict
+		return match self.project.typeAliases.lookup(aliasName, readerFilePath: aliasFilePath) 'bounds'
+			undeclared gives RangeGuardVerdict.noGuard
+			declared(alias) gives self.runtimeHalfOf(alias, value: value, aliasName: aliasName, guard: guard, line: line, column: column, filePath: filePath)
+		end 'bounds'
+	end 'guardVerdict'
+
+	function runtimeHalfOf(alias RangedTypeAlias, value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, filePath FilePath) returns RangeGuardVerdict
+		if not self.needsRuntimeGuard(value, alias: alias, aliasName: aliasName, line: line, column: column, filePath: filePath) 'settledAtCompileTime'
+			return RangeGuardVerdict.noGuard
+		end 'settledAtCompileTime'
+		if guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
+			return RangeGuardVerdict.noGuard
+		end 'compileTimeHalfOnly'
+
+		return RangeGuardVerdict.guard(alias)
+	end 'runtimeHalfOf'
+
+	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one of them
+	// owes the RUNTIME half — the array element was the last that did not, and `A1f-arrayelem` moved its
+	// guard to the store, which is why the site no longer carries a `RangeCheckGuard` to be asked for.
+	//
+	// ⛔ **THE TWO FILES ARE NOT ALWAYS ONE HERE, AND THIS SITE ASSUMED THEY WERE.** It read *"both files are
+	// this function's own (every door here resolved its alias where it wrote it)"* and passed `filePath`
+	// for both — true of the cast, the field store, the struct-literal field and the array element, and
+	// FALSE of the arm-served index, whose alias is the CALLEE's (`Parser.recordArmServedIndexRangeCheck`).
+	// The site now carries the declaration it resolved; `RangeCheckSite.aliasFilePath` holds the measurement.
+	function processSite(site RangeCheckSite, filePath FilePath)
+		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: site.aliasFilePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+		end 'verdict'
+	end 'processSite'
+
+	// ---- narrowed PARAMETERS: the runtime half of the call-argument door (A1f) ----
+
+	// ⭐⭐ **THE GUARD GOES AT THE CALLEE'S ENTRY, NOT AT THE CALL.** A call argument is the one door whose
+	// check cannot be emitted where it is written: a check is a BRANCH, and an argument is evaluated
+	// part-way through building an argument list, so the guard would land PAST the call with the callee
+	// already run (`RangeCheckGuard` states the obstacle in full). The callee's entry block splits cleanly,
+	// needs no argument-list restructuring, and costs ONE guard per narrowed parameter per FUNCTION rather
+	// than one per CALL.
+	//
+	// ⭐ **IT IS ALSO THE ONLY PLACE THAT CAN COVER EVERY CALLER.** A call through a function value has no
+	// callee name at the call site to look a parameter's range up by (`callIndirect`/`witnessCall`), so a
+	// call-site rule would leave the indirect door open for ever. One guard behind the entry covers direct
+	// calls, indirect calls and witness dispatch with nothing to enumerate.
+	//
+	// ⚠ **WHY THIS IS NOT COSMETIC.** `specs/safety.md` promises that `/` and `mod` are THROWING
+	// operations, and that a divisor "proven non-zero — a non-zero literal, or a ranged type whose range
+	// excludes 0 — compiles to a bare divide with no check". A `NonZero` PARAMETER is treated as proven, so
+	// the guard is elided; with the premise unenforced the proof was false, and a catchable `DivisionByZero`
+	// became an uncatchable hardware fault that `recover()` cannot see. Enforcing the premise is what makes
+	// the elision legitimate.
+	//
+	// The panic names the PARAMETER's own declaration line, not the caller's: one guard stands in front of
+	// every call, so the caller's line is not a fact it holds — and the parameter list is where the premise
+	// is declared, which is the honest thing for it to name.
+	//
+	// ⚠ **THE COST IS NOT THE COMPARE — IT IS THAT A GUARDED LEAF STOPS BEING A LEAF.** `emitPanicBlock`
+	// emits a `call mrt_panic`, so a function that had no call at all acquires one, and
+	// `prologueEpilogue` gives it a real frame: `division/ranged-divisor-is-a-bare-idiv`'s `divide` gained
+	// `x64.prologue 32` / `x64.epilogue 32` around a body that still ends in the same bare `idiv`. That is
+	// a per-FUNCTION cost paid on the in-range path, not an instruction count on the failing one, and it
+	// is the honest price of the elision the guard makes legitimate.
+	function guardRangedParams(checks FunctionRangeChecks)
+		if checks.paramSites.isEmpty() 'noRangedParam'
+			return
+		end 'noRangedParam'
+
+		let entryRef = try self.func.blockRefs.get(0) otherwise panic("guardRangedParams: '{String.from(self.func.name)}' declares a ranged parameter but has no entry block")
+		let entryId = self.module.getBlock(entryRef).id
+		for site in checks.paramSites 'eachRangedParam'
+			self.guardRangedParam(site, entryId: entryId, filePath: checks.filePath)
+		end 'eachRangedParam'
+	end 'guardRangedParams'
+
+	// ⚠ **THE POSITION IS `paramCount`, WHICH IS EXACTLY PAST THE `param` OPS AND NOWHERE ELSE.**
+	// `LowerMaxonToStd.emitParams` appends one `StdOp.param` per parameter to `blockRefs[0]` before a single
+	// body op is lowered, so the first `paramCount` ops of the entry block ARE the incoming-register
+	// captures. Guarding before them would compare a value no `mov` has produced yet; guarding after any
+	// body op would let that op run on the value the range forbids. Both the ALIAS reader and the
+	// DIAGNOSTIC file are the callee's own — a parameter's range is the one visible where the function was
+	// written, and the panic points at the parameter itself.
+	//
+	// ⚠ **"THE ONE VISIBLE WHERE THE FUNCTION WAS WRITTEN" IS ONLY AS GOOD AS `RangedAliasRegistry.lookup`.**
+	// Handing it the callee's path is right and is all this site can do; what the registry then does with a
+	// name the callee's file does not itself declare used to be LAST-WINS, and a user
+	// `typealias Codepoint = int(0 to 100)` therefore made `stdlib/helpers/string/utf16.maxon`'s
+	// `utf16LeadSurrogate(codepoint Codepoint)` panic on a legal `70000` against a range from a file it has
+	// never seen. ✅ **CLOSED (A1f-aliasclash): a third file now resolves to a declaration it MAY NAME**, so
+	// this site gets the callee's own exported/stdlib alias. What remains open, and is E3063's rung, is a
+	// contest between two declarations the reader may BOTH name.
+	//
+	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
+	// `guardVerdict`'s compile-time half never fires here; what it decides for a parameter is the one thing
+	// that matters, `rangeIsFull` — a full-range parameter promises nothing and gets nothing.
+	//
+	// ⭐ **INT AND FLOAT ALIKE, AND THE SYMMETRY IS THE POINT RATHER THAN A CONVENIENCE.** `emitGuardAt`
+	// already forks the entire cascade on `aliasIsFloat` for the `as` and `return` doors, so a float
+	// parameter needs nothing of its own — and guarding only the integer half would replace *five doors of
+	// which four guard* with *parameters of which only the int ones guard*, which is a fresh instance of
+	// the very defect this rung exists to delete. `rangedParamSites` records a float alias for the same
+	// reason `rangedReturnAliasName` stopped excluding one when #19 closed: the domain is decided where
+	// the BOUNDS are read, never where the site is recorded.
+	//
+	// ⭐ **A `function f(x T) returns T … return x` GUARDS THE VALUE ONCE — HERE.** The `return` site's
+	// own guard is elided against this one, and the argument for that lives at `entryGuardAlreadyCovers`,
+	// which is where the two facts it needs are both in hand. This site emits exactly as it always did.
+	//
+	// ⭐⭐ **AND IT IS THE ONE DOOR THAT MAY BE HANDED AN ADDRESS RATHER THAN A VALUE (PBR-2)** — see
+	// `GuardedOperand`. `rangedParamValue(site)` is the parameter's own `param` op, which for a
+	// by-reference parameter defines a CELL POINTER; the range describes what the cell holds. The other two
+	// doors cannot reach this shape: a cast and a `return` both name a value the body computed, and a cell
+	// binding's read is already a `loadIndirect` by the time either sees it.
+	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
+		let paramValue = rangedParamValue(site)
+		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard(alias) then self.emitParamGuard(site, alias: alias, entryId: entryId, filePath: filePath)
+		end 'verdict'
+	end 'guardRangedParam'
+
+	// ⭐⭐ **THE CASCADE, AND THE RECORD OF WHERE IT LANDED (EC7).** A parameter guard is the ONE guard this
+	// pass emits that a LATER pass can prove dead, because it is the one whose premise belongs to somebody
+	// else: the caller. `InlineLeaves` splices this body into a frame that may already know the argument is
+	// in range — from its own entry guard, or from a counted loop's interval — and a cascade it can identify
+	// is a cascade it can decline to copy. Identifying it is what nothing recorded before this row: once
+	// emitted, a guard is a compare, a branch and a panicking block, which is also what a hand-written
+	// `if x < 0 'bad' panic(…) end` is.
+	//
+	// ⚠ **THE HEAD IS READ BEFORE THE EMIT AND THE OK BLOCK AFTER IT, and neither is `entryId`.** A second
+	// ranged parameter's cascade splits the FIRST one's `__rc_ok` (`guardSiteAt` resolves a site to its
+	// block's current chain END), so the k-th guard's head is the (k-1)-th's ok block and only the first
+	// one's head is the entry. Recording `entryId` for all of them would tell the inliner that every cascade
+	// begins where control enters, and it would skip the first guard's compare while jumping into the
+	// second's.
+	//
+	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt` hands back
+	// the head it was given, which is how that says so without a flag.
+	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
+		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount as BlockOpPos)
+		let headId = guardSite.block.id
+		self.requireGuardHeadHoldsOnlyParams(guardSite)
+		// ⭐ **THE ID SPACE BEFORE AND AFTER IS WHAT ENUMERATES THE CASCADE'S OWN BLOCKS.** Everything
+		// `emitGuardAt` mints — the `__rc_ok` continuation, the `__rc_panic`, one `__rc_chk` per extra bound
+		// — goes through `IrModule.addBlock`, which hands out `func.nextBlockId` and bumps it. So the ids in
+		// `[firstMintedId, nextBlockId)` are exactly this guard's, in one subtraction and with no second
+		// list to keep in step with the three places that mint them.
+		let firstMintedId = self.func.nextBlockId
+		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+		if ok.id == headId 'bothBoundsElided'
+			return
+		end 'bothBoundsElided'
+
+		var owned = BlockIdArray.create()
+		owned.push(headId)
+		for mintedId in firstMintedId upto self.func.nextBlockId 'eachMintedBlock'
+			if mintedId != ok.id 'notTheContinuation'
+				owned.push(mintedId)
+			end 'notTheContinuation'
+		end 'eachMintedBlock'
+		self.func.recordParamGuard(site.index, alias: alias, headBlockId: headId, okBlockId: ok.id, ownedBlockIds: owned)
+	end 'emitParamGuard'
+
+	// ⛔⛔ **THE OPS THE CASCADE'S HEAD KEEPS MUST BE `param` OPS AND NOTHING ELSE — AND SINCE EC7 A BREACH
+	// IS A DELETION RATHER THAN A MISPLACEMENT.** `guardSiteAt` anchors at `paramCount`, which is exactly
+	// past the incoming-register captures `LowerMaxonToStd.emitParams` appends before any body op, so the
+	// head this split leaves holds precisely those. `InlineLeaves` DECLINES to copy that head when it can
+	// prove the cascade dead, and a `param` op is the one op a splice does not need copied (it becomes the
+	// call's argument). Anything ELSE that ever ends up in front of the guard would previously have been a
+	// guard placed one op late; it is now an op the splice silently drops. This says so where the assumption
+	// is made instead of leaving it to the shape of another pass.
+	//
+	// ⚠ It walks only the guard's OWN prefix (`site.position`), which is `paramCount` for the first cascade
+	// in a block and 0 for every chained one — the k-th guard splits the (k-1)-th's continuation, which was
+	// minted empty. So the cost is one arity-bounded walk per guarded function, not per op.
+	function requireGuardHeadHoldsOnlyParams(site GuardSite)
+		for pos in 0 upto site.position 'eachPrefixOp'
+			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
+			match self.opAtIndex(opIdx) 'op'
+				const or
+					binOp or
+					unaryOp or
+					cmp or
+					binOpImm or
+					cmpImm or
+					div or
+					mod or
+					condBranch or
+					branch or
+					ret then self.refuseNonParamAheadOfAGuard(pos)
+				param then break 'op'
+				call or
+					retVoid or
+					globalAddr or
+					loadIndirect or
+					storeIndirect or
+					osAllocPages or
+					osWriteStdout or
+					rdataAddr or
+					tryCall or
+					errorReturn or
+					osExit or
+					funcAddr or
+					callIndirect or
+					osPanic or
+					osReadClock or
+					osSleepMs or
+					osProcessSpawn or
+					osProcessExitCode or
+					osWaitHandles or
+					osCloseHandle or
+					osWaitHandle or
+					osFreePages or
+					switch or
+					witnessCall or
+					osPipeCreate or
+					osIocpCreate or
+					osEventCreate or
+					osThreadCreate or
+					osLockInit or
+					osLockEnter or
+					osLockLeave or
+					osReadOverlapped or
+					osLastError or
+					osProcessSpawnInherit or
+					osCancelIo or
+					osGetPid or
+					osPipeCreateOutbound or
+					osWriteFile or
+					osReadWallClock or
+					witnessTryCall or
+					osFileOpenRead or
+					osFileClose or
+					osReadFile or
+					osFileOpenWrite or
+					osFileSize or
+					osFileDelete or
+					osFileRename or
+					osFileFindFirst or
+					osFileFindClose or
+					osFileFindNext or
+					osDirCreate or
+					osDirCurrentPath or
+					osFileAttributes or
+					osPanicValue or
+					osCommandLine or
+					osStdHandle or
+					osExecutablePath or
+					osWriteStderr or
+					stackRecordAddr or
+					osOpenNamedSegment or
+					osMapNamedSegment or
+					osTickCountMs or
+					osHandleSetInherit or
+					osPipePeek or
+					osEnvRead or
+					osProcessTerminate or
+					osSocketStartup or
+					osSocketResolve or
+					osSocketFreeAddrInfo or
+					osSocketCreate or
+					osSocketConnect or
+					osSocketSend or
+					osSocketRecv or
+					osSocketClose or
+					osCpuCount or
+					osThreadCpuTicks or
+					osDecommitPages or
+					memFill or
+					osCommitPages or
+					osReservePages or
+					atomicCas or
+					atomicRmw or
+					currentThreadToken or
+					tlsAlloc or
+					tlsSetValue or
+					tlsSlotLoad or
+					osSetEvent or
+					osEnterBackgroundPriority then self.refuseNonParamAheadOfAGuard(pos)
+				osFileOpenWriteExecutable then self.refuseNonParamAheadOfAGuard(pos)
+				osEnvBlock or
+					osEnvBlockFree then self.refuseNonParamAheadOfAGuard(pos)
+				loadAcquire or
+					storeRelease then self.refuseNonParamAheadOfAGuard(pos)
+				osHandleFileType then self.refuseNonParamAheadOfAGuard(pos)
+				osCreateNamedSegment or
+					osUnmapNamedSegment or
+					osUnpublishNamedSegment or
+					covPoint or
+					osHostSample then self.refuseNonParamAheadOfAGuard(pos)
+			end 'op'
+		end 'eachPrefixOp'
+	end 'requireGuardHeadHoldsOnlyParams'
+
+	// The refusal both non-`param` arms share — ONE message, because they say one thing.
+	function refuseNonParamAheadOfAGuard(pos BlockOpPos)
+		panic("requireGuardHeadHoldsOnlyParams: op {pos} of '{String.from(self.func.name)}'s entry block stands AHEAD of its parameter guard and is not a `param` op — the guard is anchored at `paramCount` on the premise that the first `paramCount` ops are the incoming-register captures, and `InlineLeaves` drops that whole block when it declines the cascade")
+	end 'refuseNonParamAheadOfAGuard'
+
+	// Every op read on this pass's mutating paths goes through here, for `InlineLeaves.opAtIndex`'s reason:
+	// a `self.module.ops.get(...)` written inline BORROWS `module`, and this pass appends ops and blocks to
+	// it in the next breath — which the self-compile refuses.
+	function opAtIndex(opIdx OpIndex) returns StdOp
+		return try self.module.ops.get(opIdx) otherwise panic("RangeCheckEmitter.opAtIndex: op index {opIdx} named by a block of '{String.from(self.func.name)}' is not in module.ops")
+	end 'opAtIndex'
+
+	// Is this parameter an address or a value? `reassignedParamMask` is the ABI's own answer — the same bit
+	// `LowerMaxonToStd` types the slot from and `transferFuncs` shapes the callee's signature with — so this
+	// door and the representation cannot come to disagree.
+	//
+	// It takes the SITE and re-derives both halves through `rangedParamValue`, because the value and the
+	// parameter position are ONE number (see that function): passing them side by side would be two spellings
+	// of one identity, free to be handed different sites on the day someone splits the call.
+	function paramOperand(site RangeCheckParamSite) returns GuardedOperand
+		if maskHasParam(self.func.reassignedParamMask, param: site.index) 'arrivesAsACellAddress'
+			return GuardedOperand.pointeeOf(rangedParamValue(site))
+		end 'arrivesAsACellAddress'
+
+		return GuardedOperand.asIs(rangedParamValue(site))
+	end 'paramOperand'
+
+	// ---- call-argument sites ----
+
+	// ⭐ **THE ONE SITE KIND WHOSE ALIAS IS RESOLVED HERE RATHER THAN AT THE PARSE.** A call argument's
+	// declared type belongs to the callee, which the caller's file may never have seen (see
+	// `RangeCheckArgSite`); this pass runs once, after every file has merged, so the callee's own record is
+	// in hand. Resolved, it asks the SAME `guardVerdict` every other position asks — there is no second
+	// decision anywhere for a call argument.
+	//
+	// ⚠ The alias reader file is the CALLEE's, never this function's: the range a parameter was declared
+	// with is the one visible where the FUNCTION was written. The diagnostic's file stays this function's
+	// — see `guardVerdict`.
+	function processArgSite(site RangeCheckArgSite, filePath FilePath)
+		match self.paramAliasOf(site) 'p'
+			none then return
+			found(aliasName, declFilePath) then self.checkArgAgainstParamRange(site, aliasName: aliasName, declFilePath: declFilePath, filePath: filePath)
+		end 'p'
+	end 'processArgSite'
+
+	// A call argument owes the COMPILE-TIME half and NOTHING ELSE (`RangeCheckGuard`), so it asks the
+	// shared decider purely for the E3005 that decider raises on its way to an answer. The `guard` arm is
+	// unreachable by construction — the argument is asked as `compileTimeOnly` — and says so, rather than
+	// quietly anchoring a guard at a position a call argument has no way to name.
+	function checkArgAgainstParamRange(site RangeCheckArgSite, aliasName ByteArray, declFilePath FilePath, filePath FilePath)
+		match self.guardVerdict(site.value, aliasName: aliasName, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column, aliasFilePath: declFilePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard then panic("checkArgAgainstParamRange: the call to '{String.from(site.callee)}' was asked as `compileTimeOnly` and came back owing a RUNTIME guard — `runtimeHalfOf` must never answer `guard` for a compile-time-only position")
+		end 'verdict'
+	end 'checkArgAgainstParamRange'
+
+	// The ranged-alias name the argument's PARAMETER was declared with, plus the callee's file. `none`
+	// covers every ordinary call: a callee with no ranged parameter at all files no `paramSites`, an
+	// argument landing on an unranged position matches no site, and a malformed call (bad arity, unknown
+	// label) slots past the end and matches none either — which SemanticCheck reports against the real
+	// registry, and which is not this pass's to diagnose.
+	//
+	// ⚠ The scan is over the callee's RANGED parameters only — usually one, never more than its arity — so
+	// it is bounded by the same `arity` the label lookup it sits beside already walks (`argSlotPosition`
+	// scans `paramNames`), and it adds no growth shape this call did not already have.
+	function paramAliasOf(site RangeCheckArgSite) returns ParamAliasLookup
+		let calleeChecks = try self.project.rangeChecks.get(site.callee) otherwise return ParamAliasLookup.none
+		if calleeChecks.paramSites.isEmpty() 'noRangedParam'
+			return ParamAliasLookup.none
+		end 'noRangedParam'
+
+		// A `rangeChecks` entry and a `funcSignatures` entry are written by the SAME `parseFunction`, one
+		// statement apart and under the same name, so a callee present in one and absent from the other is a
+		// broken invariant rather than a program the user could write.
+		let signature = try self.project.funcSignatures.get(site.callee) otherwise panic("paramAliasOf: '{String.from(site.callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
+		// `argSlotPosition` is the ONE label->position mapping in the compiler; asking it here is what keeps
+		// a labelled argument checked against the parameter it actually lands on rather than the one it
+		// happens to sit beside.
+		let slot = argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)
+		for paramSite in calleeChecks.paramSites 'eachRangedParam'
+			if paramSite.index == slot 'thisArgumentsParameter'
+				return ParamAliasLookup.found(paramSite.aliasName, declFilePath: calleeChecks.filePath)
+			end 'thisArgumentsParameter'
+		end 'eachRangedParam'
+
+		return ParamAliasLookup.none
+	end 'paramAliasOf'
+
+	// ---- return sites ----
+
+	// `checks.filePath` picks the alias, exactly as it does for a cast — a ranged `return` is checked
+	// against the range declared where the FUNCTION was written. It takes the whole `FunctionRangeChecks`
+	// because `guardReturns` needs the PARAMETER sites too (see `entryGuardAlreadyCovers`), and threading
+	// a fifth field through would leave the two halves of one question arriving separately.
+	function processReturnSites(checks FunctionRangeChecks)
+		match self.project.typeAliases.lookup(checks.returnAliasName, readerFilePath: checks.filePath) 'bounds'
+			undeclared then return
+			declared(alias) then self.guardReturns(alias, checks: checks)
+		end 'bounds'
+	end 'processReturnSites'
+
+	function guardReturns(alias RangedTypeAlias, checks FunctionRangeChecks)
+		for site in checks.returnSites 'eachSite'
+			// ⚠ **ASKED FIRST, AND UNCONDITIONALLY** — it is the decider that raises the compile-time E3005
+			// on its way to an answer (`guardVerdict` states the same discipline), and it is also what makes
+			// the elision below legitimate: clause 4 is that the entry guard EXISTS, and the only thing that
+			// could have stopped it existing is this function answering `false` for the same value against
+			// the same alias. Reaching the elision at all is therefore the proof that it did not.
+			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: checks.returnAliasName, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
+				continue
+			end 'noGuard'
+			if self.entryGuardAlreadyCovers(site.value, checks: checks) 'guardedAtTheEntry'
+				continue
+			end 'guardedAtTheEntry'
+
+			match self.retBlockOf(site) 'ret'
+				notFound then break 'ret'
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
+			end 'ret'
+		end 'eachSite'
+	end 'guardReturns'
+
+	// ⭐⭐ **IS THIS `return`'S VALUE ALREADY STANDING BEHIND THIS FUNCTION'S OWN ENTRY GUARD (A1f-dupguard)?**
+	// `function f(x T) returns T … return x` emitted the entry cascade and an identical return cascade over
+	// the same `ValueId` against the same alias. The second is elided — and because A1f exists BECAUSE a
+	// guard was elided on a premise nothing enforced, the premise is spelled out and pinned rather than
+	// asserted. **Four clauses, and `specs/range-check-panic.md` has a case for each:**
+	//
+	//   1. **THE SAME VALUE.** Dense SSA numbers a value once, and a parameter's `ValueId` is defined by its
+	//      `param` op — so `site.value == rangedParamValue(paramSite)` is an IDENTITY, not an inference. A
+	//      `var` shadow reassigned before the `return` carries a different id (`Scope.setValue` rebinds),
+	//      and a parameter cannot be mutated at all (E2013). ⇒ `return-of-a-reassigned-shadow-is-still-guarded`,
+	//      `return-of-a-computed-value-is-still-guarded`.
+	//   2. **THE SAME ALIAS.** Both names are resolved through `checks.filePath` — `guardRangedParam` and
+	//      `processReturnSites` hand `lookup` the identical reader — so equal NAMES are one declaration and
+	//      therefore one pair of bounds. A narrower return alias over the same parameter is a different name
+	//      and gets its guard. ⇒ `return-through-a-narrower-alias-is-still-guarded`.
+	//   3. **DOMINANCE.** `guardRangedParams` splits the ENTRY block at `func.paramCount`, which is exactly
+	//      past `emitParams` and before a single body op, so every path to every `return` runs the cascade
+	//      first. This is the one clause no program can break — there is no `return` reachable without
+	//      passing the entry. ⇒ `entry-guard-covers-a-return-inside-a-branch`.
+	//   4. **THE ENTRY GUARD EXISTS.** Both sites route through the same `needsRuntimeGuard` with the same
+	//      value and the same alias, and `guardReturns` asks it BEFORE this — so this is reached only on the
+	//      answer that made the entry guard fire. The two remaining ways a guard can be skipped are shared
+	//      too: `lookup` is the same call (we are inside its `declared` arm), and `emitGuardAt`'s
+	//      both-bounds-elided return is a function of the alias alone, so it fires at neither site or both.
+	//
+	// ⚠ **A LINEAR SCAN, AND BOUNDED BY THE ARITY** — `paramSites` is SPARSE (one entry per RANGED
+	// parameter, never per parameter), so this walks at most the function's ranged parameters, which is
+	// usually one and never more than `MaxAbiArgs`. It is the same bound `paramAliasOf`'s scan already has
+	// and adds no growth shape a call did not have.
+	function entryGuardAlreadyCovers(value ValueId, checks FunctionRangeChecks) returns bool
+		for paramSite in checks.paramSites 'eachRangedParam'
+			if rangedParamValue(paramSite) == value and paramSite.aliasName.equals(checks.returnAliasName) 'sameValueSameAlias'
+				return true
+			end 'sameValueSameAlias'
+		end 'eachRangedParam'
+
+		return false
+	end 'entryGuardAlreadyCovers'
+
+	// ---- the shared decision ----
+
+	// Whether a site needs a RUNTIME guard. A literal of the alias's OWN domain never does (its
+	// out-of-range use is reported here as a compile-time E3005, its in-range use needs no code); a
+	// full-range alias never does; everything else does.
+	//
+	// ⚠ THE DOMAIN TEST IS PART OF THE LITERAL TEST, not decoration. `collectConsts` records every
+	// `const`'s payload with no regard for its type, and a FLOAT const's payload is an IEEE-754 bit
+	// pattern — so a float const reaching an integer alias (or the reverse) would be compared as a
+	// number it is not. A domain mismatch therefore falls through to the runtime guard.
+	//
+	// ⚠⚠ **THE LITERAL IS ASKED BEFORE `rangeIsFull`, AND THE OTHER ORDER WAS A SILENT WRONG ANSWER.** A
+	// full range admits every 64-bit PATTERN, which is the whole of what a RUNTIME guard could test — so
+	// eliding the guard is right. It is not the whole of what the COMPILE-TIME check tests: `int(0 to
+	// u64.max)` still declares a lower bound of 0, and a written `-1` is below it. With the full-range arm
+	// first this function returned before it could look at the constant at all, and `take(-1)` compiled
+	// clean into such a parameter and printed 18446744073709551615. Reordered, the
+	// signed-full `int(i64.min to i64.max)` is unaffected (every integer satisfies it, so the literal arm
+	// answers in-range for it and always will) and only the unsigned-full range gains a verdict.
+	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
+		let isFloat = aliasIsFloat(alias)
+
+		let literals = self.floatConsts if isFloat else self.intConsts
+		if literals.contains(value) 'literal'
+			let v = literals.constantOf(value)
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value)) 'outOfRange'
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat, rawBitWidth: alias.rawBitWidth), line: line, column: column, filePath: filePath)
+			end 'outOfRange'
+			return false
+		end 'literal'
+
+		// ⭐⭐ **`int(0 to u64.max)` NO LONGER LANDS HERE, AND THAT IS THE WHOLE CHANGE.** It spans every
+		// 64-bit pattern as a SET, which is why `rangeIsFull` used to discard its guard — but it is a
+		// QUANTITY, and a quantity's door refuses a value that arrived from a SIGNED domain. What still
+		// tests nothing is `bits(64)` (every pattern IS one of its values), the signed-full range, and a
+		// full-range float; `aliasAdmitsEveryValue` is the three of them and nothing else.
+		if aliasAdmitsEveryValue(alias) 'admitsEveryValue'
+			return false
+		end 'admitsEveryValue'
+
+		return true
+	end 'needsRuntimeGuard'
+
+	// Split the site's block, emit the panic block, thread the compare cascade between them, and extend
+	// `chain` onto the continuation so the NEXT guard on this path lands after this one (see `GuardChain`
+	// for why only an alias-named site has a chain to extend).
+	//
+	// ⭐ **IT HANDS BACK THE BLOCK THE IN-RANGE PATH CONTINUES IN**, which is the guard's `__rc_ok` when one
+	// was emitted and the site's own head block when both bounds elided — the true answer in either case, not
+	// a presence flag wearing a block's clothes. Two of the three callers have no use for it; `emitParamGuard`
+	// is the one that does, because *where the cascade ends* is half of the record `InlineLeaves` needs to
+	// skip it (EC7).
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain) returns IrBlock
+		let isFloat = aliasIsFloat(alias)
+		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
+		if checks.isEmpty() 'noBoundNeeded'
+			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
+			// guard, and nothing was split, so the chain end is where it was.
+			return site.block
+		end 'noBoundNeeded'
+
+		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
+		// LOAD-BEARING** — see `extendGuardChain`.
+		let ok = self.splitFor(site, chain: chain)
+		// ⚠ **THE DEREFERENCE GOES IN BETWEEN, AND ITS POSITION IS THE WHOLE OF WHY IT IS HERE AND NOT AT
+		// THE CALLER.** `site.block` is the guard's HEAD: after the split it holds exactly the ops that
+		// stood before the site, so appending the load here puts it past the `param` ops and immediately
+		// ahead of the cascade that reads it. It appends an OP and never a BLOCK, so `extendGuardChain`'s
+		// "the last block registered is the continuation" invariant is untouched.
+		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
+		let panicBlock = self.emitPanicBlock(message)
+		self.emitCascade(site.block, value: compared, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+		return ok
+	end 'emitGuardAt'
+
+	// ⭐⭐ **THE VALUE THE CASCADE ACTUALLY COMPARES — see `GuardedOperand` for why a parameter can be a
+	// cell.** The load's type is the CASCADE's operand type rather than the parameter's declared Std type,
+	// and the two cannot disagree: a cell holds one full machine word (`Parser.allocateCell` boxes
+	// `CellPayloadBytes`), and `emitCascade` materializes its bounds in the very same `f64`/`i64` the domain
+	// of the alias picks — so the load, the bounds and the compare are one width by construction.
+	function comparedValue(operand GuardedOperand, head IrBlock, isFloat bool) returns ValueId
+		return match operand 'o'
+			asIs(value) gives value
+			pointeeOf(cell) gives self.emitCellLoad(head, cell: cell, isFloat: isFloat)
+		end 'o'
+	end 'comparedValue'
+
+	// Load what a by-reference parameter's cell holds, appended to `head`. The one place this pass reads
+	// through a pointer, for `emitZeroConstOf`'s reason: a second spelling of the offset or the width would
+	// be a second answer to "what does a cell hold". The offset is `Parser.CellContentOffset`, the same
+	// named constant the parser's own cell load and store address through.
+	function emitCellLoad(head IrBlock, cell ValueId, isFloat bool) returns ValueId
+		let loaded = self.mintId()
+		self.module.appendOp(head, op: StdOp.loadIndirect(loaded, addrId: cell, offset: CellContentOffset, valueType: StdType.f64 if isFloat else StdType.i64))
+		return loaded
+	end 'emitCellLoad'
+
+	// Move `siteBlockId`'s chain end onto the continuation `splitChainEnd` just made, so the next guard in
+	// that source block lands after this one instead of before it.
+	//
+	// ⚠ **THIS MUST RUN BEFORE ANYTHING ELSE APPENDS A BLOCK.** The continuation's own blockRef is
+	// recoverable only as "the last entry `addBlock` registered", and `emitPanicBlock` plus the cascade's
+	// `__rc_chk` blocks append more the moment they run. So it is read here — and CHECKED against the
+	// block the split actually returned, not assumed: a later reordering that slipped an append in
+	// between would chain the NEXT guard onto the panic block, and no test would show that as anything
+	// but wrong code at some unrelated site.
+	//
+	// ⚠ **THE BASE MOVES WITH THE TAIL, AND `splitAt` IS WHY.** The continuation is where the source
+	// block's ops from `splitAt` on will stand, so an op that stood at position p of the chain-end block
+	// now stands at `p - splitAt` of the new one. `guardChainBase` accumulates those shifts in the
+	// ORIGINAL block's coordinates, which is the space a site's recorded position is written in — advance
+	// one column without the other and the (k+1)-th guard lands at an offset measured against a block it
+	// is no longer in. It is also where the pending tail STARTS, which is what `materializeChainTails`
+	// reads it as.
+	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt BlockOpPos)
+		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
+		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
+			panic("extendGuardChain: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlock` returned — a block was appended between the split and this record, so the chain would advance onto the wrong block")
+		end 'notTheContinuation'
+
+		try self.guardChainTail.set(siteBlockId, value: okRef + 1) otherwise panic("extendGuardChain: guard site block id {siteBlockId} is outside the function's block-id space, which `guardSiteAt` already resolved it within")
+		let base = try self.guardChainBase.get(siteBlockId) otherwise panic("extendGuardChain: guardChainBase has no entry for block id {siteBlockId}, which guardChainTail just answered for")
+		try self.guardChainBase.set(siteBlockId, value: base + splitAt) otherwise panic("extendGuardChain: guardChainBase.set OOB at block {siteBlockId}, which was just read in range")
+	end 'extendGuardChain'
+
+	// Which split the site gets, and the chain advance that belongs to the chained one. Both leave `head`
+	// un-terminated for the cascade to finish and return the continuation the guard's in-range edge goes
+	// to.
+	function splitFor(site GuardSite, chain GuardChain) returns IrBlock
+		return match chain 'chain'
+			blockChain(siteBlockId) gives self.splitChainEnd(site, sourceBlockId: siteBlockId)
+			retChain gives splitBlockInPlace(self.module, func: self.func, head: site.block, position: site.position, label: RangeCheckOkLabel)
+		end 'chain'
+	end 'splitFor'
+
+	// ⭐⭐ **CARVE THE NEXT SEGMENT OF `sourceBlockId`'S CHAIN OUT OF ITS PRE-SPLIT OP LIST — WITHOUT
+	// EVER MOVING THE OPS PAST THE CUT.** The chain-end block ends up holding the source block's ops from
+	// the previous split point up to this one; the continuation is left EMPTY, because the next guard on
+	// this chain would only carve a prefix off it again, and `materializeChainTails` places what remains
+	// once the loop is over.
+	//
+	// ⚠ **THIS IS THE DIFFERENCE BETWEEN LINEAR AND QUADRATIC BYTES, MEASURED.** The split used to
+	// partition the chain-end block's own list into two FRESH arrays, which moved everything after the
+	// cut on every guard: k guards in a source block of B ops copied Σ(B − pₖ) ≈ k·B/2 op refs, and the
+	// generated `scaleDivide` — 1,024 `as ScaleDivisor` casts in ONE straight-line block, doubling per
+	// scale rung — read `phase:insertRangeChecks` at ×2.83 ×2.82 ×3.73 ×4.11 ×4.32 bytes per DOUBLING
+	// ladder rung, 13.0% of everything the compiler allocated at rung 5, with the ratio still climbing.
+	// Allocations were dead flat at ×2.00 throughout: a fixed number of arrays per site, each one bigger
+	// — which is the whole signature of this bug and is why the byte column, not the allocation column,
+	// is the one that found it.
+	//
+	// The asymmetry that makes it work: an array can give up its BACK for free but not its FRONT, and a
+	// chain cuts left to right. Carving forward out of one stable list makes every copy a segment nobody
+	// copies again, so the whole chain moves B op refs in total.
+	function splitChainEnd(site GuardSite, sourceBlockId BlockId) returns IrBlock
+		let source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
+		// The block is about to hand its list over to the segment carved below, so park the pre-split list
+		// where the rest of the chain can still read it. Idempotent after the first split: `chainSourceOps`
+		// hands back the row this wrote.
+		try self.guardChainSource.set(sourceBlockId, value: source) otherwise panic("splitChainEnd: guardChainSource has no row for block id {sourceBlockId}, which `guardSiteAt` already resolved within the function's block-id space")
+		let base = try self.guardChainBase.get(sourceBlockId) otherwise panic("splitChainEnd: guardChainBase has no entry for block id {sourceBlockId}, which `guardSiteAt` just read in range")
+
+		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
+		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
+		var headBlock = site.block
+		var segment = OpIndexArray.create()
+		for i in base upto base + site.position 'carveSegment'
+			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
+			segment.push(opIdx)
+		end 'carveSegment'
+		headBlock.opRefs = segment
+
+		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
+		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
+		return ok
+	end 'splitChainEnd'
+
+	// The op list the site block held BEFORE any guard split it — the coordinate space a site's recorded
+	// `stdOpPos` is written in, and the one list every segment of that block's chain is carved out of.
+	//
+	// ⚠ **"HAS A SPLIT MOVED PAST THIS BLOCK YET" IS DERIVED, NOT A FOURTH COLUMN.** `guardChainTail`
+	// starts every block as its own chain end and a split is exactly what moves it off itself, so a chain
+	// end that still IS the source block is a block whose `opRefs` is still its pre-split list. Recording
+	// that list any earlier than the split would be wrong rather than merely eager: a site `guardSiteAt`
+	// has already resolved can still turn out to owe no cascade at all (`emitGuardAt`'s both-bounds-elided
+	// return), and a block nothing split must keep its own list.
+	function chainSourceOps(sourceBlockId BlockId, chainEnd IrBlock) returns OpIndexArray
+		if chainEnd.id == sourceBlockId 'stillItsOwnChainEnd'
+			return chainEnd.opRefs
+		end 'stillItsOwnChainEnd'
+
+		return try self.guardChainSource.get(sourceBlockId) otherwise panic("chainSourceOps: guardChainSource has no row for block id {sourceBlockId} of '{String.from(self.func.name)}', whose chain end `guardChainTail` has already been moved off it")
+	end 'chainSourceOps'
+
+	// ⭐⭐ **PLACE THE OPS EVERY GUARDED BLOCK STILL OWES ITS LAST CONTINUATION.** A chained split leaves
+	// the continuation empty (`splitChainEnd`), so the ops from the last split point to the end of the
+	// source list are placed here — once, when no further guard can move them. Without this every guarded
+	// block loses everything that followed its last guard.
+	//
+	// It walks the chain-tail column rather than a list of split blocks because that column already
+	// records the answer: a row whose chain end is a block OTHER than itself was split. The column is as
+	// wide as the block-id space was at the FIRST guard, which is the only part of it that can hold a
+	// site's block (`guardSiteAt`) — `func.nextBlockId` has since grown by every block this pass appended.
+	function materializeChainTails()
+		if self.guardChainTail.isEmpty() 'noRuntimeGuardEmitted'
+			return
+		end 'noRuntimeGuardEmitted'
+
+		for blockId in 0 upto self.guardChainTail.count() 'eachBlockId'
+			let tailRef = try self.guardChainTail.get(blockId) otherwise panic("materializeChainTails: guardChainTail has no row for block id {blockId}, which is inside the column's own width")
+			if tailRef == 0 'notInThisFunction'
+				continue
+			end 'notInThisFunction'
+
+			var chainEnd = self.module.getBlock(((tailRef - 1) as BlockRef))
+			if chainEnd.id == blockId 'neverSplit'
+				continue
+			end 'neverSplit'
+			if not chainEnd.opRefs.isEmpty() 'alreadyHoldsOps'
+				panic("materializeChainTails: the chain end of block {blockId} in '{String.from(self.func.name)}' already holds {chainEnd.opRefs.count()} op(s) — a continuation is minted empty and receives its ops only here, so something appended to one before its tail was placed")
+			end 'alreadyHoldsOps'
+
+			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
+			let source = self.chainSourceOps(blockId, chainEnd: chainEnd)
+			for i in base upto source.count() 'eachPendingOp'
+				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
+				chainEnd.opRefs.push(opIdx)
+			end 'eachPendingOp'
+		end 'eachBlockId'
+	end 'materializeChainTails'
+
+	// The panic block: `osPanic <message-label>`, then a dead return (the panic never returns, but
+	// every block must terminate). The message is interned as a NUL-terminated `.rdata` cstr blob — the
+	// same immortal-rdata path a String literal's blob uses, deduped by bytes — and `osPanic`
+	// carries its label to the backend, which loads the address into the ABI's first-arg register and
+	// calls `mrt_panic`.
+	function emitPanicBlock(message ByteArray) returns IrBlock
+		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic")
+		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
+		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
+		self.emitDeadReturn(panicBlock)
+		return panicBlock
+	end 'emitPanicBlock'
+
+	// The unreachable terminator after `mrt_panic`. `mrt_panic` never returns, so none of these bits is
+	// ever read — but the block still has to LEAVE the function the way the function's ABI says, because a
+	// verifying backend reads the shape whether or not the path runs.
+	//
+	// ⛔⛔ **IT WROTE ONE REGISTER IN A FUNCTION WHOSE ABI RETURNS TWO, AND wasm REFUSED THE MODULE (X6).**
+	// A function that uses the SECONDARY RETURN SLOT leaves through `errorReturn` — the primary value AND
+	// the second word — which `LowerMaxonToStd.emitRetOrErrorReturn` calls *"the ONE place the ABI decides
+	// ret-vs-errorReturn"*. It was not: this pass appends its blocks AFTER lowering has run, so it is a
+	// second decider. On x64 the missing second register is invisible (the path aborts); on wasm the
+	// functype is multi-value and `wasm-tools component new` rejected the whole component with
+	// `type mismatch: expected i64, found i32`.
+	//
+	// ⚠ **THE QUESTION IS `functionUsesSecondaryReturnSlot`'S, NOT `throwsClauseIsThrowing`'S**, and asking
+	// the narrow one left the INTERFACE-RETURNING disjunct — whose second word is the witness half of the
+	// fat pointer — writing one register under a two-register type. One predicate, so a third writer of
+	// that slot cannot reach here without this door already knowing about it.
+	//
+	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
+	// one rule for one fact, in the dialect both passes already read (X6 review).
+	function emitDeadReturn(block IrBlock)
+		if functionUsesSecondaryReturnSlot(self.func.maxonReturnType, throws: self.func.throwsTypeName) 'aSecondReturnWord'
+			let dead = self.emitZeroConstOf(block, valueType: stdDefaultPrimaryReturnType(self.func.returnType))
+			let second = self.emitZeroConstOf(block, valueType: StdType.i64)
+			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: second))
+			return
+		end 'aSecondReturnWord'
+
+		match self.func.returnType 'rt'
+			void then self.module.setTerminator(block, op: StdOp.retVoid)
+			value(inner) then self.module.setTerminator(block, op: StdOp.ret(self.emitZeroConstOf(block, valueType: inner)))
+		end 'rt'
+	end 'emitDeadReturn'
+
+	// A zero `const` of an EXPLICIT type, appended to `block` — the one place this pass mints one, so the
+	// throwing and non-throwing dead returns cannot come to disagree about how a zero is made.
+	function emitZeroConstOf(block IrBlock, valueType StdType) returns ValueId
+		let zero = self.mintId()
+		self.module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: valueType))
+		return zero
+	end 'emitZeroConstOf'
+
+	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
+	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an
+	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
+	// through to the next check, or to `okId` for the last one. The `const` is left as a register
+	// operand — `foldConstOperands`, which runs after this pass, folds it into the `cmp`'s immediate.
+	function emitCascade(head IrBlock, value ValueId, checks RangeBoundCheckArray, panicId BlockId, okId BlockId, isFloat bool)
+		// A float alias's bounds are f64 bit patterns and its guarded value lives in an XMM register, so
+		// BOTH the materialized bound and the compare carry the f64 type. `foldConstOperands` refuses to
+		// fold a float compare's operand into an immediate (there is no SSE immediate form), so the
+		// `const` correctly stays a register operand here where an integer one would be folded away.
+		let operandType = StdType.f64 if isFloat else StdType.i64
+		var current = head
+		let lastIndex = checks.count() - 1
+		for i in 0 upto checks.count() 'eachCheck'
+			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
+			let boundId = self.mintId()
+			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: operandType))
+			let condId = self.mintId()
+			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: operandType))
+
+			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
+			if i == lastIndex 'lastCheck'
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
+			end 'lastCheck' else 'moreChecks'
+				let next = self.module.addBlock(self.func, label: b"__rc_chk")
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: next.id))
+				current = next
+			end 'moreChecks'
+		end 'eachCheck'
+	end 'emitCascade'
+
+	// Where a guard goes: in the block the value was CHECKED in — so the guard runs on the path the site is
+	// on and NOWHERE else, and a cast in an unselected ternary arm / if-branch does not fire it — AT the
+	// position the value comes to rest at, so nothing between the site and the panic executes. An int->int
+	// cast emits no Std op to anchor to, so both halves are the parser's to record (`site.block` is its
+	// on-the-fly-SSA current block at the `as`, `site.maxonOpPos` the ordinal that block stood at), and the
+	// checked value is available there (a parameter, a value from a dominating block, or one defined earlier
+	// in this block — the site reads it, so it is already defined).
+	//
+	// ⚠ THE POSITION IS THE WHOLE POINT. A guard anchored at the END of its block runs after the whole
+	// straight-line body — after every print, call, store and division the out-of-range value reached, so
+	// the language's own check never fires first. No Maxon-tier op position survives `lowerMaxonToStd`'s
+	// 1:N desugaring, so the lowering RECORDS one per site out of the `opRefs.count()` its own walk
+	// already stands at (`RangeSiteWalk`), and this pass spends it into `GuardSite.position`.
+	//
+	// ⭐⭐ **"THE END OF THE BLOCK" MOVES AS SOON AS THE FIRST GUARD SPLITS IT, AND RESOLVING EVERY SITE
+	// TO THE ORIGINAL HEAD IS TWO BUGS AT ONCE.** N sites in one source block all name that block's id.
+	// Each split moves the head's terminator onto a fresh continuation and leaves the new cascade in the
+	// head — so resolving the (k+1)-th site to the head again puts its cascade BEFORE the k-th's branch
+	// and pushes that branch one block further down. Chained that way the guards RUN IN REVERSE SOURCE
+	// ORDER (measured: two out-of-range casts on consecutive lines panicked on the SECOND), and — the
+	// costlier half — all N `cmp` results are DEFINED in the head while each is READ by the terminator of
+	// a different block k levels down. `recordFusableCompare` fuses a compare only when it is the last
+	// flag-clobbering op of the branch's OWN block, so N-1 of them lose their fusion, materialize through
+	// `setcc`, and sit in a register across the whole chain: N-1 compiler-introduced values live at one
+	// point, which is what RULE 3 (RegisterPressureDiagnostic) forbids outright. At N=16 that overflowed
+	// the 14-GPR file and the RULE 3 backstop panicked, on a program with nothing wrong with it.
+	//
+	// So the index is a CHAIN END, not a block identity: a guard moves its site block's entry to its own
+	// continuation, the (k+1)-th cascade lands in the k-th's `__rc_ok`, and every `cmp` is
+	// again the last op before the branch that reads it — fused, holding no register, invisible to the
+	// allocator. Guards then also fire in source order, which is the order a reader expects the FIRST
+	// out-of-range value to be reported in.
+	//
+	// ⭐ **AND THE CHAIN COMPOSES WITH THE POSITION THROUGH `guardChainBase`, WHICH IS THE OTHER HALF OF
+	// THE SAME FACT.** The chain end says WHICH block the (k+1)-th guard splits; the base says where that
+	// block BEGINS in the coordinates the site's position is written in. A site's position is an offset
+	// into the block as the LOWERING left it, and every split shortens the front of that block by exactly
+	// its own split point — so the position to split at is `stdOpPos - base`, and the base advances by the
+	// split point each time. Tracking one without the other measures the (k+1)-th offset against a block
+	// it is no longer in.
+	//
+	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT `IrModule.getBlockByIdIn`, AND THE DIFFERENCE IS A GROWTH
+	// CURVE.** `getBlockByIdIn` is a LINEAR SCAN of `func.blockRefs`; called once per guard site it made
+	// this pass **O(sites × blocks)** — and worse than the plain product, because every guard this pass
+	// emits APPENDS TWO BLOCKS to the very set the next site's scan walks (`__rc_ok`, `__rc_panic`), so the
+	// k-th site scanned a set the previous k-1 had grown. `buildBlockIdIndex`/`blockById` are the cure that
+	// already existed for exactly this shape one pass over: `pruneDeadBlockArgs` introduced them because
+	// resolving an edge per call "would be O(edges × blocks), the shape the allocator's data-representation
+	// contract exists to forbid", and `elimTrivialBlockArgs` shares them rather than keeping a second copy.
+	// This is the third user of the same index over the same id space, not a fourth mechanism — and within
+	// this pass BOTH site kinds read the one column (`retBlockOf` is the other), built once by
+	// `ensureChainIndex`.
+	//
+	// The index is safe to hold across the splits and block appends that follow: it stores blockRef
+	// INDICES, not `IrBlock` aliases (`blockById` re-fetches from `module.blocks` on every call, so no
+	// alias goes stale), a split MUTATES its head block in place and never moves it, and every id a site
+	// names was recorded by the parser and therefore predates the pass. Its ROWS are only ever the
+	// parser's block ids — a continuation is written as a VALUE at its site block's row and never gets a
+	// row of its own — so it stays exactly `func.nextBlockId` wide however many blocks the pass appends.
+	function guardSiteAt(blockId BlockId, stdOpPos BlockOpPos) returns GuardSite
+		self.ensureChainIndex()
+
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
+		let base = try self.guardChainBase.get(blockId) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {blockId}, which blockById just resolved within the function")
+		if stdOpPos < base 'behindTheChain'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
+		end 'behindTheChain'
+
+		// ⚠ THE BOUND IS CHECKED IN THE SITE'S OWN COORDINATES — against the block's PRE-SPLIT op count,
+		// not the chain-end block's current one. Those were the same number while a split moved the ops
+		// past the cut onto the continuation; they are not, now that a continuation is minted empty and
+		// filled only by `materializeChainTails` (see `guardChainSource`). Checked against the block as it
+		// stands, every guard after the first in a block would read a count of zero and this would fire on
+		// a program with nothing wrong with it.
+		let sourceOps = self.chainSourceOps(blockId, chainEnd: block)
+		if stdOpPos > sourceOps.count() 'pastTheBlock'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
+		end 'pastTheBlock'
+
+		return GuardSite.create(block, position: stdOpPos - base)
+	end 'guardSiteAt'
+
+	// ⭐⭐ **THE BLOCK HOLDING *THIS* SITE'S `ret` — ONE INDEX SERVES BOTH SITE KINDS, AND THE ANSWER IS
+	// AN IDENTITY RATHER THAN AN ORDINAL.** A return site records its own block
+	// (`RangeCheckReturnSite.block`), so the question is the same one `guardSiteAt` asks — "where is
+	// block B's exit NOW?" — and it is answered out of the same `guardChainTail`: a block nothing split
+	// is its own chain end, and a block an alias-named guard split has had its `ret` MOVED onto the
+	// continuation its chain-end entry was moved onto in the same breath (`extendGuardChain`).
+	//
+	// ⚠ PAIRING BY ORDINAL IS WRONG HERE. Anything that walks `func.blockRefs` for the k-th live
+	// `ret(value)` pairs a value returned from N places by BLOCK ORDER, and block order is not site
+	// order: a `return` inside a `while` body sorts after the loop's exit block, and a block a guard
+	// split gets an appended `__rc_ok` that sorts LAST however early its source is. Each such site then
+	// raises its panic with the line of a DIFFERENT `return` than the one the value left through.
+	//
+	// The `ret` a site owns is not the k-th of anything: it is the one in the site's own block, and a
+	// block has exactly one. Recording the block is what turns the pairing from an ordering assumption
+	// into an identity — the same cure `RangeCheckSite.block` already is for the alias-named sites.
+	//
+	// ⚠ **THE GROWTH CURVE IS LINEAR IN SITES.** A scan for the owning `ret` would be
+	// **O(sites × blocks)** and worse than that product, because every guard APPENDS `__rc_ok` +
+	// `__rc_panic` (+ a `__rc_chk` per extra bound) to the very set the next site's scan walked: MEASURED
+	// on a function of N guarded `return` sites (`tests/ladders/genretsites.sh`, N = 50/100/200/400) at
+	// **×2.21 ×2.53 ×3.20 CPU per DOUBLING** — a RISING ratio — while allocations and bytes read a
+	// dead-flat ×1.99 / ×2.03, because a scan allocates NOTHING and was therefore invisible to the memory
+	// columns. This resolves in O(1) out of a column built once per function, and only for a function
+	// that emits a guard at all.
+	function retBlockOf(site RangeCheckReturnSite) returns RetBlockLookup
+		self.ensureChainIndex()
+
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
+		if not block.hasTerminatorOp() 'noRetLeft'
+			return RetBlockLookup.notFound
+		end 'noRetLeft'
+
+		let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
+		if not retMatchesValue(term, target: site.value) 'notThisSitesRet'
+			return RetBlockLookup.notFound
+		end 'notThisSitesRet'
+
+		return RetBlockLookup.found(block)
+	end 'retBlockOf'
+
+	// ⚠ **THE THREE CHAIN COLUMNS ARE ONE INDEX, SO THEY ARE BUILT IN ONE PLACE AND TESTED BY ONE
+	// `isEmpty`** — see `guardChainTail`. Both site kinds ask for it (`guardSiteAt` for an alias-named
+	// site's position, `retBlockOf` for a `return` site's `ret`), and whichever asks first pays for it;
+	// a function with a `rangeChecks` entry but no runtime guard never does.
+	//
+	// ⚠ **LAZY, AND THAT IS LOAD-BEARING RATHER THAN THRIFT.** A `rangeChecks` entry is filed for a
+	// function that merely passes a CONSTANT ARGUMENT to any declared callee, or constructs a generic
+	// instance (`Parser.commitRangeChecks`) — so the overwhelming majority of entries reach this pass
+	// with no RUNTIME site at all, and a call-argument site is `compileTimeOnly` and never asks. Building
+	// this in `create` would hand every one of those functions three fresh `func.nextBlockId`-sized
+	// arrays it never reads, turning a cost this pass does not currently pay into one it pays
+	// program-wide — and allocations are the trend log's exact column, so it would read as a regression
+	// on every future row.
+	function ensureChainIndex()
+		if not self.guardChainTail.isEmpty() 'alreadyBuilt'
+			return
+		end 'alreadyBuilt'
+
+		self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
+		self.guardChainBase = BlockOpPosArray.create()
+		self.guardChainBase.growFilled(self.func.nextBlockId as ElementIndex, value: 0)
+		self.guardChainSource = PreSplitOpsByBlock.create()
+		self.guardChainSource.growFilled(self.func.nextBlockId as ElementIndex, value: OpIndexArray.create())
+	end 'ensureChainIndex'
+
+	// ---- the panic message ----
+
+	// The runtime panic string, baked at compile time. THIS pass owns only the TEXT a range violation
+	// says; the `panic at <file>:<line>: ` prefix and the trailing newline are `panicMessageLine`'s, so
+	// this message and a user `panic("…")`'s cannot drift into two formats. `mrt_panic` prints the
+	// result verbatim, then the `Stack trace:` block, then exits `PanicExitCode`.
+	//
+	// ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT (N2 review)** — the same `sourceSpelledAliasName` the
+	// compile-time twin (`literalOutOfRangeMessage`) applies, so a range-contested program cannot panic
+	// naming a typealias no file declares. It also ends an inconsistency the mint created between the two
+	// SLOTS one alias can guard: a value flowing into an array ELEMENT carried the qualified spelling while
+	// the identical alias on a plain PARAMETER carried the bare one, because only an instance's element is
+	// ever qualified — one alias, two spellings, decided by where the value happened to land.
+	function rangeCheckMessage(filePath FilePath, line LineNumber, aliasName ByteArray) returns ByteArray
+		return panicMessageLine(filePath, line: line, text: "Range check failed: value outside typealias '{String.from(sourceSpelledAliasName(aliasName))}'")
+	end 'rangeCheckMessage'
+
+	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
+	// compile-time E3005 and whose in-range use needs no runtime code. Built once per function over the
+	// pre-guard ops, and PARTITIONED BY THE CONST'S OWN TYPE (see the `intConsts`/`floatConsts` fields):
+	// the payloads are numbers on one side and IEEE-754 bit patterns on the other, and nothing
+	// downstream could tell them apart from the payload alone.
+	function collectConsts()
+		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
+			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
+			match op 'c'
+				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
+				// A NEGATED INTEGER literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a
+				// `const`, not a folded `const`, so the E3005 literal check would miss it and emit a runtime
+				// guard where the spec expects a COMPILE error. Fold it here — the `const` operand is already
+				// recorded (it is emitted before the `neg`, and ops are walked in order). Only `neg` folds;
+				// every other unary (a domain conversion, a bitwise `not`) is left to the runtime path.
+				//
+				// A negated FLOAT literal needs nothing here: the parser folds `-<float literal>` into a
+				// single literal carrying the sign-flipped bits (`parseNegatedNumericLiteral`), so it arrives
+				// as a plain `const` — and `neg` is the INTEGER negate, which is why this stays int-only.
+				binOp then break 'c'
+				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
+				cmp or
+					binOpImm or
+					cmpImm or
+					div or
+					mod or
+					condBranch or
+					branch or
+					ret or
+					param or
+					call or
+					retVoid or
+					globalAddr or
+					loadIndirect or
+					storeIndirect or
+					osAllocPages or
+					osWriteStdout or
+					rdataAddr or
+					tryCall or
+					errorReturn or
+					osExit or
+					funcAddr or
+					callIndirect or
+					osPanic or
+					osReadClock or
+					osSleepMs or
+					osProcessSpawn or
+					osProcessExitCode or
+					osWaitHandles or
+					osCloseHandle or
+					osWaitHandle or
+					osFreePages then break 'c'
+				switch then break 'c'
+				// A witness call's result is a call return, not a foldable constant — nothing to record, and
+				// neither of the throwing form's two results is one either.
+				witnessCall then break 'c'
+				witnessTryCall then break 'c'
+				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
+				osPipeCreate or
+					osIocpCreate or
+					osEventCreate or
+					osThreadCreate or
+					osLockInit or
+					osLockEnter or
+					osLockLeave or
+					osReadOverlapped or
+					osLastError or
+					osProcessSpawnInherit or
+					osCancelIo or
+					osGetPid or
+					osPipeCreateOutbound or
+					osWriteFile then break 'c'
+				// The wall-clock read produces no ranged-typealias value to range-check.
+				osReadWallClock then break 'c'
+				// R4.1 + R4.2: a raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
+				osFileOpenRead or
+					osFileClose or
+					osReadFile or
+					osFileOpenWrite or
+					osFileSize or
+					osFileDelete or
+					osFileRename or
+					osFileFindFirst or
+					osFileFindClose or
+					osFileFindNext or
+					osDirCreate or
+					osDirCurrentPath or
+					osFileAttributes then break 'c'
+				// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+				osPanicValue then break 'c'
+				osCommandLine then break 'c'
+				// W5: a raw OS handle and a character count are not ranged-typealias values.
+				osStdHandle then break 'c'
+				osExecutablePath then break 'c'
+				// W35: the byte count the OS reports for a stream write is not a ranged-typealias value.
+				osWriteStderr then break 'c'
+				// A frame address is not a ranged-typealias value.
+				stackRecordAddr then break 'c'
+				osOpenNamedSegment or
+					osMapNamedSegment or
+					osTickCountMs then break 'c'
+				// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
+				// band, the machine query AND the thread-CPU read — are import calls too.
+				osHandleSetInherit or
+					osPipePeek or
+					osEnvRead or
+					osProcessTerminate or
+					osSocketStartup or
+					osSocketResolve or
+					osSocketFreeAddrInfo or
+					osSocketCreate or
+					osSocketConnect or
+					osSocketSend or
+					osSocketRecv or
+					osSocketClose or
+					osCpuCount or
+					osThreadCpuTicks then break 'c'
+				// F1a: the decommit defines nothing, so it can never define a negated int constant.
+				osDecommitPages then break 'c'
+				// F1b: a fill defines nothing, so it can never define a negated int constant.
+				memFill then break 'c'
+				// F1c: a reserve and a commit define a page base the OS chose, never a negated int constant.
+				osCommitPages or
+					osReservePages then break 'c'
+				// F2 + G1: every value-defining member of this range answers something the machine produces at run
+				// time, never a negated int constant.
+				atomicCas or
+					atomicRmw or
+					currentThreadToken or
+					tlsAlloc or
+					tlsSetValue or
+					tlsSlotLoad or
+					osSetEvent or
+					osEnterBackgroundPriority then break 'c'
+				osFileOpenWriteExecutable then break 'c'
+				osEnvBlock or
+					osEnvBlockFree then break 'c'
+				loadAcquire or
+					storeRelease then break 'c'
+				osHandleFileType then break 'c'
+				osCreateNamedSegment or
+					osUnmapNamedSegment or
+					osUnpublishNamedSegment or
+					covPoint or
+					osHostSample then break 'c'
+			end 'c'
+		end 'eachOp'
+	end 'collectConsts'
+
+	function recordConst(resultId ValueId, value ParsedInt, valueType StdType)
+		if stdTypeIsFloat(valueType) 'float'
+			self.floatConsts.upsert(resultId, value: value)
+			return
+		end 'float'
+		self.intConsts.upsert(resultId, value: value)
+	end 'recordConst'
+end 'RangeCheckEmitter'
+
+// The label this pass's continuations carry. `InlineManagedPrimitives` passes its own — the two passes
+// share the splitter below and nothing else, and a golden that named every continuation `__rc_ok` would
+// say a range check produced blocks a range check knows nothing about.
+let RangeCheckOkLabel = b"__rc_ok"
+
+// ⭐⭐ **THE BLOCK SPLIT, SHARED — AND SHARED BECAUSE THERE IS EXACTLY ONE RULE TO GET RIGHT.** Split
+// `head` at `position`: ops before it stay in `head`, ops from it on move to the continuation — and the
+// continuation takes the head block's whole EXIT with them, the terminator, the conditional branch AND
+// the outgoing edge arguments, leaving the head un-terminated for the caller to finish. Miss any one of
+// those three and the result is a block with two exits or a successor whose phis lose their incoming
+// values, neither of which any gate reads back. `InsertRangeChecks` needed it first and
+// `InlineManagedPrimitives` (EC1) needs the identical thing, so it is a free function over `(module,
+// func)` rather than a method: a second copy would be that one rule written twice, in two passes that
+// split for different reasons and would learn about a change to it separately.
+//
+// The LABEL is the caller's, because a continuation belongs to the pass that minted it and the label
+// reaches the committed goldens.
+//
+// ⚠ **WHY `InsertRangeChecks`' RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE
+// OTHER.** A return site has no chain to extend (see `GuardChain`), and the block it splits can be a
+// continuation an alias site minted — `retBlockOf` resolves its recorded block to that block's current
+// chain END — so it is a block no site's coordinates describe and no pre-split list covers. It is also
+// split at its very END (`guardReturns` passes `opRefs.count()`), which is why splitting in place costs
+// nothing there: the loop moves no op and the truncate drops none. `splitChainEnd` cannot work this way
+// because it repeats on the SAME source block, and that is exactly where moving the ops past the cut
+// becomes Θ(guards × block).
+//
+// ⛔⛔ **`InlineManagedPrimitives` TAKES THIS HALF, AND THE REASON WRITTEN HERE UNTIL 2026-08-25 DID NOT
+// FOLLOW.** It said that pass "splits at ONE position per call site and never repeats on a block it has
+// already split — its continuation is what it scans next — so the quadratic that argument is about
+// cannot arise there". The premise is true and the conclusion does not come from it: the continuation IS
+// the rest of that block, so K carve sites in a block of B ops would copy the tail K times,
+// Σ(B − pₖ) ≈ K·B/2 — the very shape `splitChainEnd` above exists to avoid, arrived at by a different
+// route. **A rationale that does not hold is worse than none: it is what a sixth primitive's author
+// would read as a licence.**
+//
+// ✅ **THE LINEARITY IS MEASURED** — `tests/ladders/genmanagedsites.sh onefunc` puts the sites in ONE
+// straight-line block and reads ×1.99 ×1.99 ×2.00 allocations and ×2.07 ×2.10 ×2.06 bytes at
+// n = 32/64/128/256, where Σ(B − pₖ) would read ×4; its `spread` control holds the same site count one
+// per function and sits on the same curve. **What follows is the READING of the emission sites that
+// explains that, and it is a reading.** The three THROWING entries arrive as a `tryCall` whose error
+// flag is tested immediately, so the call is the LAST op in its block and this function copies ZERO ops;
+// the one
+// non-throwing carve (`__managed_get_unchecked`) is emitted once per `for`-in header, so its block holds
+// exactly one and its tail is copied exactly once; and `__managed_count` is rewritten in place and
+// carves nothing. ⇒ The product term is MEASURED-LINEAR-IN-PRACTICE, not absent. A primitive that
+// carves MID-block, or a pass that merges a throwing call's blocks, reinstates it with nothing in the
+// way — re-run that ladder then, and take `splitChainEnd` if it bends.
+export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position BlockOpPos, label ByteArray) returns IrBlock
+	var headBlock = head
+	var tailOps = OpIndexArray.create()
+	for i in position upto headBlock.opRefs.count() 'moveTail'
+		let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
+		tailOps.push(opIdx)
+	end 'moveTail'
+	headBlock.opRefs.truncate(position as ElementIndex)
+
+	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
+	ok.opRefs = tailOps
+	return ok
+end 'splitBlockInPlace'
+
+// The half of a split that is the same whichever way the ops are placed: mint the continuation and move
+// `head`'s EXIT onto it — the terminator, the conditional branch and the outgoing edge arguments —
+// leaving `head` un-terminated for the caller to finish.
+//
+// ⚠ NOT exported, and that is a fact the SELF-COMPILE enforces rather than a preference: the compiler's own
+// `checkUnusedExports` reports **E3092** on an `export` no other file names, and this half has exactly one
+// caller outside its own two — there isn't one. `splitBlockInPlace` above is the shared entry;
+// `splitChainEnd` reaches this directly because it places the ops itself.
+function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
+	var ok = module.addBlock(func, label: label)
+	var headBlock = head
+
+	ok.terminator = headBlock.terminator
+	ok.condBranch = headBlock.condBranch
+	ok.branchEdges = headBlock.branchEdges
+
+	headBlock.terminator = Terminator.unset
+	headBlock.condBranch = CondBranch.none
+	headBlock.branchEdges = BranchEdgeArray.create()
+	return ok
+end 'splitBlockExit'
+
+// ⭐ **THE `ValueId` A NARROWED PARAMETER'S GUARD CHECKS — its DECLARED POSITION, and the two readers of
+// that fact must be one function.** `parseFunction` reserves ids `0..paramCount-1` for parameters, user
+// parameters first, and `rangedParamSites` walks that same declared list (see its header), so a site's
+// `index` IS its value. `guardRangedParam` spends it to emit the guard and `entryGuardAlreadyCovers`
+// spends it to decide a `return` is already behind one — and an elision that computed the id differently
+// from the guard it claims to stand behind would elide against a guard that is not there.
+function rangedParamValue(site RangeCheckParamSite) returns ValueId
+	return valueIdAtParamPosition(site.index)
+end 'rangedParamValue'
+
+// The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the
+// unsigned-max upper shape proves it is a huge unsigned the range ADMITS. Named so the sign
+// boundary is not a bare `0` sitting beside the range's own bounds.
+let SignBoundary = 0 as ParsedInt
+
+// The bound checks a `[low, high]` range needs, in cascade order. See TypeRules'
+// `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
+//
+// ⚠ **IT IS EMPTY ONLY FOR A RANGE UNBOUNDED ON BOTH SIDES, WHICH IS `rangeIsFull`'s CASE AND IS ELIDED
+// BEFORE THIS.** A WHOLLY NEGATIVE range's upper is a real bound and is not elided — see
+// `rangeNeedsUpperCheck`'s header for the two uncatchable `#DE`s eliding it reaches.
+function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeBoundCheckArray
+	var checks = RangeBoundCheckArray.create()
+
+	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
+	// compares cannot express its upper (it rides as `-1`), so out-of-range is `value >= 0 AND
+	// value < low`: a negative (bit-63-set) value is a huge unsigned IN range, a non-negative value
+	// below `low` is out. The cascade is `value < 0 → in range` then `value < low → panic`, which the
+	// backend fuses to `cmp value,0; jl ok; cmp value,low; jl panic; jmp ok`.
+	//
+	// ⚠⚠ **GATED ON A POSITIVE LOW, AND WITHOUT THAT GATE THE CASCADE IS UNREACHABLE CODE.** The
+	// full-unsigned `int(0 to u64.max)` reaches `boundChecks` now that it is a guarded QUANTITY, and its
+	// `low` IS the sign boundary — so this arm would emit `value < 0 → in range` followed by
+	// `value < 0 → panic`, whose second compare is only reached when the first was false and can
+	// therefore never fire. Falling through to the ordinary path gives it the one check it wants:
+	// `rangeNeedsLowerCheck` is true (`0 > i64.min`) and `rangeNeedsUpperCheck` is false (the unsigned
+	// upper is unbounded), which is exactly `value < 0 → panic`.
+	//
+	// ⚠ A FLOAT IS NEVER ELIGIBLE. The shape reinterprets a signed bound as an unsigned one; IEEE-754
+	// ordering is sign-and-magnitude and matches neither, so a float bound whose pattern happens to
+	// equal -1 (which is a NaN, not `u64.max`) must take the ordinary two-bound path.
+	if not isFloat and low > SignBoundary and rangeIsUnsignedMaxUpper(low, high: high) 'unsignedMaxUpper'
+		checks.push(RangeBoundCheck.createInRange(StdCmpPred.lt, bound: SignBoundary))
+		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
+		return checks
+	end 'unsignedMaxUpper'
+
+	// ⚠ A NaN PASSES a float guard, deliberately rather than by oversight. `lt`/`gt` lower to the
+	// NaN-correct SWAPPED `ucomisd`+`ja` form, which answers FALSE for an unordered compare — so neither
+	// bound fires and the value is admitted. Rejecting a NaN would need a check whose FALSE edge is the
+	// panic (`value >= low` failing on unordered), which the cascade deliberately does not have.
+	if rangeNeedsLowerCheck(low, isFloat: isFloat) 'lower'
+		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
+	end 'lower'
+	if rangeNeedsUpperCheck(low, high: high, isFloat: isFloat) 'upper'
+		checks.push(RangeBoundCheck.create(StdCmpPred.gt, bound: high))
+	end 'upper'
+	return checks
+end 'boundChecks'
+
+// Record a negated-constant result: `neg` of a recorded constant `operand` is `-operand`. Any other
+// unary opcode is not an integer constant this check reads, so nothing is recorded.
+function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueId, opcode StdUnaryOpcode)
+	if opcode != StdUnaryOpcode.neg 'notNeg'
+		return
+	end 'notNeg'
+	if not constMap.contains(operand) 'operandNotConst'
+		return
+	end 'operandNotConst'
+	constMap.upsert(resultId, value: -constMap.constantOf(operand))
+end 'recordConstNeg'
+
+// Is `term` the `ret` of exactly `target`? Asked ONCE PER RETURN SITE, of the one block that site's
+// `return` put its terminator in — so a `false` says the site's own `ret` is gone (or carries a value the
+// hand-off promoted out from under the site), which is the whole of `RetBlockLookup.notFound`.
+//
+// ⚠ IT ANSWERS A `bool` AND NOT A UNION, AND THAT IS MEASURED. A1h tried a payload-carrying
+// `RetTarget` union in a loop over every ret-bearing block; a payload case is a heap box, so it cost +2
+// allocations per return site (+805 at N=400) against a phase this work leaves allocation-identical.
+// One exhaustive `StdOp` match, in the one place the question is asked, so a new variant is a compile
+// error here rather than a `ret` this silently stops recognizing — `collectConsts` reads the same ops
+// the same way for the same reason.
+function retMatchesValue(term StdOp, target ValueId) returns bool
+	return match term 'term'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch gives false
+		ret(retValId) gives retValId == target
+		// `retVoid` is in this range and belongs there: it returns no value, so no site can name it.
+		param or
+			call or
+			retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall gives false
+		// ⭐⭐ **A THROWING FUNCTION LEAVES THROUGH `errorReturn`, NOT `ret`, AND READING ONLY `ret` HERE
+		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION (G14).** `LowerMaxonToStd.emitRetOrErrorReturn`
+		// picks the terminator off the THROWS clause — *"the ONE place the ABI decides ret-vs-errorReturn"* — so
+		// a `returns ExitCode throws E` function's `return v` lands here as `errorReturn(v, flag)` and was swept
+		// up by the arm below as "not a `ret`". `retBlockOf` then answers `notFound` and the site is dropped
+		// in silence — a `returns ExitCode throws MatchError` function returning -5 runs unguarded instead of
+		// panicking `Range check failed: value outside typealias 'ExitCode'`.
+		//
+		// The PRIMARY value is what a return site names — the error flag is the ABI's second register and no
+		// range-check site is ever recorded against it — so the comparison is `retValId`'s alone, exactly as the
+		// `ret` arm's is. `emitDeadReturn` already emits the matching `errorReturn` shape for the panic block it
+		// splits in front of, so the guard this unlocks terminates a throwing function correctly on both edges.
+		errorReturn(retValId, _) gives retValId == target
+		osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages gives false
+		// The jump table is a branch terminator, not a `ret` — it returns no value.
+		switch gives false
+		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the
+		// throwing form: it is a body op with two results, neither of them a return terminator.
+		witnessCall gives false
+		witnessTryCall gives false
+		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
+		osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile gives false
+		// The wall-clock read is a body op, never a `ret`.
+		osReadWallClock gives false
+		// R4.1 + R4.2: every file op is a body op, never a `ret`.
+		osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes gives false
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives false
+		osCommandLine gives false
+		// W5: both are body ops, never a `ret`.
+		osStdHandle gives false
+		osExecutablePath gives false
+		// W35: a stream write is a body op, never a `ret`.
+		osWriteStderr gives false
+		// A promoted record's address is a body op, never a `ret`.
+		stackRecordAddr gives false
+		osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs gives false
+		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
+		// band, the machine query AND the thread-CPU read — are import calls too.
+		osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks gives false
+		// F1a: the decommit is a body op, never the `ret` this asks about.
+		osDecommitPages gives false
+		// F1b: a fill is a body op, never the `ret` this asks about.
+		memFill gives false
+		// F1c: a reserve and a commit are body ops too, never the `ret` this asks about.
+		osCommitPages or
+			osReservePages gives false
+		// F2 + G1: every member of this range is a body op, never the `ret` this asks about.
+		atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority gives false
+		osFileOpenWriteExecutable gives false
+		osEnvBlock or
+			osEnvBlockFree gives false
+		loadAcquire or
+			storeRelease gives false
+		osHandleFileType gives false
+		osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample gives false
+	end 'term'
+end 'retMatchesValue'
+
+// The literal-const map this pass reads is `ConstValueMap` (FoldConstOperands) — each `const` result id
+// to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or
+// nothing) rather than a runtime guard. It was a byte-identical private copy here (`RangeConstMap`);
+// it is now the ONE exported container both Std passes share. Only the POPULATE walk stays this pass's
+// own — `collectConsts`, which keeps ONE MAP PER DOMAIN (a float payload is a bit pattern) and
+// additionally folds a `neg` of a `const` (`recordConstNeg`) that FoldConstOperands has no reason to.

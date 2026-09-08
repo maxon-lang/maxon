@@ -1,0 +1,25 @@
+// Test: error.wrong-union-in-a-nested-union-payload
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	empty
+	a(x Integer)
+end 'Inner'
+
+union Other
+	none
+	b(y Integer)
+end 'Other'
+
+union Wrap
+	bare
+	wrap(inner Inner)
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.wrap(Other.b(5))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:30: type mismatch: 'expected Inner, got Other'

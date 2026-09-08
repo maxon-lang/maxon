@@ -1,0 +1,85 @@
+// Test: in-a-return-value
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function bothTrue() returns bool
+	return t() and t()
+end 'bothTrue'
+
+function eitherTrue() returns bool
+	return f() or t()
+end 'eitherTrue'
+
+function main() returns ExitCode
+	var code = 0
+	if bothTrue() 'a'
+		code = code + 1
+	end 'a'
+	if eitherTrue() 'b'
+		code = code + 2
+	end 'b'
+	return code
+end 'main'
+---
+ExitCode: 3
+---
+func @bothTrue {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 1
+  scmerge:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @eitherTrue {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 1
+  scmerge:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl bothTrue
+    arm64.cbz x0, ifcont#2
+  a:
+    arm64.movImm x19, 1
+  ifcont#2:
+    arm64.bl eitherTrue
+    arm64.cbz x0, critsplit
+  b:
+    arm64.add x0, x19, 2
+    arm64.b ifcont#4
+  critsplit:
+    arm64.movRegReg x0, x19
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at in-a-return-value.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

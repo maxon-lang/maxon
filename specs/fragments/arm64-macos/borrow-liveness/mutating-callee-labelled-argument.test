@@ -1,0 +1,20 @@
+// Test: mutating-callee-labelled-argument
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+function grow(n Integer, other StringArray, dest StringArray) returns Integer
+	dest.clear()
+	return n + other.count()
+end 'grow'
+
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	var spare = StringArray.create()
+	let s = try arr.get(0) otherwise ""
+	let k = grow(1, dest: arr, other: spare)
+	print("[{s}] {k}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:14:10: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 13)

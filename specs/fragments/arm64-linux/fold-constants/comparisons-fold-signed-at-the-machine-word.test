@@ -1,0 +1,64 @@
+// Test: comparisons-fold-signed-at-the-machine-word
+typealias Word = int(i64.min to i64.max)
+
+function less(a Word, b Word) returns bool
+	return a < b
+end 'less'
+
+function equal(a Word, b Word) returns bool
+	return a == b
+end 'equal'
+
+function main() returns ExitCode
+	if not less(-1, b: 0) 'negativeIsLessThanZero'
+		return 1
+	end 'negativeIsLessThanZero'
+	if less(0, b: -1) 'zeroIsNotLessThanNegative'
+		return 2
+	end 'zeroIsNotLessThanNegative'
+	if not less(i64.min, b: i64.max) 'theWholeSpan'
+		return 3
+	end 'theWholeSpan'
+	if not equal(-1, b: -1) 'equality'
+		return 4
+	end 'equality'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body#10:
+    arm64.movImm x0, 1
+  __il_cont#9:
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_body#14
+  negativeIsLessThanZero:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#14:
+    arm64.movImm x0, 1
+  __il_cont#13:
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_body#16
+  theWholeSpan:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#16:
+    arm64.movImm x0, 1
+  __il_cont#15:
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont
+  equality:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

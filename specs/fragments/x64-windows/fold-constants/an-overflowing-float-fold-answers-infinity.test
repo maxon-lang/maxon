@@ -1,0 +1,163 @@
+// Test: an-overflowing-float-fold-answers-infinity
+typealias Real = float(f64.min to f64.max)
+
+function scaleF(a Real, b Real) returns Real
+	return a * b
+end 'scaleF'
+
+function main() returns ExitCode
+	let big = scaleF(1.0e308, b: 10.0)
+	if "{big}" != "inf" 'overflowsToInfinity'
+		return 1
+	end 'overflowsToInfinity'
+	if big != big * 2.0 'infinityIsAbsorbing'
+		return 2
+	end 'infinityIsAbsorbing'
+	if "{scaleF(-1.0e308, b: 10.0)}" != "-inf" 'andTheNegativeEnd'
+		return 3
+	end 'andTheNegativeEnd'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.storeSlotReg slot0, xmm6
+  __il_body#8:
+    x64.movsdRegRip xmm6, [rip + __fconst_0x7ff0000000000000]
+  __il_cont#7:
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect __float_toString
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rdx, [rip + __str_rec_94]  ; "inf"
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_eq
+    x64.movRegReg r12, r8
+    x64.xorRegImm32 r12, r8, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont#2
+  overflowsToInfinity:
+    x64.movRegImm32 r8, 1
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movRegReg xmm1, xmm6
+    x64.mulsdRegReg xmm1, xmm6, xmm0
+    x64.ucomisdRegReg xmm6, xmm1
+    x64.jcc parity, infinityIsAbsorbing
+  fordered:
+    x64.jcc equal, __il_body#10
+  infinityIsAbsorbing:
+    x64.movRegImm32 r8, 2
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#10:
+    x64.movsdRegRip xmm0, [rip + __fconst_0xfff0000000000000]
+  __il_cont#9:
+    x64.callDirect __float_toString
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rdx, [rip + __str_rec_95]  ; "-inf"
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_eq
+    x64.movRegReg r12, r8
+    x64.xorRegImm32 r12, r8, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont#6
+  andTheNegativeEnd:
+    x64.movRegImm32 r8, 3
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,74 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) and 125
+end 'main'
+---
+ExitCode: 72
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rsi, 0
+  whilehdr:
+    x64.cmpRegImm32 rsi, 20
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.movRegReg rdi, rsi
+    x64.sarRegImm8 rdi, rsi, 63
+    x64.shrRegImm8 rdi, rdi, 63
+    x64.leaRegRegReg rdi, rsi, rdi
+    x64.sarRegImm8 rdi, rdi, 1
+    x64.imulRegRegImm32 rdi, rdi, 2
+    x64.movRegReg r8, rsi
+    x64.subRegReg r8, rsi, rdi
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifelse
+  even:
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRegReg rcx, rcx, rsi
+  ifcont:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r8, rax, rdx
+    x64.andRegImm32 r8, r8, 125
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at int-while-loop-multiple-accumulators.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

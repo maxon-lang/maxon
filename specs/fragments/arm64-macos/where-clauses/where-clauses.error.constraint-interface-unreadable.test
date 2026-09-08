@@ -1,0 +1,36 @@
+// Test: where-clauses.error.constraint-interface-unreadable
+typealias Code = int(0 to u32.max)
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Code
+		return self.item.digest()
+	end 'go'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+interface Digest
+	function digest() returns Code
+	function bogus(,) returns Code
+end 'Digest'
+
+function main() returns ExitCode
+	return PointBox.create(Point.create(42)).go()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse

@@ -1,0 +1,1901 @@
+// Table-driven DFA lexer for Maxon source code.
+// Accepts a String source, converts to ByteArray internally for efficient byte-level scanning,
+// and produces tokens with String values sliced from the original source.
+
+export typealias LineNumber = int(0 to u64.max)
+export typealias ColumnNumber = int(0 to u64.max)
+
+// Dense columns of line/column positions. Homed here, next to their element
+// types, because two unrelated consumers need them: `SourceRangeTable` (the
+// op-parallel span store) and `BlockSourceInfo` (the per-block coverage
+// footprint).
+export typealias LineNumberArray = Array with LineNumber
+export typealias ColumnNumberArray = Array with ColumnNumber
+
+typealias ByteCursor = ArrayIterator with Byte
+
+export union LexerError implements Error
+	unexpectedEof(line LineNumber, column ColumnNumber)
+	unterminatedString(line LineNumber, column ColumnNumber)
+	unterminatedBlockComment(line LineNumber, column ColumnNumber)
+	// An opening `{` inside a double-quoted string didn't close before the
+	// string did. The (line, column) point at the offending `{` so the
+	// diagnostic underlines the brace itself rather than the EOF position.
+	// Use `\{` to embed a literal `{` in a string literal.
+	unescapedBrace(line LineNumber, column ColumnNumber)
+	// A `#`-prefixed directive whose name is not one of the recognized
+	// directive keywords (`if`, `else`, `endif`). Carries the bare name so
+	// the surfacing diagnostic can quote the offending text.
+	unknownDirective(name String, line LineNumber, column ColumnNumber)
+end 'LexerError'
+
+// --- Character classes ---
+enum CharClass
+	other
+	space
+	tab
+	cr
+	lf
+	lParen
+	rParen
+	lBrace
+	rBrace
+	lBracket
+	rBracket
+	equals
+	bang
+	less
+	greater
+	plus
+	minus
+	star
+	colon
+	slash
+	squote
+	dquote
+	backslash
+	dot
+	digit
+	alpha
+	eof
+	comma
+	COUNT
+end 'CharClass'
+
+// --- DFA states ---
+enum DfaState
+	// Live states (need more input)
+	start
+	sawEq
+	sawBang
+	sawLt
+	sawGt
+	sawSlash
+	// Terminal states
+	skipWs
+	skipCr
+	newline
+	lParen
+	rParen
+	lBrace
+	rBrace
+	plus
+	minus
+	star
+	colon
+	eq
+	eqEq
+	bangEq
+	lt
+	ltEq
+	gt
+	gtEq
+	bang
+	enterSquote
+	enterDquote
+	enterDigit
+	enterAlpha
+	enterComment
+	enterBlockComment
+	slash
+	skipOther
+	dot
+	lBracket
+	rBracket
+	emitBackslash
+	comma
+	COUNT
+end 'DfaState'
+
+// --- Action codes ---
+// Start at 1 so 0 is never a valid action (catches uninitialized table entries)
+enum Action
+	skip = 1
+	skipCr
+	newline
+	emit
+	emit2
+	enterStrSq
+	enterStrDq
+	enterNumber
+	enterIdent
+	enterComment
+	enterBlockComment
+end 'Action'
+
+// --- Token kind enum ---
+// String-backed: each variant carries its diagnostic display text as
+// `.rawValue`, so error messages can stringify a kind directly without
+// needing a separate display lookup. Comparisons remain ordinal-based.
+// Backing strings carry no surrounding quotes — callers that want the
+// quoted form (e.g. `'function'` in expected-token diagnostics) wrap
+// the value at the use site.
+export enum TokenKind
+	// Top level
+	function = "function"
+	let = "let"
+	typealias = "typealias"
+	export = "export"
+	public = "public"
+	// Control flow
+	if = "if"
+	else = "else"
+	while = "while"
+	for = "for"
+	in = "in"
+	break = "break"
+	continue = "continue"
+	return = "return"
+	panic = "panic"
+	end = "end"
+	match = "match"
+	then = "then"
+	fallthrough = "fallthrough"
+	default = "default"
+	upto = "upto"
+	gives = "gives"
+	try = "try"
+	otherwise = "otherwise"
+	throw = "throw"
+	ignore = "ignore"
+	// Cooperative concurrency: `async f()` spawns a green thread returning a
+	// promise; `await p` suspends until it completes. See specs/async-await.md.
+	async = "async"
+	await = "await"
+	// Declarations
+	returns = "returns"
+	var = "var"
+	type = "type"
+	union = "union"
+	enum = "enum"
+	static = "static"
+	interface = "interface"
+	extension = "extension"
+	extends = "extends"
+	implements = "implements"
+	uses = "uses"
+	with = "with"
+	where = "where"
+	self = "self"
+	selfType = "Self"
+	throws = "throws"
+	from = "from"
+	to = "to"
+	mod = "mod"
+	// Logical / bitwise operators
+	and = "and"
+	or = "or"
+	not = "not"
+	xor = "xor"
+	shl = "shl"
+	shr = "shr"
+	as = "as"
+	is = "is"
+	// `sizeof(Type)` — a compile-time-or-descriptor intrinsic yielding a type's byte size (P1.6-B1).
+	// Its own keyword so `sizeof(T)` parses its parenthesized operand as a TYPE (recovering `T` as the
+	// enclosing generic type's parameter), not as a value-position call to a function named `sizeof`.
+	sizeof = "sizeof"
+	// `countof(Type)` — `sizeof`'s twin for a SIZED container type: how many ELEMENTS the type holds
+	// (`Vector with 3 Int` ⇒ 3), rather than how many bytes one value of it occupies (W190). Its own keyword
+	// for `sizeof`'s reason — the parenthesized operand is a TYPE, and an identifier-arm read would make
+	// `countof(Self)` a value-position call to a function nobody declared.
+	countof = "countof"
+	// Literals
+	true = "true"
+	false = "false"
+	// Primitive types
+	int = "int"
+	float = "float"
+	bool = "bool"
+	cstring = "cstring"
+	// Literals
+	intLiteral = "integer literal"
+	floatLiteral = "float literal"
+	charLiteral = "character literal"
+	stringLiteral = "string literal"
+	byteStringLiteral = "byte string literal"
+	// Delimiters for pre-lexed interpolation expressions. A double-quoted
+	// string containing `{...}` interpolations emits as:
+	//   stringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
+	//   stringLiteral("fragment1") stringInterpStart <expr tokens> stringInterpEnd
+	//   ...
+	//   stringLiteral("fragmentN")
+	// Strings without interpolations emit a single stringLiteral as
+	// before. This lets the parser consume interpolated expressions inline
+	// from the main token stream instead of re-lexing the expression bytes
+	// through a sub-parser for every `{...}` segment.
+	stringInterpStart = "interpolation start"
+	stringInterpEnd = "interpolation end"
+	// ⭐ **A FORMAT SPECIFIER IS ONE TOKEN OF RAW SOURCE — `"{n:08x}"` emits
+	//   stringInterpStart intLiteral(n) stringFormatSpec("08x") stringInterpEnd.**
+	// It is captured by the LEXER rather than reassembled by the parser from the tokens
+	// the DFA would otherwise make of it, because those tokens do not carry the text
+	// back: `08x` lexes as `intLiteral("08") identifier("x")` and `.2` as `dot`
+	// `intLiteral("2")`, and a `dot` carries `EmptySourceText` (its kind implies its
+	// text), so a reassembly would silently drop every punctuator the spec contains.
+	// The bytes between the `:` and the closing `}`
+	// are therefore taken verbatim, once, by `scanInterpFormatSpec`.
+	stringFormatSpec = "format specifier"
+	// Identifiers
+	identifier = "identifier"
+	// Punctuation
+	leftParen = "("
+	rightParen = ")"
+	leftBrace = "\{"
+	rightBrace = "}"
+	leftBracket = "["
+	rightBracket = "]"
+	equals = "="
+	equalsEquals = "=="
+	bangEquals = "!="
+	lessThan = "<"
+	lessEquals = "<="
+	greaterThan = ">"
+	greaterEquals = ">="
+	plus = "+"
+	minus = "-"
+	star = "*"
+	slash = "/"
+	dot = "."
+	colon = ":"
+	comma = ","
+	// `@` prefixes a compiler annotation (currently only `@heap`). Emitted as a
+	// standalone token; the parser consumes it together with the following
+	// annotation identifier (e.g. `heap`) and the `var`/`let` it decorates.
+	at = "@"
+	// Conditional-compilation directives. Emitted as standalone tokens by the
+	// lexer; the parser consults the build target to decide which branch to
+	// keep and skips the others at the token-stream level.
+	hashIf = "#if"
+	hashElse = "#else"
+	hashEndif = "#endif"
+	// `///` — the ONE comment form that is a token. `//` and `/* … */` are dropped by the lexer; this one
+	// is emitted because two readers OUTSIDE the grammar need the text and the span back: `maxon fmt`
+	// round-trips it, and the LSP maps a cursor position into it. The grammar itself never reads one —
+	// `tokenKindIsSkippedLayout` is what every parser cursor steps over it by.
+	docComment = "doc comment"
+	newline = "newline"
+	eof = "end of file"
+end 'TokenKind'
+
+// ⭐⭐ **WHICH KINDS A PARSER CURSOR STEPS OVER — THE ONE DEFINITION, and it is deliberately not a
+// list of "trivia".** `newline` and `docComment` are here because the GRAMMAR reads neither: a newline
+// separates statements and carries nothing once the separation is recorded, and a doc comment is prose
+// for `maxon fmt` and the LSP that no production consumes. Everything else, EOF included, is a token
+// some production wants.
+//
+// ⚠ **IT IS NOT "where a statement ENDS", AND `statementEndsAt` MUST NOT BE ROUTED THROUGH IT.** That
+// question is about a `newline`'s MEANING (it terminates the statement), and a doc comment terminates
+// nothing — `requireNewlineAfterBlockLabel` and `requireSignatureLineEnd` demand a literal newline.
+//
+// ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
+// mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS, and
+// `arrayLiteralElementCountAt` and the declaration sweep re-derive the same skip while walking the raw
+// stream. A copy that admitted one kind and not the other would have the sweep count a literal element
+// the real parse skipped.
+//
+// `module` and not `export`: every reader lives under `Compiler/`.
+module function tokenKindIsSkippedLayout(kind TokenKind) returns bool
+	return kind == TokenKind.newline or kind == TokenKind.docComment
+end 'tokenKindIsSkippedLayout'
+
+export type Token
+	export let kind as TokenKind
+	// The token's text, as a ZERO-COPY slice of the source buffer — a pointer and a
+	// length, not a copy. Nothing is materialized per token, and a `String` is built
+	// from it only at the boundaries that genuinely need one (a symbol name that
+	// outlives the parse, a diagnostic). Comparisons stay on the bytes: `ByteArray`
+	// hashes and compares by content (see Array's Hashable/Equatable extension), so
+	// it keys the scope and the interners directly.
+	//
+	// A token whose text is implied by its KIND — every punctuator, `newline`, EOF —
+	// carries `EmptySourceText`, one shared empty slice, and so costs no allocation at
+	// all. Identifiers, numbers, string literals and directives carry a span — and so do
+	// KEYWORDS, which are lexed as identifiers and only then classified, so they reach
+	// `emitWithSource` carrying their own bytes exactly like any other word token.
+	// ⇒ `tokenDisplayText` is the one reader that resolves which of the two a caller wants.
+	export let value as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	// Byte offsets into the source buffer bracketing this token's span, used
+	// by the parser to compute op source ranges and by the LSP to map cursor
+	// positions back to ops. Both fields are 0 on EOF and synthetic tokens.
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
+
+	// `value` defaults to the shared empty slice, so a caller emitting a token whose
+	// text its kind already implies simply omits it — and allocates nothing.
+	export static function create(kind TokenKind, line LineNumber, column ColumnNumber, value ByteArray = EmptySourceText, startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
+		return Self{kind: kind, value: value, line: line, column: column, startByte: startByte, endByte: endByte}
+	end 'create'
+
+	export static function eof() returns Token
+		return Self{kind: TokenKind.eof, value: EmptySourceText, line: 0, column: 0, startByte: 0, endByte: 0}
+	end 'eof'
+end 'Token'
+
+// The text of a token whose kind already says what it is: every punctuator and
+// operator, `newline`, and EOF. ONE shared empty slice for the whole compile rather
+// than a fresh heap String per token — the allocation this type exists to not make.
+// Exported because every name-shaped field downstream wants the same "no source text"
+// value rather than minting its own empty.
+export let EmptySourceText = b""
+
+// How a DIAGNOSTIC names one token. A word or literal token carries its own source text
+// (`int`, `Integer`, `42`) and that is what the reader has to find in the file; a token whose
+// text its KIND already implies carries `EmptySourceText`, and for those the kind's own
+// spelling IS the text (`TokenKind.leftParen` is `"("`).
+//
+// ⚠ "the kind's own spelling" holds for every PUNCTUATOR and OPERATOR, and NOT for a kind whose
+// `rawValue` is a NAME for a position in the stream rather than bytes the author typed:
+// `TokenKind.newline` is `"newline"`, `eof` is `"end of file"` and `docComment` is `"doc comment"`.
+//
+// ⚠⚠ **THAT FAMILY IS NOT THE SAME AS "carries `EmptySourceText`", AND `docComment` IS WHY.** `newline`
+// and `eof` carry the empty slice BY CONSTRUCTION, so they always reach the arm above; a doc comment
+// carries the PROSE it was written with and reaches it only when that prose is empty (a bare `///`),
+// where "doc comment" is the honest answer for a token holding no text.
+// That is correct for the E2001 sites this fills — they name a token that IS there — and wrong for
+// an operand position, which is the whole reason `expressionOperandDisplayText` below exists. Do
+// not "unify" the two on the strength of the sentence above; it describes the majority, not the set.
+//
+// ⚠ It is ONE definition because `EmptySourceText`'s contract — "an empty value means the kind
+// says the text" — is a fact about `Token`, and a second copy of it does not fail loudly if it
+// drifts: it quietly names the offending token something the source never wrote. It had two
+// readers before it had a name (`tokenTextFrom`'s span renderer, and the E2001 `unexpected
+// token: '<x>'` sites, whose `got` field this fills).
+export function tokenDisplayText(token Token) returns String
+	if token.value.isEmpty() 'kindImpliesTheText'
+		return token.kind.rawValue
+	end 'kindImpliesTheText'
+
+	return String.from(token.value)
+end 'tokenDisplayText'
+
+// ⭐ **THE TOKEN AS THE SOURCE WROTE IT — `tokenDisplayText` PLUS THE DELIMITERS THE LEXER STRIPPED.**
+// A quoted literal's `value` is its BODY: `'a'` carries `a`, `"hi"` carries `hi`, `b"hi"` carries `hi`.
+// That is what a diagnostic naming ONE token wants — the message supplies its own quotes — and it is
+// exactly wrong for a diagnostic that reproduces a SPAN of source. `'a' upto 'b'` would read
+// `a upto b`, naming bounds the reader will not find in the file, which is the very failure
+// `tokenDisplayText`'s header names; and a span laid out by COLUMN drifts by the two characters the
+// spelling did not write (`tokenTextFrom` used to carry that under-advance as a known inexactness).
+//
+// ⚠ It is a SECOND function rather than a widening of `tokenDisplayText`, for the reason
+// `expressionOperandDisplayText` is one too: the QUESTION differs, not the answer. That one names a
+// token in PROSE, inside a message that quotes it; this one reconstructs SOURCE.
+export function tokenSourceSpelling(token Token) returns String
+	if token.kind == TokenKind.charLiteral 'singleQuoted'
+		return "'{String.from(token.value)}'"
+	end 'singleQuoted'
+
+	if token.kind == TokenKind.stringLiteral 'doubleQuoted'
+		return "\"{String.from(token.value)}\""
+	end 'doubleQuoted'
+
+	if token.kind == TokenKind.byteStringLiteral 'bytePrefixed'
+		return "b\"{String.from(token.value)}\""
+	end 'bytePrefixed'
+
+	return tokenDisplayText(token)
+end 'tokenSourceSpelling'
+
+// What E2004 prints in place of a token when the source wrote no operand AT ALL. A WIRE VALUE rather
+// than a phrasing choice: `specs/expected-expression-error.md` pins these exact bytes.
+let AbsentOperandText = "(empty)"
+
+// How the E2004 EXPRESSION path names the token standing where an operand belongs. A SECOND renderer
+// beside `tokenDisplayText`, and second because the QUESTION is different, not because the answer is.
+// Everywhere else a diagnostic names a token the author WROTE; here it may have to name the fact that
+// the author wrote NOTHING. `let x =` has no operand at all, and quoting the layout token that closed
+// the line ("newline") names something the reader will not find in the file.
+//
+// ⚠ IT KEYS ON THE TOKEN'S KIND AND NOT ON ITS VALUE BEING EMPTY, because every punctuator and
+// operator carries `EmptySourceText` as well (see `Token.value`) — so `- -x` would report `(empty)`
+// for its second `-`. The KIND is the thing that actually decides whether `rawValue` is the source
+// spelling (`TokenKind.star` is `"*"`) or a NAME for a position in the stream (`TokenKind.newline` is
+// `"newline"`).
+//
+// ⚠ EOF IS DELIBERATELY NOT IN THAT SET. What to report when an operand runs into the end of the
+// file is a separate open question — see maxon-bin/PLAN.md:2423 — and not this renderer's to settle.
+//
+// ⚠ THE REST OF THE "rawValue IS A NAME" FAMILY IS OUT ON PURPOSE, and for a reason that is NOT
+// "no red case reached it": `AbsentOperandText` asserts THE AUTHOR WROTE NOTHING THERE, which is
+// true of a line that ended and false of every other member. `stringInterpStart`/`stringInterpEnd`
+// (`"interpolation start"`) stand for real bytes the author typed; so do `identifier` and the five
+// literal kinds (`intLiteral` is `"integer literal"`). Reporting `(empty)` for any of them would be
+// a WRONG ANSWER, not a missing one — so this is one exception, not the first arm of a table.
+// What those kinds should print is a separate question this renderer does not answer: they render
+// as their category NAME rather than the token's TEXT (`'integer literal'`, not `'5'`). Reachable
+// at `resolveEnumArmCase`, and no spec pins it.
+export function expressionOperandDisplayText(token Token) returns String
+	if token.kind == TokenKind.newline 'lineEndedWithNoOperand'
+		return AbsentOperandText
+	end 'lineEndedWithNoOperand'
+
+	return token.kind.rawValue
+end 'expressionOperandDisplayText'
+
+// ⭐⭐ **HOW A DIAGNOSTIC NAMES WHAT THE GRAMMAR REQUIRED — the `expected` half of E2010.**
+// `tokenDisplayText` above answers the `got` half; this answers the other, and they are not the same
+// question — `got` names a token that IS in the file, `expected` names something the source has yet to
+// supply, so it is not routed through that helper (see `ParseError.unexpectedToken`).
+//
+// **THE RULE IS ABOUT SPELLINGS AND NOTHING ELSE: a token SPELLING is QUOTED; a CLASS is BARE.**
+// Every keyword, operator and punctuator — exactly the strings an author has to TYPE — is quoted;
+// everything else is bare. So the quotes are a QUOTATION, symmetric with the `got` half quoting
+// what the author did type, and that is their whole job.
+//
+// ⛔⛔ **THEY ARE *NOT* A DELIMITER, AND "a PHRASE is quoted so the reader can see where it stops" IS
+// REFUTED — canonical writes a multi-word expectation BARE in this very message family:**
+//   `specs/lexer-parser-robustness.md:57,81`  `Unexpected end of input, expected type name`
+//   `specs/lexer-parser-robustness.md:181`    `Unexpected end of input, expected characterliteral`
+// The three quoted PHRASES canonical does carry (`'interpolation end'`, `'end of default value'`,
+// `'end of global initializer'`) are hand-typed literals at three call sites, sitting beside that bare
+// `type name` — the exception, not the rule. What decides the quoting is the PROVENANCE, not the
+// text: a QUOTED expectation names a keyword or operator token's own spelling, and a BARE one does
+// not.
+//
+// ⛔ **THE SPELLING TEST IS THEREFORE `classifyIdentifier`'s — THE LEXER'S OWN KEYWORD TABLE — AND NOT
+// A LIST OF WORDS.** No property of the TEXT can separate `identifier` from `function`: both are one
+// lowercase word, and `identifier` is itself a legal identifier. What separates them is that the lexer
+// reads `function` as a keyword and `identifier` as no token at all. A word list here would fail OPEN —
+// the next keyword added would silently start rendering bare — which is the shape this project keeps
+// paying for, so the question is asked of the table that already knows the answer.
+//
+// ⚠ TWO KNOWN EXCEPTIONS STAND HERE. Under the rule above a CLASS is bare whether or not it is one
+// word, so `Expected 'a type'` (12 pins) and `Expected 'character literal'` (8 pins) are on the
+// wrong side of it. This function quotes them because it only asks the SPELLING question and treats
+// every multi-word expectation as quoted, which is right for the three phrase pins above and wrong
+// for these two. Moving them is 20 pins and its own decision. (E2004 hardcodes the bare
+// `expression` in its own template: a different CODE with a different sentence, which agrees with
+// the rule rather than being decided by it.)
+export function expectationDisplayText(expected String) returns String
+	if expectationNamesATokenClass(expected) 'aClassNoSourceSpells'
+		return expected
+	end 'aClassNoSourceSpells'
+
+	return "'{expected}'"
+end 'expectationDisplayText'
+
+// Is `expected` a CLASS of token rather than a spelling of one? Answered for the single-word case only,
+// which is where the two are genuinely indistinguishable by text — see `expectationDisplayText` for the
+// rule, for why the keyword table and not a list, and for the multi-word classes this leaves quoted.
+function expectationNamesATokenClass(expected String) returns bool
+	let word = expected.toByteArray()
+	if word.isEmpty() 'namesNothingAtAll'
+		return false
+	end 'namesNothingAtAll'
+
+	for b in word 'eachByte'
+		if not isAlpha(b) 'notOneIdentifierShapedWord'
+			return false
+		end 'notOneIdentifierShapedWord'
+	end 'eachByte'
+
+	return classifyIdentifier(word) == TokenKind.identifier
+end 'expectationNamesATokenClass'
+
+// The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
+// lexer, reports them: neither is legal Maxon, and the parser quotes the offending text
+// back in its diagnostic.
+let BangTokenText = b"!"
+let BackslashTokenText = b"\\"
+
+export typealias TokenArray = Array with Token
+
+// --- Table variables ---
+// Static lookup: byte value -> character class (256 entries, O(1) index)
+let charClassTable = [
+	// 0-15:                                                                       \t                \n                      \r
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.tab, CharClass.lf, CharClass.other, CharClass.other, CharClass.cr, CharClass.other, CharClass.other,
+	// 16-31
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	// 32-47:  sp              !               "               #               $               %               &               '               (               )               *               +               ,               -               .               /
+	CharClass.space, CharClass.bang, CharClass.dquote, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.squote, CharClass.lParen, CharClass.rParen, CharClass.star, CharClass.plus, CharClass.comma, CharClass.minus, CharClass.dot, CharClass.slash,
+	// 48-63:  0-9                                                                                                           :               ;               <               =               >               ?
+	CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.colon, CharClass.other, CharClass.less, CharClass.equals, CharClass.greater, CharClass.other,
+	// 64-79:  @               A-O
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 80-95:  P-Z                                                                             [               \               ]               ^               _
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBracket, CharClass.backslash, CharClass.rBracket, CharClass.other, CharClass.alpha,
+	// 96-111: `               a-o
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 112-127: p-z                                                                             {               |               }               ~               DEL
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBrace, CharClass.other, CharClass.rBrace, CharClass.other, CharClass.other,
+	// 128-255: extended ASCII (all other)
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other
+]
+
+// transitionTable: 36 states x 28 char classes = 1008 entries
+// Index as: state * CharClass.COUNT + charClass
+// Columns: other space tab  cr   lf   (    )    {    }    [    ]    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof  ,
+let transitionTable = [
+	// start: dispatch on first character
+	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.emitBackslash, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther, DfaState.comma,
+	// sawEq: '=' seen, looking for '='
+	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
+	// sawBang: '!' seen, looking for '='
+	DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bangEq, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang,
+	// sawLt: '<' seen, looking for '='
+	DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
+	// sawGt: '>' seen, looking for '='
+	DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
+	// sawSlash: '/' seen, looking for '/' or '*'
+	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterBlockComment, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
+	// Terminal states (rows 6-32) — never transitioned from
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// dot (terminal, never transitioned from)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// lBracket (terminal)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// rBracket (terminal)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// emitBackslash (terminal — emits a synthetic identifier holding the
+	// `\` byte so downstream "Expected function declaration, got '\\'"
+	// diagnostics carry a real token to point at)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// comma (terminal, emits a Comma token)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
+]
+
+// actionTable: 36 entries indexed by state -> action to perform
+//              start           sawEq          sawBang        sawLt          sawGt          sawSlash       skipWs         skipCr
+let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skipCr,
+	//              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
+	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
+	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
+	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
+	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot         lBracket    rBracket    emitBackslash   comma
+	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit
+]
+
+// Single dispatch point for all fixed-text tokens (operators, punctuation).
+typealias DfaStateIndex = int(0 to 64)
+
+function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
+	// State indices correspond to DfaState enum raw values (int match can't use enum names).
+	match stateIndex 'dispatch'
+		9 then tokens.push(Token.create(TokenKind.leftParen, line: line, column: column))
+		10 then tokens.push(Token.create(TokenKind.rightParen, line: line, column: column))
+		11 then tokens.push(Token.create(TokenKind.leftBrace, line: line, column: column))
+		12 then tokens.push(Token.create(TokenKind.rightBrace, line: line, column: column))
+		13 then tokens.push(Token.create(TokenKind.plus, line: line, column: column))
+		14 then tokens.push(Token.create(TokenKind.minus, line: line, column: column))
+		15 then tokens.push(Token.create(TokenKind.star, line: line, column: column))
+		16 then tokens.push(Token.create(TokenKind.colon, line: line, column: column))
+		17 then tokens.push(Token.create(TokenKind.equals, line: line, column: column))
+		18 then tokens.push(Token.create(TokenKind.equalsEquals, line: line, column: column))
+		19 then tokens.push(Token.create(TokenKind.bangEquals, line: line, column: column))
+		20 then tokens.push(Token.create(TokenKind.lessThan, line: line, column: column))
+		21 then tokens.push(Token.create(TokenKind.lessEquals, line: line, column: column))
+		22 then tokens.push(Token.create(TokenKind.greaterThan, line: line, column: column))
+		23 then tokens.push(Token.create(TokenKind.greaterEquals, line: line, column: column))
+		24 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: BangTokenText))
+		31 then tokens.push(Token.create(TokenKind.slash, line: line, column: column))
+		33 then tokens.push(Token.create(TokenKind.dot, line: line, column: column))
+		34 then tokens.push(Token.create(TokenKind.leftBracket, line: line, column: column))
+		35 then tokens.push(Token.create(TokenKind.rightBracket, line: line, column: column))
+		// Backslash is illegal at the source level outside of strings; emit a
+		// synthetic identifier carrying the literal `\` so the parser surfaces
+		// `Expected function declaration, got '\\'` (which the spec runner's
+		// path normalization renders as `'/'`) instead of silently dropping
+		// the byte.
+		36 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: BackslashTokenText))
+		37 then tokens.push(Token.create(TokenKind.comma, line: line, column: column))
+		default panic("emitFixedToken: unhandled state index {stateIndex}")
+	end 'dispatch'
+end 'emitFixedToken'
+
+// --- Lexer type ---
+
+type Lexer
+	var source as String
+	var bytes as ByteArray
+	var cursor as ByteCursor
+	export var tokens as TokenArray
+	var len as ByteOffset
+	export var line as LineNumber
+	export var column as ColumnNumber
+	// Pending lexer error stashed by scanners that hit an unrecoverable
+	// state but still need to emit a partial token before unwinding via the
+	// shared CursorError path. Read by run() after CursorError surfaces;
+	// when set, run() throws the stashed LexerError instead of the generic
+	// unexpectedEof.
+	var pendingError as LexerError
+	var hasPendingError as bool
+	// Set by sub-scanners that complete a token whose final byte happens to
+	// be the last byte of the source (no trailing newline). They unwind via
+	// CursorError because that's the shared "done" channel; the flag lets
+	// run() distinguish "clean completion at EOF" from a truncated token.
+	var emittedAtEof as bool
+
+	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false}
+	end 'create'
+
+	// --- Navigation helpers ---
+
+	// ⭐⭐ **THE ONE PLACE `line` AND `column` ARE KEPT.** Every scanner in this file already funnels
+	// through the movers below, and the byte handed here is the one that mover stepped OVER — so a
+	// newline consumed as ordinary text is counted whoever consumed it, and the next scanner someone
+	// adds has nothing to remember.
+	//
+	// ⚠⚠ **IT USED TO BE THE CALLERS' JOB AND ONLY TWO OF THEM DID IT** — the `newline` token and the
+	// block-comment body — while `tryAdvance` moved only the column. TWO bodies already walked past a
+	// `\n` without either: `scanSingleQuoteString` does it on an unterminated char literal, and
+	// `scanByteStringLiteralBody` now does it BY DESIGN, because a multi-line `b"…"` is a real
+	// construct this compiler's OWN source uses (`Runtime/GtRuntime.maxon:568`, a byte string holding
+	// one newline). Either way `line` fell short by however many newlines were eaten, and stayed short
+	// for the rest of the file.
+	//
+	// ⛔ With the newlines uncounted, EVERY diagnostic after such a literal names a line too low by
+	// the number inside it, and `maxon fmt` DELETES comments: it keys them by true source line and
+	// emits them against token lines, so the two drift apart and whatever falls off the end is
+	// dropped silently. The same defect, two faces. Counting in the mover is what closes it.
+	function countConsumed(consumed Byte)
+		if consumed == Ascii.lf 'consumedNewline'
+			line = line + 1
+			column = 1
+			return
+		end 'consumedNewline'
+
+		column = column + 1
+	end 'countConsumed'
+
+	// ⭐ **THE BYTE IS COUNTED WHETHER OR NOT THE CURSOR CAN MOVE, and that is not an off-by-one — it is
+	// what an EOF position MEANS.** `ArrayIterator` keeps the cursor on a valid element, so it refuses
+	// to step past the LAST byte; but every caller here has already consumed the byte under the cursor
+	// and is only asking to move past it. A refusal says "there is nothing after it", not "it was not
+	// consumed". Counting first is therefore the whole of why `function main()` + a trailing newline
+	// reports its unexpected end of input at line 3 column 1 rather than at the end of line 2:
+	// the file's LAST newline is exactly the byte no advance can step past.
+	// (`cursor.current()` is infallible under that same invariant, so the read never needs a guard.)
+	function advance() throws CursorError
+		countConsumed(cursor.current())
+		try cursor.advance() otherwise throw CursorError.exhausted
+	end 'advance'
+
+	// ⚠ **RETREAT CANNOT UNDO A LINE, AND NOTHING ASKS IT TO.** It steps back over the ONE byte of
+	// lookahead the DFA took (`retreatUnlessLast`, for a number or an identifier), which is a digit or
+	// a letter by construction. Restoring the column across a newline would need the PREVIOUS line's
+	// length, which the cursor does not carry — so this says so rather than answering with a column
+	// every later diagnostic in the file would inherit.
+	function retreat() throws CursorError
+		try cursor.retreat() otherwise throw CursorError.atStart
+		if cursor.current() == Ascii.lf 'unconsumedNewline'
+			panic("Lexer.retreat: stepped back over the newline at byte {cursorByte()} — the length of the line before it is not recoverable, and only the DFA's one-byte lookahead over a digit or a letter ever retreats")
+		end 'unconsumedNewline'
+
+		column = column - 1
+	end 'retreat'
+
+	// Non-throwing advance. Returns true if advanced, false if at end of source.
+	// Use in loops where reaching EOF is normal (numbers, identifiers, comments).
+	function tryAdvance() returns bool
+		countConsumed(cursor.current())
+		try cursor.advance() otherwise return false
+		return true
+	end 'tryAdvance'
+	// Variable-content emit: the token's text as a zero-copy `ByteArray` slice of the
+	// source, plus the byte range it spans. Used by the identifier, number,
+	// string-literal and directive scanners — every token whose text is not implied
+	// by its kind.
+	function emitWithSource(kind TokenKind, value ByteArray, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset)
+		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: startByte, endByte: endByte))
+	end 'emitWithSource'
+
+	// The kind of the token emitted just before the one being scanned, or `eof` at the start of the file —
+	// the ONE piece of left context any scanner reads. `scanNumber` uses it, and only it, to tell a tuple
+	// INDEX (`t.0`) from the integer part of a float (`1.5`); see the rule stated there for why that one bit
+	// is exact rather than a heuristic. `eof` for an empty stream is not a sentinel: a file cannot open with
+	// a `.`, so "no previous token" and "the previous token is not a dot" are the same answer.
+	function lastTokenKind() returns TokenKind
+		if tokens.count() == 0 'startOfFile'
+			return TokenKind.eof
+		end 'startOfFile'
+		return (try tokens.get(tokens.count() - 1) otherwise panic("Lexer.lastTokenKind: get failed one below a non-zero count")).kind
+	end 'lastTokenKind'
+
+	// The cursor's position as the byte offset every token and slice is stated in.
+	function cursorByte() returns ByteOffset
+		return cursor.index() as ByteOffset
+	end 'cursorByte'
+
+	// End byte offset for a number or identifier token: if tryAdvance() returned false
+	// at EOF the cursor still sits ON the last byte, so that byte is part of the token.
+	function sliceNumberEndByte() returns ByteOffset
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return cursorByte() + 1
+		end 'includeLastByte'
+		return cursorByte()
+	end 'sliceNumberEndByte'
+
+	// Emit a number-shaped token (intLiteral/floatLiteral) capturing its source byte
+	// range and byte slice. Serves the decimal scanner AND the hex/binary/octal
+	// prefixed forms, which previously emitted through a value-only path and so
+	// carried neither a slice nor a source range.
+	function emitNumber(kind TokenKind, numStart ByteOffset, startLine LineNumber, startCol ColumnNumber)
+		let endByte = sliceNumberEndByte()
+		let value = try bytes.slice(numStart as ElementIndex, endIndex: endByte as ElementIndex) otherwise panic("Lexer.emitNumber: invariant violated")
+		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: numStart, endByte: endByte))
+	end 'emitNumber'
+
+	// Emit a string-literal-shaped token (charLiteral/stringLiteral) capturing its
+	// source byte range and byte slice.
+	function emitStringLit(kind TokenKind, strStart ByteOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
+		let value = try bytes.slice(strStart as ElementIndex, endIndex: endByte as ElementIndex) otherwise panic("Lexer.emitStringLit: invariant violated")
+		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: strStart, endByte: endByte))
+	end 'emitStringLit'
+
+	// Sub-scanners signal "token completed cleanly on the source's final byte"
+	// by setting `emittedAtEof` and unwinding via CursorError. Centralized here
+	// so the contract — flag must be set before the throw, never after — lives
+	// in one place.
+	function finishAtEof() throws CursorError
+		emittedAtEof = true
+		throw CursorError.exhausted
+	end 'finishAtEof'
+
+	// --- Action dispatch helpers ---
+
+	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+		try advance() otherwise 'eof'
+			// Two-char token completed at the source's last byte — clean
+			// completion, not a truncated token.
+			try finishAtEof()
+		end 'eof'
+	end 'handleEmit2'
+
+	// `startByte` is the first `/`, not the cursor: `scanComment` may find a THIRD one and emit a
+	// `docComment` token, whose span has to start where the author's `///` starts.
+	//
+	// ⛔ **`//` AS THE SOURCE'S LAST TWO BYTES IS A COMPLETE COMMENT, NOT TRUNCATED INPUT.** The second
+	// slash is the byte no advance can step past, so an unguarded move here unwound as
+	// `E1008 Unexpected end of input` on a complete file. A `// x` or a trailing newline is fine; the
+	// EMPTY comment at EOF is the one shape that fails.
+	// A `//` emits no token, so there is nothing to finish here but the scan.
+	function handleEnterComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		try advance() otherwise 'slashesEndTheFile'
+			try finishAtEof()
+		end 'slashesEndTheFile'
+		try scanComment(startLine, startCol: startCol, startByte: startByte)
+	end 'handleEnterComment'
+
+	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try advance()
+		try scanBlockComment(startLine, startCol: startCol)
+	end 'handleEnterBlockComment'
+
+	// Walk one DFA step starting from the current cursor byte: read the byte's
+	// character class, consume it, follow the two-step transition (start state →
+	// live state → terminal), then dispatch the resulting action. Sets `atEnd`
+	// to true when the consumed byte was the final byte of input. Used by both
+	// the top-level run() loop and scanInterp() so the two share one driver.
+	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let ch = cursor.current()
+		// The offset of the token's FIRST byte, read before any mover runs — `scanComment` is the one
+		// dispatch arm that cannot recover it afterwards, because two slashes are already behind the cursor
+		// by the time it is reached.
+		let startByte = cursorByte()
+		// `#` opens a compiler directive (e.g. `#if`, `#else`, `#endif`). It
+		// sits outside the table-driven DFA because the directive name is a
+		// run of letters following the `#`, and we want to emit a dedicated
+		// TokenKind based on the name rather than two separate tokens.
+		if ch == Ascii.hash 'isDirective'
+			return try scanDirective(startLine, startCol: startCol)
+		end 'isDirective'
+		// `@` opens a compiler annotation (e.g. `@heap`). Like `#`, it sits
+		// outside the table-driven DFA: emit a standalone `at` token and let the
+		// table-driven scanner pick up the following annotation identifier on the
+		// next step. The byte at 64 (`@`) classifies as `other` in the DFA table,
+		// so without this special case it would be silently skipped.
+		if ch == Ascii.at 'isAt'
+			tokens.push(Token.create(TokenKind.at, line: startLine, column: startCol))
+			var atEof = false
+			try advance() otherwise 'atEofAfter'
+				atEof = true
+			end 'atEofAfter'
+			return atEof
+		end 'isAt'
+		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
+		var atEnd = false
+		try advance() otherwise 'lastChar'
+			atEnd = true
+		end 'lastChar'
+		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
+			var nextClass = CharClass.eof
+			if not atEnd 'hasNext'
+				let nextCh = cursor.current()
+				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+			end 'hasNext'
+			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
+		end 'live'
+		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, startByte: startByte, lastChar: atEnd)
+		return atEnd
+	end 'stepDfa'
+
+	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, lastChar bool) throws CursorError
+		match action 'dispatch'
+			skip then return
+			skipCr then column = column - 1
+			newline then tokens.push(Token.create(TokenKind.newline, line: startLine, column: startCol))
+			emit then emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+			emit2 then try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
+			enterStrSq then try scanSingleQuoteString(startLine, startCol: startCol)
+			enterStrDq then try scanDoubleQuoteString(startLine, startCol: startCol)
+			enterNumber then try scanNumberFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterComment then try handleEnterComment(startLine, startCol: startCol, startByte: startByte)
+			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol)
+			default panic("Lexer: unhandled action {action}")
+		end 'dispatch'
+	end 'dispatchAction'
+
+	// On enterNumber/enterIdent the DFA has already consumed the token's first
+	// character; retreat so the dedicated scanner re-reads it from the start —
+	// unless it was the final char of input, where there is nothing to back over.
+	function retreatUnlessLast(lastChar bool) throws CursorError
+		if not lastChar 'retreat'
+			try retreat()
+		end 'retreat'
+	end 'retreatUnlessLast'
+
+	function scanNumberFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanNumber(startLine, startCol: startCol)
+	end 'scanNumberFromDfa'
+
+	function scanIdentifierFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanIdentifier(startLine, startCol: startCol)
+	end 'scanIdentifierFromDfa'
+
+	// --- Sub-scanners ---
+
+	// Opening quote already consumed by main loop.
+	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursorByte()
+		while cursorByte() < len 'strBody'
+			let sc = cursor.current()
+			if sc == Ascii.quote 'endStr'
+				emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursorByte(), startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'squoteEof'
+					try finishAtEof()
+				end 'squoteEof'
+				return
+			end 'endStr'
+			// Raw escape bytes stay in the fragment; the parser decodes them
+			// on emit. Skip the byte following `\` so `\'` doesn't close the
+			// literal and `\\` doesn't swallow the next byte as escape lead.
+			if sc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'strBody'
+		// Unterminated string at EOF — stash an unterminatedString lexer
+		// error and unwind via CursorError. run() reads the stashed
+		// LexerError and surfaces it to the caller.
+		emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursorByte() + 1, startLine: startLine, startCol: startCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanSingleQuoteString'
+
+	// Opening double-quote already consumed by main loop. Scans body bytes,
+	// emitting a stringLiteral for each fragment bounded by `{` / `}`
+	// interpolations. Within `{...}` the main DFA is re-driven (via scanInterp)
+	// so interpolation expressions are lexed once, inline, into the main token
+	// stream — the parser consumes them as ordinary tokens bracketed by
+	// stringInterpStart / stringInterpEnd, with no sub-parser needed.
+	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		var fragStart = cursorByte()
+		var fragLine = startLine
+		var fragCol = startCol
+		while cursorByte() < len 'dstrBody'
+			let dc = cursor.current()
+			if dc == Ascii.dquote 'endDstr'
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte(), startLine: fragLine, startCol: fragCol)
+				if not tryAdvance() 'dquoteEof'
+					try finishAtEof()
+				end 'dquoteEof'
+				return
+			end 'endDstr'
+			if dc == Ascii.lf 'newlineInDstr'
+				// Stop at newline (matches C# ScanStringLiteral) — emit a
+				// partial fragment then stash the unterminated-string error
+				// so the lexer surfaces a diagnostic instead of silently
+				// accepting a string that never had a closing quote.
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte(), startLine: fragLine, startCol: fragCol)
+				hasPendingError = true
+				pendingError = LexerError.unterminatedString(startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'newlineInDstr'
+			if dc == Ascii.backslash 'esc'
+				// Raw escape bytes stay in the fragment; the parser decodes them
+				// on emit. Skip the escape's following byte so a backslash-lbrace
+				// `\{` doesn't open an interpolation.
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if dc == '{' 'openInterp'
+				// Emit the literal fragment accumulated before the `{`.
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte(), startLine: fragLine, startCol: fragCol)
+				let interpLine = line
+				let interpCol = column
+				tokens.push(Token.create(TokenKind.stringInterpStart, line: interpLine, column: interpCol))
+				// Consume the `{`; scanInterp runs the DFA until matching `}`.
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				try scanInterp(interpLine, openCol: interpCol)
+				// scanInterp returns with cursor AT `}`; advance past it to start
+				// the next fragment.
+				let closeLine = line
+				let closeCol = column
+				tokens.push(Token.create(TokenKind.stringInterpEnd, line: closeLine, column: closeCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				fragStart = cursorByte()
+				fragLine = line
+				fragCol = column
+				continue
+			end 'openInterp'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'dstrBody'
+		// Unterminated string at EOF — emit a partial fragment so downstream
+		// tooling has something to attach error info to, then stash the
+		// lexer error and unwind via CursorError. run() reads the stashed
+		// LexerError and surfaces it to the caller so queryTokens can route
+		// it through the project's diagnostic sink.
+		emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte() + 1, startLine: fragLine, startCol: fragCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanDoubleQuoteString'
+
+	// Phase 7 step 7: byte-string literal body scanner. Caller has consumed
+	// the opening `b` and `"`. Scans bytes until the closing `"`, treating
+	// `\` as a one-byte escape skip (decoded by the parser) and explicitly
+	// rejecting `{` interpolation markers — byte strings are byte-exact.
+	//
+	// ⭐⭐ **A RAW NEWLINE IS AN ORDINARY BODY BYTE HERE, AND ONLY HERE.** A `b"…"` is byte-exact, so a
+	// literal newline in one IS the byte it spells — `Runtime/GtRuntime.maxon:568` writes
+	// `let GtTraceNewlineText = b"` with the closing quote on the next line, and that is how this
+	// compiler's own source spells a one-byte newline constant. Refusing it with `E1002 Unterminated
+	// string literal` would leave this compiler unable to lex `GtRuntime.maxon`, and every file
+	// importing a name from it with it.
+	//
+	// ⛔ **THE DOUBLE-QUOTE TWIN KEEPS ITS REFUSAL, AND THE DIFFERENCE IS NOT AN OVERSIGHT.** A raw
+	// newline inside `b"…"` compiles and the literal holds it, while the same newline inside `"…"`
+	// is `E1002`. A `String` literal carries
+	// interpolation and escape decoding and is line-oriented; a byte string carries bytes. Do not
+	// "unify" these two bodies on this point.
+	function scanByteStringLiteralBody(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursorByte()
+		while cursorByte() < len 'bstrBody'
+			let bc = cursor.current()
+			if bc == Ascii.dquote 'endBstr'
+				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursorByte(), startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'closeEof'
+					try finishAtEof()
+				end 'closeEof'
+				return
+			end 'endBstr'
+			if bc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'bstrBody'
+		emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursorByte() + 1, startLine: startLine, startCol: startCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanByteStringLiteralBody'
+
+	// Drive the main DFA over an interpolation body `{...}`. Cursor enters AT
+	// the first byte after `{`; returns with cursor AT the matching `}`. Tracks
+	// nested braces so struct literals inside an interpolation don't terminate
+	// it early. Delegates each byte to stepDfa so every token kind (identifiers,
+	// calls, operators, nested strings) is lexed correctly.
+	//
+	// `openLine`/`openCol` point at the `{` that opened this interpolation so
+	// failures can blame the offending brace. On EOF without a matching `}`
+	// two flavours are distinguished:
+	//   * If we ever encountered a `"` inside the interp body, that `"` was
+	//     almost certainly the outer string's intended closer and the `{` was
+	//     a literal brace the user meant to escape — emit unescapedBrace.
+	//   * Otherwise the source genuinely ran out before the interp closed —
+	//     emit unterminatedString.
+	//
+	// ⭐⭐ **IT ALSO DECIDES WHERE THE EXPRESSION STOPS AND A FORMAT SPECIFIER STARTS**, which is
+	// the ONE place a token may legally follow an interpolated expression. The rule is the one
+	// `specs/string-interpolation.md` states in as many words: the `:` that opens a specifier is
+	// the one found at **brace depth zero AND group depth zero**. It is decidable HERE because
+	// every byte this loop sees at the top is a token boundary — a sub-scanner consumes whole
+	// strings, char literals and comments before returning.
+	//
+	// ⛔ **THAT MAKES A STANDING OBLIGATION ON THE GRAMMAR, NOT A CLOSED LIST OF CONSTRUCTS.** The
+	// bracket counting is exact only while EVERY `:` an expression can own sits inside `(`, `[` or
+	// `{`. That holds of all eleven `TokenKind.colon` consumers today — a named argument's inside
+	// `(…)` (`{add(1, b: 2)}`), a struct literal's inside `{…}` (`{Pt{x: 7}}`), a map literal's
+	// inside `[…]` (`{["a": 1].count()}`) — and it is a PREMISE, not a proof. **A future construct
+	// that admits a bare `:` at the top level of an expression silently turns into a format
+	// specifier here**, with no diagnostic on either side, so such a construct owes this function a
+	// change. Adding one more bracket family is a line; a colon with no bracket around it is not.
+	//
+	// ⚠ ALL THREE BRACKET FAMILIES ARE COUNTED. Counting only `(`/`{` would split
+	// `"{["a": 1].count()}"` at the MAP literal's colon.
+	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
+		var depth = 1
+		// Parens and brackets the interpolation body has left open. Braces are `depth`'s, since
+		// they also decide where the body ENDS; these only decide whether a `:` is the body's own.
+		var groupDepth = 0
+		// Cursor position right after the opening `{` — used on failure to
+		// scan the consumed body for `"`. We can't track this via a flag set
+		// in scanInterp's outer loop because sub-scanners like the char-literal
+		// scanner gobble bytes (including `"`) without surfacing them back.
+		let bodyStart = cursorByte()
+		while cursorByte() < len 'interp'
+			let ch = cursor.current()
+			if ch == ':' and depth == 1 and groupDepth == 0 'formatSpecifier'
+				try scanInterpFormatSpec(openLine, openCol: openCol, bodyStart: bodyStart)
+				return
+			end 'formatSpecifier'
+			if ch == '(' or ch == '[' 'openGroup'
+				groupDepth = groupDepth + 1
+			end 'openGroup'
+			// A close with nothing open is a source error the PARSER reports against the tokens;
+			// the count simply stays at the floor rather than going negative behind it.
+			if (ch == ')' or ch == ']') and groupDepth > 0 'closeGroup'
+				groupDepth = groupDepth - 1
+			end 'closeGroup'
+			if ch == '}' 'closeBrace'
+				depth = depth - 1
+				if depth == 0 'atClose'
+					return
+				end 'atClose'
+				// Nested close brace — emit as a token and advance.
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.rightBrace, line: braceLine, column: braceCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				continue
+			end 'closeBrace'
+			if ch == '{' 'openBrace'
+				depth = depth + 1
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.leftBrace, line: braceLine, column: braceCol))
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				continue
+			end 'openBrace'
+
+			let atEnd = try stepDfa(line, startCol: column) otherwise 'subEof'
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+			end 'subEof'
+			if atEnd 'interpEof'
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+			end 'interpEof'
+		end 'interp'
+		// Loop guard `cursorByte() < len` failed without a matching `}`.
+		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+	end 'scanInterp'
+
+	// ⭐ **THE SPECIFIER'S BYTES, VERBATIM.** Cursor enters AT the `:` `scanInterp` found at the
+	// body's own depth; returns with cursor AT the closing `}` — `scanInterp`'s own postcondition,
+	// so its caller needs to know nothing about specifiers.
+	//
+	// Nothing between the two is lexed. What a specifier MEANS depends on the type of the value it
+	// decorates — `x` is hexadecimal on an integer and ignored on a float, `verbose` is an argument
+	// to a `toString(format String)` — so the only representation that serves every reader is the
+	// text the author wrote. `Parser.acceptInterpFormatSpec` takes the token and
+	// `InterpFormatSpec.parse` is the one place those bytes are given a meaning.
+	//
+	// A `}` ends it: a specifier holds no nested construct that could own one, and the brace that
+	// would have opened such a construct is the one already excluded by the depth test that got us
+	// here.
+	//
+	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** This one
+	// did not, and the cost is measured below. ⚠ **THE SENTENCE THAT USED TO STAND HERE — *"every
+	// other byte-consuming body in this lexer stops at `Ascii.lf`"*, naming `scanDoubleQuoteString`,
+	// `scanSingleQuoteString` and `scanByteStringLiteralBody` — WAS ALREADY FALSE OF ONE OF ITS OWN
+	// THREE**: `scanSingleQuoteString` has never had a newline test and walks past one on an
+	// unterminated char literal. It is now false of a second by design (a multi-line `b"…"` is a real
+	// construct — see `scanByteStringLiteralBody`). `scanDoubleQuoteString` alone still stops. The
+	// rule that survives is about THIS scanner and rests on its own reason: a format specifier is the
+	// tail of one interpolation on one line. MEASURED before
+	// the fix: `print("a{x:")` on one line followed by `print("b{y}")` on the next COMPILED CLEAN and
+	// printed `a1`. The specifier body had eaten `")`, the newline and `print("b{y`, stopping at the
+	// NEXT LINE's `}`; the following `"` then closed the string tidily and the whole second statement
+	// was gone, with no diagnostic from either the lexer or the parser. Silently deleting a statement
+	// is the worst answer a compiler can give, and one missing `}` was enough to get it.
+	//
+	// ⚠ It USED to be the line counter's protection as well, and it is not any more: `countConsumed`
+	// moves `line` for whichever mover steps over the newline byte, so a body that swallows newlines no
+	// longer leaves `line` short. That was the second reason to stop here; the statement-deleting one above
+	// is the first, it is unaffected, and it is on its own now.
+	//
+	// `failInterp` is what both exits take, and it needs no case of its own here: it scans the
+	// consumed body for a `"` and reports the unescaped-brace reading when it finds one — which is
+	// exactly the shape above (`E1006` at the opening `{`).
+	function scanInterpFormatSpec(openLine LineNumber, openCol ColumnNumber, bodyStart ByteOffset) throws CursorError
+		// The `:` positions the token — an EMPTY specifier (`"{x:}"`) has no byte of its own to
+		// blame, and the colon is what the author typed to ask for one either way.
+		let specLine = line
+		let specCol = column
+		if not tryAdvance() 'colonAtEof'
+			try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+		end 'colonAtEof'
+
+		let specStart = cursorByte()
+		while cursorByte() < len 'specBody'
+			let ch = cursor.current()
+			if ch == '}' 'specEnd'
+				emitStringLit(TokenKind.stringFormatSpec, strStart: specStart, endByte: cursorByte(), startLine: specLine, startCol: specCol)
+				return
+			end 'specEnd'
+			if ch == Ascii.lf 'lineEndedFirst'
+				break
+			end 'lineEndedFirst'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'specBody'
+
+		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+	end 'scanInterpFormatSpec'
+
+	// Stash the right LexerError for a scanInterp that ran out of input
+	// without finding `}`. Looks at the bytes consumed since the opening
+	// `{` for a `"` — its presence means the interp gobbled past the outer
+	// string's closing quote, so the `{` was meant as a literal brace.
+	function failInterp(openLine LineNumber, openCol ColumnNumber, bodyStart ByteOffset) throws CursorError
+		hasPendingError = true
+		if interpBodyContainsDquote(bodyStart) 'sawDquote'
+			pendingError = LexerError.unescapedBrace(openLine, column: openCol)
+		end 'sawDquote' else 'genuineEof'
+			pendingError = LexerError.unterminatedString(openLine, column: openCol)
+		end 'genuineEof'
+		throw CursorError.exhausted
+	end 'failInterp'
+
+	// Walk the bytes from `bodyStart` up to the cursor's current position
+	// looking for `"`. A hit means the interp's body chewed through the
+	// outer string's intended closing quote.
+	function interpBodyContainsDquote(bodyStart ByteOffset) returns bool
+		var i = bodyStart
+		let stop = cursorByte()
+		while i < stop 'scan'
+			let b = try bytes.get(i) otherwise return false
+			if b == Ascii.dquote 'hit'
+				return true
+			end 'hit'
+			i = i + 1
+		end 'scan'
+		return false
+	end 'interpBodyContainsDquote'
+
+	// Cursor points to the first digit (not yet consumed by this scanner).
+	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let numStart = cursorByte()
+		let firstByte = cursor.current()
+
+		// Check for 0x, 0b, 0o prefixes
+		// Sentinel: peek(1) throws past EOF, which legitimately happens when
+		// scanNumber is invoked from a sub-parser (e.g. string interpolation)
+		// over a substring that ends on a digit. 0 is safe — treated as "no prefix".
+		let prefixByte = try cursor.peek(1) otherwise 0
+		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
+			// Hex literal: 0x or 0X
+			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
+				_ = tryAdvance()
+				if not tryAdvance() 'hexPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'hexPrefixEof'
+				while cursorByte() < len 'hexDigits'
+					let hc = cursor.current()
+					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+						break
+					end 'endHex'
+					if not tryAdvance() 'hexEof'
+						break
+					end 'hexEof'
+				end 'hexDigits'
+				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+				return
+			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+				// Binary literal: 0b or 0B
+				_ = tryAdvance()
+				if not tryAdvance() 'binPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'binPrefixEof'
+				while cursorByte() < len 'binDigits'
+					let bc = cursor.current()
+					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
+						break
+					end 'endBin'
+					if not tryAdvance() 'binEof'
+						break
+					end 'binEof'
+				end 'binDigits'
+				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+				return
+			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+				_ = tryAdvance()
+				if not tryAdvance() 'octPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'octPrefixEof'
+				while cursorByte() < len 'octDigits'
+					let oc = cursor.current()
+					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
+						break
+					end 'endOct'
+					if not tryAdvance() 'octEof'
+						break
+					end 'octEof'
+				end 'octDigits'
+				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+				return
+			end 'isOct'
+		end 'checkPrefix'
+
+		// Decimal digits (with underscore separators)
+		while cursorByte() < len 'digits'
+			let dc = cursor.current()
+			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
+				break
+			end 'endNum'
+			if not tryAdvance() 'digitsEof'
+				break
+			end 'digitsEof'
+		end 'digits'
+
+		// ⭐⭐ **A NUMBER THAT FOLLOWS A `.` IS A TUPLE INDEX AND HAS NO FRACTION (P1.10).**
+		//
+		// `scanNumber` greedily takes a following `.` as the start of a fraction, which is right for `1.5`
+		// and WRONG for `t.0.1`: that lexed as `identifier(t)`, `dot`, `floatLiteral(0.1)` — a chained
+		// positional access silently becoming a float. Nothing downstream can undo it, because by then the
+		// two indices have been fused into one token's text.
+		//
+		// The rule is exact rather than a heuristic, because a number can follow a `dot` for exactly one
+		// reason: `.` is not an operator on numbers in Maxon (a range is `low to high`), a float literal
+		// always begins at its INTEGER part (there is no `.5` form — `scanNumber` is only entered on a
+		// digit), and every other dotted form (`u16.max`, `p.x`, `Point.create`) has an identifier on the
+		// right. So a digit after a `.` is a tuple index, always.
+		let followsMemberDot = lastTokenKind() == TokenKind.dot
+
+		// Check for decimal point (float literal)
+		var isFloat = false
+		if cursorByte() < len and not followsMemberDot 'checkDot'
+			let dotCh = cursor.current()
+			if dotCh == Ascii.dot 'hasDot'
+				isFloat = true
+				if not tryAdvance() 'dotEof'
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					return
+				end 'dotEof'
+				while cursorByte() < len 'fracDigits'
+					let fc = cursor.current()
+					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
+						break
+					end 'endFrac'
+					if not tryAdvance() 'fracEof'
+						break
+					end 'fracEof'
+				end 'fracDigits'
+			end 'hasDot'
+		end 'checkDot'
+
+		// Check for scientific notation exponent (e/E) — only after a decimal point
+		if isFloat and cursorByte() < len 'checkExp'
+			let expCh = cursor.current()
+			if (expCh == Ascii.lowerE or expCh == Ascii.upperE) and exponentDigitFollows() 'hasExp'
+				isFloat = true
+				if not tryAdvance() 'expEof'
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					return
+				end 'expEof'
+				// Optional sign
+				if cursorByte() < len 'checkSign'
+					let signCh = cursor.current()
+					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
+						if not tryAdvance() 'signEof'
+							emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+							return
+						end 'signEof'
+					end 'hasSign'
+				end 'checkSign'
+				// Exponent digits
+				while cursorByte() < len 'expDigits'
+					let ec = cursor.current()
+					if not isDigit(ec) 'endExp'
+						break
+					end 'endExp'
+					if not tryAdvance() 'expDigitsEof'
+						break
+					end 'expDigitsEof'
+				end 'expDigits'
+			end 'hasExp'
+		end 'checkExp'
+
+		// For decimal/float numbers, only include current byte if it's a digit or underscore
+		// (not alpha like 'e' which should start a separate identifier token)
+		// The `.` is admitted here only on the same terms it was admitted as a fraction opener above — a
+		// tuple index ends at its digits, and swallowing the following `.` would take the next hop's
+		// separator with it.
+		//
+		// ⛔⛔ **AND NOT WHEN THE NUMBER ALREADY HAS A FRACTION — A SECOND `.` IS NOT PART OF ANY NUMBER.**
+		// Without `not isFloat` this clause appended the second dot of `1.5.3` to the token AND set
+		// `atEof`, so the lexer handed the parser the text `1.5.` and then stopped scanning — dropping
+		// the `3` entirely. `__float_bitsFromText` then answered `malformed`, which
+		// `Parser.literalDecodeError` PANICKED on, on the stated premise that the lexer never emits such
+		// a token. It did, on `1.5.`, `1.5.3`, `1..5` and `1.5e2.3` — four ordinary typos that CRASHED
+		// the compiler. A float token ends at its fraction; the `.` after it belongs to whatever comes
+		// next, and letting it start a member access is what turns those four into positioned errors.
+		let cb = cursor.current()
+		var atEof = false
+		var endOfs = cursorByte()
+		if isDigit(cb) or cb == Ascii.underscore or (cb == Ascii.dot and not followsMemberDot and not isFloat) 'includeDecLast'
+			endOfs = cursorByte() + 1
+			atEof = true
+		end 'includeDecLast'
+		let numBytes = try bytes.slice(numStart as ElementIndex, endIndex: endOfs as ElementIndex) otherwise panic("Lexer: number-slice invariant violated")
+		if isFloat 'emitFloat'
+			emitWithSource(TokenKind.floatLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
+		end 'emitFloat' else 'emitInt'
+			emitWithSource(TokenKind.intLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
+		end 'emitInt'
+		if atEof 'numDone'
+			try finishAtEof()
+		end 'numDone'
+	end 'scanNumber'
+
+	// ⛔⛔ **AN `e` JOINS THE NUMBER ONLY IF AN EXPONENT ACTUALLY FOLLOWS IT.** Decided by LOOKAHEAD,
+	// before anything is consumed, because the alternative is a token that lies: taking the `e` and
+	// then running a digit loop that may match ZERO digits lexes `1.5e`, `1.5E`, `1.5e+` and `1.5e-`
+	// as float literals whose text carries a dangling exponent — and `__float_bitsFromText` reads a
+	// missing exponent as `sciExp = 0`, so all four SILENTLY COMPILE AS `1.5`, a value the text
+	// names nowhere.
+	//
+	// Refusing here rather than in the reader is what keeps the diagnostic honest: an `e` that is not
+	// an exponent is an IDENTIFIER, so `1.5e` becomes `1.5` followed by `e` and the parser reports an
+	// unexpected token AT the `e`. It also improves `1.5exp`, which used to eat the `e` and complain
+	// about a stray `xp`.
+	function exponentDigitFollows() returns bool
+		let afterE = try cursor.peek(1) otherwise 0
+		if isDigit(afterE) 'digitImmediately'
+			return true
+		end 'digitImmediately'
+
+		if afterE != Ascii.plus and afterE != Ascii.minus 'noSignEither'
+			return false
+		end 'noSignEither'
+		return isDigit(try cursor.peek(2) otherwise 0)
+	end 'exponentDigitFollows'
+
+	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
+	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let startPos = cursorByte()
+		// Phase 7 step 7: byte-string literal prefix. A bare `b` immediately
+		// followed by `"` (no intervening alphanumeric) opens a byte-string
+		// literal. Use peek(1) to look one byte ahead without committing —
+		// peek throws past EOF, so guard via `otherwise 0` (0 cannot match
+		// dquote, so the fall-through naturally drops back to identifier
+		// scanning at the source's last byte).
+		if cursor.current() == Ascii.lowerB 'maybeByteStr'
+			let nextByte = try cursor.peek(1) otherwise 0
+			if nextByte == Ascii.dquote 'isByteStr'
+				// Consume the `b` and the opening `"`, then scan the body
+				// exactly like a non-interpolating double-quoted string —
+				// byte-strings explicitly disallow `{...}` interpolation, so
+				// we can't reuse scanDoubleQuoteString as-is.
+				if not tryAdvance() 'bEof'
+					try finishAtEof()
+				end 'bEof'
+				if not tryAdvance() 'qEof'
+					try finishAtEof()
+				end 'qEof'
+				try scanByteStringLiteralBody(startLine, startCol: startCol)
+				return
+			end 'isByteStr'
+		end 'maybeByteStr'
+		while cursorByte() < len 'identBody'
+			let ic = cursor.current()
+			if not isAlphaNum(ic) 'endIdent'
+				break
+			end 'endIdent'
+			if not tryAdvance() 'identEof'
+				break
+			end 'identEof'
+		end 'identBody'
+		// If tryAdvance() returned false at EOF, cursor is still on the last
+		// identifier byte — include it. Otherwise cursor is past the identifier.
+		var atEof = false
+		var identEnd = cursorByte()
+		if isAlphaNum(cursor.current()) 'includeLastByte'
+			identEnd = identEnd + 1
+			atEof = true
+		end 'includeLastByte'
+		let identBytes = try bytes.slice(startPos as ElementIndex, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
+		let kind = classifyIdentifier(identBytes)
+		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
+		if atEof 'identDone'
+			try finishAtEof()
+		end 'identDone'
+	end 'scanIdentifier'
+
+	// Consume a `#`-prefixed compiler directive starting at the current cursor
+	// position (which is AT the `#`). Reads the directive name (a run of
+	// lowercase letters following `#`) and emits the matching hashIf / hashElse
+	// / hashEndif token. A bare `#` at EOF stashes unexpectedEof; an
+	// unrecognized name stashes `unknownDirective` so the surfacing diagnostic
+	// can name the offending text instead of misreporting an EOF. Returns
+	// true if the directive consumed the source's final byte.
+	function scanDirective(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let hashStart = cursorByte()
+		// Consume the `#`.
+		try advance() otherwise 'eofAtHash'
+			// `#` at EOF with no name following — treat as malformed directive.
+			hasPendingError = true
+			pendingError = LexerError.unexpectedEof(startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'eofAtHash'
+		let nameStart = cursorByte()
+		var atEof = false
+		while cursorByte() < len 'directiveBody'
+			let dc = cursor.current()
+			if not isAlpha(dc) 'endName'
+				break
+			end 'endName'
+			if not tryAdvance() 'eofInName'
+				atEof = true
+				break
+			end 'eofInName'
+		end 'directiveBody'
+		var nameEnd = cursorByte()
+		if atEof and isAlpha(cursor.current()) 'includeLastByte'
+			nameEnd = nameEnd + 1
+		end 'includeLastByte'
+		let nameBytes = try bytes.slice(nameStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: invariant violated")
+		let name = String.from(nameBytes)
+		let kind = classifyDirective(name)
+		if kind == TokenKind.identifier 'unknown'
+			// Unknown directive name — stash a distinct lexer error so the
+			// diagnostic can quote the offending name; run()'s caller maps
+			// this to ErrorCode.lexerUnexpectedCharacter.
+			hasPendingError = true
+			pendingError = LexerError.unknownDirective(name, line: startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'unknown'
+		let fullSpanBytes = try bytes.slice(hashStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		emitWithSource(kind, value: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
+		if atEof 'directiveDone'
+			try finishAtEof()
+		end 'directiveDone'
+		return false
+	end 'scanDirective'
+
+	// Both '/' characters already consumed. Advances to (but not past) the newline, which is left for
+	// the main DFA to consume and emit as a token.
+	//
+	// ⭐ **NOT PAST THE NEWLINE IS LOAD-BEARING NOW, NOT MERELY TIDY**: it is what guarantees a
+	// `docComment` token is always immediately followed by a `newline` one, which is the whole reason the
+	// parser can treat a doc comment as layout and still leave every "a statement/header/label line ends
+	// here" rule demanding a literal newline.
+	function scanComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		if cursor.current() == Ascii.slash 'aThirdSlash'
+			try scanDocComment(startLine, startCol: startCol, startByte: startByte)
+			return
+		end 'aThirdSlash'
+
+		while cursorByte() < len 'skipComment'
+			if cursor.current() == Ascii.lf 'endComment'
+				break
+			end 'endComment'
+			if not tryAdvance() 'commentEof'
+				// Comment runs to end of file — that's a complete comment, not a
+				// truncated token.
+				try finishAtEof()
+			end 'commentEof'
+		end 'skipComment'
+	end 'scanComment'
+
+	// ⭐⭐ **`///` IS THE ONE COMMENT FORM THAT BECOMES A TOKEN** — the formatter round-trips it and the
+	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. The third slash
+	// and then ONE following space are consumed and left OUT of the text, so `/// text` and `///text`
+	// carry the identical prose and a re-emit can put the separator back by rule instead of preserving
+	// whatever the author typed. The SPAN still opens at the first slash, because that is where the
+	// construct starts on screen.
+	function scanDocComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		if not tryAdvance() 'slashesEndTheFile'
+			try finishEmptyDocComment(startLine, startCol: startCol, startByte: startByte)
+		end 'slashesEndTheFile'
+
+		if cursor.current() == Ascii.space 'oneSeparatorSpace'
+			if not tryAdvance() 'spaceEndsTheFile'
+				try finishEmptyDocComment(startLine, startCol: startCol, startByte: startByte)
+			end 'spaceEndsTheFile'
+		end 'oneSeparatorSpace'
+
+		let textStart = cursorByte()
+		var atEof = false
+		while cursor.current() != Ascii.lf 'docBody'
+			if not tryAdvance() 'docEof'
+				atEof = true
+				break
+			end 'docEof'
+		end 'docBody'
+
+		// At EOF the cursor still sits ON the last byte — `advance` refuses to step past it — so that byte
+		// is part of the text and the span runs to the end of the source.
+		let textEnd = len if atEof else cursorByte()
+		let value = try bytes.slice(textStart as ElementIndex, endIndex: textEnd as ElementIndex) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
+		emitWithSource(TokenKind.docComment, value: value, startLine: startLine, startCol: startCol, startByte: startByte, endByte: textEnd)
+
+		if atEof 'docCommentEndsTheFile'
+			try finishAtEof()
+		end 'docCommentEndsTheFile'
+	end 'scanDocComment'
+
+	// `///` — or `/// ` — as the source's final bytes: a doc comment with no prose, completed cleanly
+	// rather than a truncated token. Two positions in `scanDocComment` can run out that way, and they owe
+	// the same token.
+	function finishEmptyDocComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		emitWithSource(TokenKind.docComment, value: EmptySourceText, startLine: startLine, startCol: startCol, startByte: startByte, endByte: len)
+		try finishAtEof()
+	end 'finishEmptyDocComment'
+
+	// Both '/' and '*' already consumed. Scans until '*/' is found. A newline inside the comment is an
+	// ordinary consumed byte — `countConsumed` is what keeps `line` right across it, so this body no
+	// longer has an arm of its own for one.
+	function scanBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		while cursorByte() < len 'skipBlockComment'
+			let cc = cursor.current()
+			if cc == Ascii.star 'checkEnd'
+				// Sentinel: 0 = EOF; safely treated as not the comment closer.
+				let next = try cursor.peek(1) otherwise 0
+				if next == Ascii.slash 'foundEnd'
+					_ = tryAdvance()
+					if not tryAdvance() 'endSlashEof'
+						// `*/` was the last two bytes — comment closed cleanly,
+						// just at EOF. Mark clean completion so run() doesn't
+						// surface this as truncated input.
+						try finishAtEof()
+					end 'endSlashEof'
+					return
+				end 'foundEnd'
+			end 'checkEnd'
+			if not tryAdvance() 'blockEof'
+				hasPendingError = true
+				pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'blockEof'
+		end 'skipBlockComment'
+		// Loop exit without finding `*/` — unterminated.
+		hasPendingError = true
+		pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanBlockComment'
+
+	// --- Main DFA loop ---
+
+	function run() returns TokenArray throws LexerError
+		logDebug(LogCategory.lexer, message: function() gives "Starting lexer")
+
+		// Drive the DFA until either stepDfa returns true (consumed everything
+		// cleanly) or a scanner unwinds via CursorError. CursorError with
+		// `emittedAtEof` set means a complete token landed on the last byte
+		// (clean completion); otherwise it's truly truncated input.
+		var done = false
+		while not done 'scan'
+			let startLine = line
+			let startCol = column
+			done = try stepOnce(startLine, startCol: startCol)
+		end 'scan'
+
+		// Emit a final EOF sentinel token so the parser can rely on cursor.current()
+		// returning a valid Token even after the last user-visible token was
+		// consumed. Position points one column past the last lexed character on
+		// the same line.
+		tokens.push(Token.create(TokenKind.eof, line: line, column: column))
+		return tokens
+	end 'run'
+
+	// One iteration of the DFA loop. Returns true when the lexer is done — either
+	// stepDfa hit the source's last byte cleanly, or a sub-scanner emitted its
+	// final token and signalled `emittedAtEof`. Throws LexerError on a stashed
+	// scanner error or a truly-truncated token.
+	function stepOnce(startLine LineNumber, startCol ColumnNumber) returns bool throws LexerError
+		return try stepDfa(startLine, startCol: startCol) otherwise 'cursorErr'
+			if hasPendingError 'hasErr'
+				throw pendingError
+			end 'hasErr'
+			if not emittedAtEof 'truncated'
+				throw LexerError.unexpectedEof(startLine, column: startCol)
+			end 'truncated'
+			return true
+		end 'cursorErr'
+	end 'stepOnce'
+end 'Lexer'
+
+// --- Public API wrapper ---
+
+// Lex `source` into a token stream. Throws LexerError for fatal scan errors
+// (e.g. unterminated string literal) so queryTokens can route them through
+// the project's diagnostic sink and stop the pipeline before parsing runs
+// on partial tokens.
+export function tokenize(source String) returns TokenArray throws LexerError
+	let bytes = source.toByteArray()
+	let cursor = try bytes.cursor() otherwise 'emptySource'
+		// Empty or whitespace-only source yields an empty token stream.
+		return TokenArray.create()
+	end 'emptySource'
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
+	return try lexer.run()
+end 'tokenize'
+
+// --- Pure helpers ---
+
+// Exported for `isHexDigit`'s reason, and to its own second reader: `InterpFormatSpec.digitsEnd`
+// scans the width and precision of a format specifier, and "is this byte a decimal digit?" is the
+// number lexer's question asked about a different run of bytes — one predicate, not a second copy.
+export function isDigit(b Byte) returns bool
+	return b >= '0' and b <= '9'
+end 'isDigit'
+
+// Valid identifier start: letter (A-Z, a-z) or underscore
+function isAlpha(b Byte) returns bool
+	return (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z') or b == '_'
+end 'isAlpha'
+
+// Valid identifier continuation: letter, digit, or underscore
+function isAlphaNum(b Byte) returns bool
+	return isAlpha(b) or isDigit(b)
+end 'isAlphaNum'
+
+type KeywordInfo
+	export var kind as TokenKind
+	export var helpText as String
+	export var canHaveBlockLabel as bool
+
+	export static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}
+	end 'create'
+end 'KeywordInfo'
+
+var keywordMap = [
+	b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
+	b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
+	b"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
+	b"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
+	b"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
+	b"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
+	b"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
+	b"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
+	b"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
+	b"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
+	b"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
+	b"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
+	b"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
+	b"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
+	b"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
+	b"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
+	b"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
+	b"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
+	b"async": KeywordInfo.create(TokenKind.async, helpText: "Starts a COROUTINE of the current green thread to run a function call, returning a promise. It overlaps waiting, never execution: the coroutine is published only to its own green thread's queue and driven only by that thread, which is what keeps a box reachable from exactly one thread. Starting a thread that is scheduled independently is `spawn`, which starts a SERVICE.", canHaveBlockLabel: false),
+	b"await": KeywordInfo.create(TokenKind.await, helpText: "Suspends the current green thread until a promise completes, yielding its result.", canHaveBlockLabel: false),
+	b"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
+	b"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
+	b"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
+	b"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
+	b"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
+	b"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
+	b"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
+	b"union": KeywordInfo.create(TokenKind.union, helpText: "Declares a union type with named cases, optional associated values, and methods.", canHaveBlockLabel: false),
+	b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
+	b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
+	b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+	// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
+	// because the word is an ordinary identifier 6,537 times in `maxon-bin/` alone (see
+	// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45
+	// occurrences, every one inside a comment or a string — so it costs nothing to reserve program-wide and
+	// needs none of `module`'s contextual machinery.
+	b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
+	b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
+	b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
+	b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
+	b"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
+	b"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
+	b"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
+	b"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
+	b"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
+	b"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
+	b"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
+	b"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	b"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	b"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
+	b"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
+	b"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
+	b"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
+	b"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
+	b"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
+	b"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
+	b"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
+	b"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
+	b"sizeof": KeywordInfo.create(TokenKind.sizeof, helpText: "Returns the size of a type in bytes — a compile-time constant for a concrete type, a runtime layout-descriptor read for a generic type's parameter.", canHaveBlockLabel: false),
+	b"countof": KeywordInfo.create(TokenKind.countof, helpText: "Returns how many ELEMENTS a fixed-size container type holds — a compile-time constant for an instance that states its count, a runtime layout-descriptor read for the sized container's own `Self`.", canHaveBlockLabel: false),
+	b"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
+	b"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
+	b"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
+	b"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
+	b"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
+	b"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
+	b"cstring": KeywordInfo.create(TokenKind.cstring, helpText: "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", canHaveBlockLabel: false)
+]
+
+// Keyed on the identifier's raw BYTES, so the hot path never materializes a String:
+// `ByteArray` hashes and compares by content, so the source slice looks the keyword
+// up directly (see Array's Hashable/Equatable extension).
+function classifyIdentifier(name ByteArray) returns TokenKind
+	let info = try keywordMap.get(name) otherwise return TokenKind.identifier
+	return info.kind
+end 'classifyIdentifier'
+
+// ⭐ **IS `kind` A RESERVED WORD — DERIVED FROM `keywordMap`, NEVER RESTATED.** The formatter has to know
+// whether a token it is re-emitting is a keyword or an ordinary identifier, and a second list of the
+// keywords is exactly the copy that goes stale silently: a word added to the map above would keep
+// lexing as a keyword and start formatting as an identifier. The map is the only place the set is
+// written down, so this scans it.
+//
+// The scan is linear in the keyword count and the map is the wrong index for this direction — it is
+// keyed by SPELLING, and the answer wanted here is keyed by KIND. A reverse index would be a second
+// copy of the same fact with its own initialization order to get wrong, for a question asked once per
+// token by ONE caller that is already writing bytes to a file.
+//
+// `module` and not `export`: the formatter lives under `Compiler/` (see `Ascii` for the E3093 rule).
+module function isKeywordKind(kind TokenKind) returns bool
+	for (_, info) in keywordMap 'eachKeyword'
+		if info.kind == kind 'isTheKind'
+			return true
+		end 'isTheKind'
+	end 'eachKeyword'
+
+	return false
+end 'isKeywordKind'
+
+// Map a directive name (the text following `#`) to its TokenKind. Returns
+// TokenKind.identifier for unrecognized names so the lexer caller can
+// distinguish "valid directive" from "junk after `#`" without a separate
+// channel.
+function classifyDirective(name String) returns TokenKind
+	if name == "if" 'isIf'
+		return TokenKind.hashIf
+	end 'isIf'
+	if name == "else" 'isElse'
+		return TokenKind.hashElse
+	end 'isElse'
+	if name == "endif" 'isEndif'
+		return TokenKind.hashEndif
+	end 'isEndif'
+	return TokenKind.identifier
+end 'classifyDirective'
+
+// ASCII byte enum
+// ⚠ VISIBLE ACROSS THE MODULE for `isHexDigit`'s reason, stated one function below: a second spelling
+// of *"34 is a double quote"* is a second spelling however far away it is written.
+// `TargetPrinter.escapedPayloadByte` reads `dquote` and `backslash` from here when it renders a `.rdata`
+// blob's text into a golden. `module` and not `export`: every reader is inside `Compiler/`, and a
+// self-compile refuses an `export` nothing outside the subtree reads (E3093).
+module enum Ascii
+	lf = 10
+	space = 32
+	dquote = 34
+	hash = 35
+	quote = 39
+	star = 42
+	plus = 43
+	minus = 45
+	dot = 46
+	slash = 47
+	zero = 48
+	at = 64
+	upperB = 66
+	upperE = 69
+	upperO = 79
+	upperX = 88
+	backslash = 92
+	underscore = 95
+	lowerB = 98
+	lowerE = 101
+	lowerO = 111
+	lowerX = 120
+end 'Ascii'
+
+// Exported so the byte-string escape decoder (`Parser.hexDigitsPresent`) reads a hex digit the same way
+// the number lexer does — one predicate, not a second copy.
+export function isHexDigit(b Byte) returns bool
+	return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'F') or (b >= 'a' and b <= 'f')
+end 'isHexDigit'
+
+function isBinaryDigit(b Byte) returns bool
+	return b == '0' or b == '1'
+end 'isBinaryDigit'
+
+function isOctalDigit(b Byte) returns bool
+	return b >= '0' and b <= '7'
+end 'isOctalDigit'

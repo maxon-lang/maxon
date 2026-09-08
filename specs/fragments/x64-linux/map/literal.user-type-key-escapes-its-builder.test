@@ -1,0 +1,359 @@
+// Test: literal.user-type-key-escapes-its-builder
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function build() returns PointMap
+	return [Point.create(1, y: 2): 7, Point.create(3, y: 4): 11, Point.create(5, y: 6): 24]
+end 'build'
+
+function main() returns ExitCode
+	let m = build()
+	var total = 0 as Val
+	for i in 1 upto 4 'read'
+		total = total + (try m.get(Point.create(i * 2 - 1, y: i * 2)) otherwise panic("map literal lost a user-type key"))
+	end 'read'
+	print("total {total} count {m.count()}")
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rax, rax, 31
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at literal.user-type-key-escapes-its-builder.test:13: Range check failed: value outside typealias 'HashValue'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.cmpRegReg rax, rsi
+    x64.movRegImm32 r8, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, r8
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @build {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 7
+    x64.leaRegRdata rcx, [rip + __layout_Map_Point_int]
+    x64.leaRegRdata rdx, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Point.Equatable]
+    x64.callDirect Map.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata r9, [rip + __layout_Map_Point_int]
+    x64.leaRegRdata rsi, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Point.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 4
+    x64.callDirect Point.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r14, 11
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegRdata r9, [rip + __layout_Map_Point_int]
+    x64.leaRegRdata rsi, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Point.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 6
+    x64.callDirect Point.create
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 24
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.leaRegRdata r9, [rip + __layout_Map_Point_int]
+    x64.leaRegRdata rsi, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Point.Equatable]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect Map.upsert
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.callDirect build
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 1
+  forhdr:
+    x64.storeSlotReg slot1, r12
+    x64.cmpRegImm32 r13, 4
+    x64.jcc greaterEqual, forexit
+  read:
+    x64.imulRegRegImm32 rdx, r13, 2
+    x64.leaRegRegImm32 rcx, rdx, -1
+    x64.callDirect Point.create
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __layout_Map_Point_Val]
+    x64.leaRegRdata r9, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_Point.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect Map.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at literal.user-type-key-escapes-its-builder.test:31: map literal lost a user-type key\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "total "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; " count "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRdata rdx, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Point.Equatable]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 32]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc less, __il_slow
+  __rc_chk#13:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg r15, rcx
+    x64.jcc lessEqual, __rc_ok#12
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Map.count
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __rc_ok#12:
+    x64.movRegReg rbx, r15
+  __il_cont:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegReg rax, r13, r12
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r8
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r13, rbx, r13
+    x64.movRegReg rcx, r13
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r13, r12
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.loadRegSlot r13, slot4
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot r12, slot3
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#9:
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok#7
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at literal.user-type-key-escapes-its-builder.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#7:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Map_Point_Val
+    x64.loadRegSlot r8, slot1
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

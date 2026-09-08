@@ -1,0 +1,24 @@
+// Test: impure-method-statement-discarded
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump() returns Integer
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.bump()
+	return c.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3065: <fragment>:19:4: result of 'Counter.bump' is not used (use '_ = expr' to discard)

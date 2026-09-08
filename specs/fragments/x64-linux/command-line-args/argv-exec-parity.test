@@ -1,0 +1,286 @@
+// Test: argv-exec-parity
+function main() returns ExitCode
+	// Phase B4 parity check: the unified mrt_command_line_count /
+	// mrt_command_line_arg / mrt_executable_path bodies route through the
+	// new osGetArgc / osGetArgv / osGetExecutablePath ops, which on
+	// x64-windows dispatch into the hand-rolled mrt_win32_get_* helpers
+	// emitted as raw machine code by X64Backend.emitX64Win32Helpers.
+	let args = CommandLine.args()
+	if args.count() < 4 'count-check'
+		return 1
+	end 'count-check'
+
+	let a1 = try args.get(1) otherwise ""
+	if a1 != "alpha" 'a1-check'
+		return 2
+	end 'a1-check'
+
+	let a2 = try args.get(2) otherwise ""
+	if a2 != "beta" 'a2-check'
+		return 3
+	end 'a2-check'
+
+	let a3 = try args.get(3) otherwise ""
+	if a3 != "gamma" 'a3-check'
+		return 4
+	end 'a3-check'
+
+	let exe = try Process.executablePath() otherwise return 5
+	if exe.path.byteLength() == 0 'exe-empty'
+		return 6
+	end 'exe-empty'
+
+	return 0
+end 'main'
+---
+Args: alpha beta gamma
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __cl_argc@16 = i64 0
+  __cl_argv@24 = i64 0
+  __cl_empty_arg@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 4
+    x64.jcc greaterEqual, ifcont#2
+  count-check:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#38
+  __im_empty#25:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#39
+  __im_slow#23:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#22
+  critsplit#39:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#22
+  critsplit#38:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#22:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; ""
+    x64.jmp trycont#5
+  tryok#3:
+    x64.movRegReg rcx, r8
+  trycont#5:
+    x64.leaRegRdata rdx, [rip + __str_rec_20]  ; "alpha"
+    x64.callDirect __str_eq
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#7
+  a1-check:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#7:
+    x64.movRegImm32 rdx, 2
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow#27
+  __im_load#28:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 16
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#40
+  __im_empty#29:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#41
+  __im_slow#27:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#26
+  critsplit#41:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#26
+  critsplit#40:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; ""
+    x64.jmp trycont#10
+  tryok#8:
+    x64.movRegReg rcx, r8
+  trycont#10:
+    x64.leaRegRdata rdx, [rip + __str_rec_21]  ; "beta"
+    x64.callDirect __str_eq
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#12
+  a2-check:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm32 rdx, 3
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 3
+    x64.jcc belowEqual, __im_slow#31
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 24
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#42
+  __im_empty#33:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#43
+  __im_slow#31:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#30
+  critsplit#43:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#30
+  critsplit#42:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#30:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; ""
+    x64.jmp trycont#15
+  tryok#13:
+    x64.movRegReg rcx, r8
+  trycont#15:
+    x64.leaRegRdata rdx, [rip + __str_rec_22]  ; "gamma"
+    x64.callDirect __str_eq
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#17
+  a3-check:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#17:
+    x64.callDirect Process.executablePath
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#18
+  tryerr#19:
+    x64.movRegImm32 r12, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#18:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifcont#21
+  exe-empty:
+    x64.movRegImm32 r13, 6
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#21:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

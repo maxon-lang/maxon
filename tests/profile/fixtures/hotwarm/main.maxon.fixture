@@ -1,0 +1,60 @@
+// The profiled program every single-threaded case in `tests/profile/` measures — a program whose ranking
+// is known before it is sampled.
+//
+// ⭐ A SAMPLING PROFILER IS NONDETERMINISTIC, so nothing here may be pinned by number; what a case CAN
+// pin is an ORDER, and an order only exists if the program builds one. `hot` is given ten times `warm`'s
+// work, so which of the two tops the self-time table is a fact about this file rather than about the run
+// that happened to be sampled. Equal work would make that ordering a coin flip.
+//
+// `work` calls both and does nothing itself, so the call tree has a REAL interior node — main → work →
+// {hot, warm}. A tree assembled from the leaf end, or one that lost a frame, shows up as a missing level
+// rather than as a plausible-looking table.
+//
+// ⚠ The round counts are tuned so the whole run is a few hundred milliseconds at the default 1 kHz —
+// several hundred samples, comfortably past the report's "too few samples" floor, while leaving a case
+// file room inside `maxon test`'s per-file deadline.
+
+typealias ExitCode = int(0 to 255)
+typealias Rounds = int(0 to i64.max)
+
+// The intended hotspot. Plain addition on purpose: `mod` and `/` are FALLIBLE in Maxon, so a remainder in
+// the innermost loop would be measuring the error path as much as the arithmetic.
+function hot(rounds Rounds) returns Rounds
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'hotLoop'
+		acc = acc + i
+		i = i + 1
+	end 'hotLoop'
+
+	return acc / 1000000
+end 'hot'
+
+// The same shape at a tenth the work: unmistakably second, and nowhere near contention with `hot`.
+function warm(rounds Rounds) returns Rounds
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'warmLoop'
+		acc = acc + i
+		i = i + 1
+	end 'warmLoop'
+
+	return acc / 1000000
+end 'warm'
+
+// An interior frame that costs nothing itself: every sample under it belongs to one of its callees.
+function work() returns Rounds
+	let h = hot(1800000000)
+	let w = warm(180000000)
+
+	return (h + w) / 1000
+end 'work'
+
+function main() returns ExitCode
+	let result = work()
+	print("done {result}\n")
+
+	return 0
+end 'main'

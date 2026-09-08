@@ -1,0 +1,44 @@
+// Test: overloaded-method-satisfies-requirement-declared-second
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns Integer
+end 'Named'
+
+type Widget implements Named
+	var v as Integer
+
+	function label(extra Integer) returns Integer
+		return v + extra
+	end 'label'
+
+	function label() returns Integer
+		return v
+	end 'label'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,1198 @@
+/// Launch and manage child processes.
+///
+/// Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path
+/// is `Subprocess.run(.name("git"), arguments: ["status"])`, which captures
+/// stdout/stderr into a `CollectedOutput` value. For more control, build a
+/// `Configuration` and call `.run()` on it.
+///
+/// Async use: `let p = async Subprocess.run(...); let r = try await p`. The
+/// same `Subprocess.run` is callable from both sync and async contexts —
+/// from a green thread it yields to the scheduler at the wait, from a plain
+/// call it blocks the OS thread.
+///
+/// Not available on `wasm32-wasi` — WASI has no process-spawn primitives.
+/// Code that needs to compile on every supported target must `#if os(Wasi)`
+/// around its Subprocess use.
+///
+/// @category System
+// Subprocess: child-process execution. Not supported on WASI; do not target WASI from code that uses Subprocess.
+
+// =============================================================================
+// Shared integer types
+// =============================================================================
+
+// Raw process exit code or signal number. Signed because Unix signals and
+// some Windows abnormal-exit NTSTATUS codes are conventionally read as i64.
+typealias ExitInt = int(i64.min to i64.max)
+
+// An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
+// wider than the i64 the spawn builtins answer in. Narrowing it makes every `Pid` position a guarded
+// door, so it is worth being exact about where the builtins' `-1` is decoded, because it is NOT
+// decoded uniformly:
+//
+//   • `runDetachedConfiguration` gets the pid FROM the spawn, where `-1` means the spawn failed, and
+//     decodes it with an `==` before the value reaches this alias's return door.
+//   • `runConfiguration` does NOT decode — it reads `subprocessGetPid(handle)` and hands the result
+//     straight to `CollectedOutput.create`'s `pid Pid` parameter. That is sound rather than an
+//     oversight, and only because of what the entry answers `-1` FOR: both runtimes return it for a
+//     handle that is null / out of range / already released, and this handle was proved live one
+//     statement earlier and is released only after the read. A live handle carries the pid the spawn
+//     recorded.
+//
+// ⚠ So the guard here is the backstop for a `-1` that ESCAPED the first case, not a check the second
+// case is relying on. If a future runtime ever answers `-1` for a LIVE handle — a platform that
+// cannot report a pid — `runConfiguration` becomes an uncatchable range panic, and the fix is a
+// decode at that call, not a wider `Pid`.
+typealias Pid = int(0 to u64.max)
+
+// A cap on how many bytes of a child's output are collected. Every capped read materialises a
+// `String`, so the backing `__ManagedMemory`'s signed machine-word length bounds it.
+typealias ByteLimit = int(0 to u64.max)
+
+// File-private aliases mirroring the same names declared in `stdlib/String.maxon`
+// and `stdlib/Json.maxon`. The self-hosted stdlib whitelist doesn't yet include
+// `Json.maxon` (where `StringArray` is exported), and `String.maxon`'s
+// `StringArray`/`ByteArray` are file-private. Re-declaring them here keeps
+// Subprocess.maxon parse-clean under the self-hosted compiler's whitelist
+// without forcing the whole `Json.maxon` to be whitelisted.
+typealias StringArray = Array with String
+typealias ByteArray = Array with Byte
+typealias Byte = int(0 to u8.max)
+
+// Stdin discriminator passed across the builtin boundary. Raw values match
+// the runtime contract (see X86/ARM64 emitters and the parent plan).
+//
+// ⭐ `hold` IS THE FIFTH VALUE AND IT WAS ALREADY IN ONE RUNTIME BEFORE IT HAD A SURFACE SPELLING:
+// The compiler built it for `StreamingSubprocess`, which wants a stdin pipe with NO payload queued. `bytes`
+// cannot say that — its arm always carries one — so an empty `bytes` payload is NOT the same request.
+// The number is 4 because that is the value the compiler's runtime already decodes; that runtime's constant
+// is `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), renamed from `SubpStdinPipe`
+// when this surface spelling arrived, because a value the language can spell should not answer to a
+// second name inside one compiler.
+//
+// ⚠ `delayed` IS THE ONE VALUE NO RUNTIME HAD BEFORE THIS SURFACE SPELLING. **ALL THREE EMITTERS
+// DECODE BOTH VALUES NOW** — the bootstrap's x64 and arm64 emitters and the compiler's `emitSubpStdinSetup`.
+// ⛔ **THIS PARAGRAPH USED TO SAY THE OPPOSITE — that the compiler tested for `bytes` and `pipe`, sent
+// everything else down its non-pipe arm, and therefore handed a `delayed` spawn the null device and an
+// instant EOF — and that it was left unclosed "because closing it means editing the compiler's runtime".** It
+// WAS closed, in the same change that added these two values: `emitSubpStdinKindWantsPipe` is now the
+// one place the pipe question is asked, and `SubpSlotStdinFeedAt` carries the not-before time. The
+// stale sentence is recorded rather than deleted because a comment that names a defect the code no
+// longer has is worse than no comment: it sends the next reader looking for a divergence to work
+// around. ⇒ **the divergence to watch for now is a NEW kind added to this enum and to fewer than
+// three emitters**, which is what the two `…WantingPipe` sets exist to make a one-line change.
+enum StdinKind
+	none = 0
+	inherit = 1
+	bytes = 2
+	file = 3
+	hold = 4
+	delayed = 5
+end 'StdinKind'
+
+// Stdout / stderr discriminator passed across the builtin boundary. Shared
+// across both stdout and stderr slots — the runtime treats them identically.
+enum OutputKind
+	discard = 0
+	inherit = 1
+	collect = 2
+	file = 3
+end 'OutputKind'
+
+// Spawn-flags bitfield bits passed in the `flags` argument to
+// `subprocessSpawn` / `subprocessDetach`. Each case's `rawValue` is a single
+// bit position; the actual `flags` int is built by OR-ing selected
+// `.rawValue`s. Kept as enum (rather than constants) so the set of legal
+// bits is named in one place.
+enum SpawnFlag
+	hideWindow = 1
+	newProcessGroup = 2
+	detach = 4
+end 'SpawnFlag'
+
+// Result-struct status-kind discriminator. Matches the runtime's
+// `subprocessResultStatusKind` return values.
+enum ResultStatusKind
+	exited = 0
+	signalled = 1
+	timedOut = 2
+end 'ResultStatusKind'
+
+// =============================================================================
+// Executable
+// =============================================================================
+
+/// Error raised when an `Executable.name(...)` lookup fails to find a matching
+/// binary on the PATH.
+public enum ExecutableError implements Error
+	notFound
+end 'ExecutableError'
+
+/// What to run. Either a bare name (`"git"`, looked up through PATH on the
+/// host) or an explicit `FilePath` (used verbatim).
+public union Executable
+	name(value String)
+	path(value FilePath)
+
+	/// Wrap either arm as a `FilePath`, WITHOUT resolving anything. For
+	/// `.path(p)` this is `p` unchanged; for `.name(n)` it is the bare name as
+	/// a path, which is exactly what the OS spawn primitive wants — it does
+	/// its own PATH lookup (Windows CreateProcessW + PATHEXT, POSIX execvp).
+	/// Throws `ExecutableError.notFound` only if `n` is not a well-formed path
+	/// string; a name that is simply absent from PATH resolves fine here and
+	/// fails later, at the spawn.
+	///
+	/// ⚠ THIS IS NOT A PATH LOOKUP AND CANNOT BE USED AS AN EXISTENCE CHECK.
+	/// The `subprocessResolveOnPath` helper is called by `resolveByName`
+	/// during `runConfiguration`, not here. This comment previously claimed
+	/// the opposite, and a caller believed it: it built "is this tool
+	/// installed?" on top of `resolve()` and got a confident `notFound` for a
+	/// tool that was plainly on PATH. To probe for a tool, SPAWN it.
+	public function resolve() returns FilePath throws ExecutableError
+		return match self 'r'
+			name(n) gives try FilePath.from(n) otherwise throw ExecutableError.notFound
+			path(p) gives p
+		end 'r'
+	end 'resolve'
+
+	/// Human-readable form for diagnostics.
+	public function displayName() returns String
+		return match self 'd'
+			name(n) gives n
+			path(p) gives p.path
+		end 'd'
+	end 'displayName'
+end 'Executable'
+
+// =============================================================================
+// Environment
+// =============================================================================
+
+typealias EnvMap = Map with String, String
+
+/// How the child process's environment is constructed.
+///
+/// - `inherit` — the child sees the parent's environment unchanged.
+/// - `inheritUpdating(map)` — the child inherits, then `map`'s entries
+///   overwrite any colliding keys.
+/// - `custom(map)` — the child sees exactly `map` and nothing else.
+///
+/// The three-arm union (rather than a single `Map` field) makes
+/// `inherit`-vs-empty unambiguous.
+public union Environment
+	inherit
+	inheritUpdating(overrides EnvMap)
+	custom(vars EnvMap)
+end 'Environment'
+
+// What the spawn contract's `envInherit` slot says about the `env` slot beside it.
+//
+// ⚠ THE TRUTHY VALUE IS `parent`, WHICH READS BACKWARDS FOR A SLOT NAMED AFTER THE OTHER ANSWER. The
+// numbers are the runtime contract's, not this file's: `inherit` was the only arm any emitter served
+// for long enough that all of them spell it as the 1. Naming the pair is what stops a call site from
+// spelling either as a bare literal and getting the sense inverted.
+enum EnvSource
+	// `env` points at a caller-built block and IS the child's whole environment.
+	block = 0
+	// The child inherits this process's environment; the `env` slot is not read.
+	parent = 1
+end 'EnvSource'
+
+typealias EnvSourceValue = int(0 to 1)
+
+// The NUL that ends ONE TOKEN of a runtime blob — an argv token, an environment entry, and, one more
+// of it after the last entry, the environment block itself. Declared as the BYTE it is because that is
+// the only form its readers use: these blobs are assembled byte by byte here and walked byte by byte
+// by both runtimes.
+let BlobTokenTerminator = 0 as Byte
+
+// What separates a name from its value inside one entry: `=` (0x3D).
+let EnvNameValueSeparator = 61 as Byte
+
+/// Carries the (block, source) pair the spawn contract's `env` / `envInherit` slots take. A type for
+/// `StdioRuntimeTriple`'s reason: the two are one decision and a caller that computed them separately
+/// could compute a block for a spawn that will not read it, or the reverse.
+type SpawnEnvironment
+	public var block as String
+	public var source as EnvSourceValue
+
+	public static function create(block String, source EnvSourceValue) returns SpawnEnvironment
+		return SpawnEnvironment{block: block, source: source}
+	end 'create'
+end 'SpawnEnvironment'
+
+// =============================================================================
+// Input / Output sources
+// =============================================================================
+
+/// What the child reads on stdin.
+///
+/// - `none` — stdin is closed immediately.
+/// - `inherit` — pass through the parent's stdin.
+/// - `bytes(s)` — write `s` to stdin, then close.
+/// - `file(p)` — read stdin from a file on disk.
+/// - `hold` — stdin is a pipe the parent opens, hands the read end of to the
+///   child, and then holds open WITHOUT EVER WRITING TO IT, until the child is
+///   reaped. A read in the child therefore BLOCKS IN THE KERNEL instead of
+///   seeing EOF, which is what `none` and a spent `bytes` payload both give.
+///
+/// - `delayed(s)` — `hold`'s pipe for about a second, then `s`, then close. A
+///   read in the child BLOCKS for that long and then COMPLETES, so the child
+///   both enters a real kernel wait and still terminates on its own.
+///
+/// ⭐ `hold` IS THE ONLY ARM THAT LEAVES THE CHILD BLOCKED RATHER THAN ANSWERED,
+/// and it exists because nothing else can express that. `none` opens the null
+/// device (instant EOF), `bytes("")` writes nothing and then closes (also EOF —
+/// and the two runtimes disagree about even that; see `StdinKind`), and
+/// `inherit` hands over whatever the parent's own stdin happens to be, which is
+/// not a property any caller controls. A caller that needs a child to be stuck
+/// in a real blocking syscall has this and no other way to ask for it.
+///
+/// ⭐⭐ `delayed` EXISTS BECAUSE `hold` ALONE CANNOT BE ASSERTED ON. A child parked
+/// forever can only ever end at its spawner's timeout, so the only observation
+/// `hold` supports is "it did not finish" — which is also what a hang, a crash
+/// loop and a deadlock look like. `delayed` ends the wait, so the child exits
+/// normally and what it PRINTED, and in what ORDER against whatever ran while it
+/// was parked, becomes the observable.
+///
+/// ⚠ THE DELAY IS FIXED AND THE CALLER CANNOT NAME IT (`StdinDelayedFeedMs`, one
+/// per emitter, in the runtime that performs the write).
+/// The spawn contract carries a `limit` alongside stdout's and stderr's kinds and
+/// NONE alongside stdin's, so there is no slot to put a per-call duration in; a
+/// caller-chosen delay is a change to the builtin's arity, which is declared in
+/// each compiler's parser as well as in both emitters. The payload rides the
+/// existing `stdinData` slot and IS the caller's, so only the duration is fixed.
+///
+/// Each variant routes its payload through the `subprocessSpawn` stdio
+/// triple; the runtime stubs currently fail spawns with -1 until the real
+/// OS-side implementation lands.
+public union InputSource
+	none
+	inherit
+	bytes(data String)
+	file(path FilePath)
+	hold
+	delayed(data String)
+end 'InputSource'
+
+/// Where the child's stdout (or stderr) is sent.
+///
+/// - `discard` — output is dropped.
+/// - `inherit` — pass through to the parent's stream.
+/// - `collect(limitBytes)` — read into the `CollectedOutput.stdout`/`.stderr`
+///   field, truncated at `limitBytes`.
+/// - `file(p)` — redirect to a file on disk.
+///
+/// Each variant routes through the `subprocessSpawn` stdio triple; the
+/// runtime stubs currently fail spawns with -1 until the real OS-side
+/// implementation lands.
+public union OutputDestination
+	discard
+	inherit
+	collect(limitBytes ByteLimit)
+	file(path FilePath)
+end 'OutputDestination'
+
+// =============================================================================
+// Termination status
+// =============================================================================
+
+/// How the child terminated.
+///
+/// - `exited(code)` — the child called `exit(code)` (or its main returned
+///   `code`). On Windows this includes any value `GetExitCodeProcess` returned
+///   that isn't an NTSTATUS-class abnormal exit.
+/// - `signalled(code)` — Unix: the child was killed by signal `code`. Windows:
+///   the child terminated abnormally with NTSTATUS exit code `code` (e.g.
+///   `0xC0000005` for an access violation).
+///
+/// The current runtime stubs never produce `signalled`; that decoding lands
+/// alongside the real OS implementation of `subprocessWaitCollect`.
+public union TerminationStatus
+	exited(code ExitInt)
+	signalled(code ExitInt)
+
+	/// True iff the child exited cleanly with code 0.
+	public function isSuccess() returns bool
+		return match self 's'
+			exited(c) gives c == 0
+			signalled gives false
+		end 's'
+	end 'isSuccess'
+
+	/// The raw integer code, regardless of how the child terminated. Useful
+	/// for logging; for control flow prefer matching on the union directly.
+	public function code() returns ExitInt
+		return match self 'c'
+			exited(c) gives c
+			signalled(c) gives c
+		end 'c'
+	end 'code'
+end 'TerminationStatus'
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+/// Errors raised by `Subprocess.run` / `Configuration.run`. Each carries the
+/// actionable detail rather than just a kind tag.
+public union SubprocessError implements Error
+	executableNotFound(name String)
+	spawnFailed(reason String)
+	ioFailed(reason String)
+	timeout(elapsedMs DurationMs)
+	inputTooLarge
+
+	/// Human-readable rendering for diagnostics. Centralises the wording so
+	/// every callsite produces the same single-line description of a spawn /
+	/// timeout / I/O failure.
+	public function displayReason() returns String
+		return match self 'e'
+			executableNotFound(name) gives "executable not found: {name}"
+			spawnFailed(reason) gives "spawn failed: {reason}"
+			ioFailed(reason) gives "I/O failed: {reason}"
+			timeout(elapsedMs) gives "timed out after {elapsedMs}ms"
+			inputTooLarge gives "stdin payload too large"
+		end 'e'
+	end 'displayReason'
+end 'SubprocessError'
+
+// =============================================================================
+// Collected output
+// =============================================================================
+
+/// Result of a synchronous (or awaited-async) run that captured its output.
+public type CollectedOutput
+	public var status as TerminationStatus
+	public var stdout as String
+	public var stderr as String
+	public var pid as Pid
+	public var durationMs as DurationMs
+
+	public static function create(status TerminationStatus, stdout String, stderr String, pid Pid, durationMs DurationMs) returns CollectedOutput
+		return CollectedOutput{status: status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs}
+	end 'create'
+
+	/// True iff `status.isSuccess()` — exited cleanly with code 0.
+	public function succeeded() returns bool
+		return status.isSuccess()
+	end 'succeeded'
+
+	/// Convenience for callers that only care about a raw integer.
+	public function exitCode() returns ExitInt
+		return status.code()
+	end 'exitCode'
+end 'CollectedOutput'
+
+// =============================================================================
+// PlatformOptions
+// =============================================================================
+
+/// OS-specific knobs that don't fit cleanly into the cross-platform surface.
+public type PlatformOptions
+	public var windowsHideWindow as bool
+	public var windowsCreateNewProcessGroup as bool
+
+	public static function defaults() returns PlatformOptions
+		return PlatformOptions{windowsHideWindow: false, windowsCreateNewProcessGroup: false}
+	end 'defaults'
+end 'PlatformOptions'
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+let defaultCaptureLimit = 16 * 1024 * 1024
+
+/// Builder for a subprocess invocation. The fields are public mutable — set
+/// what you need with direct assignment after `Configuration.create(...)`,
+/// then call `.run()` or `.runDetached()`. There's no chained-setter form
+/// because Maxon mutating methods can't return `Self` without forcing a
+/// per-setter struct copy.
+public type Configuration
+	public var executable as Executable
+	public var arguments as StringArray
+	/// Empty path means "inherit the parent's working directory".
+	public var workingDirectory as FilePath
+	public var environment as Environment
+	public var standardInput as InputSource
+	public var standardOutput as OutputDestination
+	public var standardError as OutputDestination
+	/// 0 means "wait forever". Non-zero is the kill-after deadline.
+	public var timeoutMs as DurationMs
+	public var platformOptions as PlatformOptions
+
+	/// Build a Configuration with sensible defaults: empty argv, inherited
+	/// cwd, inherited env, no stdin, both output streams collected up to
+	/// 16 MiB, no timeout.
+	public static function create(executable Executable) returns Configuration
+		return Configuration{
+			executable: executable,
+			arguments: StringArray.create(),
+			workingDirectory: try FilePath.from("") otherwise panic("Configuration.create: empty path is the sentinel for 'inherit cwd'"),
+			environment: Environment.inherit,
+			standardInput: InputSource.none,
+			standardOutput: OutputDestination.collect(defaultCaptureLimit),
+			standardError: OutputDestination.collect(defaultCaptureLimit),
+			timeoutMs: 0,
+			platformOptions: PlatformOptions.defaults()
+		}
+	end 'create'
+
+	/// Run the configured subprocess and collect its output. Blocks the
+	/// caller; from a green thread the spawn yields to the scheduler so
+	/// other green threads make progress while the child runs.
+	public function run() returns CollectedOutput throws SubprocessError
+		return try Subprocess.runConfiguration(self)
+	end 'run'
+
+	/// Spawn the configured subprocess detached from the parent and return
+	/// its pid. stdin/stdout/stderr are forced to discard since the parent
+	/// won't be around to drain pipe ends.
+	public function runDetached() returns Pid throws SubprocessError
+		return try Subprocess.runDetachedConfiguration(self)
+	end 'runDetached'
+end 'Configuration'
+
+// =============================================================================
+// Subprocess — top-level entry
+// =============================================================================
+
+public type Subprocess
+	/// Run `executable arguments...` with default options and collect output.
+	public static function run(executable Executable, arguments StringArray) returns CollectedOutput throws SubprocessError
+		var c = Configuration.create(executable)
+		c.arguments = arguments
+		return try c.run()
+	end 'run'
+
+	/// Same as above, with an explicit working directory.
+	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath) returns CollectedOutput throws SubprocessError
+		var c = Configuration.create(executable)
+		c.arguments = arguments
+		c.workingDirectory = workingDirectory
+		return try c.run()
+	end 'run'
+
+	/// Same as above, with an explicit working directory and timeout.
+	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns CollectedOutput throws SubprocessError
+		var c = Configuration.create(executable)
+		c.arguments = arguments
+		c.workingDirectory = workingDirectory
+		c.timeoutMs = timeoutMs
+		return try c.run()
+	end 'run'
+
+	/// Internal entry — `Configuration.run()` routes through here. Lowers to
+	/// the `__Builtins.subprocess*` runtime contract: build argv/cwd/stdio
+	/// payloads, spawn, wait-collect, decode the result struct, release.
+	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
+		let exePath = try resolveExecutablePath(config.executable)
+		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
+		let argc = config.arguments.count() + 1
+		let spawnEnv = spawnEnvironmentFor(config.environment)
+		let stdinTriple = stdinTripleFromSource(config.standardInput)
+		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
+		let stderrTriple = outputTripleFromDestination(config.standardError)
+		let flags = attachedFlagsFor(config.platformOptions)
+
+		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		if handle == -1 'spawnFailed'
+			throw SubprocessError.spawnFailed(lastErrorMessage())
+		end 'spawnFailed'
+
+		let pid = __Builtins.subprocessGetPid(handle)
+		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
+		if result == -1 'waitFailed'
+			let reason = lastErrorMessage()
+			__Builtins.subprocessReleaseHandle(handle)
+			throw SubprocessError.ioFailed(reason)
+		end 'waitFailed'
+
+		let statusKindRaw = __Builtins.subprocessResultStatusKind(result)
+		let statusCode = __Builtins.subprocessResultStatusCode(result)
+		let stdoutManaged = __Builtins.subprocessResultStdout(result)
+		let stderrManaged = __Builtins.subprocessResultStderr(result)
+		let durationMs = __Builtins.subprocessResultDurationMs(result)
+		let stdout = String.init(stdoutManaged)
+		let stderr = String.init(stderrManaged)
+
+		__Builtins.subprocessResultRelease(result)
+		__Builtins.subprocessReleaseHandle(handle)
+
+		let statusKind = try ResultStatusKind.fromRawValue(statusKindRaw) otherwise panic("Subprocess.runConfiguration: runtime returned unexpected statusKind raw={statusKindRaw}")
+		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode, durationMs: durationMs)
+		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs)
+	end 'runConfiguration'
+
+	/// Spawn detached. Uses the same 14-arg layout as `subprocessSpawn` with
+	/// the detach flag bit set; the runtime returns the OS pid (or -1) instead
+	/// of an attached handle. stdin/stdout/stderr are forced to discard so the
+	/// child doesn't inherit pipe ends the caller would have to drain.
+	public static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
+		let exePath = try resolveExecutablePath(config.executable)
+		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
+		let argc = config.arguments.count() + 1
+		let spawnEnv = spawnEnvironmentFor(config.environment)
+		let emptyCStr = subprocessEmptyCString()
+		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
+
+		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		if pid == -1 'spawnFailed'
+			throw SubprocessError.spawnFailed(lastErrorMessage())
+		end 'spawnFailed'
+
+		return pid
+	end 'runDetachedConfiguration'
+end 'Subprocess'
+
+// =============================================================================
+// Internal helpers — argv blob, executable resolution, runtime triple plumbing
+// =============================================================================
+
+// Stdio-kind discriminator carried into spawn. Narrowed to the values the
+// contract defines so an out-of-range value can't be produced by an accidental
+// assignment. The upper bound is stdin's, which has two kinds more than the
+// output side (`StdinKind.hold`, `StdinKind.delayed`); an output slot never
+// produces either.
+typealias StdioKindValue = int(0 to 5)
+
+// Spawn-flags bitfield. Bits past the documented 3 are reserved.
+typealias SpawnFlagsValue = int(0 to 7)
+
+/// Carries the (kind, data, limit) triple passed to subprocessSpawn for one
+/// stdio stream. The limit field is meaningful only for `collect`; for other
+/// kinds the runtime ignores it but we still set it to 0 for clarity. The
+/// data field stays a `String` here so the rest of the helper chain is
+/// type-checked at the source language level; the conversion to `cstring`
+/// happens at the spawn call site via `.cstr()`. For kinds whose contract
+/// has no payload (e.g. inherit/discard), pass the empty string and the
+/// runtime treats the leading-NUL cstring as "no payload".
+type StdioRuntimeTriple
+	public var kind as StdioKindValue
+	public var data as String
+	public var limit as ByteLimit
+
+	public static function create(kind StdioKindValue, data String, limit ByteLimit) returns StdioRuntimeTriple
+		return StdioRuntimeTriple{kind: kind, data: data, limit: limit}
+	end 'create'
+end 'StdioRuntimeTriple'
+
+/// Resolve `Executable.name(n)` to a launchable path token, and pass
+/// `Executable.path(p)` through unchanged. For `.name(n)` we first ask the
+/// subprocess runtime to resolve `n` against PATH (and PATHEXT on Windows).
+/// When the runtime can't find it but the underlying OS spawn primitive can
+/// still resolve a bare name (Windows CreateProcessW with `lpApplicationName
+/// = NULL` performs its own PATH+PATHEXT search), fall back to the bare name
+/// so the user-visible behaviour matches Swift's Subprocess on every host.
+/// We only throw `executableNotFound` on hosts where the OS spawn primitive
+/// requires a pre-resolved path (i.e. POSIX execvp-style — handled by the
+/// Unix runtime in a later phase).
+function resolveExecutablePath(executable Executable) returns String throws SubprocessError
+	return match executable 'r'
+		name(n) gives resolveByName(n)
+		path(p) gives p.path
+	end 'r'
+end 'resolveExecutablePath'
+
+function resolveByName(name String) returns String
+	let resolved = __Builtins.subprocessResolveOnPath(name.cstr())
+	let isNull = __Builtins.managedIsNull(resolved)
+	if isNull != 0 'missing'
+		// Resolver miss — let the OS spawn primitive try its own lookup.
+		// On Windows CreateProcessW iterates PATH+PATHEXT itself; on POSIX
+		// the runtime falls back to execvp. The bare name reaches argv[0]
+		// of the spawn contract as a single token.
+		return name
+	end 'missing'
+	return String.init(resolved)
+end 'resolveByName'
+
+/// Pack argc strings (executable name + argv) back-to-back into a single
+/// NUL-separated buffer. Each token contributes `utf-8 bytes + 0x00`. The
+/// resulting String wraps the buffer; callers pass `.addressableBytes()` to the builtin.
+/// The runtime walks the blob using argc as the token count (NUL bytes act as
+/// separators; the runtime advances past each NUL between tokens).
+function buildArgvBlob(executablePath String, args StringArray) returns String
+	var out = ByteArray.create()
+	appendNulTerminated(out, source: executablePath)
+	let n = args.count()
+	for i in 0 upto n 'arg'
+		let arg = try args.get(i) otherwise panic("buildArgvBlob: args.get(i) out of bounds")
+		appendNulTerminated(out, source: arg)
+	end 'arg'
+	return String.from(out)
+end 'buildArgvBlob'
+
+function appendNulTerminated(out ByteArray, source String)
+	appendBytesOf(out, source: source)
+	out.push(BlobTokenTerminator)
+end 'appendNulTerminated'
+
+/// Empty cstring sentinel for the slots
+/// whose runtime contract is a cstring but whose value carries no payload
+/// (`StdinKind.none`, `OutputKind.discard`, `OutputKind.inherit`,
+/// `OutputKind.collect`). Hoisted out of the spawn call site so the same
+/// pointer is reused across all empty slots in a single spawn.
+function subprocessEmptyCString() returns cstring
+	let empty = ""
+	return empty.cstr()
+end 'subprocessEmptyCString'
+
+/// ⭐⭐ THE CHILD'S ENVIRONMENT, AND THE ONE PLACE ALL THREE `Environment` ARMS ARE ANSWERED.
+///
+/// The answer is a BLOCK — NUL-terminated `NAME=VALUE` entries back-to-back, then one more NUL — plus
+/// the flag that says whether the spawn should read it at all. That shape is the platform's own on
+/// Windows and is trivially turned into `char *const envp[]` on POSIX, so each runtime does a
+/// conversion and no runtime does any LOGIC: which entries survive, which are replaced and which are
+/// added is decided here, once, in a language that has a Map.
+///
+/// ⚠ THE BLOCK IS SELF-DELIMITING BECAUSE IT HAS TO BE. Only its BYTES reach the OS — the bootstrap's
+/// intrinsic lowering extracts the `__ManagedMemory`'s buffer pointer before the call and the compiler's runtime
+/// entry reads the same field itself — and no length travels beside them, so the terminating NUL after
+/// the last entry is the only thing that tells a runtime where the block ends.
+function spawnEnvironmentFor(env Environment) returns SpawnEnvironment
+	var out = ByteArray.create()
+
+	match env 'e'
+		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
+		inheritUpdating(overrides) then appendInheritedEntries(out, overrides: overrides)
+		custom(vars) then appendEnvEntries(out, vars: vars)
+	end 'e'
+
+	out.push(BlobTokenTerminator)
+	return SpawnEnvironment.create(String.from(out), source: EnvSource.block.rawValue)
+end 'spawnEnvironmentFor'
+
+/// The block handed over when the child INHERITS: zero entries, so nothing but the block's own
+/// terminator. The runtime never reads it — `EnvSource.parent` tells it not to — but the slot is a
+/// buffer pointer that the argument lowering dereferences either way, so it has to be a real one.
+function emptyEnvBlock() returns String
+	var out = ByteArray.create()
+	out.push(BlobTokenTerminator)
+	return String.from(out)
+end 'emptyEnvBlock'
+
+/// This process's own entries, with a named entry's VALUE replaced where the caller supplied one, and
+/// the overrides that named nothing already present appended after them.
+///
+/// ⭐ THE INHERITED ORDER IS PRESERVED RATHER THAN REBUILT FROM A MAP, deliberately: the block a child
+/// receives is then byte-identical to this process's own except at the names the caller actually
+/// named. Windows reports its block sorted and CreateProcess documents wanting a sorted one; a map's
+/// iteration order would answer neither, and the platform's own `=X:=X:\dir` drive entries — which
+/// must come first — would move.
+function appendInheritedEntries(out ByteArray, overrides EnvMap)
+	// The overrides not yet spent on an inherited entry. A copy, because deciding which ones are left
+	// over is exactly what the walk below does and the caller's map is not ours to empty.
+	var pending = EnvMap.create()
+	for (name, value) in overrides 'eachOverride'
+		pending.upsert(name, value: value)
+	end 'eachOverride'
+
+	for entry in currentEnvironmentEntries() 'eachInherited'
+		let name = envEntryName(entry)
+		if let replacement = try pending.get(name) 'overridden'
+			// The entry is rebuilt rather than patched, and the REMOVE comes after it: what is left in
+			// `pending` at the end is exactly the overrides that named nothing inherited.
+			appendEnvEntry(out, name: name, value: replacement)
+			_ = pending.remove(name)
+		end 'overridden' else 'kept'
+			appendNulTerminated(out, source: entry)
+		end 'kept'
+	end 'eachInherited'
+
+	appendEnvEntries(out, vars: pending)
+end 'appendInheritedEntries'
+
+/// Every pair of `vars` as its own entry. The whole of `Environment.custom`, and the tail of
+/// `inheritUpdating` — an override that matched no inherited name is a new variable and nothing else.
+function appendEnvEntries(out ByteArray, vars EnvMap)
+	for (name, value) in vars 'eachVar'
+		appendEnvEntry(out, name: name, value: value)
+	end 'eachVar'
+end 'appendEnvEntries'
+
+/// One `NAME=VALUE` entry and its terminator.
+function appendEnvEntry(out ByteArray, name String, value String)
+	appendBytesOf(out, source: name)
+	out.push(EnvNameValueSeparator)
+	appendNulTerminated(out, source: value)
+end 'appendEnvEntry'
+
+/// This process's environment, one `NAME=VALUE` entry per element, in the order the OS reports them.
+///
+/// ⚠ THE WALK ENDS AT THE FIRST EMPTY ANSWER, and that is the intrinsic's contract rather than a
+/// guess: every environment entry carries at least a name, so no real one is the empty string and
+/// nothing a real environment contains can end the walk early.
+///
+/// ⛔⛔ **AND THREE OF THE FOUR PRODUCERS BREAK THAT CONTRACT ON THEIR FAILURE ARMS, WHICH MAKES A
+/// TRUNCATED ENVIRONMENT INDISTINGUISHABLE FROM A COMPLETE ONE. NOT FIXED — see below.**
+/// The empty answer means "past the end" to this walk, and each producer also answers it when it
+/// COULD NOT ANSWER:
+///
+///   • the bootstrap's x86 `maxon_os_environment_entry` shares one `rt_oee_free_empty` arm between
+///     past-the-end, a `WideCharToMultiByte` sizing failure and an `mm_raw_alloc` that returned NULL;
+///   • its arm64 twin has the same shape;
+///   • the compiler's `__gt_subp_env_entry` answers empty when `GetEnvironmentStringsA` itself failed
+///     (`SubprocessRuntime.buildSubpEnvEntryFromBlock`'s `subpenvnone` arm).
+///
+/// A failure at entry k therefore stops the walk at k, and `appendInheritedEntries` hands the child a
+/// block missing every variable from k on — silently, with a successful spawn. ⚠ the compiler's POSIX shape
+/// (`buildSubpEnvEntryFromVector`) is the one that does NOT: its only empty answers are a NULL
+/// `environ` and a NULL `environ[k]`, both of which genuinely mean "no entry".
+///
+/// ⇒ THE CURE IS A SECOND CHANNEL, not a different sentinel: a failure has to be reportable
+/// separately from an answer, in all three producers, and this walk has to fail the spawn when one is
+/// raised — which makes `spawnEnvironmentFor` and its callers throwing. That is a change to the spawn
+/// contract across two compilers and both of the bootstrap's backends, so it is a rung rather than
+/// something to bolt onto one producer and leave the other two disagreeing.
+function currentEnvironmentEntries() returns StringArray
+	var entries = StringArray.create()
+	var index = 0
+
+	while true 'eachEntry'
+		let entry = String.init(__Builtins.osEnvironmentEntry(index))
+		if entry.isEmpty() 'pastTheEnd'
+			break
+		end 'pastTheEnd'
+
+		entries.push(entry)
+		index = index + 1
+	end 'eachEntry'
+
+	return entries
+end 'currentEnvironmentEntries'
+
+/// The NAME half of one `NAME=VALUE` entry — everything before its first `=`, or the whole entry when
+/// it holds none.
+///
+/// ⚠ THE SEARCH STARTS AT BYTE 1, NOT BYTE 0, and that is a platform fact rather than a defensive
+/// flourish: a Windows process's environment begins with entries like `=C:=C:\dir` recording the
+/// current directory of each drive, whose NAME is `=C:`. Splitting at byte 0 would give every one of
+/// them the empty name, and they would then collide with each other in the override lookup.
+function envEntryName(entry String) returns String
+	let bytes = entry.toByteArray()
+	let n = bytes.count()
+	var name = ByteArray.create()
+
+	for i in 0 upto n 'eachByte'
+		let b = try bytes.get(i) otherwise panic("envEntryName: i < n = bytes.count() but get({i}) failed")
+		if i > 0 and b == EnvNameValueSeparator 'atSeparator'
+			return String.from(name)
+		end 'atSeparator'
+		name.push(b)
+	end 'eachByte'
+
+	return entry
+end 'envEntryName'
+
+/// One String's bytes, appended verbatim. `appendNulTerminated` is this plus the terminator; an entry's
+/// NAME needs the half without it, because the entry does not end there.
+function appendBytesOf(out ByteArray, source String)
+	let bytes = source.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byte'
+		let b = try bytes.get(i) otherwise panic("appendBytesOf: i < n = bytes.count() but get({i}) failed")
+		out.push(b)
+	end 'byte'
+end 'appendBytesOf'
+
+/// Convert a runtime-reported `ResultStatusKind` + payload into the
+/// user-facing TerminationStatus, or throw `SubprocessError.timeout` for
+/// the `timedOut` arm. Pulled out of `runConfiguration` so the
+/// match-statement form is available — match-expressions in stdlib don't
+/// yet accept `panic(...)` arm bodies.
+function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitInt, durationMs DurationMs) returns TerminationStatus throws SubprocessError
+	match statusKind 's'
+		exited then return TerminationStatus.exited(statusCode)
+		signalled then return TerminationStatus.signalled(statusCode)
+		timedOut then throw SubprocessError.timeout(durationMs)
+	end 's'
+end 'terminationStatusFromKind'
+
+function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
+	return match src 's'
+		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: 0)
+		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: 0)
+		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: data, limit: 0)
+		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
+		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: 0)
+		delayed(data) gives StdioRuntimeTriple.create(StdinKind.delayed.rawValue, data: data, limit: 0)
+	end 's'
+end 'stdinTripleFromSource'
+
+function outputTripleFromDestination(dst OutputDestination) returns StdioRuntimeTriple
+	return match dst 'o'
+		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, data: "", limit: 0)
+		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, data: "", limit: 0)
+		collect(limitBytes) gives StdioRuntimeTriple.create(OutputKind.collect.rawValue, data: "", limit: limitBytes)
+		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, data: path.path, limit: 0)
+	end 'o'
+end 'outputTripleFromDestination'
+
+/// Compose the spawn-flags bitfield for an attached spawn (detach bit set
+/// separately by `runDetachedConfiguration`).
+function attachedFlagsFor(opts PlatformOptions) returns SpawnFlagsValue
+	var flags = 0 as SpawnFlagsValue
+	if opts.windowsHideWindow 'hide'
+		flags = flags or SpawnFlag.hideWindow.rawValue
+	end 'hide'
+	if opts.windowsCreateNewProcessGroup 'newGroup'
+		flags = flags or SpawnFlag.newProcessGroup.rawValue
+	end 'newGroup'
+	return flags
+end 'attachedFlagsFor'
+
+function lastErrorMessage() returns String
+	let managed = __Builtins.subprocessLastErrorMessage()
+	return String.init(managed)
+end 'lastErrorMessage'
+
+// =============================================================================
+// StreamingSubprocess — long-lived child with caller-driven stdio
+// =============================================================================
+
+// Opaque runtime handle for a streaming child. The runtime hands out
+// non-negative integers as table indices; -1 is reserved by the spawn
+// builtin for "spawn failed" and is never stored in a live handle slot.
+typealias StreamingHandle = int(0 to u64.max)
+
+/// A child process whose stdin / stdout / stderr the caller drives by hand.
+///
+/// Unlike `Subprocess.run(...)` (which fires the process, drains both output
+/// streams via background threads, and returns a `CollectedOutput` when the
+/// child exits), `StreamingSubprocess` keeps the pipes open and exposes
+/// per-line `writeStdinLine` / `readStdoutLine` / `readStderrLine` operations.
+/// Use it when the parent needs interactive request/response with a long-lived
+/// child — e.g. a worker pool that handles many jobs over its lifetime.
+///
+/// Lifecycle:
+///   let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
+///   try child.writeStdinLine("JOB:1")
+///   let line = try child.readStdoutLine()
+///   ...
+///   child.closeStdin()  // optional — signals EOF to child
+///   let code = try child.wait()  // blocks until child exits
+///   child.release()  // frees the OS handle
+///
+/// Forgetting `release()` leaks the handle and an OS process slot. Treat
+/// `release()` like `close()` on a file.
+public type StreamingSubprocess
+	// Raw runtime handle from subprocessSpawnStreaming. Valid until release()
+	// is called; the runtime owns the underlying pipe + process objects keyed
+	// off this integer.
+	public var handle as StreamingHandle
+	// Latched once release() runs so subsequent release() calls are no-ops
+	// (matches the "treat like file close" contract documented above).
+	public var released as bool
+
+	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
+	/// caller drives. Working directory defaults to the parent's cwd; pass
+	/// `spawnWithCwd` if you need to set it.
+	public static function spawn(executable Executable, arguments StringArray) returns StreamingSubprocess throws SubprocessError
+		let inheritCwd = try FilePath.from("") otherwise panic("StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'")
+		return try Self.spawnWithCwd(executable, arguments: arguments, workingDirectory: inheritCwd)
+	end 'spawn'
+
+	/// Same as `spawn` with an explicit working directory.
+	public static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
+		return try Self.spawnWithEnvironment(executable, arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inherit)
+	end 'spawnWithCwd'
+
+	/// Same as `spawnWithCwd`, with the child's ENVIRONMENT taken by the caller rather than inherited.
+	///
+	/// ⭐ It matters because a streaming parent may have to TELL its child something before the child's
+	/// first instruction runs: a DebugStream producer finds the ring it writes into by reading a name out
+	/// of its environment, so a parent that could only inherit could only ever watch a child that was
+	/// already being watched. `Environment` answers all three arms — `inherit`, `inheritUpdating` and
+	/// `custom` — and `spawnEnvironmentFor` turns any of them into the (block, source) pair the spawn
+	/// contract takes, exactly as the attached spawn does.
+	public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns StreamingSubprocess throws SubprocessError
+		let exePath = try resolveExecutablePath(executable)
+		let argvBlob = buildArgvBlob(exePath, args: arguments)
+		let argc = arguments.count() + 1
+		let spawnEnv = spawnEnvironmentFor(environment)
+		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup / detach). Streaming spawns
+		// never detach — the parent has to keep the pipes open — and don't take platform-options today, so
+		// the field is always 0. The environment block and its source flag follow it.
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0, spawnEnv.block.addressableBytes(), spawnEnv.source)
+		if rawHandle == -1 'spawnFailed'
+			throw SubprocessError.spawnFailed(lastErrorMessage())
+		end 'spawnFailed'
+		// rawHandle is the wide builtin return; -1 is excluded above, so the
+		// narrow StreamingHandle range is satisfied.
+		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+	end 'spawnWithEnvironment'
+
+	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
+	/// Embeds the newline; pass payload WITHOUT a trailing newline.
+	public function writeStdinLine(line String) throws SubprocessError
+		try requireLive()
+		let withNewline = "{line}\n"
+		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
+		if rc != 0 'writeFailed'
+			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
+		end 'writeFailed'
+	end 'writeStdinLine'
+
+	/// Read one line from the child's stdout, WITHOUT the trailing newline (the runtime keeps the
+	/// terminating LF and this strips it, along with a stray CR so Windows CRLF never reaches a
+	/// caller). An empty string means end of stream and nothing else — a refusal throws.
+	///
+	/// Blocks until a line is available or EOF is reached. Lines longer than
+	/// `maxBytes` are truncated and the remainder is delivered on the next
+	/// call. Default cap is 1 MiB which suits log-line / IPC-frame workloads.
+	public function readStdoutLine() returns String throws SubprocessError
+		return try Self.readStdoutLineCapped(self, maxBytes: defaultReadLineCap)
+	end 'readStdoutLine'
+
+	public function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		try requireLive()
+		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
+	end 'readStdoutLineCapped'
+
+	/// Read EXACTLY `count` bytes from the child's stdout, blocking until it has
+	/// them. Returns FEWER only at end of stream, and then only what remained; a
+	/// refusal throws. A `count` of 0 returns "" without touching the pipe.
+	///
+	/// This is the reader a FRAMED protocol needs. `Content-Length: N\r\n\r\n` followed
+	/// by N body bytes puts NO newline after the body, so `readStdoutLine` blocks
+	/// for ever on a terminator that never arrives; `readStdoutLineCapped`'s cap is
+	/// a truncation ceiling, not a length, and answers the whole buffered remainder
+	/// once it is exceeded. The two readers share one per-handle buffer, so a
+	/// caller may read headers by line and the body by count on the same stream.
+	///
+	/// No newline is stripped, unlike the line readers: a read that ends at a count
+	/// has no terminator to remove, so a CR or an LF inside the span is part of the
+	/// answer.
+	public function readStdoutBytes(count ByteLimit) returns String throws SubprocessError
+		try requireLive()
+		let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
+		return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
+	end 'readStdoutBytes'
+
+	/// Read one line from the child's stderr. Same contract as `readStdoutLine`: the terminator is
+	/// trimmed here, an empty string means end of stream, and a refusal throws.
+	public function readStderrLine() returns String throws SubprocessError
+		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
+	end 'readStderrLine'
+
+	public function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
+		try requireLive()
+		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
+	end 'readStderrLineCapped'
+
+	/// Close our write end of the child's stdin pipe. After this the child
+	/// will see EOF on its stdin and (for typical line-reading workers) exit
+	/// gracefully. Idempotent at the runtime layer; calling it on an
+	/// already-closed pipe is a no-op — and after `release()` it is one here
+	/// instead, because the postcondition already holds and the handle is a
+	/// pointer to a freed struct on some lanes.
+	public function closeStdin()
+		if not released 'stillOpen'
+			__Builtins.subprocessCloseStdin(handle)
+		end 'stillOpen'
+	end 'closeStdin'
+
+	/// Block indefinitely until the child exits, then return its exit code.
+	/// Throws `SubprocessError.ioFailed` on a wait error (e.g. the runtime
+	/// can no longer locate the handle).
+	public function wait() returns ExitInt throws SubprocessError
+		return try Self.waitWithTimeout(self, timeoutMs: 0)
+	end 'wait'
+
+	/// Block until the child exits or `timeoutMs` elapses (0 = wait forever).
+	/// Returns the exit code on success; throws `SubprocessError.timeout` if
+	/// the timeout fires (the runtime forcibly terminates the child in that
+	/// case) or `SubprocessError.ioFailed` on a wait error.
+	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
+		try requireLive()
+		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
+		if rc == -2 'timedOut'
+			throw SubprocessError.timeout(timeoutMs)
+		end 'timedOut'
+		if rc == -1 'failed'
+			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}")
+		end 'failed'
+		return rc as ExitInt
+	end 'waitWithTimeout'
+
+	/// Has the child exited? Answers without blocking and WITHOUT killing it.
+	///
+	/// ⭐ Neither `wait()` nor `waitWithTimeout()` can be asked this: the first blocks until the child ends,
+	/// and the second TERMINATES the child when its deadline fires. A parent that has to stay responsive —
+	/// draining output while the child runs — needs an answer that changes nothing.
+	///
+	/// ⚠ A handle `release()` has given back answers `running`, because after `release()` there is no live
+	/// child left to report an exit for.
+	public function pollExit() returns ExitPoll
+		if released 'gone'
+			return ExitPoll.running
+		end 'gone'
+
+		let raw = __Builtins.subprocessPollExit(handle)
+		if raw < 0 'stillRunning'
+			return ExitPoll.running
+		end 'stillRunning'
+
+		return ExitPoll.exited(raw)
+	end 'pollExit'
+
+	/// A line from the child's stdout if one is ALREADY buffered. Never blocks.
+	///
+	/// The terminator is stripped exactly as `readStdoutLine` strips it. ⭐ The answer is a UNION and not a
+	/// string, because a child's own BLANK LINE and a pipe holding nothing are the same bytes once the
+	/// terminator is off: a caller that read emptiness as "nothing yet" drops every blank line the child
+	/// writes, and nothing downstream can tell that it did. `none` says nothing about whether the stream has
+	/// ENDED — a caller that needs that asks `pollExit`, because a child that has exited writes no more.
+	public function tryReadStdoutLine() returns LinePoll
+		if released 'gone'
+			return LinePoll.none
+		end 'gone'
+
+		return bufferedLineIn(__Builtins.subprocessTryReadStdoutLine(handle, defaultReadLineCap))
+	end 'tryReadStdoutLine'
+
+	/// A line from the child's stderr if one is ALREADY buffered. Never blocks.
+	/// Same contract as `tryReadStdoutLine`.
+	public function tryReadStderrLine() returns LinePoll
+		if released 'gone'
+			return LinePoll.none
+		end 'gone'
+
+		return bufferedLineIn(__Builtins.subprocessTryReadStderrLine(handle, defaultReadLineCap))
+	end 'tryReadStderrLine'
+
+	/// Refuse every operation that would reach the runtime with a handle `release()` has given back.
+	/// The check belongs here rather than in a runtime guard because a handle is a raw pointer to a
+	/// freed struct on some lanes, so asking the runtime about it is already the bug.
+	function requireLive() throws SubprocessError
+		if released 'gone'
+			throw SubprocessError.ioFailed("used after release()")
+		end 'gone'
+	end 'requireLive'
+
+	/// Release the OS handle. Idempotent; safe to call at the end of a
+	/// using-block or from a guard path. Nothing reaches the runtime with a
+	/// released handle afterwards: the throwing methods refuse it through
+	/// `requireLive`, and `closeStdin` and `release` are idempotent no-ops
+	/// whose postcondition a released child already satisfies.
+	public function release()
+		if not released 'notYet'
+			__Builtins.subprocessReleaseHandle(handle)
+			released = true
+		end 'notYet'
+	end 'release'
+end 'StreamingSubprocess'
+
+/// What `pollExit` found. A union rather than a code-plus-sentinel because "it has not finished" is not an
+/// exit code and there is no number that could stand for it: a Windows exit code is a full DWORD.
+public union ExitPoll
+	running
+	exited(code ExitInt)
+end 'ExitPoll'
+
+/// What a non-blocking line read found. A union rather than a string-plus-sentinel because a child's own
+/// BLANK LINE is a line and `""` is the only string that could stand for "nothing buffered".
+public union LinePoll
+	line(text String)
+	none
+end 'LinePoll'
+
+/// The runtime hands a line back WITH its terminating LF, so a buffered blank line is one byte where an
+/// empty pipe is zero — which is the one place the two are still apart, before `stripTrailingCR` makes
+/// them the same string.
+function bufferedLineIn(raw __ManagedMemory) returns LinePoll
+	if raw.length() < lineReaderShortestAnswer 'nothingBuffered'
+		return LinePoll.none
+	end 'nothingBuffered'
+
+	return LinePoll.line(stripTrailingCR(String.init(raw)))
+end 'bufferedLineIn'
+
+// Default per-line truncation cap for the streaming readers. 1 MiB easily
+// holds spec-test IPC frames (typically <2 KiB) without ever truncating; a
+// runaway worker can't OOM the parent by emitting one enormous line.
+let defaultReadLineCap = 1024 * 1024 as ByteLimit
+
+// Which of a streaming child's two output streams a read is being decided for.
+enum StdioStream
+	stdout
+	stderr
+end 'StdioStream'
+
+// The shortest answer a line read can give that is not end of stream. The runtime keeps the
+// terminating LF, so every real line — the empty one included — carries at least that byte.
+let lineReaderShortestAnswer = 1 as ByteLimit
+
+/// Shared decode for the (stdout|stderr) line readers: the runtime returns a fresh __ManagedMemory
+/// holding the line bytes including the terminating LF, or a zero-length buffer at end of stream.
+/// The trailing CR goes with it so Windows CRLF doesn't leak into caller-visible strings.
+function readLineResultToString(handle StreamingHandle, raw __ManagedMemory, stream StdioStream) returns String throws SubprocessError
+	return stripTrailingCR(String.init(try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)))
+end 'readLineResultToString'
+
+/// The one place a reader's answer is judged, for all three of them.
+///
+/// A short answer is end of stream OR a refusal and both are the same bytes, so the stream's own
+/// end-state is what separates them. The reason is composed here rather than read out of
+/// `lastErrorMessage()`, which is process-global and may belong to an earlier call.
+function finishRead(handle StreamingHandle, raw __ManagedMemory, wanted ByteLimit, stream StdioStream) returns __ManagedMemory throws SubprocessError
+	if raw.length() >= wanted 'whole'
+		return raw
+	end 'whole'
+
+	match streamState(handle, stream: stream) 'decide'
+		atEof then return raw
+		open then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} was refused: it answered {raw.length()} of {wanted} bytes with the stream still open")
+		readFailed then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} failed")
+		noSuchChild then throw SubprocessError.ioFailed("the streaming handle names no live child")
+	end 'decide'
+end 'finishRead'
+
+function streamState(handle StreamingHandle, stream StdioStream) returns __SubprocessStreamState
+	match stream 'ask'
+		stdout then return __Builtins.subprocessStdoutState(handle)
+		stderr then return __Builtins.subprocessStderrState(handle)
+	end 'ask'
+end 'streamState'
+
+function streamName(stream StdioStream) returns String
+	match stream 'name'
+		stdout then return "stdout"
+		stderr then return "stderr"
+	end 'name'
+end 'streamName'
+
+/// Drop a trailing LF (and a CR before it, if present) from `s`. The runtime
+/// returns the raw line bytes including the terminator, so this is the
+/// caller-visible boundary that normalises both Unix LF and Windows CRLF line
+/// endings to "no trailing newline". ASCII-only checks are safe because
+/// neither 0x0A nor 0x0D ever appears as a UTF-8 continuation byte.
+function stripTrailingCR(s String) returns String
+	var len = s.byteLength()
+	if len == 0 'empty'
+		return s
+	end 'empty'
+	// One materialization for the whole scan-and-slice, taken after the empty check so an empty
+	// string never pays for it. See `String.addressableBytes`.
+	let bytes = s.addressableBytes()
+	let last = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	if last == 10 'hasLf'
+		len = len - 1
+	end 'hasLf'
+	if len == 0 'allConsumed'
+		return ""
+	end 'allConsumed'
+	let beforeLf = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	if beforeLf == 13 'hasCr'
+		len = len - 1
+	end 'hasCr'
+	if len == s.byteLength() 'noTrim'
+		return s
+	end 'noTrim'
+	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
+	return String.init(trimmed)
+end 'stripTrailingCR'

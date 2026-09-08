@@ -1,0 +1,542 @@
+// Conditional compilation — `#if` / `#else` / `#endif`, resolved at the TOKEN TIER.
+//
+// ⭐⭐ **DIRECTIVES ARE RESOLVED AT THE TOKEN TIER AND NOT INSIDE THE PARSER, BECAUSE A FILE'S TOKENS
+// ARE READ TWICE.**
+//
+// `queryProgramSignatures` runs a whole-program DECLARATION SWEEP over the raw token array
+// (`Parser.foldDeclaredSignaturesInto`) before any file is parsed, and that sweep is not the parser's
+// walk — it is its own linear scan with its own block-depth counter and four sub-walks of its own
+// (`recordScannedType`, `recordScannedSignature`, `recordScannedEnum`, `recordScannedInterface`).
+// Teaching directives to the PARSE loops alone would leave the SWEEP reading both branches of every
+// `#if`, and the two would disagree about which declarations the file contains:
+//
+//   • **MEASURED, on the very file this mechanism exists to unblock.** `stdlib/FilePath.maxon:3-11`
+//     declares `pathSeparator` in BOTH arms of a top-level `#if os(Windows)`/`#else`. The sweep is
+//     FIRST-WINS (`ProgramSignatures.recordDecl`), so it would record the Windows arm's line 4 on
+//     every target; on Linux/macOS/wasi the parse dispatches the `#else` arm at line 8, and
+//     `isRedeclaredBinding` compares those positions and reports **E3006 duplicate definition** — a
+//     correct program rejected on three targets out of four. Reverse the arms and it is worse: the
+//     parse binds the name to the OTHER branch's value, silently.
+//   • A `#if`-gated FIELD PAIR in a `type` body is worse still, and silent everywhere:
+//     `recordScannedType` records fields into the whole-program `StructLayout`, so recording both
+//     arms lays every later field at the wrong offset with no diagnostic at all.
+//
+// ⇒ **The directives are resolved ONCE, HERE, before anything reads the tokens.** `queryActiveTokens`
+// layers this filter over `queryTokens`, and the sweep and the parse are handed the SAME filtered
+// array — so they cannot come to disagree about which tokens exist. That is a structural guarantee,
+// not a thing to verify at each call site, and it reaches the walks a per-loop arm would still have
+// missed: `scanDescriptorNeedsInto`, the lazy sibling-receiver scan, `buildBlockExtentIndex`,
+// `assignedBindingsIn`, `fileNamesStringIndexProducer`, and the constant evaluator's transient
+// `Parser` over `decl.tokens` (which IS the declaring file's array, so it inherits the filtering).
+//
+// **The semantics this pass implements:**
+//
+//   • lexical garbage in a dead branch → `E1002 Unterminated string literal` ⇒ the dead branch IS
+//     lexed. So the whole file lexes first; this pass runs over finished tokens.
+//   • an unresolved call in a dead branch → compiles ⇒ it is never parsed or resolved.
+//   • a duplicate `static function` in a dead `#else` of a type body → compiles ⇒ same at declaration
+//     level.
+//
+// A token-level skip with a depth counter is exactly that behaviour: one linear pass, O(1) state
+// per open region, no allocation beyond the output array.
+
+// The directive TokenKinds are emitted by the lexer (`Lexer.scanDirective`) and enumerated ONCE here,
+// by `isDirectiveToken`; an unrecognized `#name` never reaches this pass at all — it is
+// `E1009 lexerUnknownDirective`, a lexer error.
+
+// A structural or semantic fault in a directive region. Surfaced by `Queries.reportDirectiveError`,
+// which is the only caller — the filter runs inside a query, where `project` is in scope, so a
+// throwing union keeps the diagnostic wording in the same file as every other query-level report.
+export union DirectiveError implements Error
+	// A `#if` still open at end of file. Positioned at the `#if` that has no `#endif` — the
+	// INNERMOST open one, which is the one whose partner is missing however many enclose it.
+	unterminatedIf(line LineNumber, column ColumnNumber)
+	// An `#else` or an `#endif` with no open `#if`. Carries the offending spelling so the message
+	// can name what it actually saw rather than enumerating both.
+	unmatchedDirective(spelling String, line LineNumber, column ColumnNumber)
+	// A condition calls a predicate that is not one of the five. See `predicateNamed`.
+	unknownPredicate(name String, line LineNumber, column ColumnNumber)
+	// A condition ran out of tokens, or holds something the grammar has no production for — a
+	// missing `)`, an operator with no right-hand side, a bare identifier with no argument list.
+	malformedCondition(line LineNumber, column ColumnNumber)
+	// A condition that PARSES, followed by more tokens on the same line. Its own case rather than a
+	// second use of `malformedCondition`, because the advice differs — there is nothing to correct
+	// in the condition itself — and because it is the one directive fault whose absence was a silent
+	// WRONG ANSWER rather than a poor message. See `expectConditionEnd`.
+	trailingConditionTokens(line LineNumber, column ColumnNumber)
+end 'DirectiveError'
+
+// One open `#if`. `branchLive` already folds in the enclosing region's liveness (see
+// `pushConditional`), so "is the cursor in live code?" is a read of the innermost frame alone and
+// never a walk of the stack.
+type DirectiveFrame
+	// Is the branch currently being walked emitted?
+	export var branchLive as bool
+	// Has ANY arm of this `#if` been taken? What makes `#else` the complement of `#if` rather than
+	// a second unconditional arm. Distinct from `not branchLive`, which is also true while the
+	// `#if` arm is being skipped and its `#else` has not yet been reached.
+	//
+	// ⚠ It answers ONLY that question, and stays `false` for an `#if` inside a dead region even
+	// though no arm of one can ever run — because "this region is unreachable" is a different fact
+	// with its own home (`enclosingRegionIsLive`), and encoding it here as well would be the same
+	// rule in two places.
+	export var takenAlready as bool
+	// The `#if`'s own position, for the unterminated-region diagnostic.
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(branchLive bool, takenAlready bool, line LineNumber, column ColumnNumber) returns DirectiveFrame
+		return Self{branchLive: branchLive, takenAlready: takenAlready, line: line, column: column}
+	end 'create'
+end 'DirectiveFrame'
+
+typealias DirectiveFrameArray = Array with DirectiveFrame
+
+// ⭐ **THE PREDICATES A `#if` CONDITION MAY CALL — THE ENUM *IS* THE ACCEPTED SET.**
+//
+// It had been two lists: five byte constants the evaluator compared against, and a hand-written
+// English sentence the diagnostic printed. They agreed, and nothing made them — a sixth predicate
+// could be accepted without being advertised, or advertised without being accepted, and neither
+// direction is a compile error. Now `predicateNamed` resolves a spelling by walking `allCases` and
+// `acceptedPredicateList` renders the same walk, so acceptance and advertisement are one fact. A new
+// case forces an arm in `predicateSpelling` and in `satisfyingArgument` (both matches are exhaustive
+// over this enum) and needs no other edit anywhere.
+enum ConditionPredicate
+	os
+	arch
+	testing
+	rcSanitize
+	leakReport
+end 'ConditionPredicate'
+
+// The spelling `flag(false)` must carry for an absent build flag to satisfy it. See
+// `satisfyingArgument`.
+let FalseSpelling = b"false"
+
+// ⭐ **THE FILTER: `tokens` minus every directive token and every inactive branch.**
+//
+// Positions are untouched — a `Token` carries its own line/column/byte span, so dropping tokens
+// cannot shift a diagnostic. What the parser receives is a stream that simply never contained the
+// dead code, which is why no downstream walk needs to know this pass exists.
+//
+// Cost is one pass over the tokens plus one output array. The frame stack is O(nesting depth), which
+// is the source's own bracket depth and not a function of file size.
+export function filterConditionalTokens(tokens TokenArray, target Target) returns TokenArray throws DirectiveError
+	// ⭐ **THE COMMON CASE IS A FILE WITH NO DIRECTIVES AT ALL, AND IT MUST NOT PAY FOR A COPY.**
+	// Every file in the scale corpus and all but four in `stdlib/` are in it. The probe is one linear
+	// scan of a scalar field — cheaper than the array it would otherwise build, and it returns the
+	// memoized token array itself rather than a duplicate of it (`queryTokens` retains it for the
+	// whole build regardless, so sharing costs nothing and copying would double the token memory).
+	if not tokensHoldDirective(tokens) 'noDirectives'
+		return tokens
+	end 'noDirectives'
+
+	var out = TokenArray.create()
+	var frames = DirectiveFrameArray.create()
+	var scan = 0 as TokenIndex
+
+	while scan < tokens.count() 'walk'
+		let tok = try tokens.get(scan) otherwise panic("filterConditionalTokens: scan<count just checked but tokens.get({scan}) failed")
+		// Read ONCE per token, before any arm can push or pop: for an ordinary token this decides
+		// whether it survives, and for a `#if` it is the ENCLOSING region's liveness, which is what
+		// the new frame's own liveness is conjoined with.
+		let regionLive = regionIsLive(frames)
+
+		if tok.kind == TokenKind.hashIf 'openRegion'
+			// ⚠ **THE CONDITION IS EVALUATED ONLY IN LIVE CODE**, and that is not an optimization —
+			// it is what makes a nested `#if` inside a dead branch mean nothing. Both references get
+			// the same property by token-walking the dead branch without interpreting it; here the
+			// dead region's condition tokens simply fall through the `not live` drop below, which is
+			// the same answer reached by the rule that was already there.
+			if regionLive 'liveParent'
+				let cursor = ConditionCursor.create((scan + 1) as TokenIndex)
+				let taken = try evaluateCondition(tokens, cursor: cursor, target: target)
+				try expectConditionEnd(tokens, cursor: cursor)
+				frames.push(DirectiveFrame.create(taken, takenAlready: taken, line: tok.line, column: tok.column))
+				scan = cursor.value
+				continue
+			end 'liveParent'
+
+			// `takenAlready: false` is the HONEST value and not an oversight: no arm of an unreachable
+			// `#if` is ever taken. Keeping the `#else` dead is `enclosingRegionIsLive`'s job alone —
+			// setting this true would ALSO do it, and having both is one fact written down twice.
+			// MEASURED: with both in place, disabling either one on its own broke no test in the
+			// suite, which is exactly what a redundant guard looks like. See
+			// `directives.else-inside-dead-branch-stays-dead`, the case that now pins the survivor.
+			frames.push(DirectiveFrame.create(false, takenAlready: false, line: tok.line, column: tok.column))
+			scan = scan + 1
+			continue
+		end 'openRegion'
+
+		if tok.kind == TokenKind.hashElse 'flipRegion'
+			if frames.isEmpty() 'elseWithoutIf'
+				throw DirectiveError.unmatchedDirective(TokenKind.hashElse.rawValue, line: tok.line, column: tok.column)
+			end 'elseWithoutIf'
+			// The ENCLOSING region's liveness, read from the frame below this one — this frame's own
+			// `branchLive` describes the arm that just ended and says nothing about whether the `#if`
+			// was reachable at all. Without it, an `#else` inside a dead outer branch goes live.
+			let enclosingLive = enclosingRegionIsLive(frames)
+			var frame = innermostFrame(frames)
+			frame.branchLive = enclosingLive and not frame.takenAlready
+			frame.takenAlready = frame.takenAlready or frame.branchLive
+			scan = scan + 1
+			continue
+		end 'flipRegion'
+
+		if tok.kind == TokenKind.hashEndif 'closeRegion'
+			if frames.isEmpty() 'endifWithoutIf'
+				throw DirectiveError.unmatchedDirective(TokenKind.hashEndif.rawValue, line: tok.line, column: tok.column)
+			end 'endifWithoutIf'
+			_ = try frames.pop() otherwise panic("filterConditionalTokens: frames non-empty just checked but pop() failed")
+			scan = scan + 1
+			continue
+		end 'closeRegion'
+
+		// ⚠ **THE THREE ARMS ABOVE MUST COVER EVERY KIND `isDirectiveToken` ADMITS**, because that
+		// predicate is the early-out probe's entire definition of "this file needs filtering". A
+		// fourth directive kind added to it and to the lexer but not to a handler here would fall
+		// through to the `keep` below and be EMITTED INTO THE PROGRAM — and a fourth kind added to a
+		// handler but not to the probe would make a file that uses only that kind skip the filter
+		// altogether. One list, checked from both ends, so neither drift is silent.
+		if isDirectiveToken(tok.kind) 'unhandledDirective'
+			panic("filterConditionalTokens: directive token '{tok.kind.rawValue}' has no handling arm")
+		end 'unhandledDirective'
+
+		if regionLive 'keep'
+			out.push(tok)
+		end 'keep'
+		scan = scan + 1
+	end 'walk'
+
+	// ⚠ **AN UNTERMINATED REGION IS REFUSED (E2063).** Accepting it silently SWALLOWS every
+	// declaration after the `#if`, and the only symptom is an unrelated "undefined" somewhere else
+	// entirely.
+	//
+	// The INNERMOST open region is the one named: its `#endif` is the missing one however many `#if`s
+	// enclose it.
+	if not frames.isEmpty() 'unterminated'
+		let open = innermostFrame(frames)
+		throw DirectiveError.unterminatedIf(open.line, column: open.column)
+	end 'unterminated'
+
+	return out
+end 'filterConditionalTokens'
+
+// The innermost open `#if`'s frame. THE one place the stack top is read, so `regionIsLive`, the
+// `#else` arm and the unterminated report cannot come to disagree about which frame is current.
+// Callers test `isEmpty` first; a caller that did not would rather see this panic than silently read
+// a frame belonging to an enclosing region.
+function innermostFrame(frames DirectiveFrameArray) returns DirectiveFrame
+	return try frames.get(frames.count() - 1) otherwise panic("innermostFrame: called on an empty directive frame stack")
+end 'innermostFrame'
+
+// THE set of token kinds this pass owns, written down once. Read by the early-out probe below and
+// asserted against the filter's handler arms (see the `unhandledDirective` panic), so the two cannot
+// come to disagree about what a directive IS.
+function isDirectiveToken(kind TokenKind) returns bool
+	return kind == TokenKind.hashIf or kind == TokenKind.hashElse or kind == TokenKind.hashEndif
+end 'isDirectiveToken'
+
+// Does this file contain a directive at all? The gate on `filterConditionalTokens`'s whole body —
+// see there for why a directive-free file must not pay for a copy of its token array.
+function tokensHoldDirective(tokens TokenArray) returns bool
+	for tok in tokens 'each'
+		if isDirectiveToken(tok.kind) 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'tokensHoldDirective'
+
+// Is the cursor in code that is emitted? True at the top level (no open `#if`), otherwise the
+// innermost frame's own answer — which already folds in every enclosing region (see
+// `DirectiveFrame.branchLive`).
+function regionIsLive(frames DirectiveFrameArray) returns bool
+	if frames.isEmpty() 'topLevel'
+		return true
+	end 'topLevel'
+	return innermostFrame(frames).branchLive
+end 'regionIsLive'
+
+// Is the region ENCLOSING the innermost open `#if` live? What an `#else` needs, and what
+// `regionIsLive` structurally cannot answer: the innermost frame describes the arm that just ended.
+// True when the innermost `#if` is itself at the top level.
+function enclosingRegionIsLive(frames DirectiveFrameArray) returns bool
+	if frames.count() < 2 'innermostIsTopLevel'
+		return true
+	end 'innermostIsTopLevel'
+	let parent = try frames.get(frames.count() - 2) otherwise panic("enclosingRegionIsLive: count>=2 just checked but get() failed")
+	return parent.branchLive
+end 'enclosingRegionIsLive'
+
+// A mutable index into the token array, threaded through the condition grammar below.
+//
+// A `type` rather than an `inout` position, because the grammar is RECURSIVE (`not not os(X)`,
+// `(a or b) and c`) and every production must resume where the one it called stopped. Returning the
+// index alongside the value from each of five productions would put the same two-field tuple in
+// five signatures and make each caller re-thread it; one shared cursor is the fact written down once.
+type ConditionCursor
+	export var value as TokenIndex
+
+	export static function create(value TokenIndex) returns ConditionCursor
+		return Self{value: value}
+	end 'create'
+end 'ConditionCursor'
+
+// ⭐ **THE CONDITION GRAMMAR:**
+//
+//     condition = or
+//     or        = and ('or' and)*
+//     and       = unary ('and' unary)*
+//     unary     = 'not' unary | atom
+//     atom      = '(' condition ')' | IDENT '(' (IDENT | true | false) ')'
+//
+// Precedence low-to-high is `or`, `and`, `not`; parentheses override at atom level.
+//
+// ⚠ **NO SHORT-CIRCUIT, DELIBERATELY.** Both operands of every `and`/`or` are always parsed, so the
+// cursor lands in the same place whatever the operands evaluate to. A short-circuiting evaluator
+// would leave the cursor mid-condition on exactly the inputs that took the fast path, and the filter
+// would resume its walk inside the condition's own tokens — emitting `os ( Linux )` into the program.
+// A condition has at most a handful of atoms and each is a scalar compare, so there is nothing to win.
+function evaluateCondition(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+	return try evaluateOr(tokens, cursor: cursor, target: target)
+end 'evaluateCondition'
+
+// ⭐ **A CONDITION ENDS AT THE END OF ITS OWN LINE, AND NOTHING MAY FOLLOW IT THERE.**
+//
+// ⚠ Without this the grammar simply stops at the first token no production wants, and the FILTER
+// RESUMES ITS WALK FROM EXACTLY THERE — so text trailing a condition is emitted into the program as
+// code. `evaluateCondition`'s no-short-circuit note names that hazard for the evaluator's own
+// tokens; this is the same hazard reached from the SOURCE side, and it was live.
+//
+// It is worth a refusal rather than a shrug because the symptom is TARGET-DEPENDENT. Measured, before
+// this existed: `#if os(Windows) os(Linux)` left `os ( Linux )` in the stream and failed with an
+// E2015 about a top-level identifier on Windows — and compiled clean on a target where the region is
+// dead and the junk is skipped along with it. The same file, accepted or rejected according to who
+// is building it, and neither answer mentioning a directive.
+//
+// Refusing is the only reading that cannot silently mean two different programs. Nothing in the
+// corpus is affected — all 100 directive lines in `specs/`, `specs/` and `stdlib/` end at their
+// condition.
+//
+// `newline` is a real token in this lexer, so "the rest of the line" is one lookahead and no
+// position arithmetic. EOF counts as an ending: a `#if` on an unterminated final line is a region
+// fault (E2063), reported below with the position of the `#if` itself, not a condition fault.
+//
+// ⛔ **A `///` DOC COMMENT ENDS THE LINE TOO, AND LEAVING IT OUT WOULD REFUSE SOURCE THAT BUILDS TODAY.**
+// `#if os(Windows) /// note` lexes as a `docComment` followed by the line's `newline`; before `///` became
+// a token the `//` path swallowed it and the condition ended cleanly. Read as a trailing token it would
+// be a NEW E2063 on an unchanged file — and the corpus contains no such line, so nothing would catch it.
+// The set is `tokenKindIsSkippedLayout`'s plus EOF, which is the same "nothing the grammar reads follows"
+// the parser's own line-end rules mean.
+function expectConditionEnd(tokens TokenArray, cursor ConditionCursor) throws DirectiveError
+	let tok = tokenAtOrEof(tokens, index: cursor.value)
+	if not tokenKindIsSkippedLayout(tok.kind) and tok.kind != TokenKind.eof 'trailing'
+		throw DirectiveError.trailingConditionTokens(tok.line, column: tok.column)
+	end 'trailing'
+end 'expectConditionEnd'
+
+function evaluateOr(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+	var result = try evaluateAnd(tokens, cursor: cursor, target: target)
+	while acceptKind(tokens, cursor: cursor, kind: TokenKind.or) 'orLoop'
+		let rhs = try evaluateAnd(tokens, cursor: cursor, target: target)
+		result = result or rhs
+	end 'orLoop'
+	return result
+end 'evaluateOr'
+
+function evaluateAnd(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+	var result = try evaluateUnary(tokens, cursor: cursor, target: target)
+	while acceptKind(tokens, cursor: cursor, kind: TokenKind.and) 'andLoop'
+		let rhs = try evaluateUnary(tokens, cursor: cursor, target: target)
+		result = result and rhs
+	end 'andLoop'
+	return result
+end 'evaluateAnd'
+
+function evaluateUnary(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+	if acceptKind(tokens, cursor: cursor, kind: TokenKind.not) 'isNot'
+		let inner = try evaluateUnary(tokens, cursor: cursor, target: target)
+		return not inner
+	end 'isNot'
+	return try evaluateAtom(tokens, cursor: cursor, target: target)
+end 'evaluateUnary'
+
+function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+	if acceptKind(tokens, cursor: cursor, kind: TokenKind.leftParen) 'isParen'
+		let inner = try evaluateCondition(tokens, cursor: cursor, target: target)
+		try expectKind(tokens, cursor: cursor, kind: TokenKind.rightParen)
+		return inner
+	end 'isParen'
+
+	let nameTok = try expectKind(tokens, cursor: cursor, kind: TokenKind.identifier)
+	try expectKind(tokens, cursor: cursor, kind: TokenKind.leftParen)
+	// The argument is an identifier (`Windows`, `x64`) or a bool keyword (`true`, `false`), which
+	// the lexer gives distinct kinds. Its TEXT is what every predicate reads, and `true`/`false`
+	// carry their own spelling in `value` — so one read serves them all.
+	let argTok = try readConditionArgument(tokens, cursor: cursor)
+	try expectKind(tokens, cursor: cursor, kind: TokenKind.rightParen)
+
+	// Resolved AFTER the argument list is consumed, so an unknown name reports its own position while
+	// the cursor still lands past the atom — the same order the two lists version had, and what keeps
+	// `error.unknown-predicate`'s golden pointing at the name rather than at the `(`.
+	let predicate = try predicateNamed(nameTok)
+	return equalsIgnoringAsciiCase(argTok.value, b: satisfyingArgument(predicate, target: target))
+end 'evaluateAtom'
+
+// The predicate a source spelling names, or E2064. Matched EXACTLY, unlike a predicate's ARGUMENT:
+// `os` is a function name in this grammar and the corpus spells them all in camelCase, whereas
+// `os(Windows)` names a platform whose conventional spelling is capitalized.
+function predicateNamed(nameTok Token) returns ConditionPredicate throws DirectiveError
+	for predicate in ConditionPredicate.allCases 'each'
+		if nameTok.value.equals(predicateSpelling(predicate)) 'found'
+			return predicate
+		end 'found'
+	end 'each'
+
+	throw DirectiveError.unknownPredicate(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+end 'predicateNamed'
+
+// Each predicate's source spelling. THE names — read by the resolver above and by the diagnostic
+// below, never written down a second time.
+function predicateSpelling(predicate ConditionPredicate) returns ByteArray
+	return match predicate 'spelling'
+		os gives b"os"
+		arch gives b"arch"
+		testing gives b"testing"
+		rcSanitize gives b"rcSanitize"
+		leakReport gives b"leakReport"
+	end 'spelling'
+end 'predicateSpelling'
+
+// ⭐ **WHAT A PREDICATE'S ARGUMENT MUST SPELL FOR IT TO BE TRUE — one comparison serves them all,
+// because every one asks the same shape of question: "is your argument the current value of this
+// fact?"** So the match yields a VALUE and never a second evaluator, and there is exactly one place
+// where an argument is compared to anything.
+//
+// `os` and `arch` answer out of `Target.maxon`'s canonical names, which is also what `--target=`
+// parses through — the platform spellings are that file's fact, not this one's. An UNRECOGNIZED
+// argument is therefore FALSE rather than an error — `os(Plan9)` compiles and takes the `#else` —
+// which is what lets portable source name a
+// platform this compiler does not target without becoming unbuildable.
+//
+// ⭐ **`testing`, `rcSanitize` AND `leakReport` NAME BUILD FLAGS THIS COMPILER DOES NOT HAVE — all
+// three are OFF, so each is satisfied exactly by `flag(false)`.** That is the correct answer and not
+// a stand-in for one. `testing` asks whether the compiler is running under the spec harness, and the
+// harness SPAWNS the compiler as a subprocess threading no such flag, so there is nothing for it to
+// be true of. `rcSanitize` and `leakReport` gate an optional refcount sanitizer and leak census,
+// neither of which exists; the leak check is unconditional.
+//
+// One rule for all three, deliberately, and in the conservative direction: a nonsense argument never
+// switches code ON.
+function satisfyingArgument(predicate ConditionPredicate, target Target) returns ByteArray
+	return match predicate 'satisfying'
+		os gives osCanonicalName(target.os)
+		arch gives cpuCanonicalName(target.cpu)
+		testing gives FalseSpelling
+		rcSanitize gives FalseSpelling
+		leakReport gives FalseSpelling
+	end 'satisfying'
+end 'satisfyingArgument'
+
+// The accepted predicates as the diagnostics list them, in enum order and comma-separated with a
+// final `or`. Rendered from `allCases` rather than written out, so the sentence a reader is told
+// to obey and the set `predicateNamed` actually accepts are the same walk of the same enum.
+export function acceptedPredicateList() returns String
+	let finalIndex = ConditionPredicate.allCases.count() - 1
+	var rendered = ""
+	var index = 0
+
+	for predicate in ConditionPredicate.allCases 'each'
+		if index > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		if index == finalIndex 'lastItem'
+			rendered = "{rendered}or "
+		end 'lastItem'
+
+		rendered = "{rendered}'{String.from(predicateSpelling(predicate))}'"
+		index = index + 1
+	end 'each'
+
+	return rendered
+end 'acceptedPredicateList'
+
+// The single argument of a predicate call. Accepted kinds are `identifier` (`Windows`, `x64`) and
+// the two bool keywords, which are their own kinds in this lexer and would otherwise be rejected as
+// "expected identifier" on the very spelling the documentation uses (`testing(true)`).
+function readConditionArgument(tokens TokenArray, cursor ConditionCursor) returns Token throws DirectiveError
+	let tok = tokenAtOrEof(tokens, index: cursor.value)
+	if tok.kind != TokenKind.identifier and tok.kind != TokenKind.true and tok.kind != TokenKind.false 'notAnArgument'
+		throw DirectiveError.malformedCondition(tok.line, column: tok.column)
+	end 'notAnArgument'
+	cursor.value = cursor.value + 1
+	return tok
+end 'readConditionArgument'
+
+// The token at an absolute index, or a synthetic EOF past the end — the same past-the-end rule
+// `Parser.tokenAt` writes down, so a malformed condition that runs off the array reports a position
+// instead of faulting. The lexer appends a real EOF, so the synthetic one is a guard.
+function tokenAtOrEof(tokens TokenArray, index TokenIndex) returns Token
+	if index >= tokens.count() 'pastEnd'
+		return Token.eof()
+	end 'pastEnd'
+	return try tokens.get(index) otherwise panic("tokenAtOrEof: index<count just checked but tokens.get({index}) failed")
+end 'tokenAtOrEof'
+
+// Consume a token of `kind` if it is there, reporting whether it was. The optional half of the pair
+// below — an `or`/`and`/`not`/`(` that is absent simply ends its production.
+function acceptKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) returns bool
+	if tokenAtOrEof(tokens, index: cursor.value).kind != kind 'notThere'
+		return false
+	end 'notThere'
+	cursor.value = cursor.value + 1
+	return true
+end 'acceptKind'
+
+// Consume a token of `kind` or refuse the condition. The REQUIRED half: a missing `)` or a `#if`
+// with no predicate at all has no reading, and the alternative to throwing is resuming the token
+// walk at an index the grammar never agreed to.
+function expectKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) returns Token throws DirectiveError
+	let tok = tokenAtOrEof(tokens, index: cursor.value)
+	if tok.kind != kind 'mismatch'
+		throw DirectiveError.malformedCondition(tok.line, column: tok.column)
+	end 'mismatch'
+	cursor.value = cursor.value + 1
+	return tok
+end 'expectKind'
+
+// ASCII case-insensitive byte equality. The corpus writes `os(Windows)` and this file's constants are
+// lowercase, so every predicate argument compares through here. Compares the SLICES in place — a
+// `Token.value` is a zero-copy view of the source buffer (see `Token.value`), and lower-casing either
+// side would allocate a String per atom for a handful of byte compares.
+function equalsIgnoringAsciiCase(a ByteArray, b ByteArray) returns bool
+	if a.count() != b.count() 'lengthDiffers'
+		return false
+	end 'lengthDiffers'
+
+	var i = 0
+	while i < a.count() 'compare'
+		let av = try a.get(i) otherwise panic("equalsIgnoringAsciiCase: i<count but a.get({i}) failed")
+		let bv = try b.get(i) otherwise panic("equalsIgnoringAsciiCase: i<count but b.get({i}) failed")
+		if toAsciiLower(av) != toAsciiLower(bv) 'differs'
+			return false
+		end 'differs'
+		i = i + 1
+	end 'compare'
+	return true
+end 'equalsIgnoringAsciiCase'
+
+// ASCII upper-case to lower-case. Bytes outside `A`-`Z` pass through, so a UTF-8 continuation byte is
+// never folded — this is deliberately ASCII-only, because the names it compares (`Windows`, `x64`,
+// `true`) are keywords of the directive grammar and not user text.
+function toAsciiLower(b Byte) returns Byte
+	if b >= AsciiUpperA and b <= AsciiUpperZ 'isUpper'
+		return (b + AsciiCaseGap) as Byte
+	end 'isUpper'
+	return b
+end 'toAsciiLower'
+
+let AsciiUpperA = 65 as Byte
+let AsciiUpperZ = 90 as Byte
+let AsciiCaseGap = 32

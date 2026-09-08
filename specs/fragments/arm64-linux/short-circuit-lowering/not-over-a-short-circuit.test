@@ -1,0 +1,66 @@
+// Test: not-over-a-short-circuit
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function main() returns ExitCode
+	var code = 0
+	if not (f() or f()) 'a'
+		code = code + 1
+	end 'a'
+	if not (t() and t()) 'b'
+		code = code + 2
+	end 'b'
+	if not (t() and f()) 'c'
+		code = code + 4
+	end 'c'
+	return code
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __il_body#19:
+    arm64.movImm x1, 0
+  scmerge#2:
+    arm64.eor x1, x1, 1
+    arm64.cbz x1, __il_body#23
+  a:
+    arm64.movImm x0, 1
+  __il_body#23:
+    arm64.movImm x1, 1
+  scmerge#6:
+    arm64.eor x1, x1, 1
+    arm64.cbz x1, __il_body#27
+  b:
+    arm64.add x0, x0, 2
+  __il_body#27:
+    arm64.movImm x1, 0
+  scmerge#10:
+    arm64.eor x1, x1, 1
+    arm64.cbz x1, ifcont
+  c:
+    arm64.add x0, x0, 4
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at not-over-a-short-circuit.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

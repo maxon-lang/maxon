@@ -1,0 +1,27 @@
+// Test: error.a-user-struct-sharing-a-stdlib-alias-name-is-still-a-record
+type ParsedInt
+	export var s as String
+
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'ParsedInt'
+
+type Box uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias PBox = Box with ParsedInt
+
+function main() returns ExitCode
+	let bad = PBox.create(5)
+	print("{bad.value.s}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:21:17: argument type mismatch for 'v': expected 'ParsedInt', got 'int'

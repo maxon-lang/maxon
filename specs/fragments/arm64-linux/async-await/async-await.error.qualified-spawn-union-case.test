@@ -1,0 +1,15 @@
+// Test: async-await.error.qualified-spawn-union-case
+typealias Tally = int(0 to 1000)
+
+union Move
+	walk(steps Tally)
+	stop
+end 'Move'
+
+function main() returns ExitCode
+	let p = async Move.walk(3)
+	return await p
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:16: Unsupported: `async Move.…` — `Move` is an enum or union, so `Move.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run

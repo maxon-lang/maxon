@@ -1,0 +1,19 @@
+// Test: error.unused-module-function
+// --- file: api/lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function localHelper() returns Integer
+	return 7
+end 'localHelper'
+
+export function publicEntry() returns Integer
+	return localHelper()
+end 'publicEntry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return publicEntry()
+end 'main'
+---
+CompilerError:
+error E3094: api/<fragment>:5:17: module function 'api.localHelper' is never referenced outside its declaring file

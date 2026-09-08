@@ -1,0 +1,105 @@
+// hover-docs.test.maxon — hover over what a symbol is DOCUMENTED as, and over the static call whose
+// rendering is the least like a bare name.
+//
+// Four of the twenty-four recovered hover tests. `hover-types.test.maxon` holds the four that hover over
+// a composite type or over a call's result; the harness is in `hover-probe.test.maxon`.
+//
+// ⚠ **THIS FILE CONCENTRATES THE PINS ON LIVE `stdlib/` CONTENT, ON PURPOSE.** `Append element to end` is
+// `Array.maxon`'s doc comment, `cstring` is read off `String.cstr`'s declaration, and `String.fromCString`
+// is a declaration in `String.maxon`. A frozen fixture copy of the stdlib would make all three pass
+// forever while testing nothing; pinned to the real tree they go red the day one of them moves — which is
+// exactly the day an editor's hover changes, and therefore worth being told about.
+
+test 'hover shows doc comment for function'
+	// "add" starts at column 11
+	let document = documentedAddDocument()
+	let rendering = try hoverRendering(document, line: 6, character: 11)
+
+	try Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
+
+	try Expect.contains(rendering, needle: "add", message: "the rendering names that function.")
+
+	// The doc text comes from the FIXTURE, so this test is independent of `stdlib/` — unlike the `push`
+	// case below, which is the same claim pinned to a live tree.
+	try Expect.contains(rendering, needle: "Adds two numbers together", message: "a `///` doc comment above a declaration reaches the hover, without its `/// ` prefix. That is the only reason to write one.")
+end 'hover shows doc comment for function'
+
+test 'hover shows doc comment for method'
+	// "increment" starts at column 6
+	//
+	// ⚠ The fixture carries TWO blank lines — after `var count int` and after `end 'Counter'`. Line 11 is
+	// `    c.increment()` only if both survive byte-exact.
+	let document = documentedCounterDocument()
+	let rendering = try hoverRendering(document, line: 11, character: 6)
+
+	try Expect.contains(rendering, needle: "increment", message: "a method call hovers as the method it resolves to.")
+
+	try Expect.contains(rendering, needle: "Increments the counter by one", message: "a `///` doc comment on a METHOD reaches the hover too. A doc-comment scanner that only walked top-level declarations would pass the function case and fail here.")
+end 'hover shows doc comment for method'
+
+test 'hover shows array push method with doc comment'
+	// "push" starts at column 8
+	//
+	// One of the header's live `stdlib/` pins: `Array.maxon:299` reads `/// Append element to end`,
+	// directly above `public function push(value Element)` at `:305`.
+	let document = arrayDocument()
+	let rendering = try hoverRendering(document, line: 2, character: 8)
+
+	try Expect.contains(rendering, needle: "push", message: "a method call into `stdlib/` hovers as that method.")
+
+	try Expect.contains(rendering, needle: "Append element to end", message: "the doc comment from `stdlib/Array.maxon` reaches the hover. Doc comments that only worked inside the open document would pass every fixture-local case and fail here — and the stdlib is where an editor user reads them most.")
+end 'hover shows array push method with doc comment'
+
+test 'hover shows static method signature'
+	// Line 2: "    var name = String.fromCString(cs)"
+	//          0         1         2
+	//          0123456789012345678901234567
+	//
+	// Another live `stdlib/` pin: `String.fromCString` is declared at `String.maxon:241`. The recovered
+	// ruler stops at 27 while the position is 22; it is still the derivation, so it is reproduced as-is.
+	let document = staticMethodDocument()
+	let rendering = try hoverRendering(document, line: 2, character: 22)
+
+	try Expect.contains(rendering, needle: "fromCString", message: "a STATIC method call hovers as that method. A resolver that only handled instance receivers would answer for `String` here, or for nothing.")
+end 'hover shows static method signature'
+
+// ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
+// character: byte-exact, no indentation stripped or added, no trailing newline. The four-space
+// indentation is the recovered source's own, and every position above is a column counted against it —
+// adding or trimming one byte silently shifts them all. `arrayDocument` is shared with
+// `hover-declarations.test.maxon` and lives in `hover-probe.test.maxon`.
+
+function documentedAddDocument() returns String
+	return String.from(b"/// Adds two numbers together
+function add(x int, y int) returns int
+    return x + y
+end 'add'
+
+function main() returns int
+    return add(1, 2)
+end 'main'")
+end 'documentedAddDocument'
+
+function documentedCounterDocument() returns String
+	return String.from(b"type Counter
+    var count int
+
+    /// Increments the counter by one
+    function increment()
+        self.count = self.count + 1
+    end 'increment'
+end 'Counter'
+
+function main() returns int
+    var c = Counter{count: 0}
+    c.increment()
+    return c.count
+end 'main'")
+end 'documentedCounterDocument'
+
+function staticMethodDocument() returns String
+	return String.from(b"function test()
+    var cs = \"hello\".cstr()
+    var name = String.fromCString(cs)
+end 'test'")
+end 'staticMethodDocument'

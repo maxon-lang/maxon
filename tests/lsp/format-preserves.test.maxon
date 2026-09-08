@@ -1,0 +1,66 @@
+// format-preserves.test.maxon — what `textDocument/formatting` must NOT touch.
+//
+// ⭐ **A FORMATTER IS JUDGED BY WHAT IT LEAVES ALONE AS MUCH AS BY WHAT IT MOVES.** A comment silently
+// dropped, a blank line collapsed or an inferred declaration rewritten are all edits an author never
+// asked for, and each is invisible until it has already happened to their file.
+//
+// The probe, the tab size and `formattedDocumentText` are `format-indent.test.maxon`'s.
+
+function implicitTypeFixture() returns String
+	return String.from(b"function main() returns int
+var x = 1
+let y = 2.5
+return x
+end 'main'")
+end 'implicitTypeFixture'
+
+function commentsFixture() returns String
+	return String.from(b"// This is a comment
+function main() returns int
+// Another comment
+var x = 1
+return x
+end 'main'")
+end 'commentsFixture'
+
+function blankLineFixture() returns String
+	return String.from(b"function foo() returns int
+return 1
+end 'foo'
+
+function main() returns int
+return 0
+end 'main'")
+end 'blankLineFixture'
+
+test 'formatting preserves implicit type declarations'
+	// Code with type inference - no explicit type annotations
+	// The formatter should NOT add explicit type annotations
+	let source = implicitTypeFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// "var x = 1" should stay as "var x = 1", not become "var x int = 1"
+	try Expect.contains(text, needle: "var x = 1", message: "an inferred `var` declaration did not survive formatting unchanged.")
+	try Expect.isFalse(text.contains("var x int"), message: "the formatter wrote an explicit type onto an inferred declaration. A formatter rewrites layout, never meaning.")
+
+	// "let y = 2.5" should stay as "let y = 2.5", not become "let y float = 2.5"
+	try Expect.contains(text, needle: "let y = 2.5", message: "an inferred `let` declaration did not survive formatting unchanged.")
+	try Expect.isFalse(text.contains("let y float"), message: "the formatter wrote an explicit type onto an inferred `let`.")
+end 'formatting preserves implicit type declarations'
+
+test 'formatting preserves comments'
+	let source = commentsFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	try Expect.contains(text, needle: "// This is a comment", message: "a top-level comment did not survive formatting.")
+	try Expect.contains(text, needle: "// Another comment", message: "a comment inside a function body did not survive formatting.")
+end 'formatting preserves comments'
+
+test 'formatting preserves blank lines'
+	let source = blankLineFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// The three parts are pinned as one literal on purpose: exactly one blank line between the two
+	// functions, neither collapsed away nor doubled.
+	try Expect.contains(text, needle: "end 'foo'\n\nfunction main", message: "the single blank line between two functions was not preserved exactly.")
+end 'formatting preserves blank lines'

@@ -1,0 +1,35 @@
+// Test: error.surplus-parenthesized-argument-against-an-inherited-uses-name
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function get() returns Element
+end 'Base'
+
+interface Sub extends Base
+	function extra() returns Integer
+end 'Sub'
+
+type Impl implements Sub with (Integer)
+	let v as Integer
+
+	function get() returns Integer
+		return v
+	end 'get'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Impl'
+
+function main() returns ExitCode
+	let i = Impl.create(42)
+	return i.get()
+end 'main'
+---
+CompilerError:
+error E2066: <fragment>:13:31: interface 'Sub' declares 0 associated type(s), but this parenthesized 'with' clause binds 1

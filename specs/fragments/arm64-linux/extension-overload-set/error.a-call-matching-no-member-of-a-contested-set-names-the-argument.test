@@ -1,0 +1,40 @@
+// Test: error.a-call-matching-no-member-of-a-contested-set-names-the-argument
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+export extension Tagged
+	export function pick(n Integer) returns Integer
+		return tag() + n
+	end 'pick'
+end 'Tagged'
+
+export type Five implements Tagged
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Five'
+
+// --- file: b.maxon
+typealias Count = int(i64.min to i64.max)
+
+export extension Tagged
+	export function pick(flag bool) returns Count
+		return tag() + (1 if flag else 0)
+	end 'pick'
+end 'Tagged'
+
+function main() returns ExitCode
+	let f = Five.make()
+	return f.pick("nope")
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:36:11: argument type mismatch for 'n': expected 'Integer', got 'String'

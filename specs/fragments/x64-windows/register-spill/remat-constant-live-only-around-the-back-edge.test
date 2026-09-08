@@ -1,0 +1,100 @@
+// Test: remat-constant-live-only-around-the-back-edge
+function leaf(x Integer) returns Integer
+	return x + 1
+end 'leaf'
+
+function loopDivisor(p Integer) returns Integer
+	let c = 7
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var a5 = p + 5
+	var a6 = p + 6
+	var i = 0
+	while i mod c < 3 'loop'
+		a1 = a1 + leaf(i)
+		a2 = a2 + a1
+		a3 = a3 + a2
+		a4 = a4 + a3
+		a5 = a5 + a4
+		a6 = a6 + a5
+		i = i + 1
+	end 'loop'
+	return a1 + a2 + a3 + a4 + a5 + a6
+end 'loopDivisor'
+
+function main() returns ExitCode
+	let r = loopDivisor(1)
+	if r == 494 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+func @loopDivisor {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 rsi, rcx, 1
+    x64.leaRegRegImm32 rdi, rcx, 2
+    x64.leaRegRegImm32 r8, rcx, 3
+    x64.leaRegRegImm32 r9, rcx, 4
+    x64.leaRegRegImm32 r10, rcx, 5
+    x64.leaRegRegImm32 rcx, rcx, 6
+    x64.movRegImm32 r11, 0
+  whilehdr:
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg r11
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.movRegReg rdx, r11
+    x64.subRegReg rdx, r11, rax
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc greaterEqual, whileexit
+  __il_body:
+    x64.leaRegRegImm32 r11, r11, 1
+  __il_cont:
+    x64.leaRegRegReg rsi, rsi, r11
+    x64.leaRegRegReg rdi, rdi, rsi
+    x64.leaRegRegReg r8, r8, rdi
+    x64.leaRegRegReg r9, r9, r8
+    x64.leaRegRegReg r10, r10, r9
+    x64.leaRegRegReg rcx, rcx, r10
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rsi, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect loopDivisor
+    x64.cmpRegImm32 r8, 494
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

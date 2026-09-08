@@ -1,0 +1,266 @@
+// `run_spec_test` MCP tool. Wraps `maxon spec-test` with the canonical filter / log
+// flags and parses the test runner's final summary line into structured
+// `{passed, failed, total, durationMs, memoryLeak}` output.
+//
+// Inputs (JSON):
+//   filter?: String                      → --filter=<pat>
+//   updateRequired?: bool                → --update-required
+//   log?: String                         → --log=<value>
+//   mmTrace?: bool                       → REFUSED; see `checkSpecTestFlags`
+//   network?: bool                       → --network
+//   target?: String                      → --target=<value>
+//
+// Output (JSON):
+//   passed, failed, total, durationMs, memoryLeak (exit code 101),
+//   exitCode, failures: [{name, output}], rawTail.
+
+typealias TestCount = int(0 to u64.max)
+
+// Spec runs can take a while when nothing is filtered, and cold-cache compiles can
+// spike well past the usual. A 10 min timeout gives plenty of head room without
+// making a runaway run silent.
+let defaultSpecTestTimeoutMs = 600000
+
+// `rawTail` cap: enough to include the summary plus a handful of failure
+// lines without flooding the MCP response.
+let rawTailMaxBytes = 4096
+
+// Exit code 101 means the test runner detected a memory leak — surface it
+// as a typed `memoryLeak` boolean so callers don't have to know the magic
+// number.
+let memoryLeakExitCode = 101
+
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// binary is run against whose specs — resolved and validated by the dispatcher.
+export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
+	// Refuse a flag the compiler cannot honour BEFORE spawning it, so the caller reads
+	// the gap rather than a usage dump.
+	try checkSpecTestFlags(argsDoc, argsId: argsId) otherwise (flag) 'unsupported'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {unsupportedFlagReason(flag)}")
+	end 'unsupported'
+
+	let binary = try compilerBinary(repoRoot) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test: required binary missing. Build it first via the `build` tool.")
+	end 'noBin'
+
+	let argv = buildSpecTestArgv(argsDoc, argsId: argsId)
+	let displayCommand = displayCommandFor(binary, argv: argv)
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultSpecTestTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(timing)
+
+	return buildOutcome(displayCommand, result: result, durationMs: elapsed)
+end 'specTestHandler'
+
+// =============================================================================
+// Argument parsing
+// =============================================================================
+
+// Construct the argv passed to `maxon spec-test`. The argv0 (the binary path
+// itself) is handled separately by Subprocess.run, so this list starts at the
+// `spec-test` subcommand.
+//
+// `checkSpecTestFlags` has already rejected the call if the caller asked for a flag
+// the runner lacks, so every key read here is one it accepts.
+function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArray
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	let filter = try argsDoc.getString(argsId, key: "filter") otherwise ""
+	if not filter.isEmpty() 'haveFilter'
+		argv.push("--filter={filter}")
+	end 'haveFilter'
+	let updateRequired = try argsDoc.getBool(argsId, key: "updateRequired") otherwise false
+	if updateRequired 'haveUR'
+		argv.push("--update-required")
+	end 'haveUR'
+	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+	if not log.isEmpty() 'haveLog'
+		argv.push("--log={log}")
+	end 'haveLog'
+	// Runs the fragments marked `<!-- network: live -->`, which the default gate excludes because a suite
+	// whose verdict depends on somebody else's uptime is not a claim about the code.
+	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+	if network 'haveNetwork'
+		argv.push("--network")
+	end 'haveNetwork'
+	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+	if not target.isEmpty() 'haveTarget'
+		argv.push("--target={target}")
+	end 'haveTarget'
+	return argv
+end 'buildSpecTestArgv'
+
+// Human-readable rendering of `binary argv...` for the JSON response. Args
+// here never contain shell metacharacters (they're flag names + values from
+// the MCP request), so a plain space-join is faithful.
+// CRITICAL: clone `binary.path` before appending. `String.append` mutates
+// the underlying managed buffer in place, and `var s = binary.path` shares
+// the buffer with the FilePath. Without the clone, the subsequent
+// `Subprocess.run(Executable.path(binary), ...)` would receive a binary
+// path corrupted with the appended argv and fail with "system cannot find
+// file specified".
+export function displayCommandFor(binary FilePath, argv StringArray) returns String
+	var s = binary.path.clone()
+	let n = argv.count()
+	for i in 0 upto n 'each'
+		let a = try argv.get(i) otherwise panic("displayCommandFor: argv.get({i}) OOB (count={n})")
+		s.append(" ")
+		s.append(a)
+	end 'each'
+	return s
+end 'displayCommandFor'
+
+// =============================================================================
+// Result parsing
+// =============================================================================
+
+type SpecSummary
+	export var passed as TestCount = 0
+	export var total as TestCount = 0
+	export var parsed as bool = false
+
+	export static function empty() returns SpecSummary
+		return Self{}
+	end 'empty'
+
+	export static function withCounts(passed TestCount, total TestCount) returns SpecSummary
+		return Self{passed: passed, total: total, parsed: true}
+	end 'withCounts'
+end 'SpecSummary'
+
+// The runner closes with a bare `83 passed, 0 failed` — no total, no wall-clock.
+// Scanned from the END of the output: a FAILING test's reason is echoed verbatim and
+// could contain that phrase, and the last one is always the real summary.
+function parseSummary(combined String) returns SpecSummary
+	let lines = combined.split("\n")
+	var i = lines.count()
+	while i > 0 'scanBackwards'
+		i = i - 1
+		let line = try lines.get(i) otherwise panic("parseSummary: lines.get OOB — i bounded by count")
+		let summary = try parseSummaryLine(line.trim()) otherwise 'notTheSummary'
+			continue
+		end 'notTheSummary'
+
+		return summary
+	end 'scanBackwards'
+
+	return SpecSummary.empty()
+end 'parseSummary'
+
+// `83 passed, 0 failed` → a SpecSummary. The runner reports no wall-clock time; the
+// envelope carries the subprocess's own measured elapsed time, which is what a caller
+// actually wants.
+function parseSummaryLine(line String) returns SpecSummary throws NotFound
+	let passedMarker = " passed, "
+	let failedMarker = " failed"
+
+	let passed = try parseLeadingInt(line)
+	if not passed.rest.startsWith(passedMarker) 'notASummary'
+		throw NotFound.notFound
+	end 'notASummary'
+
+	let afterPassed = try sliceAfter(passed.rest, marker: passedMarker)
+	let failed = try parseLeadingInt(afterPassed)
+	if not failed.rest.startsWith(failedMarker) 'notASummary'
+		throw NotFound.notFound
+	end 'notASummary'
+
+	return SpecSummary.withCounts(passed.value, total: passed.value + failed.value)
+end 'parseSummaryLine'
+
+type ParsedInt
+	export var value as TestCount
+	export var rest as String
+
+	export static function create(value TestCount, rest String) returns ParsedInt
+		return Self{value: value, rest: rest}
+	end 'create'
+end 'ParsedInt'
+
+function parseLeadingInt(s String) returns ParsedInt throws NotFound
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	var value = 0
+	var anyDigits = false
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("parseLeadingInt: get OOB — i bounded by n")
+		end 'gErr'
+		if b < 0x30 or b > 0x39 'notDigit'
+			break
+		end 'notDigit'
+		value = value * 10 + (b - 0x30)
+		anyDigits = true
+		i = i + 1
+	end 'scan'
+	if not anyDigits 'noDigits'
+		throw NotFound.notFound
+	end 'noDigits'
+	let rest = sliceBytes(bytes, from: i, until: n)
+	return ParsedInt.create(value, rest: rest)
+end 'parseLeadingInt'
+
+function sliceAfter(s String, marker String) returns String throws NotFound
+	let bytes = s.toByteArray()
+	let pos = try findByteSequence(bytes, needle: marker)
+	let start = pos + marker.byteLength()
+	return sliceBytes(bytes, from: start, until: bytes.count())
+end 'sliceAfter'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(command String, result CollectedOutput, durationMs DurationMs) returns ToolOutcome
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
+	let summary = parseSummary(combined)
+	let memoryLeak = result.exitCode() == memoryLeakExitCode
+
+	// Failed count = total - passed when we have a successful parse.
+	// Falls back to 0 when we couldn't find the summary line at all
+	// (e.g. a compile error before the tests ran) or when the math would
+	// underflow.
+	var failed = 0
+	if summary.parsed and summary.total >= summary.passed 'okMath'
+		failed = summary.total - summary.passed
+	end 'okMath'
+
+	var doc = JsonDoc.create()
+	let commandId = doc.add(JsonNode.stringNode(command))
+	let passedId = doc.add(JsonNode.numberNode(summary.passed as JsonFloat))
+	let failedId = doc.add(JsonNode.numberNode(failed as JsonFloat))
+	let totalId = doc.add(JsonNode.numberNode(summary.total as JsonFloat))
+	let durationId = doc.add(JsonNode.numberNode(durationMs as JsonFloat))
+	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode() as JsonFloat))
+	let memoryLeakId = doc.add(JsonNode.boolNode(memoryLeak))
+	let parsedId = doc.add(JsonNode.boolNode(summary.parsed))
+	let rawTail = lastBytes(combined, max: rawTailMaxBytes)
+	let rawTailId = doc.add(JsonNode.stringNode(rawTail))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("command")
+	children.push(commandId)
+	keys.push("passed")
+	children.push(passedId)
+	keys.push("failed")
+	children.push(failedId)
+	keys.push("total")
+	children.push(totalId)
+	keys.push("durationMs")
+	children.push(durationId)
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("memoryLeak")
+	children.push(memoryLeakId)
+	keys.push("summaryParsed")
+	children.push(parsedId)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'

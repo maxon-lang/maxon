@@ -1,0 +1,62 @@
+// Test: utf16-is-bmp
+function main() returns ExitCode
+	if utf16IsBmp(65) 'c10'
+		print("1\n")       // ASCII
+	end 'c10'
+	if utf16IsBmp(945) 'c11'
+		print("2\n")      // Greek α
+	end 'c11'
+	if utf16IsBmp(65535) 'c12'
+		print("3\n")    // U+FFFF (last BMP)
+	end 'c12'
+	if utf16IsBmp(128512) 'c13'
+		print("0\n")   // 😀 (not BMP)
+	end 'c13'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  andrhs#11:
+    x64.movRegImm32 rax, 1
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, andrhs#18
+  c10:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "1\x0a"
+    x64.callDirect print
+  andrhs#18:
+    x64.movRegImm32 rax, 1
+  __il_cont#16:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, andrhs#25
+  c11:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "2\x0a"
+    x64.callDirect print
+  andrhs#25:
+    x64.movRegImm32 rax, 1
+  __il_cont#23:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, andrhs#32
+  c12:
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "3\x0a"
+    x64.callDirect print
+  andrhs#32:
+    x64.movRegImm32 rax, 0
+  __il_cont#30:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  c13:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "0\x0a"
+    x64.callDirect print
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

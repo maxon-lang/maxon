@@ -1,0 +1,39 @@
+// Test: first-class-function.error.generic-instance-through-an-extension-body-alias-refuses-a-different-instance
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+
+extension Field
+	typealias Builder = function(Integer) returns FieldArray
+
+	export function runIt(f Builder) returns Integer
+		let produced = f(7)
+		let first = try produced.get(0) otherwise panic("runIt: empty array")
+		return first.v
+	end 'runIt'
+end 'Field'
+
+function buildSmalls(_ Integer) returns SmallArray
+	var out = SmallArray.create()
+	out.push(3)
+	return out
+end 'buildSmalls'
+
+function main() returns ExitCode
+	let f = Field.create(1)
+	return f.runIt(buildSmalls) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:35:11: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'

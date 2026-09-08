@@ -1,0 +1,61 @@
+// Test: while-loops.sequential-loops
+function big(n Integer) returns Integer
+	var i0 = 0
+	while i0 < n 'L0'
+		i0 = i0 + 1
+	end 'L0'
+	var i1 = 0
+	while i1 < n 'L1'
+		i1 = i1 + 1
+	end 'L1'
+	return i0 + i1
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rax, 0
+  whilehdr#6:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, whileexit#8
+  L0:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr#6
+  whileexit#8:
+    x64.movRegImm32 rcx, 0
+  whilehdr#9:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greaterEqual, whileexit#11
+  L1:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr#9
+  whileexit#11:
+    x64.leaRegRegReg r8, rax, rcx
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at while-loops.sequential-loops.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

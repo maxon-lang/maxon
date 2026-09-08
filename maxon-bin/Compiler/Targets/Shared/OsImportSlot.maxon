@@ -1,0 +1,314 @@
+// OsImportSlot — the OS primitives a dynamically-linked target reaches through an import
+// table, and the slot index a call site records for its writer to patch.
+//
+// ⭐ THE SLOT-INDEX MODEL IS OS-NEUTRAL; ONLY THE SYMBOL SPELLING IS NOT. A call site emits
+// "call through import slot k" and the object writer resolves k to an address: the Mach-O
+// writer against a `__got` entry dyld binds, the PE writer against an IAT entry (`IatSlot`,
+// the identical shape). Nothing about `k` is Mach-O, which is why this enum does NOT belong
+// in `Targets/Macos/` — two files under `Targets/Arm64/` (the isel and the entry stub) named
+// a Mach-O type to say "the exit primitive", a layering leak that only became visible when
+// arm64-linux arrived and needed the same three primitives with NO import table at all.
+//
+// The per-format SYMBOL map stays with its writer (`machoImportSymbol` renders the Mach-O
+// ABI's leading underscore: a C `exit` is the symbol `_exit`), because that IS format
+// knowledge. Adding an import is still: append a case here and its symbol there.
+//
+// ⚠ arm64-LINUX USES NONE OF THIS. Linux permits raw syscalls, so `osExit`/`osWriteStdout`/
+// `osAllocPages` lower to `svc #0` and the ELF image carries no import table, no GOT and no
+// dynamic linker (see `Arm64Runtime.arm64OsCallKind`). The enum is reached only on the
+// import-table route.
+//
+// `exit` terminates the process with main's return code. `write` is both the panic runtime's
+// route to stderr and the `osWriteStdout`/`print` primitive. `mmap` is the page source
+// `osAllocPages` bottoms out in; MAP_ANON returns ZEROED pages, satisfying the slab's zeroing
+// contract. `munmap` releases such a mapping (`osFreePages`) and `madvise` drops its physical
+// backing while KEEPING the mapping (`osDecommitPages`).
+//
+// ⛔ **THIS LIST SAID "No `munmap`: the slab never decommits, so a page-free import would be dead",
+// AND THAT SENTENCE OUTLIVED ITS PREMISE.** It was true of the bump heap, which never frees; it was
+// already false for the green-thread scheduler, which releases a completed GT's stack — that op just
+// happened to be x64-windows-gated, so the missing import surfaced as a PANIC in the arm64 isel rather
+// than as a link error here. ⚠ Only arm64-macOS actually reaches these two: the two Linux lanes make the
+// same calls as raw `svc`/`syscall` and need no import table at all (see the ⚠ note above), which is why
+// two names appear here for four lanes.
+// ⚠ APPENDED, never inserted: `osImportSlotIndex` is the enum ORDINAL and every emitted `arm64ImportCall`
+// records it, so a reorder would silently repoint every existing call site.
+//
+// ⚠ There is no `mprotect` slot, and that is not an omission: POSIX has no COMMIT state to change a
+// protection into, so `osCommitPages` is an `mmap` of the sub-range (`MAP_FIXED`) and reaches the `mmap`
+// slot already listed — exactly as `osReservePages` does. One page source, three spellings of its arguments:
+// allocate, reserve, commit.
+export enum OsImportSlot
+	exit
+	write
+	mmap
+	munmap
+	madvise
+	// --- the arm64-macOS host surface (`Targets/Arm64/Arm64DarwinRuntime`) ---
+	//
+	// ⚠ **THESE ARE REACHED FROM ONE LANE ONLY, AND THE ENUM IS STILL THE RIGHT HOME.** Every slot above is
+	// reached by arm64-macOS alone too (the Linux lanes make the same calls as raw `svc`), so "only one lane
+	// uses it" was never this list's membership rule — being an OS primitive reached through an IMPORT
+	// TABLE is. What a Linux lane needs is a syscall NUMBER, which is a different fact in a different file.
+	//
+	// `clock_gettime_nsec_np` answers a Darwin clock in nanoseconds directly in x0 — the calendar, the
+	// monotonic counter and this thread's CPU time are one import asked with three different `clockid_t`s,
+	// which is why three facilities cost one slot. `nanosleep` is the timed park.
+	clockGettimeNsecNp
+	nanosleep
+	// `sysconf` answers a numbered system parameter in x0 — `osCpuCount` asks it
+	// `_SC_NPROCESSORS_ONLN`. ⚠ **IT IS THE FIRST SLOT HERE WITH NO LINUX TWIN AT ALL**, where every slot
+	// above merely reaches its twin as a raw `svc`: Linux serves this parameter through a libc FUNCTION and
+	// numbers it differently, so there is no syscall number to pair with this slot even in principle
+	// (`StdToArm64Conversion.DarwinScNprocessorsOnln` carries the numbers and their provenance — do not
+	// restate them here). That is why `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone, and why
+	// `lowerOsCpuCount` asks `arm64OsCallKind` before emitting a call through this slot.
+	sysconf
+	// --- MAC2: the `processInfo` facility's six libSystem entries ---
+	//
+	// ⚠ **SIX SLOTS FOR THREE OPS, AND THE ARITHMETIC IS THE POINT.** Windows answers each of these
+	// questions with ONE import (`GetModuleFileNameA`, `GetCurrentProcessId`, `SetPriorityClass` +
+	// `GetPriorityClass`); Darwin needs a second call for two of them, because `_NSGetExecutablePath`
+	// answers *"a path"* rather than *"the real path"* (its own header says so — see
+	// `Arm64DarwinRuntime.buildArm64DarwinExePathChunk`, which carries the measurement) and `setpriority`
+	// answers nothing at all. That extra call is the whole reason the executable path is a CHUNK here and
+	// an isel line on Windows.
+	//
+	// `_NSGetExecutablePath` is the Darwin image-path primitive; `realpath` canonicalizes what it answers
+	// and `malloc`s the result, which `free` releases. `getpid` is the process id. `setpriority` and
+	// `getpriority` are the two halves of `osEnterBackgroundPriority` — a SET that reports nothing and the
+	// READ-BACK that is the op's answer.
+	//
+	// ⚠ **NONE OF THE SIX HAS A LINUX TWIN THAT THIS ENUM COULD SERVE**, for `sysconf`'s reason one line
+	// up and one stronger: Linux reads its own image path from the `/proc/self/exe` SYMLINK (a `readlink`
+	// on a path, not a call that answers one) and scopes `setpriority` to the THREAD rather than to the
+	// process. So a Linux lane re-answers the question rather than re-spelling this call, which is why
+	// `targetProvidesFacility` gives `processInfo` to arm64-macOS alone.
+	nsGetExecutablePath
+	realpath
+	free
+	getpid
+	setpriority
+	getpriority
+	// --- MAC3: the green-thread floor's libSystem substrate ---
+	//
+	// ⭐⭐ **FIFTEEN SLOTS BECAUSE WIN32 ANSWERS THIS FAMILY WITH KERNEL OBJECTS AND POSIX ANSWERS IT WITH
+	// STRUCTS THE CALLER OWNS.** `CreateEventA`/`SetEvent`/`WaitForSingleObject` are three imports over an
+	// opaque HANDLE; the POSIX shape of the same auto-reset event is a counting condition variable — a mutex,
+	// a condvar and a count in memory the program allocates — which is `pthread_mutex_*` + `pthread_cond_*` +
+	// `malloc`. `Arm64DarwinRuntime`'s `DarwinWaitObject` carries the layout and Go's `semasleep`/`semawakeup`
+	// the shape.
+	//
+	// ⛔⛔ **NOT `dispatch_semaphore`, AND THIS PROJECT HAS THE SCAR.** A Mach-port-backed semaphore is
+	// not async-signal-safe and wedges processes in macOS's unkillable `UE` state on a kill;
+	// `feedback`/`project_arm64_macos_wedge_fix` records the fix, which was dispatch_semaphore →
+	// pthread cond/mutex.
+	//
+	// `pthread_key_create` reserves the per-OS-thread slot the scheduler publishes its P in and
+	// `pthread_setspecific` writes it; there is deliberately NO `pthread_getspecific`, because the READ is a
+	// thread-pointer + indexed load with no call at all (`StdToArm64Conversion.lowerTlsSlotLoad`, which
+	// carries the measurement of Darwin's TSD layout). `pthread_create`/`pthread_join` are the worker M's
+	// birth and death. `getenv` answers `MAXON_MAX_PROCS`. `malloc` allocates a wait object, and `free` — five
+	// slots up, MAC2's — releases one.
+	//
+	// ⚠ **`pthread_cond_timedwait_relative_np` RATHER THAN `pthread_cond_timedwait`**, and the `_np` is the
+	// point: the portable call takes an ABSOLUTE deadline on the condvar's clock, so using it would mean
+	// reading that clock first and would make the wait's correctness depend on which clock the condvar was
+	// initialised against. The relative form takes the timeout the op already carries.
+	malloc
+	pthreadKeyCreate
+	pthreadSetspecific
+	pthreadMutexInit
+	pthreadMutexLock
+	pthreadMutexUnlock
+	pthreadMutexDestroy
+	pthreadCondInit
+	pthreadCondSignal
+	pthreadCondWait
+	pthreadCondTimedwaitRelativeNp
+	pthreadCondDestroy
+	pthreadCreate
+	pthreadJoin
+	getenv
+	// ⭐⭐ **THE THREE ATTRIBUTE CALLS EXIST BECAUSE A WIN32 `CRITICAL_SECTION` IS RECURSIVE AND A DEFAULT
+	// POSIX MUTEX IS NOT — MEASURED, as a HANG.** `osLockInit`'s Std-tier callers take the same lock nested
+	// (`SchedRuntime`'s own header records it: *"a nested `LeaveCriticalSection` releases nothing"*), which
+	// `EnterCriticalSection` permits by definition. A `pthread_mutex_init(m, NULL)` mutex is
+	// `PTHREAD_MUTEX_DEFAULT` = `PTHREAD_MUTEX_NORMAL`, whose second lock by the owning thread DEADLOCKS: the
+	// first arm64-macOS `async` build hung in `__slab_refill` → `_pthread_mutex_firstfit_lock_wait` on the
+	// slab's own re-entered lock. So the region `osLockInit` initialises is built with
+	// `PTHREAD_MUTEX_RECURSIVE`, and these are the calls that say so.
+	//
+	// ⚠ **THE WAIT OBJECT'S OWN MUTEX IS DELIBERATELY *NOT* RECURSIVE**, and the difference is not tidiness:
+	// `pthread_cond_wait` on a recursively-held mutex releases ONE level, so a condvar paired with a recursive
+	// mutex is undefined the moment anything nests it. That mutex is taken only by `Arm64DarwinRuntime`'s own
+	// chunks, never nested, so it stays `NULL`-attributed and the condvar stays sound.
+	pthreadMutexattrInit
+	pthreadMutexattrSettype
+	pthreadMutexattrDestroy
+	// --- MAC4/5/6/7: the filesystem, standard-input and argv substrate ---
+	//
+	// ⭐⭐ **`__error` IS THE WHOLE errno STORY, AND IT IS A FUNCTION RATHER THAN A LOCATION.** POSIX makes
+	// `errno` a per-thread lvalue; Darwin implements it as `*__error()`, so both READING the last failure and
+	// PUBLISHING one go through this call. `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` is the single
+	// place that maps a Darwin errno onto the Win32 number `StdOp.osLastError`'s consumers test, which is why
+	// the family costs one slot and not one per failing call.
+	//
+	// ⚠ **`open` IS THE READ HALF AND `creat` THE WRITE HALF, AND THAT PAIRING AVOIDS A VARIADIC CALL.**
+	// `open(path, oflag, ...)` takes its permission bits as a VARARG, which AAPCS64 passes on the STACK — so
+	// a create through `open` would need a frame this lowering does not have. `creat(path, mode)` is
+	// `O_CREAT|O_TRUNC|O_WRONLY` with a NAMED mode parameter and is exactly what `CreateFileA(GENERIC_WRITE,
+	// CREATE_ALWAYS)` means, so the two opens are two non-variadic calls instead of one variadic one.
+	// `openWriteExecutable` is the same call with 0755 rather than 0644 — see `StdOp.osFileOpenWriteExecutable`
+	// for why that is its own op rather than a flag on `osFileOpenWrite`.
+	//
+	// `read`/`close` complete the file handle's life (`write` is five slots up — the same descriptor write
+	// `osWriteStdout` already reaches, because a descriptor is an argument and not a symbol). `fsync` is the
+	// write-through half of `MOVEFILE_WRITE_THROUGH`, applied to the DESTINATION DIRECTORY after a `rename`,
+	// which is where POSIX records a rename's durability.
+	//
+	// `stat`/`fstat`/`fstatat` are the three spellings the find-data record is filled from: by PATH for a
+	// non-glob search and for `GetFileAttributesA`, by DESCRIPTOR for `GetFileSizeEx`, and RELATIVE TO AN
+	// OPEN DIRECTORY for each entry of a walk (which is what `dirfd` exists for — it means the walk never
+	// concatenates a path and never owns a path buffer).
+	//
+	// `opendir`/`readdir`/`closedir` + `fnmatch` are `FindFirstFileA`'s emulation: Win32 takes a GLOB and
+	// POSIX takes a DIRECTORY, so the pattern is split at its last `/`, the prefix is opened and every entry
+	// is matched against the suffix. `unlink`, `rename`, `mkdir` and `getcwd` are the four path operations
+	// with a one-to-one Win32 twin.
+	errnoLocation
+	open
+	creat
+	read
+	close
+	fsync
+	stat
+	fstat
+	fstatat
+	unlink
+	rename
+	mkdir
+	getcwd
+	opendir
+	readdir
+	closedir
+	dirfd
+	fnmatch
+	// --- MAC8: the child-process substrate ---
+	//
+	// ⭐⭐ **THIRTEEN SLOTS BECAUSE `CreateProcessA` IS ONE CALL AND `posix_spawn` IS A BUILDER.** Win32
+	// describes a child with two STRUCTS the caller fills (`STARTUPINFOA`, `SECURITY_ATTRIBUTES`) and one
+	// call that reads them; POSIX describes it with an OPAQUE OBJECT built by a sequence of calls — a
+	// `posix_spawn_file_actions_t` told, one call at a time, which descriptor becomes which, and a
+	// `posix_spawnattr_t` told which flags apply. That is the whole reason for the count.
+	//
+	// ⚠ **`posix_spawnP` AND NOT `posix_spawn`, AND THE `p` IS THE PATH SEARCH.** `stdlib/Subprocess.maxon`'s
+	// `resolveByName` documents its own fallback in so many words — *"on POSIX the runtime falls back to
+	// execvp"* — because `subprocessResolveOnPath` is allowed to miss and hand the BARE NAME on. The
+	// non-searching form would turn that documented miss into a spawn failure.
+	//
+	// ⭐⭐ **THERE IS NO `fcntl` SLOT, AND ITS ABSENCE IS A DESIGN DECISION RATHER THAN AN OMISSION.** The
+	// descriptors a child must NOT inherit are closed by `POSIX_SPAWN_CLOEXEC_DEFAULT`
+	// (`Arm64DarwinRuntime.DarwinSpawnCloexecDefault`), which inverts the POSIX default so that ONLY what
+	// the file actions name survives the exec — precisely what Win32's `bInheritHandles` + `STARTUPINFOA`
+	// pair means. Marking each end `FD_CLOEXEC` by hand would need `fcntl`, whose third argument is a
+	// VARARG that Darwin's arm64 ABI passes on the STACK — a frame these chunks do not have.
+	//
+	// ⚠ **`poll` IS THE PEEK, AND THERE IS NO `ioctl`/`FIONREAD` SLOT FOR THE SAME VARARG REASON.**
+	// `PeekNamedPipe` answers a byte COUNT; `mrt_darwin_pipe_peek` answers only READABLE-or-not and lets the
+	// following `read` report the true count, which is all the drain loop uses the answer for.
+	//
+	// `pipe` is the anonymous pair Win32 spells as a uniquely-named named pipe. `waitpid` is
+	// `WaitForSingleObject` + `GetExitCodeProcess` in one call — POSIX fuses "has it exited?" with "what did
+	// it answer?", which is why a child's handle on this lane is an OBJECT that caches the reaped status
+	// rather than a bare pid (see `DarwinWaitKindProcess`). `kill` is `TerminateProcess`. `_NSGetEnviron`
+	// answers the address of `environ`, which a Mach-O main executable may not name directly.
+	pipe
+	poll
+	waitpid
+	kill
+	posixSpawnp
+	posixSpawnFileActionsInit
+	posixSpawnFileActionsAdddup2
+	posixSpawnFileActionsAddchdirNp
+	posixSpawnFileActionsDestroy
+	posixSpawnattrInit
+	posixSpawnattrSetflags
+	posixSpawnattrDestroy
+	nsGetEnviron
+	// --- Is standard output a TERMINAL? ---
+	//
+	// ⭐ **ONE SLOT FOR THE WHOLE `terminalDetection` FACILITY, AND IT HAS NO LINUX TWIN EITHER.** `isatty` is
+	// a libc FUNCTION rather than a syscall — its body is `ioctl(fd, TCGETS, &termios)` and a status test — so
+	// a libc-less Linux image would make that call itself and reach nothing here, exactly as `sysconf` and the
+	// six `processInfo` entries above it are reached by one lane only.
+	isatty
+	// --- The BSD SOCKET band ---
+	//
+	// ⭐⭐ **SIX SLOTS FOR SEVEN OPS, BECAUSE `closesocket` IS `close` AND THAT IS THE WHOLE POINT OF A
+	// DESCRIPTOR.** Win32 gives `ws2_32` its own closer because a `SOCKET` is not a file `HANDLE` there;
+	// POSIX has one descriptor space, so `StdOp.osSocketClose` reaches the `close` slot the file band
+	// already declares — a descriptor is an argument, not a symbol, exactly as `read`/`write` are shared.
+	//
+	// ⭐ **`getaddrinfo` IS THE ONE ENTRY WITH NO LINUX TWIN OF ANY KIND, AND ITS ABSENCE THERE IS A
+	// DESIGN DECISION RATHER THAN A MISSING NUMBER.** It is a libc FUNCTION that reads
+	// `/etc/nsswitch.conf`, `/etc/hosts` and `/etc/resolv.conf` and speaks DNS; a libc-less static image
+	// has nothing to call. The Linux lanes therefore run a DIFFERENT Std graph
+	// (`ManagedSocketRuntime.SocketResolveShape`) rather than a different lowering, which is the same
+	// answer `commandLineShape` gives for argv.
+	//
+	// ⚠ **`send`/`recv` AND NOT `sendto`/`recvfrom`**, which is the opposite of the Linux lanes' choice
+	// and forced from the other side: AArch64's syscall table has no `send`/`recv` at all, while
+	// libSystem exports the four-argument forms and a chunkless lowering wants the fewest arguments it
+	// can pass.
+	getaddrinfo
+	freeaddrinfo
+	socket
+	connect
+	send
+	recv
+	// --- The NAMED SHARED SECTION both ends of a DebugStream ring map ---
+	//
+	// ⭐⭐ **THREE SLOTS BECAUSE POSIX SEPARATES NAMING A SHARED OBJECT FROM SIZING IT, AND WIN32 DOES NOT.**
+	// `CreateFileMappingA` takes the name and the length in one call; `shm_open` only names, so the length is
+	// a second call (`ftruncate`) on the descriptor it answers. `shm_unlink` removes the name — the create
+	// side runs it first, so a segment left behind by a monitor that died cannot be adopted as this run's
+	// ring. The MAPPING itself needs no slot: `mmap` is already the page source `osAllocPages` calls, one
+	// `MAP_SHARED` flag word over.
+	//
+	// ⚠ **`shm_open` IS VARIADIC AND ITS MODE THEREFORE TRAVELS ON THE STACK**, which is why the create chunk
+	// is the one runtime chunk on this lane with an outgoing-argument region (`Arm64RuntimeAsm.beginFunction`'s
+	// `outgoingArgBytes`). MEASURED on this host with `otool -tV` over a clang-compiled probe: a three-argument
+	// `shm_open` stores 0600 at `[sp]` and passes only the first two in registers.
+	//
+	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE**, for `sysconf`'s reason: `shm_open` is a libc
+	// FUNCTION there rather than a syscall — all it does is prepend `/dev/shm/` and `open` the result — so a
+	// libc-less static image re-answers the question with `openat`/`unlinkat` over a path it builds itself
+	// (`LinuxRuntime.LinuxShmCreateName`) rather than re-spelling this call.
+	shmOpen
+	shmUnlink
+	ftruncate
+	// ⭐⭐ **`sigaction` AND `sigaltstack` — THE FAULT HANDLER'S TWO PRIMITIVES, AND THE SECOND EXISTS ONLY
+	// BECAUSE OF THE FIRST'S `SA_ONSTACK` FLAG.** `sigaction` publishes `mrt_fault_handler` for SIGSEGV,
+	// SIGBUS and SIGFPE (`Arm64FaultRuntime`); `SA_ONSTACK` then says the kernel must switch to an alternate
+	// stack before entering it, and `sigaltstack` is the per-OS-THREAD call that provides one. Without the
+	// pair a fault on a green thread's small stack meets Darwin/arm64's ~600-byte signal frame and escalates
+	// to a fatal SIGILL instead of a clean panic.
+	//
+	// ⚠ **`sigaltstack` IS PER-THREAD WHERE `sigaction` IS PROCESS-GLOBAL**, which is why the two are
+	// separate calls rather than one install: the handler is registered once, and every OS thread that can
+	// run Maxon code owes itself a stack to be switched to.
+	//
+	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE.** Linux's is `rt_sigaction`, a raw `svc` whose
+	// fourth argument is the kernel's `sigset_t` SIZE and whose struct is laid out differently again — a
+	// different mechanism, not a different spelling of this call (see `X64Runtime.buildLinuxRuntimeInitChunk`
+	// for the x86-64 shape of it).
+	sigaction
+	sigaltstack
+end 'OsImportSlot'
+
+// The import slot index a call site records and the writer patches against. One accessor
+// over the enum, exactly like `iatSlotIndex`.
+export function osImportSlotIndex(slot OsImportSlot) returns RelocSlotIndex
+	return slot.ordinal as RelocSlotIndex
+end 'osImportSlotIndex'

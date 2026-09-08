@@ -1,0 +1,92 @@
+// Test: contains-on-let-set-ok
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	let s = IntSet.create()
+	let has = s.contains(1)
+	if has 'h'
+		return 1
+	end 'h'
+	return s.count() as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Set_Integer]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Set.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __layout_Set_Integer]
+    x64.leaRegRdata r9, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Set.contains
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  h:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Set_Integer
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 24]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+  __rc_chk#9:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg r12, rcx
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Set.count
+    x64.movRegReg r12, r8
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#5:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at contains-on-let-set-ok.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Set_Integer
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

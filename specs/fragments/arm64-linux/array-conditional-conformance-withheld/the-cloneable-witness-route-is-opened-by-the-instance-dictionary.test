@@ -1,0 +1,84 @@
+// Test: the-cloneable-witness-route-is-opened-by-the-instance-dictionary
+typealias StrArr = Array with String
+typealias Nested = Array with StrArr
+
+function copyIt(c Cloneable) returns Cloneable
+	return c.clone()
+end 'copyIt'
+
+function main() returns ExitCode
+	var src = Nested.create()
+	var inner = StrArr.create()
+	inner.push("ab")
+	src.push(inner)
+	_ = copyIt(src)
+	print("cloned\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @copyIt {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.loadRegBaseDisp.word64 x16, [x19 + 24]
+    arm64.blr x16
+    arm64.movRegReg x9, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_2  ; "ab"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x1, __witness_Array_StrArr.Cloneable
+    arm64.movRegReg x0, x19
+    arm64.bl copyIt
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x9
+    arm64.bl __drop_existential
+    arm64.leaRdata x0, __str_rec_3  ; "cloned\x0a"
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

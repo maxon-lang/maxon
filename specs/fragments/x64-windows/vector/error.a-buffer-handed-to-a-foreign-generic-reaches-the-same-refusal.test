@@ -1,0 +1,34 @@
+// Test: error.a-buffer-handed-to-a-foreign-generic-reaches-the-same-refusal
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Box uses T
+	var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function get() returns T
+		return held
+	end 'get'
+end 'Box'
+
+extension Vector
+	typealias BufBox = Box with ElementMemory
+
+	export function bust() returns Int
+		let b = BufBox.create(managed)
+		let got = b.get()
+		got.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:25: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length

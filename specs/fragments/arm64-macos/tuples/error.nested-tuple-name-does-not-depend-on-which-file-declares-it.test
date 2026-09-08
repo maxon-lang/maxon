@@ -1,0 +1,26 @@
+// Test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it
+// --- file: aaa.maxon
+export typealias PX = ((int, int), int)
+
+export function makeX() returns PX
+	return ((1, 2), 3)
+end 'makeX'
+
+// --- file: zzz.maxon
+export typealias PY = ((String, String), int)
+
+export function makeY() returns PY
+	return (("a", "b"), 7)
+end 'makeY'
+
+// --- file: main.maxon
+function coerce(t PY) returns PX
+	return t
+end 'coerce'
+
+function main() returns ExitCode
+	return coerce(makeY()).1 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2ce2fdda76cda7c9.int' from function declared to return '__Tuple2.__Tuple2#90fac2b26f6571d1.int'

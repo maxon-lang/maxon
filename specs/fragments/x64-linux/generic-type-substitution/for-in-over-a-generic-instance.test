@@ -1,0 +1,249 @@
+// Test: for-in-over-a-generic-instance
+typealias Integer = int(i64.min to i64.max)
+
+type Walker uses T
+	typealias TArr = Array with T
+	var items as TArr
+	var at = 0
+
+	export static function create(items TArr) returns Self
+		return Self{items: items}
+	end 'create'
+
+	export function current() returns T
+		return try items.get(at) otherwise panic("oob")
+	end 'current'
+
+	export function advance() throws IterationError
+		at = at + 1
+		if at >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+	end 'advance'
+end 'Walker'
+
+typealias IntArray = Array with Integer
+typealias IntWalker = Walker with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(3)
+	a.push(4)
+	let w = IntWalker.create(a)
+	var total = 0
+	for x in w 'walk'
+		total = total + x
+	end 'walk'
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Walker.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Walker.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at for-in-over-a-generic-instance.test:14: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 24]
+    x64.cmpRegImm32 rcx, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow
+  __im_load#11:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow
+  __im_load#12:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.loadRegBaseDisp.byte rcx, [rcx + 0]
+  __im_loaded:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rax + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#14
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  critsplit#15:
+    x64.movRegReg rdx, rcx
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg rdx, rcx
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.movRegReg rsi, r10
+  __im_cont:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at for-in-over-a-generic-instance.test:14: oob\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Walker.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, ifcont
+  done:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Walker.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forexit
+  walk:
+    x64.leaRegRdata rdx, [rip + __layout_Walker_Integer]
+    x64.movRegReg rcx, r12
+    x64.callDirect Walker.current
+    x64.leaRegRegReg r13, r13, r8
+  forstep:
+    x64.movRegReg rcx, r12
+    x64.callDirect Walker.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at for-in-over-a-generic-instance.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Walker_Integer
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

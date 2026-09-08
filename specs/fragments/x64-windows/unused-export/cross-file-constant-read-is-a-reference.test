@@ -1,0 +1,19 @@
+// Test: cross-file-constant-read-is-a-reference
+// --- file: api/limits.maxon
+export let MAX_USED = 7
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return MAX_USED
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}

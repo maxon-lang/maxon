@@ -1,0 +1,32 @@
+// Test: error.bare-try-propagation-of-a-two-member-reply-is-refused
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function fetch(h Calc.handle) returns Integer throws MathError
+	return try await h.divide(10, by: 2)
+end 'fetch'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing function throws 'MathError' — add 'otherwise' to convert

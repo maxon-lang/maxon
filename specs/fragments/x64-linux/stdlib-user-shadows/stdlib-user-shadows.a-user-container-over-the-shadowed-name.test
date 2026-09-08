@@ -1,0 +1,168 @@
+// Test: stdlib-user-shadows.a-user-container-over-the-shadowed-name
+typealias Value = int(0 to 200)
+
+type ParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns ParsedInt
+		return Self{value: value}
+	end 'create'
+end 'ParsedInt'
+
+typealias ValueBoxes = Array with ParsedInt
+
+function main() returns ExitCode
+	var boxes = ValueBoxes.create()
+	boxes.push(ParsedInt.create(3))
+	boxes.push(ParsedInt.create(4))
+
+	let x = 2.5
+	print("{x}")
+
+	var total = 0
+	for b in boxes 'each'
+		total = total + b.value
+	end 'each'
+
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @ParsedInt.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 200
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_204]  ; "panic at stdlib-user-shadows.a-user-container-over-the-shadowed-name.test:7: Range check failed: value outside typealias 'Value'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 3
+    x64.callDirect ParsedInt.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 4
+    x64.callDirect ParsedInt.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movsdRegRip xmm0, [rip + __fconst_2.5]
+    x64.callDirect __float_toString
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  forhdr:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rax*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
+    x64.leaRegRegReg rbx, rbx, rsi
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_205]  ; "panic at stdlib-user-shadows.a-user-container-over-the-shadowed-name.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

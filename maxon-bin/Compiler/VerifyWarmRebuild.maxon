@@ -1,0 +1,623 @@
+// VerifyWarmRebuild — the M2 warm-rebuild gate. `verify-warm-rebuild <file>`
+// asserts three independent properties of the incremental query spine and prints a
+// clear PASS/FAIL per property, so the driver exits 0 iff ALL hold. This gate
+// runs from M2 onward: incrementality and determinism are proven continuously,
+// never bolted on later.
+//
+//   1. Determinism (byte-identity): two independent COLD compiles of the same
+//      input must emit byte-identical CodeResults.
+//   2. Cache-hit (incrementality): a re-query over unchanged input must land as a
+//      cache HIT, not recompute.
+//   3. Invalidation (soundness): a re-query over CHANGED input must land as a MISS —
+//      and only the memos that actually read that input may miss.
+//
+// ⚠ **(3) IS THE ONE WITH TEETH, AND IT WAS MISSING FOR AS LONG AS A PARSE READ ONLY ITS OWN
+// FILE.** (1) and (2) both prove a memo is STABLE; neither can catch the opposite failure — a
+// memo that stays valid after an input it read has CHANGED — and that is the failure a cache
+// actually kills you with, because it is a WRONG ANSWER served silently out of a hit. The
+// whole-program signature index made it reachable (a parse now reads every OTHER file's
+// declarations), so the property that keeps it unreachable is now gated. See `verifyInvalidation`.
+//
+// THE MUTATE-THE-MEMO TRAP (why the two checks are structured the way they are):
+// `resolveTypes` mutates the merged `MaxonModule` IN PLACE (named -> concrete),
+// and `queryAllModule` returns the SAME module object out of its memo. So one must
+// NOT run the full pipeline twice over a single shared `queryAllModule` result and
+// expect a clean second run — the second pipeline would see an already-resolved,
+// mutated module. Both checks sidestep this:
+//   - Determinism runs each compile on its OWN fresh Project/QueryDatabase, so the
+//     two runs share no module object at all.
+//   - Cache-hit calls ONLY `queryAllModule` between its two probes and never runs
+//     resolveTypes/the backend, so the memoized module is never mutated.
+
+// The names of the emitted byte arrays compared for byte-identity. `data` is the
+// `dataPrelude` (initial `.data` image); the rest map 1:1 to CodeResult fields.
+// Named so the comparison loop carries intent, not bare string literals.
+let SectionNameCode = "code"
+let SectionNameRdata = "rdata"
+let SectionNameSymdata = "symdata"
+let SectionNameData = "data"
+
+// A query moves its hit-or-miss counter by exactly one; a query that does no work
+// leaves it put. Named so the counter assertions read as intent, not magic 0/1.
+let NoCounterMove = 0 as QueryCount
+let OneQuery = 1 as QueryCount
+
+// The result of comparing one section across the two compiles: either byte-
+// identical (carrying the common byte count for the running total) or a rendered
+// mismatch detail (first differing offset, or a trailing length difference).
+union SectionComparison
+	identical(byteCount BytePos)
+	mismatch(detail String)
+end 'SectionComparison'
+
+// The determinism verdict over ALL sections: every section identical (with the
+// summed byte count) or the FIRST section that differed (with its detail).
+union DeterminismOutcome
+	allIdentical(totalBytes BytePos)
+	sectionDiffers(detail String)
+end 'DeterminismOutcome'
+
+// A named pair of emitted byte arrays — one from each independent compile —
+// compared as one unit so the sections share a single comparison loop.
+type EmittedSection
+	export let name as String
+	export let left as ByteArray
+	export let right as ByteArray
+
+	static function create(name String, left ByteArray, right ByteArray) returns EmittedSection
+		return Self{name: name, left: left, right: right}
+	end 'create'
+end 'EmittedSection'
+
+typealias EmittedSectionArray = Array with EmittedSection
+
+// Run every property, printing a PASS/FAIL line for each and a final verdict. Returns whether ALL
+// held (the driver maps that to the process exit code). Each runs on its OWN fresh Project, so no
+// property can be contaminated by another's mutations. A file/IO CompileError
+// (fileNotFound/noSourceFiles/readError) propagates to the caller, which prints a specific message.
+export function verifyWarmRebuild(inputPath FilePath, target Target) returns bool throws CompileError
+	print("verify-warm-rebuild {inputPath}\n")
+
+	let determinismOk = try verifyDeterminism(inputPath, target: target)
+	let cacheOk = try verifyCacheHit(inputPath, target: target)
+	let invalidationOk = try verifyInvalidation(inputPath, target: target)
+
+	let allOk = determinismOk and cacheOk and invalidationOk
+	if allOk 'passed'
+		print("verify-warm-rebuild: PASS (determinism + cache + invalidation)\n")
+		return true
+	end 'passed'
+
+	printError("verify-warm-rebuild: FAIL\n")
+	return false
+end 'verifyWarmRebuild'
+
+// --- Property 1: determinism (byte-identity across two independent cold compiles) ---
+
+// One independent COLD compile: a fresh Project/QueryDatabase loaded from
+// `inputPath`, driven through the shared compile path to an emitted CodeResult and
+// then discarded. Determinism compares two of these; each MUST own its Project so
+// the two share no mutable module object (the mutate-the-memo trap in the header).
+function compileColdOnce(inputPath FilePath, target Target) returns CodeResult throws CompileError
+	var project = try loadProject([inputPath], target: target)
+	return try compileToCodeResult(project)
+end 'compileColdOnce'
+
+function verifyDeterminism(inputPath FilePath, target Target) returns bool throws CompileError
+	// Two INDEPENDENT cold compiles, each with its OWN Project/QueryDatabase (see the
+	// mutate-the-memo trap in this file's header). Two fresh projects share no module
+	// object, so each is a genuine cold compile and the byte comparison is meaningful.
+	let first = try compileColdOnce(inputPath, target: target)
+	let second = try compileColdOnce(inputPath, target: target)
+
+	var sections = EmittedSectionArray.create()
+	sections.push(EmittedSection.create(SectionNameCode, left: first.code, right: second.code))
+	sections.push(EmittedSection.create(SectionNameRdata, left: first.rdata, right: second.rdata))
+	sections.push(EmittedSection.create(SectionNameSymdata, left: first.symdata, right: second.symdata))
+	sections.push(EmittedSection.create(SectionNameData, left: first.dataPrelude, right: second.dataPrelude))
+
+	return match compareEmittedSections(sections) 'outcome'
+		allIdentical(totalBytes) gives reportDeterminismPass(totalBytes)
+		sectionDiffers(detail) gives reportDeterminismFail(detail)
+	end 'outcome'
+end 'verifyDeterminism'
+
+function reportDeterminismPass(totalBytes BytePos) returns bool
+	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
+	return true
+end 'reportDeterminismPass'
+
+function reportDeterminismFail(detail String) returns bool
+	printError("FAIL determinism: {detail}\n")
+	return false
+end 'reportDeterminismFail'
+
+// Compare every section, summing identical bytes; stop at the FIRST section that
+// differs and report it (that is the actionable failure).
+function compareEmittedSections(sections EmittedSectionArray) returns DeterminismOutcome
+	var totalBytes = 0 as BytePos
+
+	for section in sections 'each'
+		match compareSection(section.name, left: section.left, right: section.right) 'result'
+			identical(byteCount) then totalBytes = totalBytes + byteCount
+			mismatch(detail) then return DeterminismOutcome.sectionDiffers(detail)
+		end 'result'
+	end 'each'
+
+	return DeterminismOutcome.allIdentical(totalBytes)
+end 'compareEmittedSections'
+
+// Byte-compare one section. Reports the first differing offset (with both byte
+// values), or a trailing length difference; otherwise identical with the count.
+function compareSection(name String, left ByteArray, right ByteArray) returns SectionComparison
+	let leftCount = left.count()
+	let rightCount = right.count()
+
+	var common = leftCount
+	if rightCount < common 'rightShorter'
+		common = rightCount
+	end 'rightShorter'
+
+	for i in 0 upto common 'scan'
+		let l = try left.get(i) otherwise panic("compareSection: left.get({i}) OOB (common={common})")
+		let r = try right.get(i) otherwise panic("compareSection: right.get({i}) OOB (common={common})")
+		if l != r 'diff'
+			return SectionComparison.mismatch("section '{name}' differs at byte {i}: left={l}, right={r}")
+		end 'diff'
+	end 'scan'
+
+	if leftCount != rightCount 'lengthDiff'
+		return SectionComparison.mismatch("section '{name}' length differs: {leftCount} vs {rightCount} bytes (first {common} match)")
+	end 'lengthDiff'
+
+	return SectionComparison.identical(leftCount)
+end 'compareSection'
+
+// --- Property 2: cache-hit (incrementality over unchanged input) ---
+
+function verifyCacheHit(inputPath FilePath, target Target) returns bool throws CompileError
+	// ONE Project shared across both queryAllModule calls, running ONLY the query
+	// between them (never resolveTypes/the backend) so the memoized module is never
+	// mutated (see the mutate-the-memo trap in this file's header). This check therefore
+	// never reaches the allocator at all.
+	var project = try loadProject([inputPath], target: target)
+	let fileCount = project.db.sourcePaths.count()
+
+	// Whole-program memo: the first call is a cold MISS, the second a cache HIT.
+	let amMissBefore = project.db.allModuleMisses
+	let amHitBefore = project.db.allModuleHits
+
+	_ = try queryAllModule(project)
+	let amMissAfterFirst = project.db.allModuleMisses
+	let amHitAfterFirst = project.db.allModuleHits
+
+	_ = try queryAllModule(project)
+	let amMissAfterSecond = project.db.allModuleMisses
+	let amHitAfterSecond = project.db.allModuleHits
+
+	// Per-file memos survived the whole-program rebuild. The cold pass populated the
+	// token/parse caches; the second (whole-program HIT) returned early and never
+	// revisited them. Re-query each file directly: a content-hash-valid memo lands as
+	// a HIT (no recompute), so token/parse HITS rise by fileCount while MISSES hold.
+	//
+	// The SIGNATURE index is re-validated on the same probe, and it is the one that had to be
+	// added here: a parse memo is now keyed on the file's bytes AND on that index's hash
+	// (QueryEngine.parseMemoKey), so `parseHits` rising is only meaningful if the index it was
+	// keyed against is the one still in force. Every `queryParseOps` reads the index (that is why
+	// the expected delta is `fileCount`), and if it ever RECOMPUTED it on unchanged input, the
+	// rebuilt index would be a second object whose hash the parse memos were never stamped with —
+	// the exact silent-staleness this key exists to prevent, caught as a miss instead of a wrong
+	// answer.
+	let tokHitBefore = project.db.tokenHits
+	let actHitBefore = project.db.activeTokenHits
+	let parHitBefore = project.db.parseHits
+	let sigHitBefore = project.db.signatureHits
+	let tokMissBefore = project.db.tokenMisses
+	let actMissBefore = project.db.activeTokenMisses
+	let parMissBefore = project.db.parseMisses
+	let sigMissBefore = project.db.signatureMisses
+
+	try probeRebuildCacheHits(project)
+	let tokHitAfter = project.db.tokenHits
+	let actHitAfter = project.db.activeTokenHits
+	let parHitAfter = project.db.parseHits
+	let sigHitAfter = project.db.signatureHits
+	let tokMissAfter = project.db.tokenMisses
+	let actMissAfter = project.db.activeTokenMisses
+	let parMissAfter = project.db.parseMisses
+	let sigMissAfter = project.db.signatureMisses
+
+	// Evaluate every assertion (each prints its own failure detail) before combining,
+	// so a broken gate reports ALL violated properties, not just the first.
+	let firstIsMiss = assertCounterMove("first queryAllModule is a miss (allModuleMisses)", before: amMissBefore, after: amMissAfterFirst, expectedDelta: OneQuery)
+	let firstNoHit = assertCounterMove("first queryAllModule records no hit (allModuleHits)", before: amHitBefore, after: amHitAfterFirst, expectedDelta: NoCounterMove)
+	let secondIsHit = assertCounterMove("second queryAllModule is a hit (allModuleHits)", before: amHitAfterFirst, after: amHitAfterSecond, expectedDelta: OneQuery)
+	let secondNoMiss = assertCounterMove("second queryAllModule records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
+	let tokensHitOnRebuild = assertCounterMove("rebuild token re-query hits (tokenHits)", before: tokHitBefore, after: tokHitAfter, expectedDelta: fileCount)
+	let parseHitOnRebuild = assertCounterMove("rebuild parse re-query hits (parseHits)", before: parHitBefore, after: parHitAfter, expectedDelta: fileCount)
+	// One signature read per parse re-query — every `queryParseOps` reads the index before it can
+	// even decide whether its own memo is valid.
+	let signaturesHitOnRebuild = assertCounterMove("rebuild signature re-query hits (signatureHits)", before: sigHitBefore, after: sigHitAfter, expectedDelta: fileCount)
+	// The ACTIVE (directive-filtered) stream is memoized separately and gets the same pair of
+	// assertions, for the reason every other memo here has them: a cache nothing verifies is a cache
+	// whose staleness bugs are simply unpaid (this file's own QueryDatabase header names that
+	// failure). It matters more than most — this one memo feeds BOTH the declaration sweep and the
+	// parse, so a stale entry IS the two disagreeing about what a file declares (see
+	// ConditionalCompilation.maxon).
+	let activeTokensHitOnRebuild = assertCounterMove("rebuild active-token re-query hits (activeTokenHits)", before: actHitBefore, after: actHitAfter, expectedDelta: fileCount)
+	let activeTokensNotRecomputed = assertCounterMove("rebuild does not re-filter directives (activeTokenMisses)", before: actMissBefore, after: actMissAfter, expectedDelta: NoCounterMove)
+	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
+	let parseNotRecomputed = assertCounterMove("rebuild does not recompute parse (parseMisses)", before: parMissBefore, after: parMissAfter, expectedDelta: NoCounterMove)
+	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
+
+	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and activeTokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and activeTokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
+	if allOk 'passed'
+		print("PASS cache: allModule miss->hit, tokens/directives/signatures/parse hit on rebuild (hits={tokHitAfter}/{actHitAfter}/{sigHitAfter}/{parHitAfter}, misses={tokMissAfter}/{actMissAfter}/{sigMissAfter}/{parMissAfter})\n")
+		return true
+	end 'passed'
+
+	printError("FAIL cache: incrementality assertion(s) failed (see above)\n")
+	return false
+end 'verifyCacheHit'
+
+// --- Property 3: invalidation (a parse memo tracks BOTH of its inputs) ---
+
+// The synthetic edits property 3 makes. Each is APPENDED to a real source file that has
+// already been shown to parse, so all of them leave it a valid Maxon file — and they differ in
+// exactly the ways the parse memo's key has to be able to tell apart:
+//
+//   • a COMMENT changes the file's BYTES and nothing it DECLARES;
+//   • a FUNCTION changes both.
+//
+// The probe function is named for what it is, and it is `bool`-returning and trivial so that no
+// program it is appended to can fail to parse because of it. ⚠ Its name must NOT begin with `__`:
+// that prefix is reserved for compiler internals and a source-level declaration using it is E2051 —
+// a diagnostic the invalidation check reads as "the probe broke the program" (`stop parsing`). The
+// name is distinctive enough that a collision with a real declaration in the edited file is not a
+// practical concern, which is what the reserved prefix was reaching for the wrong way.
+let BytesOnlyEditText = "// verify-warm-rebuild: bytes moved, declarations did not."
+let DeclarationEditText = "function warmRebuildProbe() returns bool\n\treturn true\nend 'warmRebuildProbe'"
+
+// ⭐ **THE CONSTANT-VALUE PROBE: the same declaration twice, differing ONLY in the NUMBER.**
+//
+// The two edits above move a declaration's IDENTITY — a name appears that did not exist before —
+// so they are satisfied by a signature hash that mixes only NAMES. A top-level constant is the one
+// declaration for which that is not enough: a use INLINES its value as a literal
+// (`Parser.topLevelConstantReference`), so `let X = 7` becoming `let X = 8` changes what every
+// OTHER file COMPILES TO while moving neither those files' bytes nor any name in the program.
+// `ProgramSignatures.mixConstant` is what carries the value into the key; NOTHING ABOVE CAN SEE
+// WHETHER IT STILL DOES.
+//
+// Measured, not argued (2026-07-15): with `mixConstant`'s value arm deleted — the whole regression
+// — the two probes above still reported `PASS invalidation: … declaration edit re-parsed all 2`
+// and the spec suite still reported 295/0. Both gates were blind, because both edits ADD A NAME
+// and a name-only key moves on that. Only an edit that holds the name FIXED and moves the number
+// can tell the two keys apart, which is what these two are for.
+let ConstantValueEditBefore = "let warmRebuildProbeConstant = 7"
+let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
+
+// ⭐ **THE `var` PROBE: the SAME edit as the constant probe, asserting the OPPOSITE — and that
+// is the whole point of it.**
+//
+// `let X = 7` → `8` must re-parse EVERY file. `var X = 7` → `8` must re-parse only ONE. The two
+// declarations look identical, differ in one keyword, and have OPPOSITE correct answers — because a
+// `let`'s value is COPIED into its readers (a `literal` op) and a `var`'s is not. A reader of a
+// global emits `globalAddr __data_X` + `loadIndirect` whichever number the initializer held; the
+// value reaches only the `.data` image, which is rebuilt from the arena whenever the signature
+// query misses.
+//
+// So mixing a var's payload into the signature hash would be SOUND and would silently throw away
+// property (b): every keystroke on any global's initial value would re-parse the whole program.
+// That is the "sound, and useless" key this property exists to reject, wearing a different hat —
+// and NOTHING ELSE HERE CAN SEE IT. The constant probe asserts `fileCount` and would keep passing,
+// because a pessimal key re-parses everything for everything. Only an assertion that a var's value
+// edit re-parses ONE file can tell a correct key from an over-broad one.
+let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7"
+let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
+
+// ⭐ **THE IMAGED-RECORD PROBE: the same declaration twice, differing only in the BYTES A READER BAKES.**
+//
+// The constant probe above holds a scalar, whose value reaches its readers through `mixConstant`'s value
+// arm. A constant ARRAY does not: it is IMAGE DATA, so `assignDataLabels` gives it no `dataLabel` — that
+// walk labels only decls with storage — and a key built from shape-level facts plus that empty label carries
+// nothing of the elements at all. Meanwhile every reader bakes the ELEMENT BYTES into its own ops
+// (`Parser.emitImagedConstArrayLiteral` carries `bytes:`). So the number a reader compiles to moves while
+// the key does not.
+//
+// Measured, not argued (2026-09-06): against a key carrying only the element kind and the label, this probe
+// reported **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at
+// **54**, while every other probe here passed. None of them can see it: every other probe in this file moves
+// a NAME, a SCALAR or a KEYWORD, and a key that mixes those moves on all of them. Only an edit that holds
+// the name and the element kind FIXED and moves the elements can tell a key that carries an imaged record's
+// CONTENT from one that carries only its SHAPE.
+let ArrayValueEditBefore = "let warmRebuildProbeArray = [1, 2]"
+let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
+
+// ⭐ **AND THE SAME EDIT ON A `var` ARRAY, ASSERTING THE OPPOSITE — the `let`/`var` pair one shape up.**
+//
+// A `var` is never imaged (`settleRecordValue` overrules the keyword), so its record is a `.data` slot and
+// every reader emits `globalAddr <label>` + `loadIndirect` whichever elements the literal held: they reach
+// only `__module_init`, rebuilt from the arena whenever the signature query misses. Mixing them would be
+// SOUND and would re-parse the whole program on every keystroke inside any array initializer.
+//
+// ⚠ **THE SCALAR `var` PROBE ABOVE CANNOT STAND IN FOR THIS ONE.** A scalar `var` and an array `var` hash
+// through DIFFERENT arms (`mixDeclAnswer` and `mixConstArrayRecord`), so a key that mixed an array's
+// elements unconditionally would pass every other probe in this file, the scalar `var` one included, and
+// silently throw property (b) away for arrays.
+let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = [1, 2]"
+let ArrayGlobalValueEditAfter = "var warmRebuildProbeArrayGlobal = [9, 9, 9]"
+
+// ⭐⭐ **THE DECLARATION BOTH BOX PROBES ARE BUILT OVER — BOUND ONCE, so "the type is held byte-identical
+// across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
+// field, an added `export` — and each probe would silently become a DECLARATION edit, which the probes above
+// already gate; it would then report `fileCount` forever for the wrong reason and never fail again.
+//
+// The slot's range is the probe's own domain, one decimal digit, and the two pairs below fix it at 1 and 2.
+let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\ntype WarmRebuildProbePair\n\texport let a as WarmRebuildProbeSlot\n\tstatic function create(a WarmRebuildProbeSlot) returns WarmRebuildProbePair\n\t\treturn Self\{a: a\}\n\tend 'create'\nend 'WarmRebuildProbePair'"
+
+// ⭐ **THE IMAGED-BOX PROBE: the array probe's question at the shape whose record is a STRUCT.**
+//
+// A constant folded from a scalar-argument factory is image data too (`constStructIsImageData`), and it
+// arrives through a different arm: `factoryValue`, whose key carries the ROOT CALLEE and the same empty
+// label. Every read of it emits the box inline (`Parser.emitImageBoxRead` carries the record tree), so
+// `create(1)` becoming `create(2)` moves every reader's `.rdata` while the callee, the name and the label
+// all stand still — and the array probe above says nothing about it, the two arms sharing no term.
+let StructFieldEditBefore = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(1)"
+let StructFieldEditAfter = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(2)"
+
+// ⭐ **AND THE SAME EDIT ON A `var` BOX, ASSERTING THE OPPOSITE — the array pair's twin, one arm over, and
+// the one probe that can see the `factoryValue` arm's over-mix guard.**
+//
+// ⛔ **NEITHER `var` PROBE ABOVE COVERS THIS ARM.** `Parser.constFactoryConstruction` folds `T.create(n)`
+// into a `construct` node without ever consulting mutability, and `settleRecordValue` then gives the `var`
+// storage — so a stored box reaches `mixConstStructRecord` with the SAME root an imaged one has, and only
+// its `hasStorage` branch keeps the slots out of the key. Delete that branch and every other probe here
+// stays green while a keystroke inside any struct global's initializer re-parses the whole program.
+let StructGlobalFieldEditBefore = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(1)"
+let StructGlobalFieldEditAfter = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(2)"
+
+// ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
+//
+// Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither,
+// and it became a fact a PARSE reads at A2w: a witness dispatch on a constrained type parameter now
+// REFUSES a `static` requirement (E3116) and the comparison operators refuse one as `Equatable`
+// (E3005). So `function origin()` becoming `static function origin()` in one file changes whether
+// ANOTHER file compiles at all, while moving neither that file's bytes nor any name in the program —
+// which is exactly the rule `recordInterfaceDeclaration` states and exactly what its hash must carry.
+//
+// Measured, not argued (2026-08-01, in A2w's review): with `recordInterfaceDeclaration`'s
+// `ReceiverShapeAbsent`/`ReceiverShapePresent` mix absent — which is how A2w shipped — this probe reported
+// **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at **8**,
+// while the spec suite reported 3091/0 and every other probe here still passed. None of them can see it:
+// every edit above moves a NAME or a VALUE, and a key that mixes those moves on all of them. Only an
+// edit that holds the name, the formals and the result FIXED and moves the receiver kind can tell a
+// key that carries the flag from one that does not.
+let ReceiverKindEditBefore = "interface WarmRebuildProbeInterface\n\tfunction warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
+let ReceiverKindEditAfter = "interface WarmRebuildProbeInterface\n\tstatic function warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
+
+// ⭐ **AND THE SAME FLAG ON AN ORDINARY METHOD, WHICH IS A DIFFERENT POSITION IN THE HASH.** The probe above
+// moves an interface REQUIREMENT's keyword, which rides through `recordInterfaceDeclaration`; a `type`'s or an
+// `extension`'s method rides through `ProgramSignatures.mixDeclaration`, and a probe over one says nothing
+// about the other — the pair of discriminators is shared, the two mix sites are not.
+//
+// It became a fact a PARSE reads when a bare sibling call learned to resolve against the whole-program index
+// (`Parser.isImplicitSelfMethod`): `function of()` becoming `static function of()` decides whether ANOTHER
+// file's `extension` body prepends the enclosing `self` to its bare `of()`, or calls it with none — a wrong
+// answer or a wrong refusal, while that file's own bytes and every name in the program stay put.
+//
+// ⚠ **THE BODY AND THE SIGNATURE ARE HELD FIXED ON PURPOSE, INCLUDING THE ABSENCE OF PARAMETERS.** A method
+// that takes one moves this hash anyway through its CALL-ALIGNED consume and default facts, which prepend
+// `SelfParamName` and would make the probe pass on a key that carries nothing of the flag itself.
+let MethodReceiverKindEditBefore = "type WarmRebuildProbeHost\n\texport function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
+let MethodReceiverKindEditAfter = "type WarmRebuildProbeHost\n\texport static function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
+
+// The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
+// reason is arithmetic rather than taste: the property's halves assert "a declaration edit
+// re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
+// re-parses 1 file", and at `fileCount == 1` those are the same assertion — so the file's-own-bytes
+// key that this property exists to REJECT satisfies them all. Named, so the refusal below and the
+// reason for it are one fact.
+let MinFilesForInvalidation = 2 as QueryCount
+
+// **THE PROPERTY THE SIGNATURE INDEX'S PARSE KEY EXISTS FOR** — and the two halves of it pull in
+// opposite directions, so a key that satisfies one and not the other is simply wrong:
+//
+//   (a) EDIT A DECLARATION IN ONE FILE ⇒ EVERY file's parse must be invalidated. `b.maxon`'s bytes
+//       did not move, but what `isReady()` MEANS inside it did. This is the wrong answer the key
+//       was added for: keying a parse on the file's OWN content hash alone — which is what shipped
+//       — serves `b.maxon` from cache with a parse built against the OLD return type. Property 2
+//       cannot see it: on unchanged input, the shipped key is right.
+//   (b) EDIT ONLY BYTES (a comment, a body) ⇒ ONLY that file's parse may be invalidated. This is
+//       the half a lazy fix throws away: keying the parse on the COMPOSITE SOURCE hash would pass
+//       (a) and re-parse the entire program on every keystroke — sound, and useless.
+//   (c) EDIT A TOP-LEVEL CONSTANT'S **VALUE** ⇒ EVERY file's parse must be invalidated. Not a
+//       special case of (a): (a) moves a NAME, and a key mixing only names passes it. A constant
+//       is the one declaration whose VALUE is copied into its readers, so `let X = 7` → `8` must
+//       move the key while no name in the program moves at all. See `ConstantValueEditBefore`.
+//   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
+//       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and since A2w a
+//       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
+//   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
+//       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
+//       value is a record rather than a number: an imaged `let` is `.rdata` and every read bakes its
+//       bytes, while a `var`'s record is a slot every read loads from. The two pull opposite ways for one
+//       spelling, so a key that mixed content unconditionally satisfies half of this and throws (b) away.
+//       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
+//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore` +
+//       `ArrayGlobalValueEditBefore`, and `StructFieldEditBefore` + `StructGlobalFieldEditBefore`.
+//
+// All five are asserted here, on ONE fresh project, by editing a real file in the query database
+// and re-querying.
+//
+// ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
+// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d) and (e)'s
+// imaged half expect `fileCount` re-parses while (b) and (e)'s stored half expect 1, and those are the
+// same number — so a key that tracks only the file's own bytes, which is EXACTLY the bug this property
+// exists to catch, sails through every one of them.
+// This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
+// that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
+// It now FAILS, and says what to point it at.
+function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
+	var project = try loadProject([inputPath], target: target)
+	let fileCount = project.db.sourcePaths.count()
+
+	if fileCount < MinFilesForInvalidation 'cannotProve'
+		printError("FAIL invalidation: this project has {fileCount} source file, and the property is VACUOUS on one — 'a declaration edit re-parses every file' and 'a bytes-only edit re-parses one file' are the same assertion when every file IS the one file, so the single-file-hash key this property exists to reject would PASS. Point the gate at a project with at least {MinFilesForInvalidation} files (a cross-file callee is the whole point: `a.maxon` declares it, `b.maxon` calls it)\n")
+		return false
+	end 'cannotProve'
+
+	// ⚠⚠ **BOTH OF THESE ARE OWNED COPIES, AND NEITHER IS DEFENSIVE.** What this gate does is EDIT the
+	// project five times, and both values it carries across those edits are read out of the very storage an
+	// edit writes:
+	//   • `editedPath` is an element of `project.db.sourcePaths`, and `fileChanged` PUSHES to that array on
+	//     its `newFile` arm — so the element pointer can be invalidated by a call this function makes.
+	//     E3070 refused it, which is how it was found.
+	//   • `original` is the CONTENT of the `sourceFiles` entry for that same path, and every `fileChanged`
+	//     below UPSERTS that key — releasing the entry this string belongs to while five later
+	//     interpolations still read it. The borrow checker does not watch a `Map` read, so nothing refused
+	//     this one; it is the same defect one container over and it is fixed at the same time.
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
+	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
+	let original = entry.content.clone()
+
+	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
+	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).
+	_ = try queryAllModule(project)
+	let diagnosticsBefore = project.diagnostics.count()
+
+	fileChanged(project, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
+	let bytesEditMisses = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{DeclarationEditText}\n")
+	let declarationEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the constant probe at its BEFORE value. This transition adds a declaration, so it is an
+	// ordinary declaration edit and its miss count asserts nothing new — it exists only to make the
+	// NEXT transition a change of the number ALONE. Discarded for that reason.
+	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same file, same declaration, same NAME — only the value moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
+	let constantValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the GLOBAL probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason its constant twin is: it exists only to make the NEXT transition a change of the
+	// number alone.
+	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement that keeps the constant probe's answer from being "everything, always".
+	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditAfter}\n")
+	let globalValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the ARRAY probe at its BEFORE value — a declaration edit, discarded for the same reason its
+	// scalar twin's is.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same name, same element kind — only the BYTES a reader bakes moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditAfter}\n")
+	let arrayValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the `var` ARRAY probe, then measure the same edit on a binding whose readers bake nothing.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditAfter}\n")
+	let arrayGlobalValueEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the imaged-BOX probe, then measure it: same type declaration, same factory — only the SLOT a
+	// reader bakes moved. The declaration is interpolated rather than carried in each pair, so the two
+	// spellings cannot drift into a declaration edit (`WarmRebuildProbeBoxDecl`).
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditAfter}\n")
+	let structFieldEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the `var` BOX probe, then measure it — the only probe that can see `mixConstStructRecord`'s
+	// stored-side guard, the imaged one above being green with or without it.
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditAfter}\n")
+	let structGlobalFieldEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason the two above are.
+	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same interface, same requirement, same formals and result — only `static` moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditAfter}\n")
+	let receiverKindEditMisses = try parseMissesOnRequery(project)
+
+	// Seat the METHOD receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason the three above are.
+	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same type, same method, same result, no parameters — only `static` moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
+	let methodReceiverKindEditMisses = try parseMissesOnRequery(project)
+
+	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
+	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
+	// probe whose premise broke.
+	if project.diagnostics.count() != diagnosticsBefore 'probeBrokeTheProgram'
+		printError("FAIL invalidation: a synthetic probe edit made {editedPath} stop parsing, so the miss counts mean nothing (a failed parse is never cached, and would re-miss regardless of the key)\n")
+		return false
+	end 'probeBrokeTheProgram'
+
+	// `before: NoCounterMove` because each value above is already a DELTA — the misses that one edit
+	// caused. Routed through the same reporter as property 2 so a failure prints the same way.
+	let bytesEditIsLocal = assertCounterMove("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: bytesEditMisses, expectedDelta: OneQuery)
+	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
+	let constantValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: constantValueEditMisses, expectedDelta: fileCount)
+
+	let arrayValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: arrayValueEditMisses, expectedDelta: fileCount)
+	let structFieldEditInvalidatesEveryFile = assertCounterMove("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: structFieldEditMisses, expectedDelta: fileCount)
+
+	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
+	let arrayGlobalValueEditIsLocal = assertCounterMove("a top-level VAR ARRAY's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: arrayGlobalValueEditMisses, expectedDelta: OneQuery)
+	let structGlobalFieldEditIsLocal = assertCounterMove("a STORED struct global's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: structGlobalFieldEditMisses, expectedDelta: OneQuery)
+
+	let receiverKindEditInvalidatesEveryFile = assertCounterMove("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: receiverKindEditMisses, expectedDelta: fileCount)
+	let methodReceiverKindEditInvalidatesEveryFile = assertCounterMove("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: methodReceiverKindEditMisses, expectedDelta: fileCount)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
+	if allOk 'passed'
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
+		return true
+	end 'passed'
+
+	printError("FAIL invalidation: a parse memo does not track both of its inputs (see above)\n")
+	return false
+end 'verifyInvalidation'
+
+// Re-query every file's parse and report how many RECOMPUTED. The miss DELTA is the whole
+// measurement: it names exactly which memos the preceding edit invalidated.
+function parseMissesOnRequery(project Project) returns QueryCount throws CompileError
+	let before = project.db.parseMisses
+	try probeRebuildCacheHits(project)
+	return project.db.parseMisses - before
+end 'parseMissesOnRequery'
+
+// Assert a counter moved by exactly `expectedDelta`, printing the offending values
+// (before, delta, after) on failure so a violated assertion is self-describing.
+// Returns whether it held; callers combine several without short-circuiting so
+// every violation is reported.
+//
+// The prefix is property-neutral because BOTH the cache and the invalidation properties report
+// through here — each is a statement about a query counter, and each prints its own summary line.
+function assertCounterMove(label String, before QueryCount, after QueryCount, expectedDelta QueryCount) returns bool
+	let expected = before + expectedDelta
+	if after == expected 'ok'
+		return true
+	end 'ok'
+
+	printError("FAIL: {label}: expected {before}+{expectedDelta}={expected}, got {after}\n")
+	return false
+end 'assertCounterMove'

@@ -1,0 +1,40 @@
+// Test: struct-backing-multi-field
+typealias Latency = int(0 to 100)
+typealias Throughput = int(0 to 10)
+
+type OpInfo
+	export let latency as Latency
+	export let throughput as Throughput
+
+	static function create(latency Latency, throughput Throughput) returns Self
+		return Self{latency: latency, throughput: throughput}
+	end 'create'
+end 'OpInfo'
+
+enum Instruction
+	add = OpInfo.create(1, throughput: 1)
+	mul = OpInfo.create(3, throughput: 2)
+	div = OpInfo.create(40, throughput: 1)
+end 'Instruction'
+
+function main() returns ExitCode
+	let op = Instruction.div
+	return op.rawValue.latency
+end 'main'
+---
+ExitCode: 40
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 40
+    arm64.epilogue 16
+    arm64.ret
+}

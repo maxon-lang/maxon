@@ -1,0 +1,689 @@
+// CompileTimings — cost attribution for the WHOLE compile pipeline, in TWO units:
+// wall-clock nanoseconds, and CPU time consumed by the compiling thread.
+//
+// WHY TWO. Wall time counts every other process on the machine. That makes it the wrong
+// number for the question the scaling instrument asks — "did this phase's cost grow
+// linearly or quadratically as the input doubled?" — because a rung that happened to run
+// while something else was busy reports the something else. Measured: one scale-test run
+// read `phase:parse` at x5.03 then x1.78 across a DOUBLING ladder, which is not a curve of
+// any shape, it is preemption. CPU time cannot see preemption at all: it advances only
+// while this thread is scheduled. It is what the ladder reads, and wall time stays for the
+// human question "how long did I wait?".
+//
+// ⚠ CPU TICKS ARE NOT REPRODUCIBLE THE WAY ALLOCATIONS ARE. They still move with turbo,
+// thermal throttling and cache pressure from other cores — a few percent, against a signal
+// (x2 linear vs x4 quadratic) with a 100% margin. A move inside that band is not a
+// datapoint. Allocations remain the column where any movement at all is real.
+//
+// ⚠⚠ **A PARALLEL PHASE'S SUB-PHASE ROWS ARE A SUM OVER WORKERS AND CAN EXCEED ITS OWN WALL.** `regalloc`
+// allocates every function on a pool of worker services (`RegAllocPool`), each measuring its own brackets
+// on its own green thread, and those figures are summed into the `regalloc` sub-phase rows. So on a
+// sixteen-processor box the breakdown reads several times the phase above it: that is the pool's work,
+// not a double count, and the multiple is the parallelism. The row under the breakdown says which reading
+// it is (see `RegAllocRemainder`). Every SERIAL row in the table is unaffected, and so is the `regalloc`
+// PHASE row itself — it is bracketed on the main thread and stays exact in every column.
+//
+// ⚠ **THE SUB-PHASES' MEMORY COLUMNS ARE NOT THE SAME KIND OF SUM.** They read the CALLING GREEN THREAD's
+// allocator counters (`__Builtins.threadAllocTotal` and its two siblings), so each bracket counts what its
+// own worker allocated and the total over workers is the figure a one-processor run reports — where the
+// time columns sum to a wall-clock multiple. `RegAllocCosts` carries the argument, and the measurement from
+// the rung where these columns were process-wide and therefore fiction.
+//
+// WHY THIS EXISTS, and why the phases must be DISJOINT:
+//
+// A phase figure with no sub-phase attribution inside it is a number nobody can act
+// on, and overlapping timers make it worse than useless: a `splitting` timer
+// wrapping a splitter that owns every liveness computation bills the whole liveness
+// pass to `splitting` while the `liveness` timer reads 0.00 ms on every program ever
+// compiled — with liveness in fact the dominant cost. The numbers then say the
+// opposite of the truth.
+//
+// THE RULE THAT FOLLOWS: phases are disjoint intervals that MUST sum to the true
+// total. Where phase X calls phase Y, X's reported time EXCLUDES Y's, by one of two
+// disciplines:
+//
+//   1. TIME THE LEAF. The frontend queries nest (allModule → parseOps → tokens), so
+//      each timer covers only the work its own query does: `lex` is taken inside
+//      `queryTokens`, and `queryParseOps` starts its `parse` timer AFTER the tokens
+//      query has returned. Nothing needs subtracting because nothing overlaps.
+//   2. SUBTRACT THE INNER DELTA. Where the nesting is unavoidable, the outer phase
+//      subtracts the inner phase's delta from its own wall time — see
+//      `allocateFunction`, which takes liveness back out of the splitter's wall.
+//
+// The remainder is never silently absorbed. `unattributedNanos` reports what no phase
+// claimed, and PANICS if the phases claim MORE than the total: phases are disjoint
+// sub-intervals of the timed total, so a sum that exceeds it means two timers
+// double-count — precisely the defect above, caught instead of averaged away.
+//
+// COST: the timers are always on, like the allocator's have been since M5. They are
+// per PASS (and per function only inside the allocator, which already paid that),
+// never per op or per block. The REPORT is built lazily behind `logDebug`, so a build
+// without `--log=compiler:debug` never formats a row.
+//
+// The CPU read is the expensive half and was MEASURED before it was adopted, not assumed:
+// `__Builtins.threadCpuTicks()` costs ~302 ns against `Clock.nowNanos()`'s ~23 ns, because
+// it is a syscall where the wall clock is a user-mode counter read. Two reads per bracket,
+// and the allocator brackets per function, so the bill scales with function count — which
+// is LINEAR in program size, so it adds a linear term to every phase and cannot manufacture
+// a false curve. Whether that term is small is a fact to re-measure, not to assume, if the
+// probe count ever changes shape.
+
+// Column widths for the report table. `RuleWidth` is derived, so the separator can
+// never drift out of step with the columns above it.
+//
+// Exported, along with `padRight`/`padLeft`/`millisText` below, because the scale-test runner
+// prints tables of the same numbers and must not grow a second, subtly-different copy of
+// "nanoseconds as milliseconds to one decimal place" (CLAUDE.md's no-duplicated-code rule, and a
+// second copy would eventually disagree with this one about rounding).
+export typealias ColumnWidth = int(0 to 128)
+
+let PhaseNameWidth = 22 as ColumnWidth
+let TimeWidth = 11 as ColumnWidth
+let PercentWidth = 8 as ColumnWidth
+
+// Two percent columns: one share of the wall total, one of the CPU total (see
+// `compileTimingsReport`). Derived, so the rule cannot drift out of step with them.
+let RuleWidth = (PhaseNameWidth + TimeWidth + PercentWidth + PercentWidth) as ColumnWidth
+
+// Every row is indented under the report's title line; a sub-phase row is indented
+// once more, under the phase whose wall time it breaks down.
+let RowIndent = "  "
+let SubPhaseIndent = "    "
+
+// What `repeated` lays down: a column is filled with spaces, a rule is drawn with dashes.
+let PadUnit = " "
+let RuleUnit = "-"
+
+// A percentage held to one decimal place in integer math: `nanos * 1000 / total`, so
+// 1000 = 100.0%. There is no float formatting on this path (and no reason to pull
+// one in for two digits).
+typealias Permille = int(0 to 1000)
+
+let PermilleScale = 1000
+let PermilleTenthsPerPercent = 10
+
+// Nanoseconds -> milliseconds, to one decimal place, in integer math. `NanosPerSecond`
+// and `MillisTenthsPerSecond` are the two ends of the same conversion (1e9 ns/s and
+// 10,000 tenths-of-a-ms per second), named rather than written as bare literals.
+let NanosPerSecond = 1000000000
+let MillisTenthsPerSecond = 10000
+let MillisTenthsPerMs = 10
+
+// CPU time consumed by one thread, in the PLATFORM'S OWN UNIT — TSC ticks on Windows,
+// nanoseconds on POSIX (see `__Builtins.threadCpuTicks`). The two are not comparable and
+// nothing converts them: QueryPerformanceFrequency is the performance counter's rate, not
+// the TSC's, so any conversion written here would be a guess wearing a unit's name.
+//
+// That costs less than it sounds, because the ladder's reading is the RATIO between two
+// rungs, which is unit-free — see docs/optimization-log.md, "Reading the numbers".
+export typealias CpuTicks = int(0 to u64.max)
+
+// What one phase COST, in both units at once.
+//
+// ONE type carrying both, rather than two parallel columns with two sets of accessors, for
+// the reason PhaseProbe's header gives about time and memory: the moment a phase can be
+// credited in one unit without the other, the two attributions drift and the report says a
+// phase spent its milliseconds in one place and its CPU in another. They are bracketed
+// together, so they are stored together.
+export type PhaseCost
+	export let nanos as DurationNanos
+	export let cpuTicks as CpuTicks
+
+	export static function create(nanos DurationNanos, cpuTicks CpuTicks) returns PhaseCost
+		return Self{nanos: nanos, cpuTicks: cpuTicks}
+	end 'create'
+
+	export static function zero() returns PhaseCost
+		return Self{nanos: 0, cpuTicks: 0}
+	end 'zero'
+
+	export function plus(other PhaseCost) returns PhaseCost
+		return Self{nanos: self.nanos + other.nanos, cpuTicks: self.cpuTicks + other.cpuTicks}
+	end 'plus'
+
+	// This cost MINUS an inner one. Both components are non-negative ranges, so an inner
+	// cost exceeding the outer traps here rather than wrapping — which is the intent, and
+	// the same trap `PhaseDelta.minus` sets for the memory quantities: the inner phase is a
+	// sub-interval of the outer, so exceeding it means the two brackets overlap.
+	export function minus(inner PhaseCost) returns PhaseCost
+		return Self{nanos: self.nanos - inner.nanos, cpuTicks: self.cpuTicks - inner.cpuTicks}
+	end 'minus'
+end 'PhaseCost'
+
+// ⚠ THE COLUMNS BELOW ARE TWO SCALAR ARRAYS, NOT ONE `Array with PhaseCost`, AND THAT IS
+// A MEASUREMENT DECISION RATHER THAN A STYLE ONE.
+//
+// A PhaseCost held in an Array is boxed, so `get`/`set` on it ALLOCATE. The allocator
+// probes per function, so storing the pair cost the compiler a growing number of
+// allocations — measured at +2,596 / +3,656 / +5,776 / +10,016 across four rungs, roughly
+// doubling with the ladder. Those allocations land in the very column the trend log calls
+// bit-for-bit reproducible: the instrument would have been moving the number it reports.
+// (Same defect class as the `toByteArray()` in DebugTrace.traceUnitOf that once shifted
+// every rung, and the reason there is deliberately no peak-bytes counter.)
+//
+// So the STORAGE is scalar and allocation-free, while the API stays pair-shaped —
+// `addPhaseCost`/`costOf` take and return a PhaseCost, which is a stack value. Nothing can
+// credit a phase in one unit and forget the other, and nothing allocates to do it.
+export typealias DurationNanosArray = Array with DurationNanos
+export typealias CpuTicksArray = Array with CpuTicks
+
+// The phases the compile is attributed to.
+//
+// ⛔⛔ **APPEND-ONLY. A NEW PHASE GOES AT THE END, AND NO EXISTING MEMBER EVER CHANGES ORDINAL.**
+// `MetricsEmit.metricsText` writes one TSV row per case in this order and
+// `ScaleTestRunner.parseRungMetrics` keys its dense per-phase columns on `ordinal`, so every
+// `.metrics.tsv` ever written — and every trend row derived from one — is indexed by it. A member
+// inserted in the middle silently re-attributes every historical measurement to the wrong phase:
+// a wrong answer under a green suite, which is the failure mode this whole file exists to prevent.
+//
+// ⇒ **THIS LIST IS THEREFORE NO LONGER IN EXECUTION ORDER, AND IT USED TO BE.** The ordinal order
+// is the WIRE order; all three outputs (both report tables and the TSV) print it, so they agree
+// with each other row for row. **The execution order is deliberately not written down here.** A
+// second list would be this project's signature bug — one fact twice — and it would go stale at the
+// first pass that moved; the run itself already answers, because `PhaseProbe.begin` emits a trace
+// span the moment a phase opens, so `maxon monitor --filter=log` prints the true order of a REAL
+// compile rather than a comment's memory of one.
+//
+// Each name matches the function that does the work, so a row points at code:
+//   load             Compiler.loadProject      — discover, read, and hash the sources
+//   prepareOutput    Compiler.compileMeasured  — resolve the output path, clear the last build
+//   lex/signatures/parse/merge
+//                    Queries.*                 — the query spine, timed at the leaves
+//   checkDeclarations … layOutGlobals, installRuntime, synthesizeBodies
+//                    Compiler.compileToCodeResult — the whole-program work either side of the pipeline
+//   pipelineNameIndex
+//                    PassPipeline.run          — the one shared FunctionNameIndex
+//   resolveTypes …   PassPipeline.dispatch     — one arm per PassKind (compilePhaseOfPass)
+//   sugarGate … link BackendDispatch.buildBackend — the backend's fixed sequence
+//   writeExe/emitIr  Compiler.compile          — the object write + the --emit-ir sidecar
+export enum CompilePhase
+	load
+	lex
+	// Conditional compilation (`queryActiveTokens`): one pass per file resolving `#if`/`#else`/
+	// `#endif` against the build target. Its OWN phase rather than a slice of `lex`, because `lex`'s
+	// probe deliberately brackets `tokenize` alone (see `queryTokens`) and a phase that absorbed a
+	// neighbour's cost is the defect this file exists to prevent. A file with no directives returns
+	// its token array untouched, so the phase reads as the cost of the PROBE for most of the corpus.
+	directives
+	// The whole-program signature index (`queryProgramSignatures`): one token sweep per file, folded
+	// into one table. Its OWN phase, not a slice of `parse`, for the reason this file exists — a cost
+	// billed to a neighbour is a cost nobody can act on, and this one is new, whole-program, and
+	// exactly the kind that would hide.
+	signatures
+	parse
+	merge
+	resolveTypes
+	semanticCheck
+	// The cross-file unused-export audit (E3092/E3093/E3094). Its OWN phase, not a slice of
+	// `semanticCheck`, for the reason this file exists: it is a NEW whole-program walk over every
+	// declaration and every op, which is exactly the shape whose cost must be visible to `scale-test`
+	// rather than folded into a neighbour that would then report a growth it does not own.
+	checkUnusedExports
+	lowerMaxonToStd
+	insertRangeChecks
+	pruneDeadBlockArgs
+	elimTrivialBlockArgs
+	foldConstOperands
+	// The escape analysis + stack promotion (`promoteStackRecords`). Its OWN phase, like every other
+	// Std pass: it is whole-module where its four neighbours are per-function, so a cost billed into one
+	// of them would report a call-graph walk as a per-function one.
+	promoteStackRecords
+	// The value-tuple return convention (`applyValueTupleReturn`). Its OWN phase, like every other Std
+	// pass: it is a whole-module call-graph walk, and billed into its per-function neighbours the growth
+	// would be reported as theirs.
+	valueTupleReturn
+	sugarGate
+	// The reachability prune (`eliminateDeadFunctions`). Its OWN phase, not a slice of `sugarGate` or
+	// `isel`, because it exists to make the phases after it SMALLER: billed into one of them, the cost
+	// and the saving would net off inside a single number and neither would be readable.
+	deadFunctions
+	isel
+	regalloc
+	prologueEpilogue
+	runtimeAugment
+	encode
+	link
+	writeExe
+	emitIr
+
+	// ── EVERYTHING BELOW THIS LINE WAS APPENDED BY A2n, AND IT IS COST THAT WAS ALWAYS PAID.
+	//
+	// A long span of `Compiler.compileToCodeResult` ran inside NO bracket at all. It was never
+	// unmeasured — the whole-compile probe opens before it and closes after — but it landed in
+	// `unattributedCost`, which `ScaleTestRunner.parseRungMetrics` reads and DISCARDS, so no
+	// table could say which of a dozen whole-program passes had grown. MEASURED on the scale
+	// corpus before it was bracketed: rung 0 — 27,506 allocations / 1,617,373 bytes (2.66% /
+	// 2.39% of the compile); rung 5 — 228,231 / 12,097,854 (1.08% / 0.75%).
+	//
+	// ⚠ They are appended rather than slotted in beside the phases they run between, for the
+	// reason this enum's header gives. Nothing here is a NEW cost.
+
+	// `Compiler.compileMeasured`: resolving the output path and deleting the previous build's exe
+	// and `.ir` sidecar. Its own phase and not a slice of `load`, because `load` reads the SOURCES
+	// while this writes to the OUTPUT — billing a `File.delete` to the source loader is exactly the
+	// neighbour-absorption this file exists to prevent.
+	prepareOutput
+	// The whole-program declaration checks that run before the pipeline (`checkValueMergeSignatures`,
+	// `checkConformance`, `checkLiteralInitConformance`, `checkGenericAliasCycles`,
+	// `checkWhereConstraints`, `checkTypeSymbolNamespace`).
+	//
+	// ONE phase rather than six, and that is the grouping rule for every phase below: a reader asks
+	// what CHECKING THE DECLARATIONS cost, never what `checkLiteralInitConformance` alone cost, and a
+	// table of thirty one-call rows answers neither question. Recorded from TWO brackets, because
+	// `queryProgramSignatures` runs between the first check and the other five and owns the
+	// `signatures` phase; `addPhaseCost` accumulates, so two disjoint intervals make one honest row.
+	checkDeclarations
+	// The `verify*Ordinals` block — the builtin-error ordinal claims (`Compiler.compileToCodeResult`).
+	verifyOrdinals
+	// From `liveGlobalLabels` to `collectFnRefThunkTargets`: which globals the program can still name,
+	// the synthesized `__module_init`, the stdlib reachability facts, and the runtime-usage walk with
+	// its destructor/cloner closures. One phase because every one of them asks the SAME question —
+	// WHAT DOES THIS PROGRAM NEED — and every install below reads the answer.
+	deriveRuntimeNeeds
+	// Assembling the `.data` slot list from those answers and laying the section out
+	// (`GlobalDataTable.layOut`). Split from `deriveRuntimeNeeds` although it runs in the same breath,
+	// because it is the only step there whose cost is O(globals) rather than O(module).
+	layOutGlobals
+	// `PassPipeline.run`'s ONE shared `FunctionNameIndex`, built before the first pass and read by
+	// two of them.
+	//
+	// ⚠ **NAMED FOR THE PIPELINE, NOT FOR NAME INDEXING, AND THE PRECISION IS THE POINT.** There are
+	// THREE Maxon-tier `FunctionNameIndex.create` calls; a row called `nameIndex` would name one of
+	// them and under-report the mechanism threefold. The other two are inside `checkConformance` and
+	// `deriveStdlibFacts`, so they are billed to `checkDeclarations` and `deriveRuntimeNeeds` — which
+	// is where the cost belongs, since it is those passes' own.
+	pipelineNameIndex
+	// The hand-built runtime library installs (`installMmRuntime` … `installBuiltinConformanceRuntime`),
+	// which run after the pipeline and are already-lowered Std. One phase, not eighteen: they are
+	// bits of ONE runtime floor, each gated on its own usage bit, and what a reader wants is what
+	// carrying the runtime costs this program.
+	installRuntime
+	// The bodies the compiler SYNTHESIZES for this particular program — the per-union, per-struct and
+	// per-instance destructor cascades, the two cloner cascades, and the `__fnref_` env thunks. Its
+	// own phase beside `installRuntime` because the two scale with different things: the runtime is a
+	// fixed library gated on usage bits, while this grows with the program's TYPES.
+	synthesizeBodies
+	// The managed-primitive call-site expansion (`inlineManagedPrimitives`, EC1). APPENDED HERE rather than
+	// beside the four Std passes it runs among, for the reason this enum's header gives — the ordinals are
+	// the wire format every `.metrics.tsv` ever written is indexed by, so a member slotted into the middle
+	// would re-attribute every historical measurement to the wrong phase. Its own phase, like every other
+	// Std pass: it walks every block of every function and appends blocks, and a cost billed into a
+	// neighbour is a cost nobody can act on.
+	inlineManagedPrimitives
+	// `foldConstOperands` run a SECOND time, over the functions the two brackets above APPENDED (EC3-H).
+	// APPENDED HERE for this enum's own reason — the ordinals are the `.metrics.tsv` wire format.
+	//
+	// Its OWN row rather than a slice of `installRuntime`/`synthesizeBodies`, because it answers a different
+	// question from either: those two ask what BUILDING the appended bodies cost, and this asks what
+	// OPTIMIZING them cost. It is also the only one of the three that scales with the SIZE of what was
+	// built rather than with how many entry points were gated on, so a single row over a bracket and its
+	// optimizer would move for two unrelated reasons — the grouping rule the `synthesizeBodies` comment
+	// states, applied one level down.
+	foldEmittedConstOperands
+	// The tiny-leaf call-site splice (`inlineLeaves`, EC5). APPENDED HERE rather than beside
+	// `inlineManagedPrimitives`, which since EC17 it runs immediately after, for this enum's own reason —
+	// the ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed by, so a
+	// member slotted into the middle would re-attribute every historical measurement to the wrong phase.
+	// ⚠ For the same reason EC17's REORDER of the two passes did not reorder them here: the schedule
+	// moved and these ordinals did not, which is exactly the separation this paragraph is about.
+	//
+	// Its OWN row, like every other Std pass: it is WHOLE-MODULE where its two neighbours are
+	// per-function (it reads callee bodies), and it is the one pass whose cost is expected to be paid
+	// back with interest by the phases after it — `regalloc` and `isel` see the leaf bodies as inline ops
+	// instead of as functions to allocate and emit. Billed into a neighbour, the cost and the saving
+	// would net off inside one number and neither would be readable.
+	inlineLeaves
+	// The Target-tier CFG cleanup (`cleanUpBranches`, EC11): jump elision, conditional inversion,
+	// jump threading and unreachable-block elimination on fully register-allocated ops. APPENDED HERE
+	// rather than beside `regalloc`, between which and `prologueEpilogue` it runs, for this enum's own
+	// reason — the ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed
+	// by, so a member slotted into the middle would re-attribute every historical measurement to the
+	// wrong phase.
+	//
+	// Its OWN row rather than a slice of `regalloc`, because it is not register allocation and because
+	// it is the one backend phase whose cost is expected to be paid back by the phases after it —
+	// `prologueEpilogue` and `encode` see fewer blocks and fewer ops. Billed into `regalloc`, the cost
+	// and the saving would net off inside one number and neither would be readable.
+	branchCleanup
+	// The `const <op> const` evaluation (`foldConstants`, EC12). APPENDED HERE rather than beside the Std
+	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
+	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
+	// every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `foldConstOperands`, which it runs immediately before, because
+	// the two answer different questions and scale with different things: the operand fold's cost tracks
+	// the number of const OPERANDS, and this one's tracks the number of const EXPRESSIONS, which is what
+	// every future inlining win increases. It is also the one Std pass whose cost is expected to be paid
+	// back by the phases after it — `regalloc`, `isel` and `encode` see fewer ops and a narrower live set
+	// — and billed into a neighbour the cost and the saving would net off inside one number.
+	foldConstants
+	// The intra-block common-subexpression elimination (`eliminateCommonSubexpressions`, EC13). APPENDED
+	// HERE rather than beside the Std passes it runs among, for this enum's own reason — the ordinals are
+	// the `.metrics.tsv` wire format every trend row ever written is indexed by, so a member slotted into
+	// the middle would re-attribute every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `foldConstOperands`, which it runs immediately after, because
+	// the two answer different questions and scale with different things: the operand fold's cost tracks
+	// the number of const OPERANDS, and this one's tracks the number of ARITHMETIC ops per block, which
+	// is what every future inlining win increases. It is also one of the passes whose cost is expected to
+	// be paid back by the phases after it — `regalloc` in particular sees a narrower live set — and
+	// billed into a neighbour the cost and the saving would net off inside one number.
+	commonSubexpressionElimination
+	// Loop-invariant code motion (`hoistLoopInvariants`, EC14). APPENDED HERE rather than beside the Std
+	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
+	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
+	// every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `commonSubexpressionElimination`, which it runs immediately
+	// after, because the two scale with different things: CSE's cost tracks the number of ARITHMETIC ops
+	// per dominator path, and this one's tracks the number of LOOPS and the size of their bodies — a
+	// program of straight-line code pays this phase almost nothing whatever its arithmetic looks like. It
+	// is also one of the passes whose cost is expected to be paid back by the phases after it, and billed
+	// into a neighbour the cost and the saving would net off inside one number.
+	loopInvariantCodeMotion
+	// Strength reduction of a division by a constant (`strengthReduceDivision`, EC18). APPENDED HERE
+	// rather than beside the Std passes it runs among, for this enum's own reason — the ordinals are the
+	// `.metrics.tsv` wire format every trend row ever written is indexed by, so a member slotted into the
+	// middle would re-attribute every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `foldConstants`, which it runs immediately after, because the
+	// two scale with different things: the fold's cost tracks the number of constant EXPRESSIONS, and
+	// this one's tracks the number of DIVISIONS — a quantity almost every function has none of, which is
+	// exactly why it needs its own row to show that. It is also one of the passes whose cost is expected
+	// to be paid back later (its sequence is what `commonSubexpressionElimination` then merges), and
+	// billed into a neighbour the cost and the saving would net off inside one number.
+	strengthReduceDivision
+	// The SAME pass over the APPENDED RUNTIME BAND (`Compiler.compileToCodeResult`), which no pipeline
+	// pass sees — `foldEmittedConstOperands` is its exact precedent, one row up the same band. Its own
+	// row rather than a widening of `strengthReduceDivision` above, because the two measure different
+	// populations: one is the program's divisions and the other is the runtime's, and a program that
+	// prints one integer pays the second and almost none of the first.
+	strengthReduceEmittedDivision
+	// Building and writing the `<output>.mxdbg` debug-info sidecar (`Compiler.compileMeasured`). Its own
+	// row rather than a slice of `writeExe`, because the two are gated by different flags: a build with
+	// `--no-debug-info` pays this nothing at all, and a row that folded it into the executable write
+	// could not show that.
+	writeDebugInfo
+end 'CompilePhase'
+
+// Per-compile timing state, owned by `Project` (which is already threaded through
+// every phase — the queries, the pass pipeline, and the backend all take it — so no
+// pass needs a new parameter just to be timed, and the per-file fan-out driver gets
+// per-compile timings instead of contending on a global).
+//
+// Mirrors `RegAllocStats`: a dense `phaseCost` column indexed by the phase enum's
+// ordinal, with `addPhaseCost`/`costOf` as the only accessors.
+export type CompileTimings
+	export var phaseNanos as DurationNanosArray
+	export var phaseCpuTicks as CpuTicksArray
+	// Cost of the whole compile, stamped once by `compile`. Zero until then: the
+	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
+	// zero total means "not a reported build", not "an instant build".
+	export var total as PhaseCost
+	// The register allocator's own sub-phase breakdown. Owned HERE (rather than
+	// created per-run inside `allocateRegisters`) so the report can nest it under the
+	// `regalloc` phase and RECONCILE the two. The sub-phases are a breakdown OF that
+	// phase's wall time, never six additional phases — adding them to the phase they
+	// live inside is the double-count this file exists to prevent.
+	export var regAlloc as RegAllocStats
+
+	// Both columns are scalars, so `resize` zero-fills them correctly. (An `Array with
+	// PhaseCost` would need seeding by `push` instead — resize sets the length of a struct
+	// array without giving the slots storage, so `count()` answers while `get` reports OOB.
+	// That is a trap worth knowing about; it is not one this type falls into any more.)
+	export static function create() returns CompileTimings
+		var phaseNanos = DurationNanosArray.create()
+		phaseNanos.resize(CompilePhase.allCases.count())
+		var phaseCpuTicks = CpuTicksArray.create()
+		phaseCpuTicks.resize(CompilePhase.allCases.count())
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, total: PhaseCost.zero(), regAlloc: RegAllocStats.create()}
+	end 'create'
+
+	// Takes the two quantities as SCALARS rather than a PhaseCost, and that is the hot path
+	// paying for itself: constructing a pair here allocated one boxed value per record, the
+	// allocator records seven per function, and the bill showed up in the trend log's
+	// reproducible column. It is still ONE call carrying both, so a phase still cannot be
+	// credited in one unit and forgotten in the other — which was the whole point of the
+	// pair. `costOf` returns one, because it is read per compile and not per function.
+	export function addPhaseCost(phase CompilePhase, nanos DurationNanos, cpuTicks CpuTicks)
+		let idx = phase.ordinal
+		let curNanos = try self.phaseNanos.get(idx) otherwise panic("CompileTimings.addPhaseCost: phase index OOB for '{phase.name}'")
+		try self.phaseNanos.set(idx, value: curNanos + nanos) otherwise panic("CompileTimings.addPhaseCost: phase index OOB for '{phase.name}'")
+		let curCpu = try self.phaseCpuTicks.get(idx) otherwise panic("CompileTimings.addPhaseCost: phase index OOB for '{phase.name}'")
+		try self.phaseCpuTicks.set(idx, value: curCpu + cpuTicks) otherwise panic("CompileTimings.addPhaseCost: phase index OOB for '{phase.name}'")
+	end 'addPhaseCost'
+
+	export function costOf(phase CompilePhase) returns PhaseCost
+		let idx = phase.ordinal
+		let nanos = try self.phaseNanos.get(idx) otherwise panic("CompileTimings.costOf: phase index OOB for '{phase.name}'")
+		let cpuTicks = try self.phaseCpuTicks.get(idx) otherwise panic("CompileTimings.costOf: phase index OOB for '{phase.name}'")
+		return PhaseCost.create(nanos, cpuTicks: cpuTicks)
+	end 'costOf'
+
+	// What the instrumentation actually claimed — the sum of every phase.
+	export function attributedCost() returns PhaseCost
+		var sum = PhaseCost.zero()
+		for phase in CompilePhase.allCases 'eachPhase'
+			sum = sum.plus(self.costOf(phase))
+		end 'eachPhase'
+		return sum
+	end 'attributedCost'
+
+	// Compile cost no phase claimed: the glue between phases (project construction,
+	// output-path resolution, the query spine's own cache/hash bookkeeping). Visible
+	// as its own row so a growing gap shows up instead of hiding inside a neighbour.
+	//
+	// Phases are disjoint sub-intervals of the measured total, so their sum can NEVER
+	// exceed it — in EITHER unit, since both counters are monotonic and both are read at
+	// the same two instants. If one does, two timers overlap and are double-counting: the
+	// exact failure this file's header describes, so it panics rather than clamp to zero.
+	// Each unit names itself in its own panic, because which one blew tells you whether the
+	// overlap is in the brackets or in the counter.
+	export function unattributedCost() returns PhaseCost
+		let attributed = self.attributedCost()
+
+		if attributed.nanos > self.total.nanos 'overlapNanos'
+			panic("CompileTimings: the phases sum to {attributed.nanos} ns but the whole compile took {self.total.nanos} ns — two phase timers OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileTimings' header).")
+		end 'overlapNanos'
+
+		if attributed.cpuTicks > self.total.cpuTicks 'overlapCpu'
+			panic("CompileTimings: the phases sum to {attributed.cpuTicks} CPU ticks but the whole compile used {self.total.cpuTicks} — two phase timers OVERLAP and are double-counting (see CompileTimings' header).")
+		end 'overlapCpu'
+
+		return self.total.minus(attributed)
+	end 'unattributedCost'
+end 'CompileTimings'
+
+// WHAT THE ALLOCATOR'S SUB-PHASES LEAVE OVER - or, on a POOL, what they overlap by.
+//
+// The sub-phases are disjoint intervals of ONE function's allocation, and `regalloc` allocates every
+// function on a pool of worker services (`RegAllocPool`), so several of them run inside one wall. Their
+// SUM is therefore the pool's work and is not bounded by the phase's wall at all: at sixteen workers it
+// is expected to be several times it, and reading that multiple IS the parallelism the pass bought.
+//
+// ⛔ **SO NO OVERLAP CHECK CAN STAND HERE: A SUM ABOVE THE WALL IS THE NORMAL READING.** The defect
+// worth refusing is `splitting` silently containing `liveness` - the failure this whole file exists to
+// prevent - and it is refused at the site that CREATES it rather than a report away from it:
+// `RegAllocCosts.recordExcluding` takes liveness back out of the splitter's bracket through
+// `PhaseDelta.minus`, whose non-negative components trap on exactly that overlap. One fact, checked
+// once, where it is still answerable.
+union RegAllocRemainder
+	// The phase's wall minus what its sub-phases claimed: the driver loop's own cost. What a pool of one
+	// leaves, which is every compile at `MAXON_MAX_PROCS=1` and every one a bootstrap-built compiler runs.
+	unattributed(cost PhaseCost)
+	// What the sub-phases claimed BEYOND the phase's wall: work the pool did at the same time as other
+	// work. Read as a multiple of the wall it is the allocator's realised parallelism.
+	concurrent(cost PhaseCost)
+end 'RegAllocRemainder'
+
+function regAllocRemainder(timings CompileTimings) returns RegAllocRemainder
+	let wall = timings.costOf(CompilePhase.regalloc)
+
+	var claimed = PhaseCost.zero()
+	for sub in RegAllocPhase.allCases 'eachSub'
+		claimed = claimed.plus(timings.regAlloc.costOf(sub))
+	end 'eachSub'
+
+	if claimed.nanos > wall.nanos or claimed.cpuTicks > wall.cpuTicks 'thePoolRanSeveralAtOnce'
+		return RegAllocRemainder.concurrent(costGap(claimed, under: wall))
+	end 'thePoolRanSeveralAtOnce'
+
+	return RegAllocRemainder.unattributed(wall.minus(claimed))
+end 'regAllocRemainder'
+
+// `over` minus `under`, componentwise, floored at zero. The floor is not a rounding convenience: a pool
+// exceeds its phase in ONE column and not the other - the driver sleeps through most of the phase, so
+// its CPU is small where its wall is large - and `PhaseCost.minus` traps rather than wrapping.
+function costGap(over PhaseCost, under PhaseCost) returns PhaseCost
+	let nanos = over.nanos - under.nanos if over.nanos > under.nanos else 0
+	let cpuTicks = over.cpuTicks - under.cpuTicks if over.cpuTicks > under.cpuTicks else 0
+	return PhaseCost.create(nanos, cpuTicks: cpuTicks)
+end 'costGap'
+
+// The one row the remainder renders as, labelled for what it actually is.
+function regAllocRemainderRow(timings CompileTimings, total PhaseCost) returns String
+	return match regAllocRemainder(timings) 'remainder'
+		unattributed(cost) gives timingRow("{SubPhaseIndent}(unattributed)", cost: cost, total: total)
+		concurrent(cost) gives timingRow("{SubPhaseIndent}(concurrent)", cost: cost, total: total)
+	end 'remainder'
+end 'regAllocRemainderRow'
+
+// The whole-compile attribution table: every phase with its ms, its share of the wall
+// total and its share of the CPU total, the allocator's sub-phases nested under
+// `regalloc`, and a TOTAL / attributed / unattributed footer that makes any gap explicit.
+//
+// WHY BOTH SHARES AND ONLY ONE DURATION. `ms` is the wall time, which is what a human
+// waited. `cpu%` is where the WORK went. A phase whose two shares disagree is a phase that
+// spent its wall time NOT RUNNING — descheduled, or waiting on the OS — and that gap is
+// the one thing the old single-share table could never show. CPU ticks are deliberately
+// not rendered as a duration: their unit is platform-defined (see `CpuTicks`), so a
+// millisecond figure would be an invented conversion, while a share is exact either way.
+export function compileTimingsReport(timings CompileTimings) returns String
+	let total = timings.total
+
+	var msg = StringBuilder.create()
+	msg.append("compile timings — total {millisText(total.nanos)} ms wall, {total.cpuTicks} CPU ticks\n")
+	// The header's label carries the same indent every row's does, so it pads to the
+	// same column width and the four columns line up.
+	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: TimeWidth)}{padLeft("%", width: PercentWidth)}{padLeft("cpu%", width: PercentWidth)}\n")
+	msg.append(horizontalRule(RuleWidth))
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		msg.append(timingRow("{RowIndent}{phase.name}", cost: timings.costOf(phase), total: total))
+
+		if phase == CompilePhase.regalloc 'nestRegAlloc'
+			msg.append(regAllocBreakdown(timings, total: total))
+		end 'nestRegAlloc'
+	end 'eachPhase'
+
+	msg.append(horizontalRule(RuleWidth))
+	msg.append(timingRow("{RowIndent}TOTAL", cost: total, total: total))
+	msg.append(timingRow("{RowIndent}attributed", cost: timings.attributedCost(), total: total))
+	msg.append(timingRow("{RowIndent}unattributed", cost: timings.unattributedCost(), total: total))
+	return msg.build()
+end 'compileTimingsReport'
+
+// The allocator's sub-phases, indented under `regalloc`. Their percentages are
+// taken against the WHOLE-COMPILE total (not against the regalloc wall), so a reader
+// can compare "liveness" directly against "parse" — the question the table exists to
+// answer is where the compile's time goes, not where the allocator's does.
+function regAllocBreakdown(timings CompileTimings, total PhaseCost) returns String
+	var msg = StringBuilder.create()
+	for sub in RegAllocPhase.allCases 'eachSub'
+		msg.append(timingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
+	end 'eachSub'
+	msg.append(regAllocRemainderRow(timings, total: total))
+	return msg.build()
+end 'regAllocBreakdown'
+
+function timingRow(label String, cost PhaseCost, total PhaseCost) returns String
+	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(cost.nanos), width: TimeWidth)}{padLeft(percentOfTotal(cost.nanos as ShareQuantity, total: total.nanos as ShareQuantity), width: PercentWidth)}{padLeft(percentOfTotal(cost.cpuTicks as ShareQuantity, total: total.cpuTicks as ShareQuantity), width: PercentWidth)}\n"
+end 'timingRow'
+
+// Nanoseconds rendered as milliseconds to one decimal place, in integer math.
+//
+// The timers read `Clock.nowNanos` (a monotonic ~100 ns clock) rather than `Clock.nowMs`,
+// whose GetTickCount64 backing has a ~15.6 ms TICK — coarser than most phases being
+// measured. On that clock every per-function sub-phase read 0 or 16 ms, and a single
+// sub-phase's share of a compile swung between 9.6% and 14.4% across identical runs.
+// The reading was quantization, not signal. Nanoseconds are stored; milliseconds are
+// merely how a human reads the row.
+function millisText(nanos DurationNanos) returns String
+	let tenths = (nanos * MillisTenthsPerSecond) / NanosPerSecond
+	return "{tenths / MillisTenthsPerMs}.{tenths mod MillisTenthsPerMs}"
+end 'millisText'
+
+// A rule spanning exactly `width` columns. A row's own indent is part of its label column, so
+// a rule starts at column 0 and ends where its table's last column does.
+//
+// Exported for the memory table, whose four columns are wider than this one's three. That table used
+// to carry its own copy of this function and of both pads below, differing only in which widths they
+// summed — and a copy of a formatter is a formatter that will eventually disagree.
+export function horizontalRule(width ColumnWidth) returns String
+	return "{repeated(RuleUnit, count: width)}\n"
+end 'horizontalRule'
+
+// A quantity being rendered as a share of a total. Both units this report shows are
+// non-negative counters over the same range, so ONE percentage formatter serves both
+// rather than a second copy differing only in the name of what it divides.
+typealias ShareQuantity = int(0 to u64.max)
+
+// `value` as a percentage of `total`, to one decimal place, in integer math.
+function percentOfTotal(value ShareQuantity, total ShareQuantity) returns String
+	if total == 0 'noTotal'
+		// Not a reported build (the warm-rebuild gate never stamps a total), so there is
+		// no denominator to divide by and every share is vacuously zero.
+		return "0.0%"
+	end 'noTotal'
+
+	if value > total 'overlap'
+		panic("percentOfTotal: a phase claims {value} of a {total} compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
+	end 'overlap'
+
+	// `total` is guarded non-zero above; integer `/` throws for a possibly-zero divisor, and
+	// `otherwise panic` is the project's form for a `try` that must not fail.
+	let permille = (try ((value * PermilleScale) / total) otherwise panic("percentOfTotal: total was 0 past its own guard")) as Permille
+	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
+end 'percentOfTotal'
+
+// Pad to `width` with spaces. A label longer than its column widens that row rather
+// than being truncated — a phase name must always be readable in full.
+//
+// One interpolation, so one allocation: the compiler measures every part of an interpolated string
+// and allocates the result exactly once.
+export function padRight(text String, width ColumnWidth) returns String
+	return "{text}{repeated(PadUnit, count: padCount(text, width: width))}"
+end 'padRight'
+
+export function padLeft(text String, width ColumnWidth) returns String
+	return "{repeated(PadUnit, count: padCount(text, width: width))}{text}"
+end 'padLeft'
+
+// The spaces a `text` cell needs to fill a `width` column — none, for a label that already overflows
+// it (see `padRight`: an overlong label widens its row rather than being truncated).
+function padCount(text String, width ColumnWidth) returns ColumnWidth
+	let len = text.byteLength() as ColumnWidth
+	if len >= width 'overflows'
+		return 0
+	end 'overflows'
+
+	return width - len
+end 'padCount'
+
+// `unit` repeated `count` times — the one place a run of identical characters is spelled, for both
+// pads above and both tables' rules.
+//
+// It RESERVES, because the size is known exactly before the first unit is written. That matters more
+// than it looks: `String.append` is exact by design (stdlib/String.maxon), so the while-loop this
+// replaced — append one space, `width` times — reallocated and recopied the whole run PER SPACE, and
+// every cell of every table paid it.
+function repeated(unit String, count ColumnWidth) returns String
+	var out = StringBuilder.create()
+	out.reserve(unit.byteLength() * (count as BytePos))
+
+	for _ in 0 upto count 'each'
+		out.append(unit)
+	end 'each'
+
+	return out.build()
+end 'repeated'

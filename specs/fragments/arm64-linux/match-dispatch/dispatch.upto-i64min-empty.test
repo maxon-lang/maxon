@@ -1,0 +1,78 @@
+// Test: dispatch.upto-i64min-empty
+function classify(x Integer) returns Integer
+	return match x 'm'
+		0 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `0 upto i64.min` is the empty range — nothing is below i64.min. A prior bug decremented
+	// the exclusive upper to `i64.min - 1`, which wrapped to `i64.max` and matched every value >= 0.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
+	if classify(9223372036854775807) == 0 'd'
+		n = n + 1
+	end 'd'
+	return n
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  matchdefault#15:
+    arm64.movImm x1, 0
+  __il_cont#12:
+    arm64.cmp x1, 0
+    arm64.b.ne matchdefault#20
+  a:
+    arm64.movImm x0, 1
+  matchdefault#20:
+    arm64.movImm x1, 0
+  __il_cont#17:
+    arm64.cmp x1, 0
+    arm64.b.ne matchdefault#25
+  b:
+    arm64.add x0, x0, 1
+  matchdefault#25:
+    arm64.movImm x1, 0
+  __il_cont#22:
+    arm64.cmp x1, 0
+    arm64.b.ne matchdefault#30
+  c:
+    arm64.add x0, x0, 1
+  matchdefault#30:
+    arm64.movImm x1, 0
+  __il_cont#27:
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  d:
+    arm64.add x0, x0, 1
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.upto-i64min-empty.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

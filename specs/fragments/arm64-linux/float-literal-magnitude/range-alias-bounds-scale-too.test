@@ -1,0 +1,19 @@
+// Test: range-alias-bounds-scale-too
+typealias Astronomical = float(1.0e-30 to 1.0e30)
+
+function main() returns ExitCode
+	let x = 1.0e20 as Astronomical
+	let y = 1.0e19 as Astronomical
+	return trunc(x / y)
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

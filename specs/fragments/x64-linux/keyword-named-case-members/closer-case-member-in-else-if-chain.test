@@ -1,0 +1,55 @@
+// Test: closer-case-member-in-else-if-chain
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 1 'first'
+		return 1
+	end 'first' else if tagOf(Kw.end) == 2 'second'
+		return 42
+	end 'second' else 'rest'
+		return 3
+	end 'rest'
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm#10:
+    x64.movRegImm32 rax, 2
+  __il_cont#7:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matcharm#19
+  first:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matcharm#19:
+    x64.movRegImm32 rax, 2
+  __il_cont#16:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, ifelse
+  second:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+}

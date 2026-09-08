@@ -1,0 +1,32 @@
+// Test: error.other-type-cannot-read-private
+
+typealias Integer = int(i64.min to i64.max)
+
+type A
+	var secret as Integer
+
+	static function create() returns Self
+		return A{secret: 0}
+	end 'create'
+end 'A'
+
+type B
+	var n as Integer
+
+	static function create() returns Self
+		return B{n: 0}
+	end 'create'
+
+	function peek() returns Integer
+		let a = A.create()
+		return a.secret
+	end 'peek'
+end 'B'
+
+function main() returns ExitCode
+	let b = B.create()
+	return b.peek()
+end 'main'
+---
+CompilerError:
+error E3014: <fragment>:22:12: cannot access unexported field: 'secret' outside of type 'A'

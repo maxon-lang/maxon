@@ -1,0 +1,26 @@
+// Test: marker-contents-are-never-read
+// --- file: main.maxon
+function main() returns ExitCode
+	return 42
+end 'main'
+
+// --- file: fixtures/.maxonignore
+# every line of this file is inert, including the two below
+!second-program.maxon
+fixtures/nested/
+
+// --- file: fixtures/second-program.maxon
+function main() returns ExitCode
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

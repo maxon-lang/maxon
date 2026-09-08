@@ -1,0 +1,250 @@
+// Test: async-filesystem.async-write-read-parallel
+function main() returns ExitCode
+		let path1 = FilePath from "async_par_a.txt"
+		let path2 = FilePath from "async_par_b.txt"
+
+		// Write both files synchronously
+		try File.writeText(path1, content: "FileA") otherwise 'e1'
+				return 1
+		end 'e1'
+		try File.writeText(path2, content: "FileB") otherwise 'e2'
+				try File.delete(path1) otherwise ignore
+				return 2
+		end 'e2'
+
+		// Read both asynchronously in parallel
+		let p1 = async File.readText(path1)
+		let p2 = async File.readText(path2)
+		let c1 = try await p1 otherwise "err"
+		let c2 = try await p2 otherwise "err"
+
+		// Clean up
+		try File.delete(path1) otherwise ignore
+		try File.delete(path2) otherwise ignore
+
+		print("{c1}{c2}")
+		return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __mrt_errno@264 = i64 0
+  __mrt_tls_ready@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.leaRegRdata rcx, [rip + __str_rec_21]  ; "async_par_a.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; "async_par_b.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.leaRegRdata rdx, [rip + __str_rec_23]  ; "FileA"
+  __il_body#21:
+    x64.movRegImm32 rax, 0
+  __il_cont#20:
+    x64.movRegReg rcx, rbx
+    x64.callDirect File.writeText
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.leaRegRdata rdx, [rip + __str_rec_24]  ; "FileB"
+  __il_body#23:
+    x64.movRegImm32 rax, 0
+  __il_cont#22:
+    x64.movRegReg rcx, r12
+    x64.callDirect File.writeText
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegReg rcx, rbx
+    x64.callDirect File.delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#7
+  trycont#7:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegFunc rcx, [rip + File.readText]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], rbx
+    x64.leaRegFunc rax, [rip + __gt_release_File.readText]
+    x64.storeBaseDispReg.word64 [r13 + 176], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegFunc rcx, [rip + File.readText]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 200], r12
+    x64.leaRegFunc rax, [rip + __gt_release_File.readText]
+    x64.storeBaseDispReg.word64 [r14 + 176], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_rec_25]  ; "err"
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+    x64.jmp trycont#10
+  tryok#8:
+    x64.movRegReg r13, r8
+  trycont#10:
+    x64.storeSlotReg slot2, r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_rec_25]  ; "err"
+    x64.callDirect __str_retain
+    x64.movRegReg r14, r8
+    x64.jmp trycont#13
+  tryok#11:
+    x64.movRegReg r14, r8
+  trycont#13:
+    x64.storeSlotReg slot3, r14
+    x64.movRegReg rcx, rbx
+    x64.callDirect File.delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#16
+  trycont#16:
+    x64.movRegReg rcx, r12
+    x64.callDirect File.delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont#19
+  trycont#19:
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r13 + 8]
+    x64.loadRegBaseDisp.word64 r13, [r14 + 0]
+    x64.loadRegBaseDisp.word64 r14, [r14 + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

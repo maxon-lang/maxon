@@ -1,0 +1,575 @@
+// Test: small-sort-network-n4-all-perms
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function isSorted(a IntArray) returns bool
+	let n = a.count()
+	if n <= 1 'trivial'
+		return true
+	end 'trivial'
+	var i = 1
+	while i < n 'scan'
+		let prev = try a.get(i - 1) otherwise return false
+		let curr = try a.get(i) otherwise return false
+		if prev > curr 'oop'
+			return false
+		end 'oop'
+		i = i + 1
+	end 'scan'
+	return true
+end 'isSorted'
+
+// Build the k-th permutation of [0,1,2,3] using factoriadic decomposition.
+function nthPerm4(k Integer) returns IntArray
+	var pool = IntArray.create()
+	pool.push(0)
+	pool.push(1)
+	pool.push(2)
+	pool.push(3)
+	var result = IntArray.create()
+	var remaining = k
+	let divs = [6, 2, 1, 1]
+	for i in 0 upto 4 'pick'
+		let d = try divs.get(i) otherwise panic("divs OOB")
+		// Every `divs` entry is >= 1, so these divides never throw; the `otherwise` arms are
+		// unreachable (matching the `panic` used for this function's other impossible failures).
+		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
+		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
+		let v = try pool.get(idx) otherwise panic("pool OOB")
+		result.push(v)
+		try pool.remove(idx) otherwise panic("pool.remove OOB")
+	end 'pick'
+	return result
+end 'nthPerm4'
+
+function main() returns ExitCode
+	var k = 0
+	var failed = 0
+	while k < 24 'eachPerm'
+		var perm = nthPerm4(k)
+		perm.sort(ascending)
+		if not isSorted(perm) 'bad'
+			failed = failed + 1
+		end 'bad'
+		k = k + 1
+	end 'eachPerm'
+	print("{failed}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @isSorted {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 1
+    x64.jcc greater, ifcont#2
+  trivial:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 r13, 1
+  whilehdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc greaterEqual, whileexit
+  scan:
+    x64.leaRegRegImm32 rdx, r13, -1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok#12
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_108]  ; "panic at small-sort-network-n4-all-perms.test:16: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#12:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#17
+  __im_load#18:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 r14, [rax + rdx*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#24
+  __im_empty#19:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, critsplit#25
+  __im_slow#17:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r14, r8
+    x64.jmp __im_cont#16
+  critsplit#25:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#16
+  critsplit#24:
+    x64.movRegReg r10, rax
+  __im_cont#16:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#6
+  tryerr#7:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#6:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok#14
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_109]  ; "panic at small-sort-network-n4-all-perms.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow#21
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, critsplit#26
+  __im_empty#23:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#27
+  __im_slow#21:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#20
+  critsplit#27:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#20
+  critsplit#26:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#20:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#8:
+    x64.cmpRegReg r14, r8
+    x64.jcc lessEqual, ifcont#11
+  oop:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#11:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @nthPerm4 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegImm32 rax, 4
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegImm32 rdx, 0
+  forhdr:
+    x64.storeSlotReg slot1, rdx
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc greaterEqual, forexit
+  pick:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#18
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + rdx*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [r14 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#25
+  __im_empty#20:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit#26
+  __im_slow#18:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#17
+  critsplit#26:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#17
+  critsplit#25:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rax
+  __im_cont#17:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at small-sort-network-n4-all-perms.test:37: divs OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, rcx
+    x64.movRegReg rsi, r8
+    x64.orRegReg rsi, r8, rcx
+    x64.movRegReg rax, rbx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r15, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rcx
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at small-sort-network-n4-all-perms.test:40: nthPerm4: divs entry was 0\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.cmpRegImm32 r8, -1
+    x64.setccReg equal, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rax, rax, rbx
+    x64.cqo
+    x64.idivReg rsi
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at small-sort-network-n4-all-perms.test:41: nthPerm4: divs entry was 0\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_110]  ; "panic at small-sort-network-n4-all-perms.test:42: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r15, rax
+    x64.jcc aboveEqual, __im_slow#22
+  __im_load#23:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rdx, [rax + r15*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#27
+  __im_empty#24:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, critsplit#28
+  __im_slow#22:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
+    x64.jmp __im_cont#21
+  critsplit#28:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#21
+  critsplit#27:
+    x64.movRegReg r10, rax
+  __im_cont#21:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at small-sort-network-n4-all-perms.test:42: pool OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_push
+    x64.leaRegRdata rax, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect Array.remove
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at small-sort-network-n4-all-perms.test:44: pool.remove OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rdx, rax, 1
+    x64.loadRegSlot rax, slot0
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 rbx, 24
+    x64.jcc greaterEqual, whileexit
+  eachPerm:
+    x64.movRegReg rcx, rbx
+    x64.callDirect nthPerm4
+    x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, r13
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.movRegReg rcx, r13
+    x64.callDirect isSorted
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  bad:
+    x64.leaRegRegImm32 r12, r12, 1
+  ifcont:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_24]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot2
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

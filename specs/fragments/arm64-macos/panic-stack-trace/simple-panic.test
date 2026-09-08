@@ -1,0 +1,43 @@
+// Test: simple-panic
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+
+function dangerous(value Integer) returns Byte
+	return value as Byte
+end
+
+function main() returns ExitCode
+	return dangerous(300)
+end
+---
+ExitCode: 1
+---
+func @dangerous {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at simple-panic.test:6: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 300
+  __il_slow:
+    arm64.bl dangerous
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

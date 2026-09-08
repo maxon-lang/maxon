@@ -1,0 +1,26 @@
+// Test: unicode-escape.char-basic
+function main() returns ExitCode
+	let excl = '\u0021'
+	if excl == '!' 'check'
+		print("PASS")
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_2  ; "!"
+    arm64.leaRdata x1, __str_rec_2  ; "!"
+    arm64.bl __str_eq
+    arm64.cbz x0, ifcont
+  check:
+    arm64.leaRdata x0, __str_rec_3  ; "PASS"
+    arm64.bl print
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,15 @@
+// Test: error.let-global-receiver-is-linted
+typealias StrMap = Map with (String, String)
+
+let m = StrMap.create()
+
+function main() returns ExitCode
+	let k = "a"
+	if m.contains(k) 'has'
+		print(try m.get(k) otherwise "?")
+	end 'has'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3087: <fragment>:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(k)' (or 'if var') instead — performs one lookup instead of two

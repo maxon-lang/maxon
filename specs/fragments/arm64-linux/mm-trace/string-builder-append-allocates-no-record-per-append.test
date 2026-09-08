@@ -1,0 +1,77 @@
+// Test: string-builder-append-allocates-no-record-per-append
+function main() returns ExitCode
+	var sb = StringBuilder.create()
+	sb.append("ab")
+	sb.append("cd")
+	let s = sb.build()
+	return s.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __ds_base@40 = i64 0
+  __ds_buf_size@48 = i64 0
+  __ds_buf_mask@56 = i64 0
+  __ds_start_ts@64 = i64 0
+  __ds_lock@72 = i64 0
+  __mm_alloc_id@80 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl StringBuilder.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_2  ; "ab"
+    arm64.movRegReg x0, x19
+    arm64.bl StringBuilder.append
+    arm64.leaRdata x1, __str_rec_3  ; "cd"
+    arm64.movRegReg x0, x19
+    arm64.bl StringBuilder.append
+    arm64.movRegReg x0, x19
+    arm64.bl StringBuilder.build
+    arm64.movRegReg x20, x0
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.cmp x21, 0
+    arm64.b.ge __il_cont
+  __il_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl String.byteLength
+    arm64.movRegReg x21, x0
+  __il_cont:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at string-builder-append-allocates-no-record-per-append.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_StringBuilder
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

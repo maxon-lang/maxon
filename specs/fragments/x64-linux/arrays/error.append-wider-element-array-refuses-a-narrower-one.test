@@ -1,0 +1,20 @@
+// Test: error.append-wider-element-array-refuses-a-narrower-one
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(99)
+	var s = Smalls.create()
+	s.push(150)
+	s.append(b)
+	let first = try s.get(0) otherwise 0
+	let second = try s.get(1) otherwise 0
+	print("{first} {second}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'Smalls', got 'Bytes'

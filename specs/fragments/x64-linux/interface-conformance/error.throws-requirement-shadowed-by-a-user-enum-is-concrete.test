@@ -1,0 +1,35 @@
+// Test: error.throws-requirement-shadowed-by-a-user-enum-is-concrete
+typealias Code = int(0 to u32.max)
+
+enum Error
+	shadowAlpha
+	shadowBeta
+end 'Error'
+
+enum OtherError
+	oops
+end 'OtherError'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws OtherError
+		if self.x < 10 'small'
+			throw OtherError.oops
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:17:6: Method 'Point.digest' throws 'OtherError' but interface 'Digest' declares it 'throws Error' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'Error'

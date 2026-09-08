@@ -1,0 +1,75 @@
+// Test: basic-equal
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point implements Equatable
+	export var x as Integer
+	export var y as Integer
+
+	function equals(other Point) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	let b = Point.create(1, y: 2)
+	if a.equals(b) 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.storeBaseDispReg.word64 [rdx + 8], rcx
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.leaRegSlot rsi, slot2
+    x64.storeBaseDispReg.word64 [rsi + 0], rax
+    x64.storeBaseDispReg.word64 [rsi + 8], rcx
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 0]
+    x64.cmpRegReg rax, rcx
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont
+  andrhs:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

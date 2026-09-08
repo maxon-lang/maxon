@@ -1,0 +1,610 @@
+// Profile/ProfileCommand.maxon — `maxon profile run <exe>`: launch a program, sample where its CPU time
+// goes, and print a report.
+//
+// ⭐⭐ **IT PROFILES A PRISTINE BINARY.** No instrumentation, no rebuild, no flag at build time: the only
+// thing read besides the running process is the `.mxdbg` sidecar an ordinary build already writes, which
+// leaves the executable byte-identical. So the program measured is the program that ships.
+//
+// ⭐⭐ **EVERY REFUSAL HERE IS THE REFERENCE DRIVER'S OWN SENTENCE, AND THAT IS A CONTRACT RATHER THAN A
+// STYLE.** A report is a MEASUREMENT and no two runs of a sampled program agree, so a refusal is the only
+// part of this tool that two implementations can be compared on byte for byte — and
+// `tests/profile/profile-refusals.test.maxon` does exactly that. A "better" wording here is the failure,
+// not a fix.
+//
+// ⚠ **THE BANNER SAYS `maxon` WHERE THE REFERENCE SAYS `maxon`, AND THAT IS THE ONE DIFFERENCE THE
+// CORPUS NORMALIZES.** A usage banner spells the command a user should type, so demanding byte identity
+// there would demand that this driver tell people to run a binary they do not have.
+//
+// ⭐ **STDOUT IS EXACTLY THE REPORT.** Every refusal, and every word the profiled program itself says on
+// EITHER of its streams, goes to stderr — which is what keeps a profile of a chatty program machine-readable.
+//
+// ⭐ **THIS TOOL'S OWN EXIT CODE ANSWERS ONE QUESTION: DID THE MEASUREMENT COMPLETE.** The measured
+// program's status is DATA, reported as `target exit code:` in the text. One integer cannot answer both.
+//
+// The gate and every conjunct of its reason are `ProfileModel`'s.
+#if os(Windows) and arch(x64)
+
+	// How this driver names itself and its subcommand in everything it prints. The subcommand word is the
+	// SUBJECT of every refusal (`profile: …`) and the driver name is the one thing the corpus normalizes
+	// away before comparing this tool's transcripts.
+	let ProfileDriverName = "maxon"
+	let ProfileSubcommandName = "profile"
+
+	// The one verb there is, and the flags around it.
+	let RunVerb = "run"
+	let JsonFlag = "--json"
+	let FoldedFlag = "--folded"
+	let RateFlag = "--rate="
+	let MinPercentFlag = "--min-percent="
+	let TimeoutFlag = "--timeout="
+	let TargetEnvFlag = "--target-env="
+
+	// The tail position the verb sits at, and the first one a flag or the executable can.
+	let VerbArgument = 0
+	let FirstOptionArgument = 1
+
+	// ⭐ **THE DEFAULT RATE.** A kilohertz gives a thousand readings per second of runtime, so even a
+	// one-second program clears the trustworthy-sample floor by an order of magnitude, while costing the
+	// target one suspend/resume pair per millisecond per RUNNING thread.
+	let DefaultRateHz = 1000.0 as ProfileRate
+
+	// ⭐ **THE FASTEST RATE THIS ACCEPTS, REFUSED RATHER THAN CLAMPED** — a rate reported back as though it
+	// were in force is a measurement setting that silently is not.
+	//
+	// ⚠⚠ **THIS CEILING IS NOT THE ONE THAT BINDS.** The real ceiling is the OPERATING SYSTEM's: the loop
+	// ticks on a waitable timer whose granularity puts it near 1.75 kHz on a typical host, far below this
+	// number. It is not lowered to that, because half a millisecond is one machine's granularity rather than
+	// a portable fact — what is done instead is that the report states the rate it ACHIEVED beside the one
+	// requested, which makes an over-ask self-documenting instead of a silent lie.
+	let MaxRateHz = 10000.0 as ProfileRate
+
+	// The default reporting floor. One percent of a kilohertz run is ten samples a second; below that a row
+	// is noise, and listing it would make two runs of one program produce different reports.
+	let DefaultMinPercent = 1.0 as ProfileShare
+	let MaxMinPercent = 100.0 as ProfileShare
+
+	// ⭐ The default bound on a profiled run — the same ten minutes and the same reason as coverage's: it
+	// exists only so a target that never finishes cannot hang the tool that launched it.
+	//
+	// ⚠ Unlike coverage's, reaching it is NOT fatal to the measurement. A coverage run that hits its
+	// deadline has nothing to report, because the counters are written by the program on its way out; a
+	// profile that hits its deadline has every sample it took, so it reports them as PARTIAL. There is no
+	// refusal here to attach a "raise it and run again" recourse to.
+	let DefaultTimeoutSeconds = 600.0 as ProfileSeconds
+	let MaxTimeoutSeconds = 922337203685.0 as ProfileSeconds
+
+	// The half-sentence a deadline's refusal is built around, so the flag and its refusal describe one rule.
+	let PositiveSecondsRequirement = "needs a positive number of seconds"
+
+	// How long one drained line may keep the tick loop from its deadline: a bounded number of lines per
+	// stream per tick, so a chatty child cannot starve the sampler while an idle one costs two polls.
+	let MaxDrainedLinesPerTick = 4
+
+	// The kill a deadline performs: the shortest wait that still terminates the child.
+	let KillWaitMs = 1 as DurationMs
+
+	let MillisPerSecond = 1000.0
+	let NanosPerMilli = 1000000.0
+
+	// A command line this tool could not act on, and a measurement that did not complete, are one answer:
+	// something other than a finished report. Distinct from the MEASURED program's status, which is data.
+	let RefusedProfileExit = 1 as ExitCode
+
+	// What one `profile` command line asked for. A record rather than a local per flag, for `MaxonArgs`'
+	// reason: an accumulating chain carries one value across its joins instead of one register per option.
+	type ProfileRequest
+		export var json as bool
+		export var folded as bool
+		export var exePath as String
+		export var exeGiven as bool
+		export var rateHz as ProfileRate
+		export var minPercent as ProfileShare
+		export var timeoutSeconds as ProfileSeconds
+		export var targetArgs as StringArray
+		// ⚠ **THE OVERRIDES ARE TWO PARALLEL LISTS AND NOT A MAP**, which is forced rather than chosen:
+		// `Environment.inheritUpdating` takes stdlib's own file-private `EnvMap`, so the only shape this side
+		// can hand it is a map LITERAL, whose type the argument position supplies. A map built here would be a
+		// different alias of the same instantiation and is refused (E3005). The pair is turned into one
+		// literal at the spawn — see `profileChildEnvironment`.
+		export var targetEnvNames as StringArray
+		export var targetEnvValues as StringArray
+
+		static function create() returns ProfileRequest
+			return Self{json: false, folded: false, exePath: "", exeGiven: false, rateHz: DefaultRateHz, minPercent: DefaultMinPercent, timeoutSeconds: DefaultTimeoutSeconds, targetArgs: StringArray.create(), targetEnvNames: StringArray.create(), targetEnvValues: StringArray.create()}
+		end 'create'
+	end 'ProfileRequest'
+
+	/// `maxon profile run <exe> [--json|--folded] [--rate=<hz>] [--min-percent=<share>]
+	/// [--timeout=<seconds>] [--target-env=<NAME>=<VALUE>] [args...]`.
+	///
+	/// The tail is this command's own, filed verbatim by `MaxonArgs.parse` so a target argument spelled like
+	/// one of this driver's flags cannot be consumed on its way past.
+	export function runProfile(args MaxonArgs) returns ExitCode
+		let verb = try args.paths.get(VerbArgument) otherwise 'noVerb'
+			return refuseProfileUsage("expected a verb")
+		end 'noVerb'
+
+		if verb != RunVerb 'unknownVerb'
+			return refuseProfileUsage("unknown verb '{verb}'")
+		end 'unknownVerb'
+
+		var request = ProfileRequest.create()
+		for position in FirstOptionArgument upto args.paths.count() 'eachArgument'
+			let arg = try args.paths.get(position) otherwise panic("runProfile: index {position} is past args.paths.count() despite the upto bound")
+
+			if arg == JsonFlag 'jsonFlag'
+				request.json = true
+			end 'jsonFlag' else if arg == FoldedFlag 'foldedFlag'
+				request.folded = true
+			end 'foldedFlag' else if arg.startsWith(TargetEnvFlag) 'targetEnvFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				if not recordProfileTargetEnv(request, raw: raw) 'notAnAssignment'
+					return refuseProfileUsage("'{TargetEnvFlag}<NAME>=<VALUE>' needs a non-empty variable name, got '{raw}'")
+				end 'notAnAssignment'
+			end 'targetEnvFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				if not recordProfileTimeout(request, raw: raw) 'notADeadline'
+					return refuseProfileUsage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
+				end 'notADeadline'
+			end 'timeoutFlag' else if arg.startsWith(RateFlag) 'rateFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let problem = recordProfileRate(request, raw: raw)
+				if not problem.isEmpty() 'notARate'
+					return refuseProfileUsage(problem)
+				end 'notARate'
+			end 'rateFlag' else if arg.startsWith(MinPercentFlag) 'minPercentFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let problem = recordProfileMinPercent(request, raw: raw)
+				if not problem.isEmpty() 'notAShare'
+					return refuseProfileUsage(problem)
+				end 'notAShare'
+			end 'minPercentFlag' else if not request.exeGiven and not arg.startsWith(OptionPrefix) 'theExecutable'
+				request.exePath = arg
+				request.exeGiven = true
+			end 'theExecutable' else if request.exeGiven 'aTargetArgument'
+				request.targetArgs.push(arg)
+			end 'aTargetArgument' else 'unknownOption'
+				return refuseProfileUsage("unknown option '{arg}'")
+			end 'unknownOption'
+		end 'eachArgument'
+
+		if not request.exeGiven 'noExecutable'
+			return refuseProfileUsage("expected an executable")
+		end 'noExecutable'
+
+		// ⛔ NAMED RATHER THAN SILENTLY PREFERRING ONE: a caller who asked for both wants two different
+		// consumers served, and answering one of them without saying so is a setting that is not in force.
+		if request.json and request.folded 'twoMachineFormats'
+			return refuseProfileUsage("'{JsonFlag}' and '{FoldedFlag}' are two different machine formats — pick one")
+		end 'twoMachineFormats'
+
+		return measureProfile(request)
+	end 'runProfile'
+
+	// ========================================================================================
+	// THE FLAGS THAT CARRY A NUMBER
+	// ========================================================================================
+
+	// ⭐ Each numeric flag is PARSED here and judged by the rule that OWNS its meaning, so the two cannot come
+	// to refuse differently — and each refusal is worded by the rule, which knows why the bound exists,
+	// rather than by the parser, which does not. An empty answer means the value was accepted.
+	//
+	// A door onto the request rather than a returned value: The compiler cannot lower a union carrying a float
+	// payload (E2015), and a struct whose second field means nothing without its first is the sentinel that
+	// shape exists to avoid.
+	function recordProfileRate(request ProfileRequest, raw String) returns String
+		let rate = try float.fromString(raw) otherwise 'notANumber'
+			return "'{RateFlag}' needs a number, got '{raw}'"
+		end 'notANumber'
+
+		if not (rate > 0.0) 'notPositive'
+			return "'{RateFlag}' needs a positive number of samples per second, got '{raw}'"
+		end 'notPositive'
+
+		if rate > MaxRateHz 'pastTheCeiling'
+			return "'{RateFlag}' cannot exceed {reportWholeNumberText(MaxRateHz as ReportNumber)} samples per second. Note that asking for anything near it is already an over-ask: the loop ticks on an OS waitable timer whose granularity caps it near 1750 Hz on a typical host, and the report states the rate it ACHIEVED beside the one requested so you can see what you got, got '{raw}'"
+		end 'pastTheCeiling'
+
+		request.rateHz = rate as ProfileRate
+
+		return ""
+	end 'recordProfileRate'
+
+	function recordProfileMinPercent(request ProfileRequest, raw String) returns String
+		let share = try float.fromString(raw) otherwise 'notANumber'
+			return "'{MinPercentFlag}' needs a number, got '{raw}'"
+		end 'notANumber'
+
+		// 100% would hide everything including the root, which is a report that has measured something and
+		// shows none of it.
+		if not (share >= 0.0 and share < MaxMinPercent) 'outsideTheRange'
+			return "'{MinPercentFlag}' needs a share in [0, 100) — it is the percentage below which a row is summarized rather than listed, got '{raw}'"
+		end 'outsideTheRange'
+
+		request.minPercent = share as ProfileShare
+
+		return ""
+	end 'recordProfileMinPercent'
+
+	// A caller-spelled decimal number of seconds, held to the one rule: finite and strictly positive. A
+	// deadline that rounds away to zero expires before the program could possibly run, and would then be
+	// reported as a setting the caller asked for.
+	function recordProfileTimeout(request ProfileRequest, raw String) returns bool
+		let seconds = try float.fromString(raw) otherwise 'notANumber'
+			return false
+		end 'notANumber'
+
+		if not (seconds > 0.0 and seconds <= MaxTimeoutSeconds) 'notAPositiveFiniteDuration'
+			return false
+		end 'notAPositiveFiniteDuration'
+
+		request.timeoutSeconds = seconds as ProfileSeconds
+
+		return true
+	end 'recordProfileTimeout'
+
+	// ⚠ REFUSED RATHER THAN IGNORED, exactly as `maxon debug` refuses it: a silently dropped variable leaves
+	// the program running under an environment the caller believes they configured — and for
+	// `MAXON_MAX_PROCS` that is the difference between a reproducible green-thread profile and a
+	// machine-dependent one. A repeated NAME takes the LAST value, matching a shell assignment.
+	function recordProfileTargetEnv(request ProfileRequest, raw String) returns bool
+		let halves = raw.split(EnvAssignment)
+		let name = try halves.get(0) otherwise ""
+		if name.isEmpty() or halves.count() < 2 'noName'
+			return false
+		end 'noName'
+
+		request.targetEnvNames.push(name)
+		request.targetEnvValues.push(profileEnvValueOf(halves))
+
+		return true
+	end 'recordProfileTargetEnv'
+
+	// Everything past the FIRST `=` is the value, because a value may contain one of its own.
+	function profileEnvValueOf(halves StringArray) returns String
+		var value = ""
+		for (iter, piece) in halves.withIterator() 'eachPiece'
+			if iter.index() == 0 'theName'
+				continue
+			end 'theName'
+
+			value.append(piece if value.isEmpty() and iter.index() == 1 else "{EnvAssignment}{piece}")
+		end 'eachPiece'
+
+		return value
+	end 'profileEnvValueOf'
+
+	let EnvAssignment = "="
+
+	// ========================================================================================
+	// THE MEASUREMENT
+	// ========================================================================================
+
+	// What a run needs before anything is launched, or the sentence naming what is missing. There is no
+	// partly-trusted path: either the binary, its placement and its sidecar all describe one build, or no
+	// program is started at all.
+	union ProfileSubject
+		ready(placement ProfilePlacement, sidecar MxdbgReader)
+		refused(reason String)
+	end 'ProfileSubject'
+
+	// ⭐ The sidecar is loaded and VOUCHED FOR before anything is launched, deliberately: a profile with no
+	// symbols is a list of addresses, so running the program first would burn the user's time to arrive at a
+	// refusal that was knowable up front.
+	function profileSubjectOf(exePath String) returns ProfileSubject
+		let binary = try FilePath.from(exePath) otherwise return ProfileSubject.refused("'{exePath}' is not a spellable path")
+
+		// Asked before the sidecar, so a target that is simply not there is reported as that rather than as
+		// whatever a sidecar loader makes of a file it cannot open.
+		if not File.exists(binary) 'noSuchExecutable'
+			return ProfileSubject.refused("no such executable: {reportPathDisplay(exePath)}")
+		end 'noSuchExecutable'
+
+		return match readProfilePlacement(binary) 'placed'
+			refused(reason) gives ProfileSubject.refused(reason)
+			found(placement) gives profileSubjectWithSidecar(binary, placement: placement)
+		end 'placed'
+	end 'profileSubjectOf'
+
+	// ⚠ The build-id refusal deliberately names the FACT and not the two ids: they are a build-machine detail
+	// a reader can do nothing with, and printing them would make every refusal transcript machine-specific.
+	function profileSubjectWithSidecar(binary FilePath, placement ProfilePlacement) returns ProfileSubject
+		let sidecarPath = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise return ProfileSubject.refused("'{binary.toString()}' has no spellable sidecar path")
+		if not File.exists(sidecarPath) 'noSidecar'
+			return ProfileSubject.refused("no debug-info sidecar at {reportPathDisplay(sidecarPath)} — a profile needs it to name the code its samples land in. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag.")
+		end 'noSidecar'
+
+		let image = try File.readBinary(sidecarPath) otherwise return ProfileSubject.refused("cannot read {reportPathDisplay(sidecarPath)}")
+
+		let sidecar = try MxdbgReader.parse(image) otherwise (e) 'badImage'
+			return ProfileSubject.refused("cannot read {reportPathDisplay(sidecarPath)}: {e.displayReason()}")
+		end 'badImage'
+
+		if sidecar.buildId != codeBuildId(placement.codeBytes) 'differentBuild'
+			return ProfileSubject.refused("the .mxdbg sidecar describes a different build of this binary — rebuild it")
+		end 'differentBuild'
+
+		return ProfileSubject.ready(placement, sidecar: sidecar)
+	end 'profileSubjectWithSidecar'
+
+	function measureProfile(request ProfileRequest) returns ExitCode
+		return match profileSubjectOf(request.exePath) 'subject'
+			refused(reason) gives refuseProfile(reason)
+			ready(placement, sidecar) gives launchAndSample(request, placement: placement, sidecar: sidecar)
+		end 'subject'
+	end 'measureProfile'
+
+	function launchAndSample(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader) returns ExitCode
+		let target = try FilePath.from(request.exePath) otherwise return refuseProfile("'{request.exePath}' is not a spellable path")
+
+		// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
+		// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
+		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.resolve(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDir(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+			return refuseProfile("could not run {reportPathDisplay(request.exePath)}: {e.displayReason()}")
+		end 'didNotStart'
+
+		let outcome = sampleUntilItEnds(request, placement: placement, sidecar: sidecar, child: child)
+		child.release()
+
+		return outcome
+	end 'launchAndSample'
+
+	// `--target-env` applied over the INHERITED environment, the same meaning `maxon debug --target-env=` has.
+	// A repeated NAME takes the LAST value, matching a shell assignment and the fact that an environment block
+	// holds one value per name — which is what the in-order upsert below gives.
+	function profileChildEnvironment(request ProfileRequest) returns Environment
+		if request.targetEnvNames.count() == 0 'nothingToSet'
+			return Environment.inherit
+		end 'nothingToSet'
+
+		var overrides = [profileEnvNameAt(request, position: 0): profileEnvValueAt(request, position: 0)]
+		for position in 1 upto request.targetEnvNames.count() 'eachOverride'
+			overrides.upsert(profileEnvNameAt(request, position: position), value: profileEnvValueAt(request, position: position))
+		end 'eachOverride'
+
+		return Environment.inheritUpdating(overrides)
+	end 'profileChildEnvironment'
+
+	function profileEnvNameAt(request ProfileRequest, position ElementIndex) returns String
+		return try request.targetEnvNames.get(position) otherwise panic("profileEnvNameAt: position {position} is inside a list of {request.targetEnvNames.count()} names")
+	end 'profileEnvNameAt'
+
+	function profileEnvValueAt(request ProfileRequest, position ElementIndex) returns String
+		return try request.targetEnvValues.get(position) otherwise panic("profileEnvValueAt: every name recorded pushes a value beside it")
+	end 'profileEnvValueAt'
+
+	// ⭐ Everything that can fail is asked HERE, before a single tick, so a refusal names the missing mechanism
+	// rather than a profile coming back mysteriously empty.
+	//
+	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
+	// every tick, and a value bound by a `match` arm is immutable (E3063).
+	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess) returns ExitCode
+		let pid = __Builtins.subprocessGetPid(child.handle) as ProfileWord
+
+		let process = __Builtins.profileOpenTarget(pid)
+		if process == 0 'noSuchProcess'
+			return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath)} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+		end 'noSuchProcess'
+
+		let timer = __Builtins.profileTimerCreate()
+		let scratch = __Builtins.profileScratchAlloc(ProfileScratchBlockBytes)
+		let window = __Builtins.profileScratchAlloc(ProfileStackWindowBytes)
+
+		// ⚠ The session is built BEFORE the three are tested, so whatever was taken is released down the one
+		// path that releases anything — `release` skips the slots that came back empty. Testing first would
+		// need a second close sequence here, and two of them disagree the moment a fourth resource appears.
+		var session = ProfileSession.create(process, timer: timer, scratch: scratch, window: window)
+		if timer == 0 or scratch == 0 or window == 0 'noSampler'
+			session.release()
+			return refuseProfileAfterKilling(child, reason: "the sampler could not take the timer and scratch pages it ticks on, so this run could not be measured at all")
+		end 'noSampler'
+
+		let outcome = match profileImageFor(session, pid: pid, placement: placement, sidecar: sidecar) 'symbols'
+			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
+			loaded(image) gives runProfileTicks(request, child: child, session: session, image: image)
+		end 'symbols'
+
+		session.release()
+
+		return outcome
+	end 'sampleUntilItEnds'
+
+	// ⭐⭐ **THE TICK LOOP, ON THE THREAD THAT CALLED IT.** Per tick, in this order: refresh the thread table
+	// if it is due, sample every thread that has run, drain what the child has said without blocking, check
+	// whether it is still alive, then step the ABSOLUTE deadline and wait for it.
+	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
+		var accumulator = ProfileAccumulator.create()
+		var frames = ProfileStringArray.create()
+
+		let intervalTicks = profileIntervalTicks(request.rateHz)
+		let deadlineNanos = trunc(request.timeoutSeconds * MillisPerSecond * NanosPerMilli) as DurationNanos
+		let started = Clock.nowNanos()
+		var lastRefresh = started
+		var deadline = __Builtins.profileNowFileTime() + intervalTicks
+		var status = ProfileTargetStatus.notObserved
+		var completed = false
+
+		session.refreshThreads()
+		while true 'eachTick'
+			if profileThreadRefreshDue(Clock.elapsedNanos(lastRefresh)) 'timeToLookAgain'
+				session.refreshThreads()
+				lastRefresh = Clock.nowNanos()
+			end 'timeToLookAgain'
+
+			session.sampleOnce(accumulator, image: image, frames: frames)
+			drainChildOutput(child)
+
+			// ⭐ LIVENESS IS CHECKED AFTER THE SAMPLE, so a short program's last moments are measured rather
+			// than lost to a check that happened to win the race.
+			let observed = profileChildExit(child)
+			if profileStatusObserved(observed) 'itEnded'
+				status = observed
+				completed = true
+				break
+			end 'itEnded'
+
+			if Clock.elapsedNanos(started) >= deadlineNanos 'pastTheDeadline'
+				break
+			end 'pastTheDeadline'
+
+			deadline = deadline + intervalTicks
+			session.waitUntil(deadline)
+		end 'eachTick'
+
+		let seconds = profileSecondsOf(Clock.elapsedNanos(started))
+
+		if not completed 'stillRunning'
+			// A deadline that fired leaves a live child, and the only wait this surface has that ENDS one is
+			// the one that terminates it at its own timeout.
+			_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
+		end 'stillRunning'
+
+		drainChildTail(child)
+
+		return emitProfileReport(request, report: accumulator.finish(reportPathDisplay(request.exePath), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
+	end 'runProfileTicks'
+
+	// What `pollExit` found, in the report's own vocabulary. A child still running has no status to report,
+	// which is exactly what `notObserved` means.
+	function profileChildExit(child StreamingSubprocess) returns ProfileTargetStatus
+		return match child.pollExit() 'poll'
+			running gives ProfileTargetStatus.notObserved
+			exited(code) gives ProfileTargetStatus.exited(code as ProfileTargetExitCode)
+		end 'poll'
+	end 'profileChildExit'
+
+	function profileStatusObserved(status ProfileTargetStatus) returns bool
+		return match status 'k'
+			notObserved gives false
+			exited gives true
+		end 'k'
+	end 'profileStatusObserved'
+
+	// ⭐ **THE PROFILED PROGRAM'S OWN OUTPUT GOES TO STDERR — BOTH STREAMS OF IT** — which is what keeps
+	// stdout exactly the report. Bounded per tick: a chatty child must not starve the sampler's schedule.
+	function drainChildOutput(child StreamingSubprocess)
+		for stream in ProfileChildStream.allCases 'eachStream'
+			var taken = 0
+			var buffered = true
+			while buffered and taken < MaxDrainedLinesPerTick 'someOfIt'
+				match pollProfileChildLine(child, stream: stream) 'polled'
+					line(text) then printError("{text}\n")
+					none then buffered = false
+				end 'polled'
+				taken = taken + 1
+			end 'someOfIt'
+		end 'eachStream'
+	end 'drainChildOutput'
+
+	// Everything the child left behind once it has ended, including a final line it wrote with no terminator
+	// — the poll stops at a newline that never arrives, and by this point an empty blocking read can only be
+	// end of stream.
+	function drainChildTail(child StreamingSubprocess)
+		for stream in ProfileChildStream.allCases 'eachStream'
+			var buffered = true
+			while buffered 'untilNothingIsBuffered'
+				match pollProfileChildLine(child, stream: stream) 'polled'
+					line(text) then printError("{text}\n")
+					none then buffered = false
+				end 'polled'
+			end 'untilNothingIsBuffered'
+
+			let tail = readProfileChildTail(child, stream: stream)
+			if not tail.isEmpty() 'thereWasOne'
+				printError("{tail}\n")
+			end 'thereWasOne'
+		end 'eachStream'
+	end 'drainChildTail'
+
+	enum ProfileChildStream
+		stdout
+		stderr
+	end 'ProfileChildStream'
+
+	function pollProfileChildLine(child StreamingSubprocess, stream ProfileChildStream) returns LinePoll
+		return match stream 'which'
+			stdout gives child.tryReadStdoutLine()
+			stderr gives child.tryReadStderrLine()
+		end 'which'
+	end 'pollProfileChildLine'
+
+	function readProfileChildTail(child StreamingSubprocess, stream ProfileChildStream) returns String
+		return match stream 'which'
+			stdout gives try child.readStdoutLine() otherwise ""
+			stderr gives try child.readStderrLine() otherwise ""
+		end 'which'
+	end 'readProfileChildTail'
+
+	// ⛔ stdout is the report and nothing else. The exit code answers whether the MEASUREMENT completed: a
+	// run killed at its deadline is real data CI must not read as a finished measurement.
+	function emitProfileReport(request ProfileRequest, report ProfileReport) returns ExitCode
+		if request.json 'machineJson'
+			print("{renderProfileJson(report)}\n")
+		end 'machineJson' else if request.folded 'machineFolded'
+			print(renderProfileFolded(report))
+		end 'machineFolded' else 'forAReader'
+			print(renderProfileText(report))
+		end 'forAReader'
+
+		return 0 if report.runCompleted else RefusedProfileExit
+	end 'emitProfileReport'
+
+	// A refusal reached with a child already running: it is this tool's orphan, so it is ended before the
+	// refusal is printed.
+	function refuseProfileAfterKilling(child StreamingSubprocess, reason String) returns ExitCode
+		_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
+
+		return refuseProfile(reason)
+	end 'refuseProfileAfterKilling'
+
+	// ========================================================================================
+	// REFUSALS
+	// ========================================================================================
+
+	// A refusal that names a defect the caller can see for themselves — a missing file, a sidecar from
+	// another build. It carries no banner: the command line was well formed, the situation was not.
+	function refuseProfile(reason String) returns ExitCode
+		printError("{ProfileSubcommandName}: {reason}\n")
+
+		return RefusedProfileExit
+	end 'refuseProfile'
+
+	// A refusal about the COMMAND LINE, which is the one kind a banner answers.
+	function refuseProfileUsage(problem String) returns ExitCode
+		printError("{ProfileSubcommandName}: {problem}\n")
+		printError("Usage: {ProfileDriverName} {ProfileSubcommandName} {RunVerb} <exe> [{JsonFlag}|{FoldedFlag}] [{RateFlag}<hz>] [{MinPercentFlag}<share>] [{TimeoutFlag}<seconds>] [args...]\n")
+		printError("  {RunVerb}      launch the program and sample where its CPU time goes.\n")
+		printError("            The binary needs no instrumentation and is not rebuilt; only the\n")
+		printError("            {MxdbgSidecarExtension} sidecar is read, so the program measured is the one that ships.\n")
+		printError("            The program's own output goes to stderr so stdout is only the report.\n")
+		printError("  {JsonFlag}    emit the full report as JSON instead of a summary.\n")
+		printError("  {FoldedFlag}  emit collapsed stacks (`root;child;leaf <count>`), the format\n")
+		printError("            flamegraph.pl, inferno and speedscope all read.\n")
+		printError("  {RateFlag}N   samples per second per running thread (default {reportWholeNumberText(DefaultRateHz as ReportNumber)}, max {reportWholeNumberText(MaxRateHz as ReportNumber)}).\n")
+		printError("  {MinPercentFlag}N\n")
+		printError("            hide rows below this share of the run from the printed tables\n")
+		printError("            (default {reportWholeNumberText(DefaultMinPercent as ReportNumber)}); how many were hidden is always reported.\n")
+		printError("  {TimeoutFlag}S  stop the program and report a PARTIAL profile after S seconds (default {reportWholeNumberText(DefaultTimeoutSeconds as ReportNumber)}).\n")
+		printError("  {TargetEnvFlag}N=V\n")
+		printError("            set a variable in the PROFILED program's environment (repeatable).\n")
+		printError("            MAXON_MAX_PROCS=N pins the scheduler's worker count, which is what\n")
+		printError("            makes a green-thread profile reproducible rather than machine-dependent.\n")
+		printError("            This tool's own exit code says whether the MEASUREMENT completed;\n")
+		printError("            the program's own status is reported as `target exit code`.\n")
+
+		return RefusedProfileExit
+	end 'refuseProfileUsage'
+#else
+
+	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT**, exactly as `monitor` is. Sampling suspends another process's
+	/// threads and reads its register file as an x64 `CONTEXT`, which is `TargetFacilities.processSampling`'s
+	/// row — and a compiler without that intrinsic cannot serve it at all. The driver still dispatches
+	/// on a
+	/// command enum whose match is exhaustive, so a caller who typed `profile` is owed the reason rather than
+	/// a usage listing that says nothing about why.
+	export function runProfile(args MaxonArgs) returns ExitCode
+		printError("maxon profile: unavailable in this build. Sampling suspends the target's threads and reads an x64 CONTEXT record, which only an compiler-built x64-Windows compiler can do — so the {args.paths.count()} argument(s) after `profile` name a program it cannot measure.\n")
+
+		return 1
+	end 'runProfile'
+#endif

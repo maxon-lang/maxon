@@ -1,0 +1,71 @@
+// Test: error.held-position-nested-binding-disagreement
+typealias Integer = int(i64.min to i64.max)
+typealias IntCursor = Cursor with Integer
+typealias IntBag = Bag with (Integer, IntCursor)
+
+interface Cursor uses Item
+	function item() returns Item
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function cursor() returns Iter
+end 'Bag'
+
+type IntCur implements Cursor with Integer
+	let v as Integer
+
+	function item() returns Integer
+		return v
+	end 'item'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'IntCur'
+
+type TextCur implements Cursor with String
+	let s as String
+
+	function item() returns String
+		return s
+	end 'item'
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'TextCur'
+
+type GoodBag implements Bag with (Integer, IntCur)
+	let v as Integer
+
+	function cursor() returns IntCur
+		return IntCur.create(v)
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'GoodBag'
+
+type BadBag implements Bag with (Integer, TextCur)
+	let v as Integer
+
+	function cursor() returns TextCur
+		return TextCur.create("nope")
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'BadBag'
+
+function firstOf(b IntBag) returns Integer
+	return b.cursor().item()
+end 'firstOf'
+
+function main() returns ExitCode
+	return (firstOf(GoodBag.create(7)) + firstOf(BadBag.create(1))) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'

@@ -1,0 +1,304 @@
+// Test: struct-array-get-survives-scope
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+		export var value as Integer
+		export var next as Integer
+
+		static function create(value Integer, next Integer) returns Self
+			return Self{value: value, next: next}
+		end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+type List
+		export var nodes as NodeArray
+		export var head as Integer
+
+		function pushFront(value Integer)
+				let node = Node.create(value, next: self.head)
+				self.nodes.push(node)
+				self.head = self.nodes.count() - 1
+		end 'pushFront'
+
+		function walk()
+				var current = self.head
+				while current != -1 'w'
+						let node = try self.nodes.get(current) otherwise Node.create(0, next: -1)
+						current = node.next
+				end 'w'
+		end 'walk'
+
+		static function create(nodes NodeArray, head Integer) returns Self
+			return Self{nodes: nodes, head: head}
+		end 'create'
+end 'List'
+
+function main() returns ExitCode
+		var list = List.create(NodeArray.create(), head: -1)
+		list.pushFront(10)
+		list.pushFront(20)
+		list.walk()
+		list.pushFront(30)
+		let n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
+		return n1.value
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Node.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.pushFront {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect Node.create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+  whilehdr:
+    x64.cmpRegImm32 rdx, -1
+    x64.jcc equal, whileexit
+  w:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at struct-array-get-survives-scope.test:28: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 r12, [rax + rdx*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#13
+  __im_empty:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit#14
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#13:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm rdx, 18446744073709551615
+    x64.callDirect Node.create
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+  trycont:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.callDirect __mm_decref
+    x64.movRegReg rdx, r12
+    x64.jmp whilehdr
+  whileexit:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegImm rdx, 18446744073709551615
+    x64.movRegReg rcx, r8
+    x64.callDirect List.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.walk
+    x64.movRegImm32 rdx, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#11
+  __im_empty:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit#12
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  critsplit#12:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#11:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm rdx, 18446744073709551615
+    x64.callDirect Node.create
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+  trycont:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 0]
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_List
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at struct-array-get-survives-scope.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

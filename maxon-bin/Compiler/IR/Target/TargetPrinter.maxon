@@ -1,0 +1,1358 @@
+// TargetPrinter — serialize a lowered TargetModule to a stable, human-readable
+// text form.
+//
+// Two consumers: `build --emit-ir` (writes the printed IR to `<output>.ir`) and
+// the spec runner (embeds it in a committed `.test` fragment so every test
+// carries its generated code, diffable across codegen changes).
+//
+// WHY the op match is exhaustive with NO bare `default`: this printer is the one
+// place a new `TargetOp` variant is forced to be handled. TargetOp carries no
+// tier boundary that would make an unprinted op unrepresentable, so a `default`
+// arm here would silently print `??` for any op a later milestone adds. An
+// exhaustive `match` turns "someone added a TargetOp" into a COMPILE error at
+// `formatTargetOp`, so the printer can never fall out of sync with the dialect.
+// This is the same "you cannot add an op without declaring its facts" discipline
+// the dialect's `TargetOpMeta` enforces, applied to text emission.
+
+// Two-space nesting, ISA-mnemonic prefix, and the section punctuation are format
+// contracts shared with the committed fragments — named, not scattered literals,
+// so the one place the layout is defined is here.
+let BlockLabelIndent = "  "
+let OpIndent = "    "
+
+// Every mnemonic is prefixed once by the ISA namespace (`x64.`) at the print
+// site rather than baked into all 16 match arms — the arms stay mnemonic-only
+// and the namespace lives in one constant.
+let X64OpPrefix = "x64."
+let Arm64OpPrefix = "arm64."
+let FuncHeaderPrefix = "func @"
+
+// A HAND-ASSEMBLED chunk's header. Deliberately NOT `func @`: what follows is a hex dump of the
+// bytes the backend assembled, not a rendering of ops, and a reader must be able to tell the two
+// apart at a glance rather than by noticing the body looks odd.
+let ChunkHeaderPrefix = "chunk @"
+
+// How a chunk's bytes are laid out: sixteen per line, each line opened by its CHUNK-LOCAL offset (a
+// chunk's `entryOffset` is always 0, so the offsets a reader sees are the ones a disassembler
+// listing of that chunk alone would show). Named because the three together are a format contract
+// with every committed chunk golden.
+let ChunkBytesPerLine = 16
+let ChunkOffsetDigits = 4
+let ChunkOffsetSeparator = ": "
+let ChunkByteSeparator = " "
+
+// The block delimiters every rendering here opens and closes with. A `{` inside an interpolated string
+// is the interpolation's own opener, so writing one costs an escape — and each of the three renderings
+// (the data section, a function body, a chunk dump) had spelled that escape for itself, two of them
+// through a private local pair. One spelling, read by all three.
+let OpenBrace = "\{"
+let CloseBrace = "\}"
+
+// The WITHHELD functions a rendering names — the compiler's emitted runtime, or a `stdlib/` body — as
+// a `--emit-ir-runtime=` list, which a spec case writes as a ```RequiredRuntime block. EMPTY is the
+// ordinary case and is not a sentinel: it is the literal count of names the caller gave. (The alias
+// keeps the `Runtime` spelling the flag and the fence are both named by; what it selects is stated at
+// `isSuppliedFunction`, which is the one rule deciding it.)
+export typealias RuntimeFunctionNameArray = Array with String
+
+// The `.data` section a module carries, rendered first by `printTargetModule` — which is the reason
+// `globalData` is a parameter there.
+//
+// It gives the top-level `var` feature the SAME gate every other emitted thing has: the golden
+// fragment pins the layout, so a slot that moves, changes width, or changes its initial value is a
+// FAILING TEST with a reviewable diff rather than a silent difference in a program's starting state
+// — which no exit code can see until the one path that reads that global happens to run.
+//
+// ⚠ It is NOT what a ```RequiredData block is checked against, and an earlier draft of this comment
+// said it was. `SpecTestRunner.checkRequiredSections` parses that block into BYTES and compares them
+// against the `.data` section read back out of the linked PE (`PeSectionReader`) — this text is
+// never consulted. That independence is deliberate and is the gate's whole value: a spec checked
+// against the printer would only ever prove the compiler agrees with itself, and could not catch a
+// section header with a wrong RVA or a raw pointer off by an alignment. The two share the `i64 42`
+// NOTATION because it reads well in both places; they share no code, and that is the point.
+//
+// So the two gates are complementary, not redundant: this golden pins what the compiler DECIDED,
+// RequiredData pins what the linker actually WROTE.
+//
+// ⭐ **AN f64 SLOT SHOWS THE NUMBER SOMEBODY WROTE.** `entry.value` is a `ParsedInt` holding an IEEE
+// BIT PATTERN when the slot is a float, so this printed `__data_pi@0 = f64 4614253070214989087` — a
+// gate whose whole purpose is *"a slot that changes its initial value is a FAILING TEST with a reviewable
+// diff"*, rendering the one field a reviewer cannot review. `scalarConstantText` is the shared renderer,
+// the same one an E3005 range bound goes through, so the two cannot disagree about what `3.14` is.
+//
+// A program with no global prints NOTHING here, not an empty header: the section does not exist, and
+// every pre-existing golden is unchanged by this rung as a result.
+function printDataSection(globalData GlobalDataTable) returns String
+	if globalData.dataSection.count() == 0 'noGlobals'
+		return ""
+	end 'noGlobals'
+
+	var out = StringBuilder.create()
+	out.append("data {OpenBrace}\n")
+	for entry in globalData.dataSection 'each'
+		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {scalarConstantText(entry.value, isFloat: stdTypeIsFloat(entry.valueType))}\n")
+	end 'each'
+	out.append("{CloseBrace}\n")
+	return out.build()
+end 'printDataSection'
+
+// Serialize a whole TargetModule: each function in module order (the entry stub
+// `mrt_start` first, then user functions in source order — a deterministic
+// order the register allocator and lowering preserve), separated by one blank
+// line, with no trailing blank line.
+//
+// ⭐⭐ **A FRAGMENT RENDERS THE PROGRAM, NOT WHAT THE PROGRAM WAS SUPPLIED WITH — so the LIBRARY is
+// withheld exactly as the emitted runtime is (`isSuppliedFunction`).** `stdlib/` is compiled from
+// source into the SAME module as the user's code, so without this filter a five-line program whose
+// whole body is `print("hello".trim())` renders thousands of library lines across dozens of
+// functions. A golden that is 99% library says almost nothing about the case it is named after, and
+// every edit to `stdlib/` would rewrite thousands of fragments at once — drowning the drift signal
+// the fragments exist to carry in a diff nobody can read.
+//
+// ⚠ **THE FACT IS THE FUNCTION'S OWN PROVENANCE, ASKED THE ONE WAY THIS COMPILER ASKS IT.** The set
+// arrives as `project.stdlibFacts.stdlibFunctions` — the per-function form of "came from `stdlib/`"
+// that `StdlibSource` derives once per compile and that `isStdlibFunction` is the reader of. It is
+// NOT re-derived here from paths or from name shapes: a `String.`/`Array.` prefix test would be a
+// second answer to a question that already has one, and would misfile a user's own `String`-named
+// method the moment one existed.
+//
+// ⭐⭐ **`runtimeNames` IS THE ONLY WAY A WITHHELD BODY REACHES A GOLDEN, AND IT IS OPT-IN
+// PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
+// the `__str_*`/`__managed_*` families) are skipped by default because the shared scaffolding is
+// identical in every test and would be pure noise in all of them — and, until BATCH8, "by default"
+// meant "always": this function's one caller (`Compiler.compileMeasured`, which was
+// `Compiler.writeTargetIr` when BATCH8 was written — G20 split the RENDER from the WRITE) passed the
+// old `includeRuntime: false` unconditionally and nothing anywhere passed `true`, so those bodies
+// carried **no golden at all**. The miss was
+// measured, not feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a
+// use-after-free that BALANCES (the matching release disappears with it), and the exit codes, the
+// leak gate and every committed fragment stayed green over exactly that edit, together.
+//
+// So the axis is a NAME LIST rather than a boolean. A boolean has only a useless second state here —
+// "render all of it", into every fragment at once — while a list renders exactly the body a rung has
+// just written into exactly the test that is about it, and leaves all 3,198 other goldens byte-
+// identical. A name that RENDERED nothing is REFUSED (`requireEveryNameRendered`), because a
+// misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
+//
+// ⭐ **AND IT NAMES A STDLIB BODY BY THE SAME ROUTE, for the same reason it names an emitted one:**
+// once the library is withheld, `String.trim`'s lowered code has no golden either, and a case whose
+// SUBJECT is a stdlib body (a retirement of a synthesized surface onto `stdlib/`, a codegen fix for a
+// container primitive) has to be able to pin the one body it is about. The list is the whole opt-in —
+// a case that names nothing is byte-for-byte the program's own functions.
+//
+// ⭐⭐ **AND THE LIST REACHES THE HAND-ASSEMBLED CHUNKS TOO — they are not `module.functions`, but they
+// ARE addressable.** `mrt_panic`, the green-thread pieces and (on arm64) the entry stub are raw bytes
+// rather than `TargetOp`s, so there is no IR body to print for them — and the block used to be REFUSED
+// on that ground, which confused *"has no IR body"* with *"cannot be pinned"*. Every one of them
+// carries its NAME on its `FunctionCodeChunk`, so a requested name that no FUNCTION answered is
+// offered to `codeChunks`, and the chunk bearing it renders its ASSEMBLED BYTES. That is the entire
+// difference: two RENDERINGS of one selection rule, not two selection rules. What it buys is measured
+// rather than hoped for — the panic runtime, the scheduler's context switch and the stack-growth
+// trampoline had no gate of ANY kind, being the one part of an emitted program that neither an exit
+// code, nor the leak gate, nor a section pin, nor a fragment could see.
+//
+// The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
+// owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
+// would make printing a module quadratic in its own output.
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, stdlibFunctions FunctionNameSet) returns String
+	var body = StringBuilder.create()
+	let dataText = printDataSection(globalData)
+	body.append(dataText)
+	// The data block is followed by a blank line, exactly as two functions are — so a program WITH
+	// globals reads as `data { … }` then its functions, and one WITHOUT is byte-for-byte unchanged.
+	var afterFirst = dataText.byteLength() > 0
+
+	// The module's ISA, recovered once and threaded down so the SHARED ops (which carry no ISA of their
+	// own) name their operands against the right register file. See `moduleTargetCpu`.
+	let cpu = moduleTargetCpu(module)
+
+	// ⭐⭐ **THE REFUSAL IS DERIVED FROM THE RENDER, not computed beside it.** One flag per requested
+	// name, and the ONLY thing that raises a flag is the very test the loop below uses to decide
+	// whether to print a function. An earlier draft asked the question twice — a `requireRuntimeNames-
+	// Renderable` pre-pass that scanned the module for each name, and a `namesFunction` predicate the
+	// print loop consulted — which is this project's signature bug in miniature: two readers of one
+	// question, nothing making them agree, and a divergence that reports a WRONG ANSWER rather than a
+	// compile error: the check says the name will render, the skip rule renders nothing, the golden is
+	// recorded without the body, and the test claiming the gate goes green for ever. A future edit to
+	// the skip rule now cannot bypass the refusal, because there is no second rule left to bypass.
+	var rendered = BoolArray.create()
+	rendered.resize(runtimeNames.count())
+
+	for func in module.functions 'eachFunc'
+		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
+		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
+		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
+		// WRONG ANSWER rather than an error.
+		let supplied = isSuppliedFunction(func, stdlibFunctions: stdlibFunctions)
+
+		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
+		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
+		// the one selection rule.
+		if named and not supplied 'notWithheld'
+			panic("printTargetModule: '{String.from(func.name)}' is the PROGRAM's own function — it is parsed from {func.sourceFilePath}, which is not the library, and the fragment already renders it, so naming it in a ```RequiredRuntime block pins nothing new")
+		end 'notWithheld'
+
+		if supplied and not named 'skipSupplied'
+			continue
+		end 'skipSupplied'
+
+		if afterFirst 'separator'
+			body.append("\n")
+		end 'separator'
+
+		body.append(printTargetFunction(module, func: func, cpu: cpu, globalData: globalData))
+		afterFirst = true
+	end 'eachFunc'
+
+	// ⚠ **THE CHUNK PASS RUNS SECOND, AND THE ORDER IS WHAT MAKES "HAND-ASSEMBLED" DERIVED RATHER THAN
+	// RECORDED.** EVERY module function also has a chunk (`emitFunctionChunk` built it), so "is this
+	// chunk hand-assembled?" is exactly "did no function of this name already answer the request?" —
+	// which the flag column above has just finished recording. Asking it that way means nothing has to
+	// carry a `isHandAssembled` bit that a new chunk producer could forget to set, and a name can never
+	// be rendered twice: `markNamedBy` reports a match as NEW only when at least one of its flags was
+	// still down.
+	for chunk in codeChunks 'eachChunk'
+		if not markNamedBy(runtimeNames, name: chunk.funcName, rendered: rendered) 'notNamedOrAlreadyRendered'
+			continue
+		end 'notNamedOrAlreadyRendered'
+
+		if afterFirst 'separator'
+			body.append("\n")
+		end 'separator'
+
+		body.append(printChunkBytes(chunk))
+		afterFirst = true
+	end 'eachChunk'
+
+	requireEveryNameRendered(runtimeNames, rendered: rendered)
+
+	return body.build()
+end 'printTargetModule'
+
+// Raise `rendered[k]` for every requested name equal to `name`, and answer whether that introduced
+// anything NEW — i.e. whether at least one of the flags it raised had been down. THE one place a
+// ```RequiredRuntime name is matched against something renderable: the function loop's skip rule, the
+// chunk loop's hand-assembled test, and the refusal below all read this column and nothing else.
+//
+// ⚠ **THE TWO HALVES OF THAT ANSWER ARE BOTH LOAD-BEARING, and they are not the same question.** Every
+// matching flag is RAISED, because a case listing one name twice has asked for one body and must not
+// be refused for the second mention. But the answer REPORTED is "was anything still down?", because
+// that is what the chunk loop needs: a chunk whose name a function already answered must not render
+// its bytes underneath that function's IR.
+//
+// It takes the NAME rather than the `IrFunction`, so the chunk pass — which has no function — matches
+// through this and not through a second, driftable copy of "does this list select this name?".
+//
+// A linear scan over a list a spec author typed by hand (one or two entries, never more), against the
+// caller's own `ByteArray`.
+function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered BoolArray) returns bool
+	var isNew = false
+	for (iter, requested) in runtimeNames.withIterator() 'each'
+		if not name.equals(requested.toByteArray()) 'noMatch'
+			continue
+		end 'noMatch'
+
+		let alreadyRendered = try rendered.get(iter.index()) otherwise panic("markNamedBy: flag read at {iter.index()} is outside a column sized by the same list")
+		if not alreadyRendered 'firstAnswer'
+			isNew = true
+		end 'firstAnswer'
+
+		try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
+	end 'each'
+	return isNew
+end 'markNamedBy'
+
+// ⭐ **ONE HAND-ASSEMBLED CHUNK, AS BYTES** — `chunk @<name> {`, then sixteen bytes a line prefixed by
+// their chunk-local offset, then the closing brace. The `func @` twin for the runtime pieces that have
+// no ops to print.
+//
+// ⚠ **THESE ARE THE CHUNK'S OWN PRE-LINK BYTES, and that is what makes the golden STABLE.** A chunk's
+// buffer is fixed at assembly time; the `.text` image the linker builds from it then has every
+// intra-module call resolved to a rel32 and every IAT reference patched to an RVA, both of which move
+// when anything ELSE in the program changes size. A dump cut from the linked image would therefore go
+// red on an unrelated edit to the test's own `main` — the same reason a printed IR body shows a branch
+// LABEL rather than a displacement. (`CodeResult.codeChunks` carries this decision on the other side.)
+function printChunkBytes(chunk FunctionCodeChunk) returns String
+	var sb = StringBuilder.create()
+	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {OpenBrace}\n")
+
+	let byteCount = chunk.code.count()
+	for (iter, b) in chunk.code.withIterator() 'eachByte'
+		let column = iter.index() mod ChunkBytesPerLine
+		if column == 0 'opensALine'
+			sb.append("{OpIndent}{hexOffset(iter.index() as CodeOffset)}{ChunkOffsetSeparator}")
+		end 'opensALine' else 'continuesOne'
+			sb.append(ChunkByteSeparator)
+		end 'continuesOne'
+
+		sb.append(hexByte(b))
+
+		// The last byte of a full line, or the last byte of the chunk — a short final line is closed by
+		// the same test rather than by a second one after the loop, which could disagree about whether
+		// an exactly-full chunk needs one. Written as `index + 1 == count` rather than against a
+		// `count - 1` bound, which underflows its own range type on a (never-produced) empty chunk.
+		if column == ChunkBytesPerLine - 1 or iter.index() + 1 == byteCount 'closesALine'
+			sb.append("\n")
+		end 'closesALine'
+	end 'eachByte'
+
+	sb.append("{CloseBrace}\n")
+	return sb.build()
+end 'printChunkBytes'
+
+// A chunk-local offset as lowercase hex, zero-padded to `ChunkOffsetDigits` so every line of a dump
+// starts in the same column and a diff points at a byte rather than at a re-wrapped line.
+//
+// ⚠ It PADS, it does not TRUNCATE. No chunk today is within three orders of magnitude of overflowing
+// four digits, but a fixed-width render of a wider one would print an offset the byte is not at —
+// silently, and in a golden whose whole job is to be read literally. A longer line is the honest
+// failure mode.
+function hexOffset(offset CodeOffset) returns String
+	var digits = ChunkOffsetDigits
+	while (offset shr (digits * BitsPerHexDigit)) > 0 'tooWide'
+		digits = digits + 1
+	end 'tooWide'
+
+	var out = StringBuilder.create()
+	for i in 0 upto digits 'eachDigit'
+		out.append(hexDigit((((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask) as MachineWord)))
+	end 'eachDigit'
+	return out.build()
+end 'hexOffset'
+
+// --- The one spelling of a byte in hex ---
+//
+// ⚠ **DECLARED HERE, IN THE COMPILER TIER, AND CONSUMED BY THE HARNESS ABOVE IT.** `Testing`'s section
+// gates render a `.data` mismatch in bytes and used to carry their own `hexByte`/`hexDigit`; a chunk
+// dump is the same rendering in the compiler, and a second copy of "a byte, in hex" is a second copy
+// whichever direction it faces. The harness may call down into the compiler (it already does, for
+// `targetToString` and `emitsTargetIr`); the compiler may not call up. So the shared spelling lives on
+// the lower side, and `PeSectionReader.formatHexBytes` reads it from here.
+
+// How many bits one hex digit carries — the shift `hexOffset` walks its nibbles by, and the shift
+// `hexByte` splits a byte on. A literal `4` in both places is one fact written twice.
+let BitsPerHexDigit = 4
+
+// The low nibble those shifts then select — the SAME fact as `BitsPerHexDigit`, read as a mask instead
+// of a width, and it was written as a bare `0xF` at all three shift sites plus a fourth time in
+// `hexDigit`'s panic text. Widen one and the others silently index past the digit table.
+let HexDigitMask = 0xF
+
+export function hexByte(b MachineWord) returns String
+	return "{hexDigit((b shr BitsPerHexDigit) and HexDigitMask)}{hexDigit(b and HexDigitMask)}"
+end 'hexByte'
+
+// One lowercase hex digit.
+function hexDigit(nibble MachineWord) returns String
+	let digits = b"0123456789abcdef"
+	return oneByteText((try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`") as MachineWord))
+end 'hexDigit'
+
+// ONE byte as a one-character String. A `ByteArray` of length one rather than a `String` index: both
+// callers hold BYTES, and `String.from` of a one-byte array is the shortest honest route to a
+// one-character String in a language whose String is UTF-8 and whose indices are byte positions.
+function oneByteText(b MachineWord) returns String
+	var one = ByteArray.create()
+	one.push(b)
+	return String.from(one)
+end 'oneByteText'
+
+// --- The VALUE a `.rdata` label names, printed beside the label ---
+//
+// ⭐⭐ **A LABEL IS A NAME FOR BYTES A FRAGMENT DOES NOT OTHERWISE SHOW.** `leaRegRdata rcx,
+// [rip + __str_blob_0]` pins WHICH slot the code addresses and says nothing whatever about what is in it —
+// so the message a range-check panic prints, which is the entire observable behaviour of that block, was
+// invisible in every golden that contains one. The note closes that: the label still identifies the slot,
+// and the text says what the slot holds.
+//
+// ⚠ **IT IS DRIVEN BY THE PAYLOAD'S KIND AND NEVER BY THE LABEL'S SPELLING** (`rdataPayloadNote` matches
+// on `GlobalDataTable.payloadKindOf`). A prefix test would fail OPEN on a structural label — a witness
+// table and a layout descriptor wear no prefix a matcher could enumerate — and routing `.rdata` by name is
+// a rule this compiler has already deleted once; `GlobalDataTable.RdataPayloadKind` carries that argument.
+//
+// ⚠ The FLOAT islands deliberately get no note: their label already IS their value
+// (`GlobalDataTable.registerFloatConstant`), and `[rip + __fconst_-5.5]  ; -5.5` would say it twice.
+let RdataNoteSeparator = "  ; "
+
+// How much of a payload a note shows. A cap exists because a String literal has no length limit and a
+// golden is read as text; the SIZE is chosen from the corpus rather than picked: the longest thing that
+// routinely lands here is a range-check panic, `panic at <file>:<line>: Range check failed: value outside
+// typealias '<name>'`, whose file part is a spec's own test name and runs to ~60 bytes — about 140 in
+// total. At 72 every one of them was cut at `typealias 'Exi`, hiding the one clause that says which
+// check this is, which is the whole reason to print it. 160 shows those whole and still bounds the line.
+//
+// The cap counts the payload's OWN bytes, not the rendered escapes, so a run of unprintables cannot move
+// it.
+let RdataNoteMaxBytes = 160 as ElementIndex
+
+// What marks a note as cut short. OUTSIDE the closing quote, so it can never be read as content: a
+// payload really ending in three dots renders `"a..."` and a truncated one renders `"a"...`.
+let RdataNoteEllipsis = "..."
+
+// The printable-ASCII band a note renders verbatim; everything outside it becomes a hex escape. Named as
+// a BAND rather than as two bare numbers because the two ends are one decision — "what can a golden carry
+// literally?" — and 0x7F is excluded for the same reason 0x00 is: it is a control code, not a character.
+let PrintableAsciiLow = 0x20 as MachineWord
+let PrintableAsciiHigh = 0x7E as MachineWord
+
+// The note for one `.rdata` operand — WHERE this slot's text is, and the empty string when it has none.
+// EXHAUSTIVE over `RdataPayloadKind` for the reason the file header gives about `formatTargetOp`: a new
+// payload kind must not be able to arrive and silently render as nothing.
+//
+// ⭐⭐ **A STRING RECORD IS THE CASE THAT MATTERS, AND IT IS ONE HOP AWAY.** Emitted code addresses a
+// String literal through its 56-byte RECORD, never through its blob — `print("hi")` lowers to
+// `leaRegRdata rcx, [rip + __str_rec_1]` — so a note that rendered only its OWN payload would show the
+// text of a range-check panic (which does pass its blob) and nothing at all for every string a program
+// actually mentions. The record's meaning IS the blob it names; `stringBlobLabelOfRecord` is that link,
+// indexed by the table rather than scanned for.
+function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns String
+	let name = String.from(label)
+	return match globalData.payloadKindOf(name) 'kind'
+		// TEXT by construction: the payload's own bytes.
+		stringBlob or
+			traceTag or
+			envName or
+			coveragePath gives payloadTextNote(globalData.payloadOf(name))
+		// A float island needs none — its LABEL is its value (`GlobalDataTable.registerFloatConstant`).
+		floatConstant gives ""
+		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
+		// STRUCTURE: bytes only a decoder can read, so the label stands alone.
+		byteArrayBlob or
+			jumpTable or
+			witnessTable or
+			layoutDescriptor or
+			slabTable or
+			unicodeTable or
+			byteArrayRecord or
+			structRecord or
+			stringTableBuffer gives ""
+	end 'kind'
+end 'rdataPayloadNote'
+
+// One text payload, as the note that follows an operand.
+function payloadTextNote(bytes ByteArray) returns String
+	return "{RdataNoteSeparator}{quotedPayloadText(bytes)}"
+end 'payloadTextNote'
+
+// A text payload as a quoted, escaped, length-capped literal.
+//
+// ⚠ **IT STOPS AT THE FIRST NUL, WHICH IS WHERE THE TEXT STOPS AND NOT WHERE THE PAYLOAD DOES.** A
+// String blob is its bytes and a NUL, and the table then pads every payload to
+// `GlobalDataTable.RdataPayloadAlignment`, so rendering the whole payload would put one to seven escaped
+// zero bytes at the end of most notes — alignment, in a note about content. A trace tag carries no
+// terminator of its own and simply reaches its pad, which stops this for the same reason.
+function quotedPayloadText(bytes ByteArray) returns String
+	var out = StringBuilder.create()
+	out.append(DoubleQuoteText)
+
+	var shown = 0 as ElementIndex
+	for b in bytes 'eachByte'
+		if b == NulTerminator 'endOfText'
+			break
+		end 'endOfText'
+
+		if shown == RdataNoteMaxBytes 'capped'
+			return "{out.build()}{DoubleQuoteText}{RdataNoteEllipsis}"
+		end 'capped'
+
+		out.append(escapedPayloadByte(b as MachineWord))
+		shown = shown + 1
+	end 'eachByte'
+
+	return "{out.build()}{DoubleQuoteText}"
+end 'quotedPayloadText'
+
+// The quote a note's text is wrapped in, and the backslash that escapes one. Named because each is
+// written at more than one place in the renderer above and both are a FORMAT CONTRACT with every
+// committed fragment, not an incidental character.
+let DoubleQuoteText = "\""
+let BackslashText = "\\"
+
+// One payload byte as it appears inside a note. Quote and backslash are escaped so the note cannot be
+// mis-read as ending early; everything outside printable ASCII becomes a hex escape, which keeps a golden
+// pure ASCII whatever a String literal holds — including a NEWLINE, which would otherwise break the
+// one-op-per-line format the whole file rests on.
+//
+// The two special bytes come from the LEXER's `Ascii`, not from two fresh constants here: "34 is a double
+// quote" is one fact, and this file's own `BitsPerHexDigit`/`HexDigitMask` pair records what happens when
+// such a fact is written down twice.
+function escapedPayloadByte(b MachineWord) returns String
+	if b == Ascii.dquote or b == Ascii.backslash 'escapedVerbatim'
+		return "{BackslashText}{oneByteText(b)}"
+	end 'escapedVerbatim'
+
+	if b < PrintableAsciiLow or b > PrintableAsciiHigh 'notPrintable'
+		return "{BackslashText}x{hexByte(b)}"
+	end 'notPrintable'
+
+	return oneByteText(b)
+end 'escapedPayloadByte'
+
+// ⭐ **A NAME THAT RENDERED NOTHING IS REFUSED, because the alternative is a test that claims a gate
+// it does not have.** A ```RequiredRuntime block exists to put ONE body under a golden; a typo in it
+// would add nothing to the fragment, the golden would be recorded without the body, and the case
+// would pass for ever while pinning exactly what it pinned before — the "a gate that cannot see its
+// own property must not report PASS" rule, arriving through a spelling mistake.
+//
+// The cause is a misspelling, or a piece this program does not contain: the emitted runtime is
+// installed on DEMAND, so `__str_bytes_view` exists only in a program whose stdlib cone takes a
+// String's bytes, and `__gt_morestack` only in one that runs a green thread — and a STDLIB body is
+// dropped by dead-function elimination unless the program reaches it, so `String.trim` is nameable
+// only from a program that trims. (The other way to name nothing — naming a function the fragment
+// already shows — is caught inside the render loop, where the function is in hand.)
+//
+// ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" USED TO BE LISTED HERE AS A THIRD, UNFIXABLE CAUSE. IT IS NOT A
+// CAUSE AT ALL ANY MORE**, and the message must not send a reader after a spelling that will never
+// work: a chunk has no IR body, which is still true, but it is rendered as BYTES instead of being
+// refused (see `printChunkBytes`). Every remaining reason a name renders nothing is repairable — a
+// different spelling, or a program whose runtime includes the piece — which is exactly what this text
+// now says.
+//
+// It panics rather than reporting a diagnostic: the list arrives on a `--emit-ir-runtime=` command
+// line, which is the spec runner's own instrument rather than a program's source, and a panic
+// carries the message into the runner's captured stderr where the failing test shows it.
+function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered BoolArray)
+	for (iter, name) in runtimeNames.withIterator() 'eachName'
+		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
+		if not didRender 'noSuchFunction'
+			panic("printTargetModule: this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated")
+		end 'noSuchFunction'
+	end 'eachName'
+end 'requireEveryNameRendered'
+
+// True for the runtime/entry functions the compiler's backend synthesizes (not from user source): the entry stub
+// `mrt_start`, the emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
+// `__fnref_` env-thunks and `__module_init`/`__module_cleanup`.
+//
+// EXPORTED because it is the SAME set the P1.5-B1a′ GT stack guard EXEMPTS (X64Backend's
+// `emitFunctionChunk`): a runtime function must never trigger `__gt_morestack` — the scheduler core
+// runs the grower, and its own kernel calls are already shimmed onto the system stack (slice 1) — so
+// "which functions are compiler-emitted runtime" is one predicate, shared by the golden-skip here and
+// the guard exemption there, not two copies free to drift.
+//
+// ⚠⚠ **THE NAME SHAPE ALONE WAS A REACHABLE SEGFAULT, AND PROVENANCE IS THE SECOND CLAUSE THAT FIXES IT
+// (A1r review).** This read the two prefixes and nothing else, on the stated premise *"Maxon reserves `__`
+// for compiler-internal names, so a user function can never collide"* — which **D6 falsified**:
+// `stdlib/Builtins.maxon` may DECLARE `__`-prefixed names, and A1r made them CALLABLE. A user function
+// wearing the prefix was therefore handed the SCHEDULER's exemption. MEASURED on x64-windows: a
+// `__probeDeep` declared in that module, recursing 4000 deep inside an `async` worker, **SIGSEGVs (exit
+// 139)** because no guard ever called `__gt_morestack`; the identical program with the `__` dropped from
+// the name exits **42**. A safety exemption keyed on a naming convention is only as sound as the
+// convention, and this convention had acquired an exemption of its own.
+//
+// **`sourceFilePath` is the fact, and it is recorded at CONSTRUCTION by the only party that knows it**: the
+// parser stamps it on every function it builds (`parseFunction`, and `parseClosureExpression` for a lifted
+// closure), and `IrFunction.createFromStd` / `ModuleInit`'s `IrFunction.create` — the two doors a synthesized
+// function comes through — leave it empty. So it is derived rather than guessed, and no name can fool it:
+// not a declared `__int_fromString`, and not a lifted closure inside one (`__int_fromString$closure_0`),
+// which the prefix test also exempted.
+//
+// ⚠ **IT NARROWS THE NAME TEST AND DOES NOT REPLACE IT, and that is not conservatism — MEASURED, replacing
+// it fails 118 spec tests.** An empty `sourceFilePath` is a strictly WIDER set than this one: it also holds
+// the SYNTHESIZED BUILTIN bodies — `int.compare`, `String.hash`, the runtime families — which
+// are compiler-built but deliberately wear NO prefix (a witness reloc must name a real `.text` symbol; see
+// `IrInterface.isBuiltinConformanceImplName`). Those are exactly the bodies the `set`/`string-trim`/
+// `character-set`/`primitive-comparable` goldens exist to pin — ⚠ **and in the first and third that is now
+// the KEY's conformance impls (`Character.hash`/`Character.equals`) rather than a container runtime**, whose
+// synthesized bodies went at W105 and W129; the spec directories still reach the same naming band, by the
+// corpus route. On the GT side they are ordinary frames a
+// green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, which is the
+// CONJUNCTION: the runtime's own naming band, and not parsed from source.
+function isRuntimeFunction(func IrFunction) returns bool
+	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
+end 'isRuntimeFunction'
+
+// ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
+// and the refusal all read** (see `printTargetModule`). Two disjoint provenances, one question:
+//
+//   * the compiler's own emitted scaffolding (`isRuntimeFunction`), which is invariant across every
+//     program and identical in every fragment; and
+//   * the LIBRARY — every function the merged module got from `stdlib/` source, which is invariant
+//     across every program that uses the same corner of it.
+//
+// ⚠ **IT IS NOT `isRuntimeFunction` WIDENED, and the two must not be merged.** `isRuntimeFunction` has
+// a SECOND reader with an entirely different question — `skipsGreenThreadStackGuard`, which asks
+// whether a frame may skip the stack-growth check — and a stdlib function is an ordinary frame a green
+// thread runs and MUST grow for. Folding the library into that predicate would hand `String.trim` the
+// scheduler's exemption, which is the exact class of defect (a safety exemption keyed on the wrong
+// fact) that `isRuntimeFunction`'s own header records as a reachable SIGSEGV.
+//
+// The library half is a set lookup rather than a path test for the reason `StdlibSource`'s header
+// gives: provenance is materialized ONCE per compile, and re-deriving it with `FilePath.isInside`
+// costs about four String allocations per question.
+function isSuppliedFunction(func IrFunction, stdlibFunctions FunctionNameSet) returns bool
+	return isRuntimeFunction(func) or stdlibFunctions.contains(func.name)
+end 'isSuppliedFunction'
+
+// ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question `isRuntimeFunction`
+// is close enough to answer by accident.
+//
+// The two are not the same question and only look it while every synthesized function is scaffolding.
+// `isRuntimeFunction` asks about PROVENANCE — "is this the compiler's own invariant machinery?" — and that
+// is the right question for the GOLDENS, which is its other reader. The guard asks about STACK BEHAVIOUR:
+// "can this frame overflow a green thread's stack?" The scheduler core must never trigger the grower and
+// its kernel calls are shimmed onto the system stack; `__module_init` and `__maxon_global_cleanup` run
+// outside `main`, where there is no green thread to overflow.
+//
+// ⚠ One synthesized family satisfies `isRuntimeFunction` and neither of those reasons, so it carries the
+// guard: the per-type CASCADES, which recurse to the depth of the user's data graph.
+// `IrFunction.needsGreenThreadStackGuard` is where that is said, and carries the measurement.
+export function skipsGreenThreadStackGuard(func IrFunction) returns bool
+	return isRuntimeFunction(func) and not func.needsGreenThreadStackGuard
+end 'skipsGreenThreadStackGuard'
+
+// --- Block names: the ONE derivation a header and a branch target both read ---
+
+// What separates a colliding block label from the BlockId that disambiguates it. No block label
+// can contain it: a source label is an identifier (`'each'`) and every compiler-minted one is a
+// lowercase word (`ifcont`, `tryerr`, `__rc_panic`), so a disambiguated name can never be mistaken
+// for a bare one. `buildBlockPrintNames` does not take that on trust — it PROVES the whole set is
+// injective before returning it.
+let BlockNameIdSeparator = "#"
+
+// How many of a function's blocks share one label — the count that decides whether a name needs
+// disambiguating at all.
+typealias BlockLabelOccurrences = Map with (ByteArray, ElementIndex)
+
+// Every block's printed name, KEYED BY ITS BlockId. A map rather than an id-indexed array because a
+// function's live ids are sparse (passes delete blocks), so an array would need a filler in the gaps
+// — and any filler is a sentinel that a lookup could return instead of failing.
+typealias BlockPrintNames = Map with (BlockId, String)
+
+// The names already handed out, so the injectivity claim above is CHECKED rather than asserted.
+typealias BlockPrintNameSet = Set with String
+
+// ⛔⛔ **A BLOCK'S `label` IS NOT ITS IDENTITY, AND PRINTING IT AS ONE MADE THE DUMP LIE.**
+//
+// Labels are minted per CONSTRUCT, not per block: `parseIf` names every continuation `ifcont`, a
+// `try` names every pair `tryerr`/`tryok`, the range-check names every trio `__rc_chk`/`__rc_ok`/
+// `__rc_panic`. One function therefore routinely holds several blocks of one name. The printer used
+// to render `block.label` in the header AND resolve a branch target to `block.label` too — a LOSSY
+// KEY USED AS AN IDENTITY, and not merely ambiguous: in `buildFor`
+// (`specs/refcount-global-getter-forward.md`) two blocks are both `ifcont` and the FIRST ends
+// in `jmp ifcont` targeting the SECOND, so the only reading available to a reader — the label above
+// the jump — says self-loop where the code is a forward jump.
+//
+// MEASURED when this was fixed: **4,505 of 16,250 committed `.test` goldens** held at least one
+// such function (15,272 functions; `ifcont` 9,606, `tryerr`/`tryok` 6,273 each, `critsplit` 4,385).
+//
+// The disambiguator is the block's own `id`, which IS injective — it is minted per function, and
+// `PruneDeadBlockArgs.buildBlockIdIndex` already treats `func.nextBlockId` as that id space's bound.
+// ⭐ **A label that is UNIQUE in its function still prints bare**, which is why the other 11,745
+// goldens are untouched and why a reader only ever sees a `#id` a real collision earned.
+//
+// It is built ONCE per function and read by BOTH the block header and every branch operand. That is
+// the point, and it is this file's own stated discipline (see `printTargetModule`'s note on two
+// readers of one question): a second derivation of "what is this block called" is exactly how a
+// header and a jump could come to disagree.
+function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
+	var occurrences = BlockLabelOccurrences.create()
+	for block in funcBlocks 'countLabels'
+		var seen = 0 as ElementIndex
+		if let counted = try occurrences.get(block.label) 'known'
+			seen = counted
+		end 'known'
+		occurrences.upsert(block.label, value: seen + 1)
+	end 'countLabels'
+
+	var names = BlockPrintNames.create()
+	var taken = BlockPrintNameSet.create()
+
+	for block in funcBlocks 'nameEach'
+		let shared = try occurrences.get(block.label) otherwise panic("buildBlockPrintNames: label '{String.from(block.label)}' was counted and is now unreadable")
+		let name = blockNameFor(block, shared: shared)
+
+		// The claim in this table's header, CHECKED. It can only fail if a block label spells the
+		// separator, which nothing in the compiler or the surface language mints today — so a failure
+		// here is the day that stopped being true, reported at the one place that can still say so.
+		if taken.contains(name) 'notInjective'
+			panic("buildBlockPrintNames: two blocks of one function would both print as '{name}' — a block label spelling '{BlockNameIdSeparator}' has collided with a disambiguated name, so a branch target could not be resolved from the printed text")
+		end 'notInjective'
+		taken.insert(name)
+
+		// `insert` throws on a key already present, which makes "two blocks of one function share an
+		// id" a reported invariant break rather than a silently dropped name.
+		try names.insert(block.id, value: name) otherwise panic("buildBlockPrintNames: two blocks of the function being printed both claim id {block.id}")
+	end 'nameEach'
+
+	return names
+end 'buildBlockPrintNames'
+
+// One block's printed name: bare when its label is the function's only one of that spelling, and
+// suffixed with the block's own id when it is not. `shared` is how many blocks of the function carry
+// this label — the caller counts it once for the whole function rather than re-deriving it per block.
+function blockNameFor(block IrBlock, shared ElementIndex) returns String
+	let label = String.from(block.label)
+
+	if shared > 1 'collides'
+		return "{label}{BlockNameIdSeparator}{block.id}"
+	end 'collides'
+
+	return label
+end 'blockNameFor'
+
+// The printed name of a branch target — the ONE spelling every branch operand resolves through.
+//
+// A target that is not one of the function's own blocks is BROKEN IR (a branch names a block of its
+// own function, and `printTargetFunction` builds the table from exactly those blocks), so it panics
+// rather than rendering the `block_<id>` placeholder the old resolver returned. That placeholder was
+// a sentinel wearing a name: it reads like a block that exists, and it never appeared in any of the
+// 16,250 committed goldens, so nothing was relying on it.
+function blockPrintName(blockId BlockId, names BlockPrintNames) returns String
+	return try names.get(blockId) otherwise panic("blockPrintName: branch target block {blockId} is not a block of the function being printed — a branch can only name a block of its own function")
+end 'blockPrintName'
+
+// Serialize one function: `func @<name> {`, then each block as `<name>:` (see
+// `buildBlockPrintNames` — NOT its raw label, which is not unique) followed by
+// its ops (and terminator) one per line, then the closing brace.
+function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, globalData GlobalDataTable) returns String
+	var sb = StringBuilder.create()
+	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
+
+	// The function's blocks in `blockRefs` order — the same public-API walk the
+	// backend's `emitFunctionChunk` uses. Collected once so branch targets can be
+	// resolved to names against it.
+	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
+	let names = buildBlockPrintNames(funcBlocks)
+
+	for block in funcBlocks 'eachBlock'
+		sb.append("{BlockLabelIndent}{blockPrintName(block.id, names: names)}:\n")
+
+		for opIdx in block.opRefs 'eachOp'
+			sb.append(printOpLine(module, opIdx: opIdx, names: names, cpu: cpu, globalData: globalData))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), names: names, cpu: cpu, globalData: globalData))
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb.append("{CloseBrace}\n")
+	return sb.build()
+end 'printTargetFunction'
+
+// One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
+// is an invariant violation (a block references an op not in `module.ops`), not
+// a user error, so it panics rather than printing a sentinel.
+function printOpLine(module TargetModule, opIdx OpIndex, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
+	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
+	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, names: names, cpu: cpu, globalData: globalData)}\n"
+end 'printOpLine'
+
+// The ISA namespace ops print under — the whole module's, not the op's. A module is single-target
+// (buildBackend dispatches on cpu), so every op prints `x64.` or `arm64.` uniformly; a SHARED op
+// (movRegReg, the spill/reload forms, xchgRegReg) prints under the module's ISA, not the x64 band it
+// happens to sit in. x64 output stays byte-identical (an x64 module's ops all printed `x64.` before).
+function opIsaPrefix(cpu CpuArch) returns String
+	return match cpu 'c'
+		x64 gives X64OpPrefix
+		arm64 gives Arm64OpPrefix
+		wasm32 panic("opIsaPrefix: maxon has no wasm Target printer")
+	end 'c'
+end 'opIsaPrefix'
+
+// The ISA a Target module was lowered for, recovered from its ops: any op in the arm64 band means an
+// arm64 module, else x64. A module is single-ISA, and the SHARED ops carry no ISA of their own, so
+// their operands can only be named against the module's ISA — recovered here once (the printer's
+// caller lives in another tier's file, so deriving it keeps the name rendering self-contained).
+function moduleTargetCpu(module TargetModule) returns CpuArch
+	for op in module.ops 'eachOp'
+		if opIsArm64Band(op) 'arm64'
+			return CpuArch.arm64
+		end 'arm64'
+	end 'eachOp'
+	return CpuArch.x64
+end 'moduleTargetCpu'
+
+// True when `op` is one of the arm64-SPECIFIC ops (the `arm64Ret..arm64ImportCall` band) — the shared
+// ops (in the x64 band positionally) and the x64-specific ops are false, so a module is arm64 iff it
+// holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
+function opIsArm64Band(op TargetOp) returns bool
+	return match op 'p'
+		prologue or
+			epilogue or
+			ret or
+			jmp or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			subRegReg or
+			imulRegReg or
+			negReg or
+			cmpRegReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			cmpRegImm32 or
+			xchgRegReg or
+			callDirect or
+			iatCall or
+			cqo or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			andRegImm32 or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			leaRegRdata or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg gives false
+		arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel gives true
+		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
+		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
+		leaRegFunc or
+			callReg or
+			x64Syscall gives false
+		// The jump tables are per-ISA: `x64JumpTable` is an x64 op (module not arm64 for it), `arm64JumpTable`
+		// an arm64 one.
+		x64JumpTable gives false
+		arm64JumpTable gives true
+		// The memory-indirect witness call is an x64 op (P1.7a slice 2a).
+		callMem gives false
+		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
+		arm64StoreOutgoingArg or
+			arm64LoadIncomingArg gives true
+		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
+		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to negF64RegReg` arm
+		// and are correctly `false` there — that range's endpoint is the x64 band's last member and it
+		// MOVED when `movqXmmGpr`, then `negF64RegReg`, were appended to it.
+		arm64FmovGprFp gives true
+		arm64FmovFpGpr gives true
+		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
+		leaRegSlot gives false
+		// F1b: the fill ladders are per-ISA, exactly as the jump tables above are — same question, same
+		// answer, and written as two arms rather than a range for that reason.
+		x64MemFill gives false
+		arm64MemFill gives true
+		// F2: per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
+		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
+		// exact: the x64 four are contiguous and the arm64 three follow them.
+		x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase gives false
+		arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer gives true
+		// EC16: the scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
+		// are x64's, the shifted-register `add` is arm64's.
+		leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg gives false
+		arm64AddLsl gives true
+		// EC18's high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
+		// three-address `SMULH`, each its own op.
+		imulHighReg gives false
+		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
+		arm64Fneg gives true
+		arm64LoadAcquire or
+			arm64StoreRelease gives true
+		arm64Smulh gives true
+		// ⛔ **`false`, AND IT IS THE ANSWER RATHER THAN A DEFAULT.** The counter is ONE op shared by both ISAs,
+		// so `true` here would make a pure-x64 module holding one report as arm64 and print every op in it
+		// against the wrong register file.
+		covInc gives false
+	end 'p'
+end 'opIsArm64Band'
+
+// ⭐ **THE ONE OP THAT PRINTS ITS INSTRUCTION RATHER THAN ITS VARIANT NAME**, and deliberately.
+// `TargetOp.divideReg` carries a `IntegerSignedness` because `idiv` and `div` share every fact the
+// dialect records about them (see its header) — but they are two DIFFERENT INSTRUCTIONS, and what a
+// golden fragment is for is showing which one was emitted. Printing `divideReg r8` for both would
+// hide exactly the difference X10 exists to make visible.
+function x64DivideOpName(signedness IntegerSignedness) returns String
+	return match signedness 's'
+		signed gives "idivReg"
+		unsigned gives "divReg"
+	end 's'
+end 'x64DivideOpName'
+
+// Render one TargetOp as `<mnemonic> <operands>` (the ISA namespace is added by the caller).
+// EXHAUSTIVE over every TargetOp variant — see the file header: no bare `default`, so a new variant is
+// a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
+// operands against the right register file (`sharedVregName`); the x64/arm64-specific arms need no
+// dispatch (they only ever appear in their own ISA's modules).
+function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
+	return match op 'op'
+		prologue(stackSize) gives "prologue {stackSize}"
+		epilogue(stackSize) gives "epilogue {stackSize}"
+		ret gives "ret"
+		jmp(targetBlockId) gives "jmp {blockPrintName(targetBlockId, names: names)}"
+		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {blockPrintName(targetBlockId, names: names)}"
+		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"
+		movRegImm32(dest, value) gives "movRegImm32 {vregName(dest)}, {value}"
+		movRegReg(destReg, srcReg) gives "movRegReg {sharedVregName(destReg, cpu: cpu)}, {sharedVregName(srcReg, cpu: cpu)}"
+		movReg32Reg32(destReg, srcReg) gives "movReg32Reg32 {vregName(destReg)}, {vregName(srcReg)}"
+		subRegReg(dest, lhs, rhs) gives "subRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		imulRegReg(dest, lhs, rhs) gives "imulRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		negReg(dest, src) gives "negReg {vregName(dest)}, {vregName(src)}"
+		cmpRegReg(lhsReg, rhsReg) gives "cmpRegReg {vregName(lhsReg)}, {vregName(rhsReg)}"
+		leaRegRegReg(dest, base, index) gives "leaRegRegReg {vregName(dest)}, {vregName(base)}, {vregName(index)}"
+		leaRegRegImm32(dest, base, disp) gives "leaRegRegImm32 {vregName(dest)}, {vregName(base)}, {disp}"
+		imulRegRegImm32(dest, src, imm) gives "imulRegRegImm32 {vregName(dest)}, {vregName(src)}, {imm}"
+		cmpRegImm32(reg, imm) gives "cmpRegImm32 {vregName(reg)}, {imm}"
+		xchgRegReg(a, b) gives "xchgRegReg {sharedVregName(a, cpu: cpu)}, {sharedVregName(b, cpu: cpu)}"
+		callDirect(targetName) gives "callDirect {String.from(targetName)}"
+		iatCall(slotIndex) gives "iatCall {slotIndex}"
+		cqo gives "cqo"
+		divideReg(divisor, signedness) gives "{x64DivideOpName(signedness)} {vregName(divisor)}"
+		pushReg(reg) gives "pushReg {registerName(reg)}"
+		popReg(reg) gives "popReg {registerName(reg)}"
+		storeSlotReg(slot, srcReg) gives "storeSlotReg slot{slot}, {sharedVregName(srcReg, cpu: cpu)}"
+		loadRegSlot(destReg, slot) gives "loadRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
+		andRegReg(dest, lhs, rhs) gives "andRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		orRegReg(dest, lhs, rhs) gives "orRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		xorRegReg(dest, lhs, rhs) gives "xorRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		notReg(dest, src) gives "notReg {vregName(dest)}, {vregName(src)}"
+		andRegImm32(dest, lhs, imm) gives "andRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		orRegImm32(dest, lhs, imm) gives "orRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		xorRegImm32(dest, lhs, imm) gives "xorRegImm32 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		shlRegImm8(dest, lhs, imm) gives "shlRegImm8 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		sarRegImm8(dest, lhs, imm) gives "sarRegImm8 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		shrRegImm8(dest, lhs, imm) gives "shrRegImm8 {vregName(dest)}, {vregName(lhs)}, {imm}"
+		shlRegCl(dest, lhs) gives "shlRegCl {vregName(dest)}, {vregName(lhs)}"
+		sarRegCl(dest, lhs) gives "sarRegCl {vregName(dest)}, {vregName(lhs)}"
+		shrRegCl(dest, lhs) gives "shrRegCl {vregName(dest)}, {vregName(lhs)}"
+		setccReg(dest, cond) gives "setccReg {condCodeName(cond)}, {vregName(dest)}"
+		// The data-section band. The LABEL is printed, because it is what the golden pins: a fragment
+		// showing `leaRegGlobal rax, __data_counter` is what makes a wrong slot a reviewable diff.
+		leaRegGlobal(dest, label) gives "leaRegGlobal {vregName(dest)}, {String.from(label)}"
+		loadRegBaseDisp(dest, base, disp, width) gives "loadRegBaseDisp.{accessWidthName(width)} {sharedVregName(dest, cpu: cpu)}, [{sharedVregName(base, cpu: cpu)} + {disp}]"
+		storeBaseDispReg(base, disp, src, width) gives "storeBaseDispReg.{accessWidthName(width)} [{sharedVregName(base, cpu: cpu)} + {disp}], {sharedVregName(src, cpu: cpu)}"
+		addsdRegReg(dest, lhs, rhs) gives "addsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		subsdRegReg(dest, lhs, rhs) gives "subsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		mulsdRegReg(dest, lhs, rhs) gives "mulsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		divsdRegReg(dest, lhs, rhs) gives "divsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		ucomisdRegReg(lhs, rhs) gives "ucomisdRegReg {vregName(lhs)}, {vregName(rhs)}"
+		movsdRegRip(dest, label) gives "movsdRegRip {vregName(dest)}, [rip + {String.from(label)}]"
+		cvtsi2sdRegReg(dest, src) gives "cvtsi2sdRegReg {vregName(dest)}, {vregName(src)}"
+		cvttsd2siRegReg(dest, src) gives "cvttsd2siRegReg {vregName(dest)}, {vregName(src)}"
+		// The MATH INTRINSICS. `roundsd`'s MODE is printed by its `FloatRoundMode` member name rather
+		// than its imm8: what the golden must pin is the ROUNDING, and `0x01` cannot be reviewed
+		// without the manual open beside it.
+		sqrtsdRegReg(dest, src) gives "sqrtsdRegReg {vregName(dest)}, {vregName(src)}"
+		roundsdRegReg(dest, src, mode) gives "roundsdRegReg.{mode.name} {vregName(dest)}, {vregName(src)}"
+		// The BIT REINTERPRETATION. Printed dest-first like every other x64 arm here, NOT in the
+		// encoder's inverted ModR/M order — a golden shows the data flow, and the field inversion is
+		// `encodeMovqGprXmm`'s private business.
+		movqGprXmm(dest, src) gives "movqGprXmm {vregName(dest)}, {vregName(src)}"
+		// Its INVERSE. Printed dest-first for the same reason, and here the two orders happen to
+		// coincide — this direction's ModR/M mapping is the ordinary one — which is exactly why the
+		// printer states the data flow rather than mirroring whatever the encoder does.
+		movqXmmGpr(dest, src) gives "movqXmmGpr {vregName(dest)}, {vregName(src)}"
+		// ⚠ THE OPERATION IS PRINTED, NOT THE INSTRUCTIONS. Every other x64 arm here names one
+		// mnemonic because it IS one; `absF64RegReg` assembles to a `psllq`/`psrlq` pair (see
+		// TargetDialect), and printing the pair would put the encoder's expansion in a golden the
+		// isel is what actually decided. What a fragment must pin is that `abs` reached the x64
+		// backend as one two-address op over these two vregs.
+		absF64RegReg(dest, src) gives "absF64RegReg {vregName(dest)}, {vregName(src)}"
+		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
+		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
+		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]{rdataPayloadNote(label, globalData: globalData)}"
+		// `minsd`/`maxsd` print their real mnemonic, unlike `absF64RegReg` above: each IS one
+		// instruction, so there is no encoder expansion for a golden to leak. The mnemonic's PREFIX is
+		// the `FloatMinMaxKind` member name spliced in — NOT the suffix construction `roundsd` uses
+		// (`roundsdRegReg.{mode.name}`, a literal variant name with the mode appended). ⚠ So these two
+		// member names are LOAD-BEARING FOR COMMITTED GOLDEN TEXT: they are spelled to match the x86
+		// mnemonics, and renaming `max` to `maximum` would silently emit `maximumsd` into every
+		// fragment. Both operands are shown because the ORDER is
+		// semantic here — each answers with its second source on a NaN — so a fragment that showed only
+		// the destination could not catch a swap.
+		minMaxSdRegReg(dest, lhs, rhs, kind) gives "{kind.name}sd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		// The sign-bit FLIP prints its OPERATION for `absF64RegReg`'s reason: it assembles to a
+		// `pcmpeqd`/`psllq`/`xorpd` triple, and what a golden must pin is that `fneg` reached the x64
+		// backend as one two-address op over these two vregs — not the encoder's expansion.
+		negF64RegReg(dest, src) gives "negF64RegReg {vregName(dest)}, {vregName(src)}"
+		// --- arm64 SCALAR-CORE band ---
+		//
+		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
+		// name), and each condition through the `Arm64CondCode` member name. The mnemonics are the
+		// arm64 spellings; the `arm64.` namespace is added by `opIsaPrefix` at the print site.
+		arm64Ret gives "ret"
+		arm64Branch(targetBlockId) gives "b {blockPrintName(targetBlockId, names: names)}"
+		arm64CondBranch(cond, targetBlockId) gives "b.{cond.name} {blockPrintName(targetBlockId, names: names)}"
+		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
+		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
+		arm64MovImm(dest, value) gives "movImm {arm64VregName(dest)}, {value}"
+		// The frame-record offset is rendered ONLY when the frame has an outgoing stack-argument region to push
+		// it past — which is what having one MEANS, and which no function in the corpus does. Rendering an
+		// unconditional `+0` would be a golden's worth of noise about a region that does not exist, on every
+		// arm64 function there is. The rendering stays injective: a frame with a region reads differently from
+		// one without.
+		arm64Prologue(stackSize, recordOffset) gives "prologue {stackSize}" if recordOffset == 0 else "prologue {stackSize} record@{recordOffset}"
+		arm64Epilogue(stackSize, recordOffset) gives "epilogue {stackSize}" if recordOffset == 0 else "epilogue {stackSize} record@{recordOffset}"
+		arm64Add(dest, lhs, rhs) gives "add {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Sub(dest, lhs, rhs) gives "sub {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Mul(dest, lhs, rhs) gives "mul {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Sdiv(dest, lhs, rhs) gives "sdiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Udiv(dest, lhs, rhs) gives "udiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Msub(dest, mulLhs, mulRhs, minuend) gives "msub {arm64VregName(dest)}, {arm64VregName(mulLhs)}, {arm64VregName(mulRhs)}, {arm64VregName(minuend)}"
+		arm64And(dest, lhs, rhs) gives "and {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Orr(dest, lhs, rhs) gives "orr {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Eor(dest, lhs, rhs) gives "eor {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Lslv(dest, lhs, rhs) gives "lslv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Asrv(dest, lhs, rhs) gives "asrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Lsrv(dest, lhs, rhs) gives "lsrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Neg(dest, src) gives "neg {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Mvn(dest, src) gives "mvn {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64AddImm(dest, src, imm) gives "add {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64SubImm(dest, src, imm) gives "sub {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64AndImm(dest, src, imm) gives "and {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64OrrImm(dest, src, imm) gives "orr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64EorImm(dest, src, imm) gives "eor {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64LslImm(dest, src, imm) gives "lsl {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64AsrImm(dest, src, imm) gives "asr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64LsrImm(dest, src, imm) gives "lsr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64Cmp(lhs, rhs) gives "cmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64CmpImm(reg, imm) gives "cmp {arm64VregName(reg)}, {imm}"
+		arm64Cset(dest, cond) gives "cset {arm64VregName(dest)}, {cond.name}"
+		arm64LeaFuncAddr(dest, funcName) gives "leaFuncAddr {arm64VregName(dest)}, {String.from(funcName)}"
+		arm64LeaRdata(dest, label) gives "leaRdata {arm64VregName(dest)}, {String.from(label)}{rdataPayloadNote(label, globalData: globalData)}"
+		arm64LeaGlobal(dest, label) gives "leaGlobal {arm64VregName(dest)}, {String.from(label)}"
+		arm64BranchLink(targetName) gives "bl {String.from(targetName)}"
+		arm64BranchLinkReg(reg) gives "blr {arm64VregName(reg)}"
+		arm64Fadd(dest, lhs, rhs) gives "fadd {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fsub(dest, lhs, rhs) gives "fsub {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fmul(dest, lhs, rhs) gives "fmul {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fdiv(dest, lhs, rhs) gives "fdiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fcmp(lhs, rhs) gives "fcmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fsqrt(dest, src) gives "fsqrt {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fabs(dest, src) gives "fabs {arm64VregName(dest)}, {arm64VregName(src)}"
+		// The arm64 arms print REAL MNEMONICS (`fcvtzs`, `scvtf`, …), and `FRINT<r>`'s rounding is part
+		// of its mnemonic rather than a printed operand — so the mode resolves to the letter the
+		// assembler would show.
+		arm64Frint(dest, src, mode) gives "{arm64FrintMnemonic(mode)} {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
+		arm64ImportCall(slotIndex) gives "importCall {slotIndex}"
+		arm64Syscall(number) gives "syscall {number}"
+		// `fcsel` prints its condition, like `arm64Cset` and unlike `arm64Frint` (whose mode is part of
+		// its mnemonic). The condition is the whole NaN argument for `min` on this target — `mi` is what
+		// makes an unordered compare pick the second operand — so a fragment that hid it could not catch
+		// the one substitution that silently changes the answer.
+		arm64Fcsel(dest, ifTrue, ifFalse, cond) gives "fcsel {arm64VregName(dest)}, {arm64VregName(ifTrue)}, {arm64VregName(ifFalse)}, {cond.name}"
+		leaRegFunc(dest, funcName) gives "leaRegFunc {vregName(dest)}, [rip + {String.from(funcName)}]"
+		callReg(reg) gives "callReg {vregName(reg)}"
+		x64Syscall(number) gives "x64Syscall {number}"
+		// The jump tables render the biased index, the default, and the slot→target table run-length
+		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
+		// and the table stays readable even at the span cap.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
+		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
+		// carries — the address is a frame fact the encoder (outgoing) or the prologue pass (incoming) adds.
+		arm64StoreOutgoingArg(slot, srcReg) gives "storeOutgoingArg [sp + arg{slot}], {arm64VregName(srcReg)}"
+		arm64LoadIncomingArg(dest, slot) gives "loadIncomingArg {arm64VregName(dest)}, [arg{slot}]"
+		// The arm64 BIT REINTERPRETATION. Printed `fmov` — the real mnemonic, as every arm64 arm here
+		// is — and the operand NAMES disambiguate it from the FP→FP `fmov` the shared `movRegReg`
+		// emits: `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so `fmov x0, d1` and
+		// `fmov d0, d1` read as the two different instructions they are.
+		arm64FmovGprFp(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		// Its INVERSE, and the reason the arm above is written the way it is: BOTH render the mnemonic
+		// `fmov`, so the two are told apart in a golden ONLY by which side prints `x<n>` and which
+		// `d<n>` — `fmov x0, d1` against `fmov d0, x1`. That is the real assembly and it is unambiguous;
+		// an invented mnemonic would be neither.
+		arm64FmovFpGpr(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
+		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
+		leaRegSlot(destReg, slot) gives "leaRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
+		// F1b: the fill ladders print their NAME and their fill BYTE — never an operand list, because they
+		// have none (see `targetOpOperands`). The byte is the one thing that varies between two otherwise
+		// identical fills, so it is exactly what a golden needs to show.
+		x64MemFill(fillByte) gives "x64MemFill 0x{hexByte(fillByte as MachineWord)}"
+		arm64MemFill(fillByte) gives "arm64MemFill 0x{hexByte(fillByte as MachineWord)}"
+		// F2 — the atomics print their REAL MNEMONICS, for `x64DivideOpName`'s reason one screen up: what a
+		// golden is for is showing which instruction was emitted, and `lock xadd` versus `lock add` is exactly
+		// the difference the prior-value peephole makes. `[reg]` renders the memory operand, so the address is
+		// visibly a dereference and not a value.
+		//
+		// ⚠ `lock cmpxchg`'s implicit RAX comparand is NOT printed, and deliberately: it is not an operand of
+		// this op, it arrives in the `movRegReg rax, …` the isel emits immediately above, and a golden that
+		// invented a third operand here would show a register the instruction does not encode.
+		x64LockCmpxchg(addrReg, srcReg) gives "lock cmpxchg [{vregName(addrReg)}], {vregName(srcReg)}"
+		x64LockXadd(dest, src, addrReg) gives "lock xadd [{vregName(addrReg)}], {vregName(dest)} <- {vregName(src)}"
+		x64LockAdd(addrReg, srcReg) gives "lock add [{vregName(addrReg)}], {vregName(srcReg)}"
+		x64TebSelfPointer(dest) gives "mov {vregName(dest)}, gs:[0x{hexByte(WindowsTebSelfPointerOffset)}]"
+		x64GsLoadRegBase(dest, base) gives "mov {vregName(dest)}, gs:[{vregName(base)}]"
+		// The arm64 macro-ops print their name and their operands rather than the six-instruction sequence
+		// they expand to — the choice `x64MemFill`/`arm64MemFill` already make, and for their reason: a golden
+		// records the OPS the allocator coloured, and the encoder's internal branches are not ops.
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) gives "arm64AtomicCas {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(expectedReg)}, {arm64VregName(replacementReg)}"
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives "arm64AtomicRmw.{opcode.name} {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(operandReg)}"
+		arm64ThreadPointer(dest, source) gives "arm64ThreadPointer {arm64VregName(dest)}, {source.name}"
+		// --- EC16: the scaled-index band ---
+		//
+		// Rendered in the SOURCE shape `[base + index*scale + disp]` rather than as the op's field list,
+		// which is the choice `loadRegBaseDisp`/`storeBaseDispReg` already make one band up: a golden is
+		// read to see what address an access computes, and `*8` beside the index is the whole point of
+		// the op. The multiplier is printed, not the shift — that is what the program said.
+		leaRegBaseIndexScale(dest, base, index, scale) gives "leaRegBaseIndexScale {vregName(dest)}, [{vregName(base)} + {vregName(index)}*{memoryIndexScaleFactor(scale)}]"
+		loadRegBaseIndexScale(dest, base, index, scale, disp, width) gives "loadRegBaseIndexScale.{accessWidthName(width)} {sharedVregName(dest, cpu: cpu)}, [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}]"
+		storeBaseIndexScaleReg(base, index, scale, disp, src, width) gives "storeBaseIndexScaleReg.{accessWidthName(width)} [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}], {sharedVregName(src, cpu: cpu)}"
+		// The arm64 twin prints as the INSTRUCTION it is (`add xd, xn, xm, lsl #k`), not as a bracketed
+		// address: on AArch64 this is arithmetic, and the shift — not the multiplier — is what the
+		// instruction's field holds.
+		arm64AddLsl(dest, base, index, scale) gives "arm64AddLsl {arm64VregName(dest)}, {arm64VregName(base)}, {arm64VregName(index)}, lsl #{memoryIndexScaleShift(scale)}"
+		// Prints its ONE explicit operand, exactly as `divideReg` does — RAX and RDX are the op's implicit
+		// masks and a golden that spelled them would be showing the model rather than the instruction.
+		imulHighReg(src) gives "imulHighReg {vregName(src)}"
+		arm64Fneg(dest, src) gives "fneg {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64LoadAcquire(dest, base, width) gives "ldar.{accessWidthName(width)} {arm64VregName(dest)}, [{arm64VregName(base)}]"
+		arm64StoreRelease(base, src, width) gives "stlr.{accessWidthName(width)} [{arm64VregName(base)}], {arm64VregName(src)}"
+		arm64Smulh(dest, lhs, rhs) gives "smulh {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		covInc(pointId) gives "covInc {pointId}"
+	end 'op'
+end 'formatTargetOp'
+
+// Render a jump table's slot→target array run-length encoded: consecutive slots with the same target
+// become one `[lo..hi]=label` entry (or `[i]=label` for a single slot), so an arm's several slots read
+// as one span and an all-distinct table reads as one entry per slot. Keeps the dump legible without
+// losing which slot routes where.
+function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) returns String
+	if caseTargets.count() == 0 'empty'
+		return ""
+	end 'empty'
+
+	var out = StringBuilder.create()
+	var afterFirst = false
+	var runStart = 0 as ElementIndex
+	var runTarget = try caseTargets.get(0) otherwise panic("formatJumpTableSlots: caseTargets.get(0) on non-empty")
+	for i in 1 upto caseTargets.count() 'each'
+		let target = try caseTargets.get(i) otherwise panic("formatJumpTableSlots: caseTargets.get OOB at {i}")
+		if target != runTarget 'runEnd'
+			appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: i - 1, target: runTarget, names: names)
+			afterFirst = true
+			runStart = i
+			runTarget = target
+		end 'runEnd'
+	end 'each'
+	appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: caseTargets.count() - 1, target: runTarget, names: names)
+
+	return out.build()
+end 'formatJumpTableSlots'
+
+function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementIndex, runEnd ElementIndex, target BlockId, names BlockPrintNames)
+	if afterFirst 'separator'
+		out.append(", ")
+	end 'separator'
+	let label = blockPrintName(target, names: names)
+	if runStart == runEnd 'single'
+		out.append("[{runStart}]={label}")
+	end 'single' else 'span'
+		out.append("[{runStart}..{runEnd}]={label}")
+	end 'span'
+end 'appendJumpTableRun'
+
+// The printed form of a SHARED op's operand — one that appears in BOTH ISAs (movRegReg, the
+// spill/reload and base+disp forms, xchgRegReg) and so carries a neutral `RegNum` with no ISA of its
+// own. It names the operand against the MODULE's register file: the x64 names in an x64 module, the
+// arm64 names in an arm64 module. Without this a shared op in an arm64 module would print `rax` for
+// RegNum 0 where it means `x0` — the register file is right, only the naming table was wrong.
+function sharedVregName(vreg TargetVReg, cpu CpuArch) returns String
+	return match cpu 'c'
+		x64 gives vregName(vreg)
+		arm64 gives arm64VregName(vreg)
+		wasm32 panic("sharedVregName: maxon has no wasm Target printer")
+	end 'c'
+end 'sharedVregName'
+
+// The printed form of an arm64 operand: a colored physical register by its arm64 name (`x0`, `d5`,
+// …) or a still-virtual value by its SSA id. `TargetVReg.physical` carries a neutral `RegNum`, which
+// the printer — one tier above the neutral op — maps back through `Arm64Register`, exactly as the
+// arm64 encoder will. The x64 twin is `vregName`.
+function arm64VregName(vreg TargetVReg) returns String
+	return match vreg 'v'
+		physical(reg) gives arm64RegName(reg)
+		virtual(id) gives "v{id}"
+	end 'v'
+end 'arm64VregName'
+
+// The arm64 register name for a colored `RegNum` — the `Arm64Register` member name (x0..x30 for
+// 0..30, d0..d31 for 31..62). The enum's own names ARE the register names, so no second table.
+function arm64RegName(reg RegNum) returns String
+	let r = try Arm64Register.fromRawValue(reg) otherwise panic("arm64RegName: register number {reg} names no arm64 register (0..62)")
+	return r.name
+end 'arm64RegName'
+
+// A machine-register operand: a colored physical GPR by its ISA name (`rax`,
+// `r8`, …) or a still-virtual value by its SSA id (`v<id>`). A fully lowered
+// module (what CodeResult.targetModule holds) has only `physical`; `virtual`
+// appears only when printing pre-regalloc IR for debugging.
+// The printed form of an x64 operand: a colored physical register by its x64 name, or a still-
+// virtual value by its SSA id. `TargetVReg.physical` now carries a neutral `RegNum`, so the printer
+// — a per-ISA reader, one tier above the neutral op — maps it back through `X64Register` exactly as
+// the x64 encoder does. arm64 ops print through `arm64VregName` instead (their operands name arm64
+// registers), which is why this stays x64-specific rather than taking an ISA parameter.
+function vregName(vreg TargetVReg) returns String
+	return match vreg 'v'
+		physical(reg) gives registerName(try X64Register.fromRawValue(reg) otherwise panic("vregName: colored register number {reg} is not a valid X64Register"))
+		virtual(id) gives "v{id}"
+	end 'v'
+end 'vregName'
+
+// The ISA name of each general-purpose register. Exhaustive over X64Register so a
+// register-file change (e.g. adding the XMM file as its own enum) does not
+// silently misname a register. Exported for the x64 encoder's scratch-register guard
+// (`assertOperandOffEncoderScratch`), whose panic names the register it found.
+export function registerName(reg X64Register) returns String
+	return match reg 'r'
+		rax gives "rax"
+		rcx gives "rcx"
+		rdx gives "rdx"
+		rbx gives "rbx"
+		rsp gives "rsp"
+		rbp gives "rbp"
+		rsi gives "rsi"
+		rdi gives "rdi"
+		r8 gives "r8"
+		r9 gives "r9"
+		r10 gives "r10"
+		r11 gives "r11"
+		r12 gives "r12"
+		r13 gives "r13"
+		r14 gives "r14"
+		r15 gives "r15"
+		xmm0 gives "xmm0"
+		xmm1 gives "xmm1"
+		xmm2 gives "xmm2"
+		xmm3 gives "xmm3"
+		xmm4 gives "xmm4"
+		xmm5 gives "xmm5"
+		xmm6 gives "xmm6"
+		xmm7 gives "xmm7"
+		xmm8 gives "xmm8"
+		xmm9 gives "xmm9"
+		xmm10 gives "xmm10"
+		xmm11 gives "xmm11"
+		xmm12 gives "xmm12"
+		xmm13 gives "xmm13"
+		xmm14 gives "xmm14"
+		xmm15 gives "xmm15"
+	end 'r'
+end 'registerName'
+
+// The printed suffix of a memory access's width — what makes a golden fragment show that a bool
+// global moved ONE byte and an int moved eight. Without it the two loads print identically and the
+// one gate that could catch a wrong-width access says nothing.
+function accessWidthName(width X64AccessWidth) returns String
+	return match width 'w'
+		byte gives "byte"
+		word64 gives "word64"
+	end 'w'
+end 'accessWidthName'
+
+// The arm64 mnemonic for each rounding mode `arm64Frint` can carry. Unlike x64's `roundsd`, whose
+// mode is a printed imm8 operand, arm64 spells the rounding INTO the mnemonic — so a golden reads
+// `frintm` where the x64 golden reads `roundsdRegReg.towardNegative`, and each matches what its own
+// assembler would show.
+function arm64FrintMnemonic(mode FloatRoundMode) returns String
+	return match mode 'm'
+		nearestTiesToEven gives "frintn"
+		towardNegative gives "frintm"
+		towardPositive gives "frintp"
+	end 'm'
+end 'arm64FrintMnemonic'
+
+// The mnemonic name of each condition code a fused `jcc` can carry. Exhaustive
+// over X64CondCode so a new comparison predicate forces a printable name.
+function condCodeName(cond X64CondCode) returns String
+	return match cond 'c'
+		below gives "below"
+		aboveEqual gives "aboveEqual"
+		equal gives "equal"
+		notEqual gives "notEqual"
+		belowEqual gives "belowEqual"
+		above gives "above"
+		parity gives "parity"
+		noParity gives "noParity"
+		less gives "less"
+		greaterEqual gives "greaterEqual"
+		lessEqual gives "lessEqual"
+		greater gives "greater"
+	end 'c'
+end 'condCodeName'

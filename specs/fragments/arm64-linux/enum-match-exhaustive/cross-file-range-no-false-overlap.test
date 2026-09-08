@@ -1,0 +1,107 @@
+// Test: cross-file-range-no-false-overlap
+// --- file: ops.maxon
+export union WideOp
+	call
+	ret
+	param
+	extra
+end 'WideOp'
+
+export union NarrowOp
+	ret
+	call
+	param
+end 'NarrowOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op NarrowOp) returns Code
+	return match op 'check'
+		ret gives 1
+		call to param gives 2
+	end 'check'
+end 'classify'
+
+function describeWide(op WideOp) returns Code
+	return match op 'check'
+		call to extra gives 9
+	end 'check'
+end 'describeWide'
+
+function main() returns ExitCode
+	let narrow = classify(NarrowOp.call)
+	let wide = describeWide(WideOp.ret)
+	if wide == 9 'wideOk'
+		return narrow
+	end 'wideOk'
+	return 99
+end 'main'
+---
+ExitCode: 2
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 2
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchdead
+  matcharm#2:
+    arm64.movImm x0, 2
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 125
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:4: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+  matcharm#7:
+    arm64.movImm x1, 2
+  matchcont:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow
+  __rc_chk:
+    arm64.cmp x1, 125
+    arm64.b.le __rc_ok
+  __il_slow:
+    arm64.bl classify
+    arm64.b matcharm#15
+  __rc_ok:
+    arm64.movRegReg x0, x1
+  matcharm#15:
+    arm64.movImm x1, 9
+  __il_cont:
+    arm64.cmp x1, 9
+    arm64.b.ne ifcont
+  wideOk:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

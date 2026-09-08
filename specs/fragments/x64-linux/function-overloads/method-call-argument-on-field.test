@@ -1,0 +1,125 @@
+// Test: method-call-argument-on-field
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function size() returns Wide
+		return self.tally
+	end 'size'
+end 'Leaf'
+
+type Trunk
+	export var leaf as Leaf
+
+	export static function make(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'make'
+end 'Trunk'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let t = Trunk.make(Leaf.make(7))
+	return over(t.leaf.size())
+end 'main'
+---
+ExitCode: 107
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Leaf.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Trunk.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 7
+    x64.callDirect Leaf.make
+    x64.movRegReg rcx, r8
+    x64.callDirect Trunk.make
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body#7:
+    x64.leaRegRegImm32 rbx, rax, 100
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_Trunk
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at method-call-argument-on-field.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

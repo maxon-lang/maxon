@@ -1,0 +1,54 @@
+// Test: divide-by-zero-expression-form
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let zero = opaque(0)
+	var result = 0
+	// A STATEMENT-position `try`, which is what the block form's `result = 100 / zero` body amounts to.
+	// The quotient is discarded, and the throw survives that: what raises the error is the divisor test
+	// feeding the fork, not the divide whose value nobody reads.
+	try (100 / zero) otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then result = 42
+		end 'kind'
+	end 'handle'
+	return result as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_cont:
+    arm64.movImm x0, 100
+    arm64.movImm x1, 1
+    arm64.movImm x2, 1
+    arm64.sdiv x0, x0, x2
+  tryerr:
+    arm64.sub x0, x1, 1
+    arm64.cmp x0, 0
+    arm64.b.ne matchdead
+  matcharm:
+    arm64.movImm x0, 42
+  trycont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at divide-by-zero-expression-form.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}

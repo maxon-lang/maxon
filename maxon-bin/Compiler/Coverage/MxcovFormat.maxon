@@ -1,0 +1,196 @@
+// Compiler/Coverage/MxcovFormat.maxon — the `.mxcov` counter file a `--coverage` binary writes when it
+// exits: a fixed 40-byte header followed by one little-endian u64 per coverage point, in counter order.
+//
+// ⭐⭐ **THE BYTE LAYOUT IS A FROZEN CONTRACT.** A data file the instrumented binary writes must be one
+// the report reads, across a build boundary; `tests/coverage/` pins it by handing one measurement to
+// both drivers.
+//
+// ⭐⭐ **THE FORMAT IS STATED ONCE, HERE, AND THE COUNTER GEOMETRY IS A FUNCTION RATHER THAN AN
+// EXPRESSION.** The bytes are produced by hand-emitted runtime code — one writer per target — and
+// consumed by the report, across a build boundary, with nothing between them that could notice a
+// disagreement. `HeaderSize + index * CounterSize` spelled at each of those sites is this project's
+// signature bug wearing an offset's clothes: a header that grew, or a counter array that gained
+// padding, would have to be found at every one of them, and the ones that were found would go on
+// agreeing with each other while the rest quietly attributed every count to a neighbour. The failure is
+// not a crash — it is a full report of REAL COUNTS ON THE WRONG LINES.
+//
+// It carries the BUILD-ID of the `.text` it came from, which is what makes a stale data file a REFUSAL
+// rather than a wrong report: counters are anonymous indices, so a `.mxcov` from a previous build joined
+// against today's point table names real source lines with numbers belonging to other lines.
+
+// `MXCOV\0\0\0`, 8 bytes so the header stays 8-byte aligned. A reader that does not see this refuses the
+// file. Written as codes rather than as a string literal because the trailing NULs are part of it.
+let MxcovMagicByte0 = 77
+let MxcovMagicByte1 = 88
+let MxcovMagicByte2 = 67
+let MxcovMagicByte3 = 79
+let MxcovMagicByte4 = 86
+
+// Bumped on any change to what the file MEANS. A reader refuses a version it does not know rather than
+// misreading it.
+let MxcovFormatVersion = 1
+
+// Appended to the binary's path WITH its extension still on: `foo.exe` -> `foo.exe.mxcov`.
+export let MxcovDataExtension = ".mxcov"
+
+// Header slots, little-endian.
+//
+// ⛔⛔ **STATUS IS A WHOLE WORD AND ALONE IN IT.** It is the ONLY field the running program writes, and
+// the emitted runtime's store primitive is 64-bit — so a status packed beside a neighbour is a store
+// that silently overwrites the neighbour. Giving the one written field its own word makes that
+// unrepresentable rather than commented against.
+let MxcovOffMagic = 0
+let MxcovOffVersion = 8
+let MxcovOffReserved = 12
+let MxcovOffBuildId = 16
+let MxcovOffPointCount = 24
+let MxcovOffReserved2 = 28
+
+// ⚠ EXPORTED because the RUNNING PROGRAM writes it: `CoverageRuntime.__cov_dump` stores its status here
+// through a `globalAddr` of the reserved `.data` run, which is the one field emitted code touches.
+export let MxcovOffStatus = 32
+let MxcovHeaderSize = 40
+
+// One counter. u64 because a hot line in a long run must not wrap into a smaller, believable number.
+let MxcovCounterSize = 8
+
+// Whether the run that produced the file reached its own exit. An ABORTED file holds every count up to
+// the fault and is reported as PARTIAL — never presented as a finished measurement, because the lines
+// after the fault never got their chance to run. Aborted is also the value the COMPILER stamps, so a
+// binary killed before it dumps is honest by construction.
+// ⚠ BOTH EXPORTED, and to the two ends of the same decision: the entry stub stamps COMPLETED, and each
+// backend's `mrt_panic` stamps ABORTED on its way out.
+export let MxcovStatusCompleted = 1
+export let MxcovStatusAborted = 0
+
+// A coverage point's counter slot, which is its index in the owning `CovPointTable`.
+export typealias MxcovPointIndex = int(0 to u32.max)
+
+// A byte position in the image. Wide enough that `covImageSize` cannot overflow for ANY representable
+// point count, which is what lets the reservation and the truncation check be the same function: a
+// hostile `pointCount` at the top of its range asks for ~34 GB, and that is a large number here rather
+// than a small positive one.
+typealias MxcovByteOffset = int(0 to i64.max)
+
+// Where counter `index` sits in the image — the ONE place a coverage point's index becomes a byte
+// address. See this file's header for what a second spelling costs.
+export function covCounterOffset(index MxcovPointIndex) returns MxcovByteOffset
+	return MxcovHeaderSize + index * MxcovCounterSize
+end 'covCounterOffset'
+
+// The whole image's byte length: the block the compiler RESERVES, the block the program WRITES, and the
+// length a file claims to be from the count in its own header. Stated as the offset one past the last
+// counter so it cannot drift from `covCounterOffset`.
+export function covImageSize(pointCount MxcovPointIndex) returns MxcovByteOffset
+	return covCounterOffset(pointCount)
+end 'covImageSize'
+
+// ⭐⭐ **THE WHOLE `.mxcov` IMAGE A `--coverage` BUILD RESERVES IN `.data`: the header, then one zeroed
+// counter per point.** ONE builder serves both the RESERVATION and the later `stampDataBlob` that writes
+// the real build-id into it, so the two lengths are equal by construction — a stamp that resized the run
+// would move every scalar global laid out behind it, and the table refuses one rather than resolving it.
+//
+// ⚠ **THE STATUS IT LAYS DOWN IS `ABORTED`, AND THAT IS THE HONEST INITIAL VALUE.** A binary killed
+// before it reaches its own exit never writes this word, so what a reader finds is what the compiler put
+// there; `MxcovStatusAborted` makes that file report as PARTIAL instead of as a finished measurement.
+export function buildMxcovImage(buildId HashDigest, pointCount MxcovPointIndex) returns ByteArray
+	var image = ByteArray.create()
+	image.push(MxcovMagicByte0)
+	image.push(MxcovMagicByte1)
+	image.push(MxcovMagicByte2)
+	image.push(MxcovMagicByte3)
+	image.push(MxcovMagicByte4)
+	writeZeros(image, n: (MxcovHeaderSize - image.count()) as BytePos)
+
+	patchDword(image, offset: MxcovOffVersion, value: MxcovFormatVersion as MachineWord)
+	patchDword(image, offset: MxcovOffReserved, value: 0)
+	patchQword(image, offset: MxcovOffBuildId, value: buildId as MachineWord)
+	patchDword(image, offset: MxcovOffPointCount, value: pointCount as MachineWord)
+	patchDword(image, offset: MxcovOffReserved2, value: 0)
+	patchQword(image, offset: MxcovOffStatus, value: MxcovStatusAborted as MachineWord)
+	image.growFilled(covImageSize(pointCount) as ElementIndex, value: 0 as Byte)
+
+	return image
+end 'buildMxcovImage'
+
+// ============================================================================================
+// READING ONE BACK
+// ============================================================================================
+
+// One counter's value. u64 for `MxcovCounterSize`'s reason: a hot line in a long run must not wrap into
+// a smaller, believable number.
+typealias MxcovCounter = int(0 to u64.max)
+
+export typealias MxcovCounterArray = Array with MxcovCounter
+
+// ⚠ **A FILE THIS READER CANNOT VOUCH FOR IS REFUSED, NEVER PARTLY TRUSTED**, for `MxdbgReadError`'s
+// reason: a report built from counters read at the wrong stride names real source lines with numbers
+// belonging to other lines.
+export union MxcovReadError implements Error
+	notCoverageData
+	unsupportedVersion(version MxcovPointIndex)
+	truncated(pointCount MxcovPointIndex, need MxcovByteOffset, held MxcovByteOffset)
+
+	export function displayReason() returns String
+		return match self 'k'
+			notCoverageData gives "not a {MxcovDataExtension} file (bad magic)"
+			unsupportedVersion(version) gives "{MxcovDataExtension} format version {version} is not supported (this build speaks {MxcovFormatVersion})"
+			truncated(pointCount, need, held) gives "{MxcovDataExtension} is truncated: {pointCount} counters need {need} bytes, file has {held}"
+		end 'k'
+	end 'displayReason'
+end 'MxcovReadError'
+
+// A `.mxcov` image read back: the build it belongs to, whether that run reached its own exit, and one
+// counter per coverage point in counter order.
+export type MxcovData
+	export var buildId as HashDigest
+	var status as MachineWord
+	export var counters as MxcovCounterArray
+
+	static function create(buildId HashDigest, status MachineWord, counters MxcovCounterArray) returns MxcovData
+		return Self{buildId: buildId, status: status, counters: counters}
+	end 'create'
+
+	export static function parse(image ByteArray) returns MxcovData throws MxcovReadError
+		if not mxcovMagicMatches(image) 'badMagic'
+			throw MxcovReadError.notCoverageData
+		end 'badMagic'
+
+		let version = imageReadU32(image, at: MxcovOffVersion as ByteOffset) as MxcovPointIndex
+		if version != MxcovFormatVersion 'wrongVersion'
+			throw MxcovReadError.unsupportedVersion(version)
+		end 'wrongVersion'
+
+		// ⚠ The length a FILE CLAIMS is computed at `MxcovByteOffset`'s width, which is wide enough that a
+		// corrupt `pointCount` at the top of its range asks for a LARGE number rather than wrapping into a
+		// small positive one a truncation check would wave through.
+		let pointCount = imageReadU32(image, at: MxcovOffPointCount as ByteOffset) as MxcovPointIndex
+		let need = covImageSize(pointCount)
+		if (image.count() as MxcovByteOffset) < need 'shorterThanItClaims'
+			throw MxcovReadError.truncated(pointCount, need: need, held: image.count() as MxcovByteOffset)
+		end 'shorterThanItClaims'
+
+		var counters = MxcovCounterArray.create()
+		for index in 0 upto pointCount 'eachCounter'
+			counters.push(imageReadU64(image, at: covCounterOffset(index as MxcovPointIndex) as ByteOffset) as MxcovCounter)
+		end 'eachCounter'
+
+		return MxcovData.create(imageReadU64(image, at: MxcovOffBuildId as ByteOffset) as HashDigest, status: imageReadU64(image, at: MxcovOffStatus as ByteOffset), counters: counters)
+	end 'parse'
+
+	// Did the run that wrote this reach its own exit? An ABORTED file holds every count up to the fault
+	// and is reported as PARTIAL, never presented as a finished measurement.
+	export function runCompleted() returns bool
+		return self.status == (MxcovStatusCompleted as MachineWord)
+	end 'runCompleted'
+end 'MxcovData'
+
+// The whole 8-byte magic, trailing NULs included: a file whose first five bytes happen to spell `MXCOV`
+// and whose sixth is anything else is not this container.
+function mxcovMagicMatches(image ByteArray) returns bool
+	if image.count() < MxcovHeaderSize 'shorterThanAHeader'
+		return false
+	end 'shorterThanAHeader'
+
+	return imageReadU64(image, at: MxcovOffMagic as ByteOffset) == (MxcovMagicByte0 or (MxcovMagicByte1 shl 8) or (MxcovMagicByte2 shl 16) or (MxcovMagicByte3 shl 24) or (MxcovMagicByte4 shl 32)) as MachineWord
+end 'mxcovMagicMatches'

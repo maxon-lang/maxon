@@ -1,0 +1,219 @@
+{
+  "name": "maxon-lsp-client",
+  "displayName": "Maxon Language Support",
+  "description": "Language support for Maxon programming language",
+  "version": "0.1.0",
+  "publisher": "maxon",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxon-lang/maxon"
+  },
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "icon": "icons/maxon-extension-icon.png",
+  "activationEvents": [
+    "workspaceContains:**/*.maxon",
+    "workspaceContains:**/*.test",
+    "workspaceContains:specs/*.md"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "maxon",
+        "aliases": [
+          "Maxon",
+          "maxon"
+        ],
+        "extensions": [
+          ".maxon",
+          ".test"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./maxon-icon.svg",
+          "dark": "./maxon-icon.svg"
+        }
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "maxon-icons",
+        "label": "Maxon Icon Theme",
+        "path": "./maxon-icon-theme.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "maxon",
+        "scopeName": "source.maxon",
+        "path": "./syntaxes/maxon.tmLanguage.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "maxon"
+      }
+    ],
+    "icons": {
+      "maxon-logo": {
+        "description": "Maxon logo",
+        "default": {
+          "fontPath": "./icons/maxon-icons.woff",
+          "fontCharacter": "\\E000"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "maxon",
+          "title": "Maxon",
+          "icon": "./activity-bar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "maxon": [
+        {
+          "type": "webview",
+          "id": "maxon.compilerExplorerView",
+          "name": "Compiler Explorer",
+          "icon": "./activity-bar-icon.svg",
+          "contextualTitle": "Maxon"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "maxon.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "Maxon"
+      },
+      {
+        "command": "maxon.openCompilerExplorer",
+        "title": "Open Compiler Explorer",
+        "category": "Maxon"
+      },
+      {
+        "command": "maxon.generateIR",
+        "title": "Generate IR (internal)",
+        "category": "Maxon"
+      },
+      {
+        "command": "maxon.generateAsm",
+        "title": "Generate Assembly (internal)",
+        "category": "Maxon"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Maxon",
+      "properties": {
+        "maxon.formatting.insertSpaces": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use spaces instead of tabs for indentation"
+        },
+        "maxon.formatting.tabSize": {
+          "type": "number",
+          "default": 2,
+          "description": "Tab size (used when insertSpaces is true)"
+        }
+      }
+    },
+    "semanticTokenScopes": [
+      {
+        "language": "maxon",
+        "scopes": {
+          "label.level0": [
+            "entity.name.label.level0.maxon"
+          ],
+          "label.level1": [
+            "entity.name.label.level1.maxon"
+          ],
+          "label.level2": [
+            "entity.name.label.level2.maxon"
+          ],
+          "label.level3": [
+            "entity.name.label.level3.maxon"
+          ],
+          "label.level4": [
+            "entity.name.label.level4.maxon"
+          ],
+          "label.level5": [
+            "entity.name.label.level5.maxon"
+          ]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[maxon]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": false,
+        "editor.tabSize": 2,
+        "editor.insertSpaces": false,
+        "editor.detectIndentation": false
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+          "label.level0": "#C0B090",
+          "label.level1": "#B090B0",
+          "label.level2": "#90A0B0",
+          "label.level3": "#90B090",
+          "label.level4": "#90B0B0",
+          "label.level5": "#B0A090"
+        }
+      },
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": "entity.name.label.maxon",
+            "settings": {
+              "foreground": "#808080"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "scripts": {
+    "build-icons": "node scripts/build-icon-font.js && node scripts/build-extension-icon.js",
+    "vscode:prepublish": "npm run bundle",
+    "compile": "tsc -p ./",
+    "bundle": "npm run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
+    "watch": "npm run check-types && node esbuild.js --watch",
+    "pretest": "npm run bundle && npm run compile",
+    "test": "npm run test:grammar && node ./out/test/runTest.js",
+    "test:grammar": "vscode-tmgrammar-snap -s source.maxon -g syntaxes/maxon.tmLanguage.json test-fixtures/**/*.maxon",
+    "test:grammar:update": "vscode-tmgrammar-snap -u -s source.maxon -g syntaxes/maxon.tmLanguage.json test-fixtures/**/*.maxon",
+    "package": "vsce package",
+    "install-extension": "npm run package && \"%LOCALAPPDATA%/Programs/Microsoft VS Code/bin/code\" --install-extension maxon-lsp-client-0.1.0.vsix"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.19.15",
+    "@types/vscode": "^1.110.0",
+    "@vscode/test-electron": "^2.3.9",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.7",
+    "mocha": "^11.7.5",
+    "opentype.js": "^2.0.0",
+    "sharp": "^0.34.5",
+    "ttf2woff": "^3.0.0",
+    "typescript": "^6.0.2",
+    "vscode-tmgrammar-test": "^0.1.3"
+  }
+}

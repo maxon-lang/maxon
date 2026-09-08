@@ -1,0 +1,190 @@
+// coverage-line-states.test.maxon — the annotated listing tells FOUR line states apart, and each marker
+// is attached to the line it describes.
+//
+// Three of the four are easy to conflate, and conflating any two is a wrong answer a reader cannot see:
+//   * a COUNT — the run executed this line, that many times;
+//   * `#####` — real emitted code the run never reached, which is what a coverage tool exists to find;
+//   * `-----` — the optimizer emitted NO CODE for this line, so there is nothing to reach. Reported as
+//     `#####` it blames the tests for missing code that does not exist; reported blank it hides among
+//     the comments;
+//   * blank — no coverage point at all: a comment, a blank line, an `end`.
+//
+// ⭐⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** A hit count moves with inlining, with loop
+// rotation and with the stdlib a program pulls in, and a case that pinned one would go red for every
+// unrelated change and teach its reader to re-bless it. So the numeric half is asked as an ORDER: a line
+// inside a loop body runs MORE times than the loop's own header, whatever the two numbers are. The three
+// non-numeric states are pinned exactly, because a marker is a spelling and not a measurement.
+//
+// ⭐ **THE MARKER AND THE LINE ARE ASSERTED TOGETHER.** A marker column and a line-number column can each
+// be internally consistent and still describe a different line than the source text printed beside them —
+// an off-by-one in the listing walk, or a point table indexed by the wrong stride, reads as a plausible
+// set of markers on somebody else's lines. So every anchored line is checked by asking the row printed
+// for that NUMBER whether it carries that line's own TEXT.
+//
+// ⛔ **EVERY LINE THIS CASE NAMES IS FOUND BY ANCHOR, OUT OF THE STAGED SOURCE.** The fixture may grow a
+// line without this file changing, and it may not lose one silently: an anchor that is absent, or present
+// twice, stops the case rather than pinning whichever line the walk happened to see last.
+
+// This case's staging label.
+let LineStatesCaseLabel = "line-states"
+
+// The lines of the fixture this case asks about, by anchor. Their NUMBERS are the fixture's business.
+let HotAnchor = "hot"
+let LoopHeaderAnchor = "loopHeader"
+let NeverAnchor = "never"
+let EliminatedAnchor = "eliminated"
+let NoCodeAnchor = "nocode"
+
+// The two markers that are spellings rather than numbers, in the report's own words.
+
+// The summary key this case reads its elimination tally off.
+let EliminatedSummaryKey = "eliminated: "
+
+// A listing row is `<marker> |<line>| <source>`: the marker column, the line-number column, and the
+// source text, which may itself hold the separator and is therefore rejoined rather than taken whole.
+let ColumnSeparator = "|"
+let MarkerColumn = 0
+let LineNumberColumn = 1
+let SourceColumnStart = 2
+let ListingRowColumns = 3
+
+// A row of the annotated listing, or the absence of one. A union rather than an empty string, because a
+// BLANK marker is a real state here — the fourth one — and could not be told from "there was no row".
+union ListingRowLookup
+	none
+	found(row String)
+end 'ListingRowLookup'
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'the four line states are told apart and each marker names its own line'
+	let staged = stagedProgram(LineStatesCaseLabel, fixture: StatesFixtureName)
+	let executable = builtExecutable(staged, stem: CoveredOutputStem)
+	try requireCoverageBuild(staged, output: executable)
+
+	let report = try requireCoverageRunReport(staged, executable: executable)
+
+	// ⭐ THE JOIN, for every line this case goes on to make a claim about.
+	for anchor in anchorsUnderTest() 'eachAnchor'
+		try requireRowNamesItsOwnLine(report, staged: staged, anchor: anchor)
+	end 'eachAnchor'
+
+	// The three states that are spellings.
+	let neverMarker = anchoredMarker(report, staged: staged, anchor: NeverAnchor)
+	let eliminatedMarker = anchoredMarker(report, staged: staged, anchor: EliminatedAnchor)
+	let noCodeMarker = anchoredMarker(report, staged: staged, anchor: NoCodeAnchor)
+	try Expect.equal(neverMarker, expected: NotCoveredMarker, message: "the line the fixture anchors as `{NeverAnchor}` is real emitted code inside a condition that is false for the whole run, and its marker is not `{NotCoveredMarker}`. Finding exactly that line is what a coverage tool is FOR; reported as a count it says the run reached code it never reached, and reported blank it disappears among the comments. The report reads:{LineFeed}{report}")
+	try Expect.equal(eliminatedMarker, expected: EliminatedMarker, message: "the line the fixture anchors as `{EliminatedAnchor}` is the body of a function nothing calls, so the optimizer emitted no code for it, and its marker is not `{EliminatedMarker}`. `{NotCoveredMarker}` there blames the run for not reaching code that does not exist, and a blank hides it among the comments — the fourth state needs its own mark or it is not a state. The report reads:{LineFeed}{report}")
+	try Expect.isEmpty(noCodeMarker, message: "the line the fixture anchors as `{NoCodeAnchor}` is a comment and carries no coverage point, yet the listing marked it. A marker on a line that has no point is a count belonging to some other line, printed where a reader will believe it. The report reads:{LineFeed}{report}")
+
+	// The state that is a number, asked as an ORDER rather than as a value.
+	let hot = decimalValue(anchoredMarker(report, staged: staged, anchor: HotAnchor))
+	let loopHeader = decimalValue(anchoredMarker(report, staged: staged, anchor: LoopHeaderAnchor))
+	try Expect.greaterThan(hot as AssertedInt, than: 0, message: "the line the fixture anchors as `{HotAnchor}` runs on every iteration of a loop the program definitely enters, and the listing gives it no positive count. A line that ran and is reported as not having run is the failure mode that makes a coverage number worth less than none. The report reads:{LineFeed}{report}")
+	try Expect.greaterThan(hot as AssertedInt, than: loopHeader as AssertedInt, message: "the loop BODY (`{HotAnchor}`, counted {hot}) did not outrun the loop HEADER (`{LoopHeaderAnchor}`, counted {loopHeader}). The header is evaluated once per entry and the body once per iteration, so a body that does not exceed it means the counts are not per-execution at all — a point incremented once per line rather than once per pass reads as a plausible listing of ones. The report reads:{LineFeed}{report}")
+
+	try requireSummaryAgrees(report)
+end 'the four line states are told apart and each marker names its own line'
+
+// ============================================================================================
+// THE SUMMARY LINE
+// ============================================================================================
+
+// The header tallies, against the fixture's own shape: it deliberately leaves lines uncovered and
+// deliberately has a function nothing calls, so a report claiming everything covered or nothing
+// eliminated has stopped counting one of the states above rather than found a cleaner program.
+function requireSummaryAgrees(report String) throws TestFailure
+	let lines = summaryTokenAfter(report, key: LinesSummaryKey)
+	let covered = ratioNumerator(lines)
+	let instrumented = ratioDenominator(lines)
+	try Expect.greaterThan(instrumented as AssertedInt, than: 0, message: "the summary reports `{LinesSummaryKey}{lines}`, instrumenting no lines at all. Zero instrumented lines is not an empty measurement — it is a binary nobody instrumented, and every per-line assertion over it passes vacuously. The report reads:{LineFeed}{report}")
+	try Expect.lessThan(covered as AssertedInt, than: instrumented as AssertedInt, message: "the summary reports `{LinesSummaryKey}{lines}` — every instrumented line covered — over a fixture that deliberately holds a line no run reaches. A green total on code with an untested line is the worst answer a coverage tool can give, because a green number gets trusted. The report reads:{LineFeed}{report}")
+
+	let eliminated = decimalValue(summaryTokenAfter(report, key: EliminatedSummaryKey))
+	try Expect.greaterThan(eliminated as AssertedInt, than: 0, message: "the summary reports `{EliminatedSummaryKey}{eliminated} lines` over a fixture whose `neverCalled` is removed whole by dead-function elimination. Eliminated lines are counted separately BECAUSE they are not a coverage failure; a zero here means they were folded into one of the other two states and the distinction was lost. The report reads:{LineFeed}{report}")
+end 'requireSummaryAgrees'
+
+// ============================================================================================
+// READING THE ANNOTATED LISTING
+// ============================================================================================
+
+// Every anchor this case makes a claim about. Written once, so the join below and the assertions above
+// cannot come to cover different sets.
+function anchorsUnderTest() returns StringArray
+	var anchors = StringArray.create()
+	anchors.push(HotAnchor)
+	anchors.push(LoopHeaderAnchor)
+	anchors.push(NeverAnchor)
+	anchors.push(EliminatedAnchor)
+	anchors.push(NoCodeAnchor)
+
+	return anchors
+end 'anchorsUnderTest'
+
+// ⭐ The row printed for an anchored line NUMBER carries that line's own TEXT. Both halves of a listing
+// row are derived from the same point table, so only asking one about the other can catch a walk that is
+// one row out — which otherwise reads as a complete, plausible listing.
+function requireRowNamesItsOwnLine(report String, staged FilePath, anchor String) throws TestFailure
+	let line = anchoredLineNumber(staged, anchor: anchor)
+	match listingRow(report, line: line) 'listed'
+		none then try Expect.fail("the annotated listing prints no row for line {line}, which the staged fixture anchors as `{anchor}`. The listing prints EVERY line of a reported file — that is what makes a blank marker mean 'no coverage point' rather than 'not shown' — so a missing line is one whose state a reader cannot ask about at all. The report reads:{LineFeed}{report}")
+		found(row) then try Expect.contains(rowSourceText(row), needle: "{AnchorPrefix}{anchor}", message: "the listing's row for line {line} does not print the source line the staged fixture anchors as `{anchor}`. The marker column and the line-number column come from the same point table, so a listing walk that is one row out prints a full, plausible set of markers against the wrong lines. The row reads: {row}")
+	end 'listed'
+end 'requireRowNamesItsOwnLine'
+
+// The marker column of an anchored line's row. The caller has already asserted the row is there, so its
+// absence here is that assertion broken rather than a state to report.
+function anchoredMarker(report String, staged FilePath, anchor String) returns String
+	let line = anchoredLineNumber(staged, anchor: anchor)
+	match listingRow(report, line: line) 'listed'
+		none then panic("coverage tests: `{anchor}` has no listing row, which `requireRowNamesItsOwnLine` refuses before any marker is read.")
+		found(row) then return rowMarker(row)
+	end 'listed'
+end 'anchoredMarker'
+
+// The listing row for one source line. Rows are told from headers, the legend and the branch section by
+// SHAPE — a listing row is the only line of a report that spells the column separator twice — rather than
+// by a section walk, so a report that grows a section does not silently change what this reads.
+function listingRow(report String, line FixtureLineNumber) returns ListingRowLookup
+	for text in outputLines(report) 'eachLine'
+		let columns = text.split(ColumnSeparator)
+		if columns.count() < ListingRowColumns 'notAListingRow'
+			continue
+		end 'notAListingRow'
+
+		let numbered = try columns.get(LineNumberColumn) otherwise continue
+		if decimalValue(numbered) as FixtureLineNumber == line 'theRow'
+			return ListingRowLookup.found(text)
+		end 'theRow'
+	end 'eachLine'
+
+	return ListingRowLookup.none
+end 'listingRow'
+
+// A row's marker column, with the padding that right-aligns it dropped. EMPTY is a real answer — it is
+// the fourth state — which is why the row's presence is established before this is called.
+function rowMarker(row String) returns String
+	let marker = try row.split(ColumnSeparator).get(MarkerColumn) otherwise ""
+
+	return marker.trim()
+end 'rowMarker'
+
+// A row's source text: everything past the second separator, rejoined, because a source line may spell
+// the separator itself and truncating it there would compare half a line.
+function rowSourceText(row String) returns String
+	var rendered = ""
+	var atStart = true
+	var column = 0
+	for piece in row.split(ColumnSeparator) 'eachColumn'
+		if column >= SourceColumnStart 'partOfTheSource'
+			rendered.append(piece if atStart else "{ColumnSeparator}{piece}")
+			atStart = false
+		end 'partOfTheSource'
+
+		column = column + 1
+	end 'eachColumn'
+
+	return rendered
+end 'rowSourceText'

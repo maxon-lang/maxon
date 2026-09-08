@@ -1,0 +1,20 @@
+// The one place the compiler query spine's hashing carries policy; the fold itself is `stdlib/Hasher`.
+//
+// Every per-file query (queryTokens, queryParseOps) is keyed on the content hash of its input, and
+// the whole-program queryAllModule is keyed on a composite hash folded over every file's content
+// hash in source-path order. Content-hash keying is **parallel-safe**: a hash is computed
+// independently per file with no shared mutable state, so per-file parse tasks never contend on a
+// global counter, and two builds of byte-identical input produce byte-identical cache keys.
+
+// Fold a byte sequence into a running hash, tagged with its length.
+//
+// The tag is the policy: FNV-1a folds a flat byte sequence, so without a length "ab" then "c" and
+// "a" then "bc" reach one digest — and the signature index folds a name, then a return type, then
+// the next name. It lives here rather than in stdlib because anything that must interoperate with
+// another FNV-1a implementation needs the bare fold.
+//
+// Takes a `ByteArray`, so a caller that already holds one — every interned name is a zero-copy
+// slice of the source — hashes it without building a String.
+export function mixBytes(state HashDigest, bytes ByteArray) returns HashDigest
+	return Hasher.combined(Hasher.combined(state, bytes: bytes), value: bytes.count())
+end 'mixBytes'

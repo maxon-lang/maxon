@@ -1,0 +1,28 @@
+// Test: push-on-let-self-field-array-error
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export let items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add(v Integer)
+		items.push(v)
+	end 'add'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.add(1)
+	return b.size() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)

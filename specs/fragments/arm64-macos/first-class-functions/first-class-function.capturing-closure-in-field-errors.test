@@ -1,0 +1,26 @@
+// Test: first-class-function.capturing-closure-in-field-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	var h = Handler.create(double)
+	let bump = 20
+	h.op = function(n Integer) gives n + bump
+	return h.op(22)
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:21:4: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

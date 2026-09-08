@@ -1,0 +1,52 @@
+// Test: error.two-instantiations-compile-to-one-name
+type Str
+	export var s as String
+	export static function make() returns Self
+		return Self{s: "a"}
+	end 'make'
+end 'Str'
+
+type Box
+	export var s as String
+	export static function make() returns Self
+		return Self{s: "b"}
+	end 'make'
+end 'Box'
+
+type Box_Int
+	export var s as String
+	export var t as String
+	export var u as String
+	export static function make() returns Self
+		return Self{s: "c", t: "cc", u: "ccc"}
+	end 'make'
+end 'Box_Int'
+
+type Int_Str
+	export var s as String
+	export var t as String
+	export var u as String
+	export static function make() returns Self
+		return Self{s: "d", t: "dd", u: "ddd"}
+	end 'make'
+end 'Int_Str'
+
+type Pair uses A, B
+	export var first as A
+	export var second as B
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+typealias P1 = Pair with (Box_Int, Str)
+typealias P2 = Pair with (Box, Int_Str)
+
+function main() returns ExitCode
+	let a = P1.create(Box_Int.make(), second: Str.make())
+	let b = P2.create(Box.make(), second: Int_Str.make())
+	return 4
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:43:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name

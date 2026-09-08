@@ -1,0 +1,146 @@
+// Test: async-await.try-await.void
+var flag = 0
+
+enum TestError implements Error
+		failed
+end 'TestError'
+
+function maySetFlag(succeed bool) throws TestError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				flag = 1
+				return
+		end 'ok'
+		throw TestError.failed
+end 'maySetFlag'
+
+function main() returns ExitCode
+		let p = async maySetFlag(true)
+		try await p otherwise ignore
+		return flag
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __data_flag@0 = i64 0
+  __data_CharacterSet.cachedWhitespacesAndNewlines@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_run_queue_head@24 = i64 0
+  __gt_run_queue_tail@32 = i64 0
+  __gt_init_done@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_trace_counter@80 = i64 0
+  __gt_proc_count@88 = i64 0
+  __gt_proc_handles_base@96 = i64 0
+  __gt_proc_gts_base@104 = i64 0
+  __gt_proc_wait_snapshot@112 = i64 0
+  __gt_proc_poller@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __sched_progress@136 = i64 0
+  __sched_active_workers@144 = i64 1
+  __sched_max_active_workers@152 = i64 1
+  __sched_tls_index@160 = i64 0
+  __sched_tls_teb_offset@168 = i64 0
+  __sched_procs@176 = i64 0
+  __sched_allm@184 = i64 0
+  __sched_midle@192 = i64 0
+  __sched_pidle@200 = i64 0
+  __sched_num_procs@208 = i64 0
+  __sched_shutdown_flag@216 = i64 0
+  __sched_lock@224 = i64 0
+  __sched_nmspinning@232 = i64 0
+  __sched_parked_drivers@240 = i64 0
+  __sched_sysmon_started@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __mrt_errno@272 = i64 0
+  __mrt_tls_ready@280 = i64 0
+  __slab_arena_list@288 = i64 0
+  __slab_arena_map_l1@296 = i64 0
+  __slab_state@304 = i64 0
+}
+
+func @maySetFlag {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "noyield.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect File.exists
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  ok:
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rcx, __data_flag
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.leaRegFunc rcx, [rip + maySetFlag]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont
+  trycont:
+    x64.leaRegGlobal rax, __data_flag
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_86]  ; "panic at async-await.try-await.void.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,1879 @@
+// InlineLeaves — a Std→Std pass that replaces a direct call to a TINY LEAF function with a COPY of
+// that function's body, and leaves the callee where it is.
+//
+// ⭐⭐ **WHY A CALL TO A THREE-OP FUNCTION IS THE THING TO DELETE.** MEASURED 2026-08-26 on the stage-1
+// self-compile (`temp/r6/`): `regMaskContains` — `((mask shr regNum) and 1) != 0`, plus the entry guard
+// its `int(0 to 63)` parameter earns — is **21.07% of the profile's self time** from **14 static call
+// sites**. The call is not most of its cost; it is nearly all of it, because the body is smaller than
+// the protocol around it (the argument moves, the `call`, the frame the guard's panic block forces the
+// prologue pass to give it, the `ret`). The same census finds **406 strict leaves** and 3,704 sites into
+// leaves of ≤ 12 body ops — 2.6% of the program's calls STATICALLY, and a far larger share dynamically,
+// because a leaf that small is what a loop calls.
+//
+// ⛔⛔ **A CALLEE THAT CAN PANIC IS STILL INLINED, AND THAT IS WHAT MAKES THE PASS WORTH HAVING.**
+// Every ranged-parameter leaf ends in a panic block — `regMaskContains` included, through its `RegNum`
+// guard — so refusing them would exclude the pass's whole reason for existing. See `mintSlowArm` for
+// what keeps `range-check-panic` / `panic.in-function`'s stack traces exact.
+//
+// ONE ROUND, LEAF-ONLY: no fixpoint, no loop-depth or const-argument multipliers. The leaves that
+// matter are tiny and sit in loops, so a size heuristic buys nothing here that a flat budget does not.
+//
+// Three things a general Std-tier inliner needs and this one does not:
+//   • **an ownership side table** — refcounts are inserted at the MAXON tier, so a retain, a release
+//     and a scope drop are all `call` ops and a body holding one is not a leaf. There is nothing to
+//     thread.
+//   • **cross-module snapshots** — `stdlib/` is compiled into the same module. There is nothing to
+//     snapshot.
+//   • **a slot-op refusal** — `stackRecordAddr` is `isUnsupportedInInlineBody`, and
+//     `promoteStackRecords` runs AFTER this pass, so none exists yet either way.
+//
+// `BlockArgReturnRole` is declared and nothing reads it; wiring it here would be a producer with no
+// consumer.
+//
+// ⚠ **THE PARAMETER HALF OF THE REMAP COLUMN IS A RANGE, NOT A SEARCH.** `ValueId`s `0..paramCount-1`
+// ARE the parameters by the Std ABI's own convention (`IrValueId.maxon`, and
+// `InsertRangeChecks.rangedParamValue` rests on the same identity), and the `param` ops the copy skips
+// are CHECKED against that convention as they go by (`assertParamOpMatchesConvention`). A scan that
+// stopped at the first non-param op would bind nothing when anything is prepended, and every spliced
+// body op would then read the CALLER's same-numbered value.
+
+// ⭐ **THE OP BUDGET, AND WHAT IT ADMITS — MEASURED, at this tier, not guessed from the target dump.**
+// Counted over all of a callee's blocks with terminators included and `param` ops excluded (a `param`
+// becomes the call's argument rather than an instruction).
+//
+// ⛔⛔ **THE REASON 24 WAS CHOSEN IS GONE. THE NUMBER IS NOT — IT NOW RESTS ON A DIFFERENT MEASUREMENT,
+// AND THE TWO MUST NOT BE CONFUSED.** It was 24 because `regMaskContains` was 23 Std ops and 16 refused
+// it: the headline function of the rung that set this budget, refused by its own budget. What put it at
+// 23 was where THE SHIFT RULE lives — `Parser.emitGuardedShift` saturates a shift whose count the
+// compiler cannot fold, at the MAXON tier, in ops. **EC6 deleted that for this leaf**: a count whose
+// DECLARED alias lies inside the counts the instruction takes as written is now emitted bare
+// (`Parser.shiftCountIsProvenUnguarded`), `regNum` is `int(0 to 63)`, and `((mask shr regNum) and 1) != 0`
+// **fits inside 16** — MEASURED, not inferred: the leaf inlines at a budget of 16.
+//
+// ⭐ **WHAT HOLDS 24 UP TODAY IS THE SITE COUNT ALONE.** MEASURED on the self-compile (2026-08-27, both
+// arms after EC6): at **24**, 3,673 sites inlined across 418 eligible callees, 512 refused by size across
+// 49 callees; at **16**, 3,286 sites across 349 callees, 899 refused across 118, of which 387 sites / 69
+// callees a budget of 24 would admit. **24 buys 387 sites and 69 callees over 16** — a tenth more
+// inlining. That is not a rounding error, so LOWERING this back is a change in its own right and owes its
+// own CPU A/B; it may not ride on the justification above, which has been spent.
+//
+// ⚠ Both arms were read on the binary EC6's review then CORRECTED (`Parser.shiftCountIsProvenUnguarded`
+// was spending a merge's declared alias as a proof), so the 24 arm was RE-READ afterwards and is
+// unchanged to the digit — 3,673 / 418 / 512 / 49 on the fixed tree. The 16 arm was not re-run: it needs
+// its own build, and the correction only ever RE-ADDS a guard, which can move that arm's numbers down
+// but not the conclusion, since 24 admits every leaf 16 does.
+//
+// The pass reports what `ReportedLargerLeafBudget` would additionally admit, so the next person to ask
+// has the number for THIS compile instead of a guess.
+let MaxInlinedLeafOps = 24 as OpCount
+
+// The second budget the pass MEASURES but does not use — reported beside the refusals so that "would a
+// bigger one be better?" is answered from the compile being asked about rather than re-derived. It is
+// deliberately not a knob: two budgets that both took effect would be two rules.
+let ReportedLargerLeafBudget = 32 as OpCount
+
+// The block labels this pass mints. They reach the committed goldens, so they are short and prefixed
+// `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and `InlineManagedPrimitives`'
+// `__im_`).
+//
+// ⭐ **A COPIED block KEEPS THE CALLEE BLOCK'S OWN LABEL — except the ENTRY, and that exception is the
+// rule.** `__rc_ok`, `ifcont`, `whilehdr` are claims about a CONSTRUCT, and every one of them is still
+// true after the block is copied into another function; `entry` is a claim about a FUNCTION, and a copied
+// block is not the caller's entry. Left alone it put a second block called `entry` inside `main`
+// (MEASURED — `a-pure-leaf-is-inlined`'s golden read `entry` / `entry#0`, the printer disambiguating two
+// blocks of one name), which is exactly the label a reader trusts not to be ambiguous.
+let InlineContLabel = b"__il_cont"
+let InlineSlowLabel = b"__il_slow"
+let InlineBodyLabel = b"__il_body"
+
+typealias SiteCount = int(0 to u64.max)
+
+// How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
+typealias GuardCount = int(0 to u64.max)
+
+// The shared empties a `LeafInliner` starts with and NEVER writes to — `seedSiteBuffers` replaces them
+// with real arrays at the first site, and `valueIds` replaces the minter at the first splice. This pass
+// constructs one inliner per FUNCTION in the module and the overwhelming majority of functions hold no
+// inlinable site at all, so three `create()`s in the constructor would be three heap objects per
+// function for nothing. Same shape, and the same measured reason, as
+// `InlineManagedPrimitives.sharedUnseededMinter` and `InsertRangeChecks`' chain columns; safe for the
+// same reason — the one operation that would write to each is the one that replaces it.
+let sharedEmptySitePositions = BlockOpPosArray.create()
+let sharedEmptySiteCallees = FuncIndexArray.create()
+let sharedUnseededLeafMinter = ValueMinter.create(0)
+
+// ⭐ The two columns a splice that declines NOTHING never writes to — which is nearly every splice in the
+// module, since a callee with a narrowed parameter is a handful of them. Shared for the three empties
+// above's reason and with their invariant: `DeclinedGuards.decline` REPLACES both fields before its first
+// write, so neither is ever mutated. MEASURED on the scale ladder before they existed: **+34,575
+// `phase:inlineLeaves` allocations at rung 5, doubling per rung** — two arrays per splice, for a plan
+// almost every splice answers `false` from.
+let sharedEmptyDeclineColumn = BoolArray.create()
+let sharedEmptyForwardColumn = BlockIdArray.create()
+
+// --- what ONE op of a candidate body means for the leaf rule ---
+enum LeafOpRole
+	// Copyable verbatim into the caller.
+	body
+	// A `param`: not counted against the budget and never copied — the splice maps its value to the
+	// call site's argument instead.
+	parameter
+	// A call of ANY kind. It refuses the callee outright, and it is the rule that makes ownership free
+	// here (a retain/release/scope-drop is a `call`) and recursion impossible (a self-call is a call).
+	calling
+	// `osPanic` / `osPanicValue`. Its BLOCK is dropped and redirected to the slow arm, but only if the
+	// whole body is pure — see `mintSlowArm`.
+	panicking
+	// An op the dialect itself marks unsupported inside an inline body — or one that can FAULT, which
+	// the dialect marks only in prose. See `leafOpRole`.
+	refusing
+end 'LeafOpRole'
+
+// ⭐ **THE ROLE OF ONE OP — one exhaustive `match`, and the TAIL of it reads the dialect's own flag.**
+// The variants named explicitly are the ones whose role is NOT derivable from
+// `isUnsupportedInInlineBody`: the five calls and `param` all carry `false` for it (a call is perfectly
+// representable inside a body — it just is not a LEAF's body), the two panics carry `true` but are
+// handled rather than refused, and `div`/`mod` carry `false` while being the only ops that can FAULT.
+// Everything else answers off the flag, which is what gives that field its first reader and means an op
+// added with it set is refused here without this file learning its name.
+//
+// ⛔⛔ **A DIVIDE REFUSES THE CALLEE, AND THE REASON IS THE PANIC RULE'S OWN — ONE CASE FURTHER OUT.**
+// `div`/`mod` lower to `idiv`, which raises `#DE` on divide-by-zero and on `i64.min / -1`; the fault
+// handler prints `panic: integer overflow` with a symbolized backtrace, and that backtrace is taken from
+// WHERE THE INSTRUCTION IS. A panic OP has a slow arm this pass can re-issue the call through, so its
+// frame survives; a faulting instruction has nothing to re-issue — moving it moves the frame, full stop.
+// MEASURED: `safety/integer-overflow-fault-from-int-min-over-minus-one` read `in main / in mrt_start`
+// where it pins `in divide / in main / in mrt_start`, because `divide` is a two-op leaf.
+// (`loadIndirect` can fault too — a null receiver — but the language promises no message and no trace
+// for that, and refusing every leaf that reads memory would refuse `Array.isEmpty` and `ValueMinter.mint`
+// along with it. The line is drawn where a DIAGNOSTIC is promised, which is exactly where a spec pins one.)
+//
+// ⚠ Every other variant is NAMED, so a variant added later fails to compile here until it is
+// consciously placed.
+function leafOpRole(op StdOp) returns LeafOpRole
+	match op 'kind'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm then break 'kind'
+		div or
+			mod then return LeafOpRole.refusing
+		condBranch or
+			branch or
+			ret then break 'kind'
+		param then return LeafOpRole.parameter
+		call then return LeafOpRole.calling
+		retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr then break 'kind'
+		tryCall then return LeafOpRole.calling
+		errorReturn or
+			osExit or
+			funcAddr then break 'kind'
+		callIndirect then return LeafOpRole.calling
+		osPanic then return LeafOpRole.panicking
+		osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch then break 'kind'
+		witnessCall then return LeafOpRole.calling
+		osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock then break 'kind'
+		witnessTryCall then return LeafOpRole.calling
+		osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes then break 'kind'
+		osPanicValue then return LeafOpRole.panicking
+		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band (F1, F2, G1) are placed
+		// here consciously: none is a call site, a terminator or a `param`, so each one's own
+		// `isUnsupportedInInlineBody` answers below — a fill and the two atomics are body ops a leaf may
+		// hold, the import calls refuse.
+		osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority then break 'kind'
+		osFileOpenWriteExecutable then break 'kind'
+		osEnvBlock or
+			osEnvBlockFree then break 'kind'
+		loadAcquire or
+			storeRelease then break 'kind'
+		osHandleFileType then break 'kind'
+		osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample then break 'kind'
+	end 'kind'
+
+	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
+end 'leafOpRole'
+
+// --- the per-callee verdict ---
+enum LeafVerdict
+	// The body may be spliced at any direct call site that is not its own function.
+	eligible
+	// ⭐ THE PANIC RULE'S REFUSAL: the body panics AND writes memory. Re-running it on the slow arm
+	// would repeat the write, so it is refused rather than inlined-with-a-redirect.
+	panicWithStore
+	// Inside every other rule but past `MaxInlinedLeafOps`. Kept apart from `notALeaf` because it is the
+	// only refusal a BUDGET could change, and the report says how many sites it costs.
+	tooManyOps
+	// Everything else, and the list is the whole eligibility rule read backwards: a call of any kind, a
+	// `/` or `mod` (which can FAULT — see `leafOpRole`), an `isUnsupportedInInlineBody` op, a
+	// by-reference parameter, a body that carries the green-thread stack guard, a panicking ENTRY block,
+	// an entry block carrying phis, a block still in `Terminator.unset` (a body the lowering never
+	// emitted), or no body at all.
+	notALeaf
+end 'LeafVerdict'
+
+typealias LeafVerdictArray = Array with LeafVerdict
+
+// What one scan of a candidate body found. A record rather than two out-params because the verdict is a
+// JOIN of several facts and the budget question needs the op count even when the answer is `eligible`.
+type LeafBodyScan
+	export var verdict as LeafVerdict
+	export var opCount as OpCount
+
+	export static function create(verdict LeafVerdict, opCount OpCount) returns LeafBodyScan
+		return Self{verdict: verdict, opCount: opCount}
+	end 'create'
+end 'LeafBodyScan'
+
+// ⭐ **EVERY FUNCTION'S VERDICT, COMPUTED ONCE, ON THE PRE-SPLICE BODY.** Recomputing spliceability per
+// SITE is `callSites × calleeSize`; here the scan is one walk of the module and every site is a column
+// read.
+//
+// ⭐⭐ **PRE-SPLICE IS ALSO THE SEMANTICS, NOT MERELY THE SCHEDULE.** Because the verdicts are all taken
+// before the first splice, a caller that BECOMES call-free by being inlined into does not become a leaf
+// in this compile. That is the "one round, no cascade" rule, and it is what bounds the work at one copy
+// per site — stated here rather than left to be inferred from the order of two loops.
+type LeafPlan
+	var verdicts as LeafVerdictArray
+	// One past the highest ValueId each ELIGIBLE callee's body uses — the width of the value column a
+	// splice builds. Zero for every other function; `nextFreeValueId` materializes a live-op index array,
+	// so it is asked only where an answer will be spent.
+	var valueBounds as ValueIdArray
+	// The same membership as `verdicts == eligible`, in the shape `ValueOriginTable.indexRowsOfFunctions`
+	// takes. Built in the same walk rather than derived later, so the two cannot disagree about which
+	// callees' origin rows are indexed.
+	export var eligibleFuncs as BoolArray
+	// `verdicts == tooManyOps` AND inside `ReportedLargerLeafBudget` — a BIT rather than the op count it
+	// is derived from, because the count has exactly one reader and this is what that reader asks.
+	var withinLargerBudget as BoolArray
+	export var eligibleCount as FuncIndex
+	export var panicWithStoreCount as FuncIndex
+	export var tooManyOpsCount as FuncIndex
+	export var tooManyOpsWithinLargerBudget as FuncIndex
+
+	static function create(funcCount FuncIndex) returns LeafPlan
+		var valueBounds = ValueIdArray.create()
+		valueBounds.resize(funcCount)
+		var eligibleFuncs = BoolArray.create()
+		eligibleFuncs.resize(funcCount)
+		var withinLargerBudget = BoolArray.create()
+		withinLargerBudget.resize(funcCount)
+		return Self{
+			verdicts: LeafVerdictArray.create(),
+			valueBounds: valueBounds,
+			eligibleFuncs: eligibleFuncs,
+			withinLargerBudget: withinLargerBudget,
+			eligibleCount: 0,
+			panicWithStoreCount: 0,
+			tooManyOpsCount: 0,
+			tooManyOpsWithinLargerBudget: 0
+		}
+	end 'create'
+
+	// File function `funcIndex`'s verdict. Called once per function, in index order, so `verdicts` is
+	// PUSHED — an `Array with <enum>` is a struct array, and `resize` sets such an array's length without
+	// giving its slots storage (`CompileTimings.create` records that trap for `Array with PhaseCost`).
+	function record(funcIndex FuncIndex, scan LeafBodyScan, module StdModule, func IrFunction)
+		if funcIndex != self.verdicts.count() 'outOfOrder'
+			panic("LeafPlan.record: asked for function {funcIndex} with {self.verdicts.count()} already recorded — the verdict column is pushed in index order, so it IS the function numbering")
+		end 'outOfOrder'
+
+		self.verdicts.push(scan.verdict)
+		match scan.verdict 'tally'
+			eligible then self.recordEligible(funcIndex, module: module, func: func)
+			panicWithStore then self.panicWithStoreCount = self.panicWithStoreCount + 1
+			tooManyOps then self.recordTooManyOps(funcIndex, opCount: scan.opCount)
+			notALeaf then break 'tally'
+		end 'tally'
+	end 'record'
+
+	function recordEligible(funcIndex FuncIndex, module StdModule, func IrFunction)
+		self.eligibleCount = self.eligibleCount + 1
+		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
+		try self.valueBounds.set(funcIndex, value: nextFreeValueId(module, func: func)) otherwise panic("LeafPlan.recordEligible: valueBounds.set OOB at {funcIndex}")
+	end 'recordEligible'
+
+	function recordTooManyOps(funcIndex FuncIndex, opCount OpCount)
+		self.tooManyOpsCount = self.tooManyOpsCount + 1
+		if opCount > ReportedLargerLeafBudget 'pastEvenTheLargerBudget'
+			return
+		end 'pastEvenTheLargerBudget'
+
+		self.tooManyOpsWithinLargerBudget = self.tooManyOpsWithinLargerBudget + 1
+		try self.withinLargerBudget.set(funcIndex, value: true) otherwise panic("LeafPlan.recordTooManyOps: withinLargerBudget.set OOB at {funcIndex}")
+	end 'recordTooManyOps'
+
+	export function verdictOf(funcIndex FuncIndex) returns LeafVerdict
+		return try self.verdicts.get(funcIndex) otherwise panic("LeafPlan.verdictOf: function index {funcIndex} is outside the {self.verdicts.count()}-function module this plan was built over")
+	end 'verdictOf'
+
+	export function isWithinLargerBudget(funcIndex FuncIndex) returns bool
+		return try self.withinLargerBudget.get(funcIndex) otherwise panic("LeafPlan.isWithinLargerBudget: function index {funcIndex} is outside the {self.withinLargerBudget.count()}-function module this plan was built over")
+	end 'isWithinLargerBudget'
+
+	export function valueBoundOf(funcIndex FuncIndex) returns ValueId
+		return try self.valueBounds.get(funcIndex) otherwise panic("LeafPlan.valueBoundOf: function index {funcIndex} is outside the {self.valueBounds.count()}-function module this plan was built over")
+	end 'valueBoundOf'
+end 'LeafPlan'
+
+function buildLeafPlan(module StdModule) returns LeafPlan
+	var plan = LeafPlan.create(module.funcCount() as FuncIndex)
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		plan.record(funcIndex, scan: scanLeafBody(module, func: func), module: module, func: func)
+	end 'eachFunc'
+	return plan
+end 'buildLeafPlan'
+
+// One candidate body's whole verdict, from one walk.
+//
+// ⚠ **IT WALKS `blockRefs` → `opRefs` + terminator DIRECTLY rather than `IrModule.liveOpIndices`, and
+// that is the same descent** — but the array version MATERIALIZES the index list, and this runs over
+// EVERY function in the module including the large majority that answer `notALeaf` on their first call
+// op. `InlineManagedPrimitives.expandChainFrom` walks the same halves for the same reason. A terminator
+// is never a `param` and never a panic, but it IS counted and it CAN be an `errorReturn`, so the half
+// this walk would otherwise omit is exactly where a throwing body is caught.
+function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
+	if func.blockRefs.count() == 0 'noBody'
+		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
+	end 'noBody'
+	// A by-reference parameter is an ADDRESS whose aliasing is not what a tiny leaf is, and a body that
+	// carries the green-thread stack guard has a load-bearing FRAME — inlining it into an exempt caller
+	// erases the checkpoint (`IrFunction.needsGreenThreadStackGuard`). Both are function-level facts, so
+	// they are asked before a single op is read.
+	if func.reassignedParamMask != 0 or func.needsGreenThreadStackGuard 'refusedBySignature'
+		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
+	end 'refusedBySignature'
+
+	var ops = 0 as OpCount
+	var hasPanic = false
+	var hasStore = false
+	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
+		let blockRef = try func.blockRefs.get(blockIndex) otherwise panic("scanLeafBody: blockRefs.get OOB at {blockIndex} inside its own count")
+		let block = try module.blocks.get(blockRef) otherwise panic("scanLeafBody: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
+		// The ENTRY block's phis would have to be fed by the caller's branch into the copy, and there is
+		// nothing to feed them with — a function's entry takes its inputs as `param` ops. The parser mints
+		// no entry phi, so this is a stated invariant rather than a case; a body that broke it would
+		// otherwise be spliced with its entry args unbound.
+		if blockIndex == 0 and block.blockArgs.count() != 0 'entryCarriesPhis'
+			return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
+		end 'entryCarriesPhis'
+		// ⛔⛔ **A BLOCK STILL IN `Terminator.unset` MEANS THE BODY WAS NEVER LOWERED, AND THERE IS
+		// NOTHING TO COPY.** `LowerMaxonToStd` RELOCATES every function's blocks and then SKIPS the
+		// bodies of the stdlib functions no path from `main` reaches — the function is still pushed
+		// (`FunctionNameIndex` counts it for E4015) but not one of its ops, not even its `param` ops, is
+		// emitted. What is left looks exactly like a zero-op leaf: no call, no store, no panic, inside
+		// any budget. MEASURED before this rule existed: `String.byteLength` reached `carryOplessExit`
+		// with an `unset` entry block, and `Array.clone` reached `buildValueColumn` with a 2-parameter
+		// signature over a 1-wide value space — 64 spec workers died across the suite between them.
+		//
+		// The test is `isTerminated`, not `hasTerminatorOp`: a `dead` block is legitimately op-less and
+		// IS copied (see `carryOplessExit`), and `unset` is the one state that says "unwritten".
+		if not block.isTerminated() 'bodyWasNeverLowered'
+			return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
+		end 'bodyWasNeverLowered'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("scanLeafBody: op index {opIdx} named by a block of '{String.from(func.name)}' is not in module.ops")
+			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
+			// over a union with ninety variants.
+			let role = leafOpRole(op)
+			match role 'role'
+				// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
+				parameter then break 'role'
+				// ⭐ THE STORE TEST READS THE DIALECT'S OWN FLAG, so a new memory op inherits the panic rule
+				// without this file learning its name. It is asked only of `body` ops: a panic op's `isStore`
+				// records that it ends the process, which is precisely the effect the slow arm exists to let
+				// happen exactly once, and a refusing op's is moot.
+				body then hasStore = hasStore or op.rawValue.isStore
+				panicking then hasPanic = true
+				// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs
+				// over the whole module.** Bailing at the first one is what keeps a 5,000-op function from
+				// being walked to the end to learn something its second op already said.
+				calling then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'role'
+			// A panic in the ENTRY block leaves nothing to inline — the head would branch to a block the
+			// splice does not copy — so it refuses rather than redirects.
+			if role == LeafOpRole.panicking and blockIndex == 0 'entryPanics'
+				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'entryPanics'
+
+			ops = ops + countedBodyOps(role)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("scanLeafBody: terminator op index of a block of '{String.from(func.name)}' is not in module.ops")
+			ops = ops + 1
+			match leafOpRole(term) 'termRole'
+				// A terminator is never a parameter and never a panic; both would be a malformed block, and
+				// saying so here is cheaper than a rule elsewhere that has to remember it.
+				parameter then panic("scanLeafBody: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
+				panicking then panic("scanLeafBody: '{String.from(func.name)}' has a panic op in a TERMINATOR slot — a panic is a body op followed by an unreachable return (`InsertRangeChecks.emitPanicBlock`)")
+				body then break 'termRole'
+				// A `tailCall`-shaped terminator or an `errorReturn` (a THROWING body's exit): both refuse,
+				// and the terminator is exactly where the throwing one is caught.
+				calling then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+				refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'termRole'
+		end 'terminated'
+	end 'eachBlock'
+
+	if hasPanic and hasStore 'panicRule'
+		return LeafBodyScan.create(LeafVerdict.panicWithStore, opCount: ops)
+	end 'panicRule'
+	if ops > MaxInlinedLeafOps 'tooBig'
+		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: ops)
+	end 'tooBig'
+
+	return LeafBodyScan.create(LeafVerdict.eligible, opCount: ops)
+end 'scanLeafBody'
+
+// What one body op costs against the budget: everything but a `param`, which becomes the call site's
+// argument rather than an instruction. A panic op still counts — it is real code in the callee, and the
+// budget is about how much of that this pass is willing to duplicate.
+function countedBodyOps(role LeafOpRole) returns OpCount
+	return 0 if role == LeafOpRole.parameter else 1
+end 'countedBodyOps'
+
+// The site census, accumulated across every caller — the pass's one report, and the number this rung is
+// graded on. Site counts, not callee counts: the plan already carries the callee tallies, and a callee
+// refused at 16 ops that nothing calls costs nothing.
+type InlineLeafStats
+	export var inlinedSites as SiteCount
+	export var sitesRefusedByPanicRule as SiteCount
+	export var sitesRefusedBySize as SiteCount
+	export var sitesRefusedBySizeWithinLargerBudget as SiteCount
+	export var selfCallSites as SiteCount
+	// EC7 — how many spliced parameter cascades this compile proved dead and did not copy. Reported for
+	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
+	// compile being asked about rather than be re-derived from a corpus later.
+	export var declinedParamGuards as SiteCount
+
+	export static function create() returns InlineLeafStats
+		return Self{inlinedSites: 0, sitesRefusedByPanicRule: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, declinedParamGuards: 0}
+	end 'create'
+
+	export function noteDeclinedParamGuard()
+		self.declinedParamGuards = self.declinedParamGuards + 1
+	end 'noteDeclinedParamGuard'
+
+	export function noteInlined()
+		self.inlinedSites = self.inlinedSites + 1
+	end 'noteInlined'
+
+	export function noteSelfCall()
+		self.selfCallSites = self.selfCallSites + 1
+	end 'noteSelfCall'
+
+	export function notePanicRuleRefusal()
+		self.sitesRefusedByPanicRule = self.sitesRefusedByPanicRule + 1
+	end 'notePanicRuleRefusal'
+
+	export function noteSizeRefusal(withinLargerBudget bool)
+		self.sitesRefusedBySize = self.sitesRefusedBySize + 1
+		if withinLargerBudget 'wouldFitLarger'
+			self.sitesRefusedBySizeWithinLargerBudget = self.sitesRefusedBySizeWithinLargerBudget + 1
+		end 'wouldFitLarger'
+	end 'noteSizeRefusal'
+end 'InlineLeafStats'
+
+// ⭐⭐ **WHICH OF THE CALLEE'S PARAMETER CASCADES *THIS* CALL SITE PROVES DEAD (EC7) — AND THE TWO SHAPES
+// THE SPLICE NEEDS THAT ANSWER IN.**
+//
+// A narrowed parameter's entry cascade stands in front of EVERY caller, which is what makes it emittable at
+// all (`InsertRangeChecks.guardRangedParams`). Inlined, it is no longer in front of every caller — it is in
+// front of ONE, and that one may already know the argument is in range. Declining it here is the only place
+// that fact can be spent: the callee cannot see it and the caller cannot reach into the callee.
+//
+// ⚠ **THE BLOCKS ARE `InsertRangeChecks`' ENUMERATION, NOT A WALK OF OUR OWN** — see
+// `RangeCheckParamGuard.ownedBlockIds` for why re-deriving them from the CFG would mean modelling a
+// terminator-less block's physical fall-through, which is a known-shaky corner of this tier.
+type DeclinedGuards
+	// Callee `BlockId` -> is this block part of a cascade this site declined? Such a block is copied by
+	// NEITHER walk, exactly as a panic block is not — and this is asked FIRST, ahead of the panic test,
+	// because a declined cascade's `__rc_panic` is one of its blocks.
+	var declined as BoolArray
+	// Callee `BlockId` -> where control goes instead when the cascade beginning at this block is declined;
+	// every other id maps to itself. Written only for a declined cascade's HEAD.
+	var forward as BlockIdArray
+	// The callee's block-id space — held rather than spent at construction, because the columns are seeded
+	// only if something is actually declined.
+	var blockIdSpace as BlockId
+	// The number of cascades, which BOUNDS the forwarding chase below: cascades chain (the k-th guard
+	// splits the (k-1)-th's `__rc_ok`), so a declined guard's continuation can itself be a declined head.
+	var guardCount as GuardCount
+	// ⭐ Has anything been declined? It is ALSO the seeded bit for the two columns, and they are one fact:
+	// the columns are written in exactly one place and it is the first decline.
+	export var anyDeclined as bool
+
+	// ⚠ `export` for ONE reader that is not a method: `sharedDeclinesNothing`, a module-level `let`, which
+	// a file-private constructor may not initialize.
+	export static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
+		return Self{declined: sharedEmptyDeclineColumn, forward: sharedEmptyForwardColumn, blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
+	end 'create'
+
+	function decline(guard RangeCheckParamGuard)
+		if not self.anyDeclined 'stillShared'
+			self.seedColumns()
+			self.anyDeclined = true
+		end 'stillShared'
+
+		try self.forward.set(guard.headBlockId, value: guard.okBlockId) otherwise panic("DeclinedGuards.decline: cascade head {guard.headBlockId} is outside the callee's block-id space")
+		for blockId in guard.ownedBlockIds 'eachOwnedBlock'
+			try self.declined.set(blockId, value: true) otherwise panic("DeclinedGuards.decline: cascade block {blockId} is outside the callee's block-id space")
+		end 'eachOwnedBlock'
+	end 'decline'
+
+	// COPY-ON-WRITE off the two shared empties, at the first decline and nowhere else. `forward` is seeded
+	// to the IDENTITY so that "this block is not forwarded" needs no second column to say so.
+	function seedColumns()
+		var declineColumn = BoolArray.create()
+		declineColumn.resize(self.blockIdSpace)
+		self.declined = declineColumn
+		var forwardColumn = BlockIdArray.create()
+		forwardColumn.resize(self.blockIdSpace)
+		for id in 0 upto self.blockIdSpace 'eachBlockId'
+			try forwardColumn.set(id, value: id) otherwise panic("DeclinedGuards.seedColumns: forwardColumn.set OOB at {id} inside the space it was just resized to")
+		end 'eachBlockId'
+		self.forward = forwardColumn
+	end 'seedColumns'
+
+	export function isDeclined(calleeBlockId BlockId) returns bool
+		if not self.anyDeclined 'noColumnToRead'
+			return false
+		end 'noColumnToRead'
+
+		return try self.declined.get(calleeBlockId) otherwise panic("DeclinedGuards.isDeclined: callee block id {calleeBlockId} is outside the {self.declined.count()}-block id space this plan was built over")
+	end 'isDeclined'
+
+	// Where control ends up entering, following as many declined cascades as chain off `id`. The chase is
+	// BOUNDED by the cascade count and panics rather than spinning: `forward` is written only at heads and
+	// only ever forward along one chain, so a cycle would mean the record is not the chain it claims to be —
+	// and the cost of believing it would be a splice branching into a block it never copied.
+	export function entryFrom(id BlockId) returns BlockId
+		if not self.anyDeclined 'noColumnToRead'
+			return id
+		end 'noColumnToRead'
+
+		var target = id
+		for _ in 0 upto self.guardCount + 1 'chase'
+			let next = try self.forward.get(target) otherwise panic("DeclinedGuards.entryFrom: block id {target} is outside the {self.forward.count()}-block id space this plan was built over")
+			if next == target 'settled'
+				return target
+			end 'settled'
+
+			target = next
+		end 'chase'
+
+		panic("DeclinedGuards.entryFrom: the forwarding chain from block {id} is longer than the {self.guardCount} cascade(s) that can be on it — a cascade's `__rc_ok` has been recorded as its own head")
+	end 'entryFrom'
+end 'DeclinedGuards'
+
+// ⭐ THE ONE PLAN EVERY SPLICE INTO A CALLEE WITH NO NARROWED PARAMETER ANSWERS FROM — which is the
+// overwhelming majority of them. `sharedUnseededLeafMinter`'s pattern and its invariant: `decline` is the
+// only thing that writes to a plan, and `declinedGuards` hands this one back exactly when the loop that
+// would call it has nothing to iterate. Its `blockIdSpace`/`guardCount` are 0 and unread, because both
+// columns and the chase are gated on `anyDeclined`, which is false here for ever.
+let sharedDeclinesNothing = DeclinedGuards.create(0, guardCount: 0)
+
+// ⭐ The columns ONE splice derives from its callee's block set, held together because every step of the
+// splice reads at least two of them.
+type SpliceBlocks
+	// Callee `BlockId` → the caller `BlockId` a target resolves to: a COPIED block's fresh id, or — for a
+	// panic block — the splice's single slow arm.
+	export var blockSubst as BlockIdArray
+	// Callee `BlockId` → is it a panic block? O(1) where re-deriving it would be a scan of the block's
+	// ops per edge, and `IrModule.getBlockByIdIn` (the other route from an id to a block) is linear in
+	// the function's block count.
+	export var isPanic as BoolArray
+	// The fresh blocks, in callee block order, skipping the panic blocks — so the copy walk can pair them
+	// up positionally with the same skip rather than by a second id lookup.
+	export var copiedRefs as BlockRefArray
+	export var hasPanicBlock as bool
+	// EC7 — the cascades this site declined. It rides here so the MINT walk and the COPY walk skip the same
+	// blocks off the same column rather than each re-deciding it; that pairing is positional
+	// (`copiedRefs`), and two answers to "is this block copied?" would silently pair a body with the wrong
+	// fresh block.
+	export var guards as DeclinedGuards
+
+	static function create(blockIdSpace BlockId, guards DeclinedGuards) returns SpliceBlocks
+		var blockSubst = BlockIdArray.create()
+		blockSubst.resize(blockIdSpace)
+		var isPanic = BoolArray.create()
+		isPanic.resize(blockIdSpace)
+		return Self{blockSubst: blockSubst, isPanic: isPanic, copiedRefs: BlockRefArray.create(), hasPanicBlock: false, guards: guards}
+	end 'create'
+
+	export function targetOf(calleeBlockId BlockId) returns BlockId
+		return try self.blockSubst.get(calleeBlockId) otherwise panic("SpliceBlocks.targetOf: callee block id {calleeBlockId} is outside the {self.blockSubst.count()}-block id space this splice mapped")
+	end 'targetOf'
+
+	export function isPanicBlock(calleeBlockId BlockId) returns bool
+		return try self.isPanic.get(calleeBlockId) otherwise panic("SpliceBlocks.isPanicBlock: callee block id {calleeBlockId} is outside the {self.isPanic.count()}-block id space this splice mapped")
+	end 'isPanicBlock'
+end 'SpliceBlocks'
+
+// Expand every inlinable tiny-leaf call site in the module.
+export function inlineLeaves(project Project, module StdModule)
+	// ⚠ **THE NON-REFUSING NAME INDEX, for `PromoteStackRecords`' reason exactly.** A duplicate function
+	// name is E4015's to report, and the site that owns that refusal runs LATER
+	// (`DeadFunctionElimination` is where a runtime-symbol collision becomes visible). Raising it here
+	// would move the refusal earlier and change which diagnostic a program gets, so this declines to
+	// reason instead: with two bodies of one name, an inline could splice the wrong one.
+	match FunctionNameIndex.build(module.functions) 'names'
+		duplicateAt then return
+		built(byName) then inlineWithNameIndex(project, module: module, byName: byName)
+	end 'names'
+end 'inlineLeaves'
+
+function inlineWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
+	let plan = buildLeafPlan(module)
+	if plan.eligibleCount == 0 'nothingToInline'
+		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
+		return
+	end 'nothingToInline'
+
+	// Built ONCE, over the eligible callees alone — see `ValueOriginTable.indexRowsOfFunctions` for why
+	// the alternative (`lookup` per copied value) is a quadratic against a table with one row per
+	// value-producing op in the program.
+	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount() as FuncIndex)
+	var stats = InlineLeafStats.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
+		// `insertRangeChecks` and `inlineManagedPrimitives` skip on. Here it is purely cost:
+		// `eliminateDeadFunctions` drops the function before isel either way, and this pass registers no
+		// `.rdata`, so skipping cannot move a golden.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		var inliner = LeafInliner.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, plan: plan, origins: origins, stats: stats)
+		inliner.run()
+	end 'eachFunc'
+
+	let inlined = stats.inlinedSites
+	let eligible = plan.eligibleCount
+	let panicRefusals = stats.sitesRefusedByPanicRule
+	let sizeRefusals = stats.sitesRefusedBySize
+	let sizeRefusalsAtLargerBudget = stats.sitesRefusedBySizeWithinLargerBudget
+	let selfCalls = stats.selfCallSites
+	let declinedGuards = stats.declinedParamGuards
+	let calleesPanicRefused = plan.panicWithStoreCount
+	let calleesSizeRefused = plan.tooManyOpsCount
+	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
+	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {panicRefusals} refused-by-panic-rule ({calleesPanicRefused} callee(s)), {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+end 'inlineWithNameIndex'
+
+// Per-caller splicer: owns the function it rewrites plus the fresh-ValueId counter every copied body
+// draws from, seeded past every id the function already uses.
+type LeafInliner
+	var project as Project
+	var module as StdModule
+	var func as IrFunction
+	var funcIndex as FuncIndex
+	var byName as FunctionNameIndex
+	var plan as LeafPlan
+	var origins as ValueOriginRowIndex
+	var stats as InlineLeafStats
+	// ⚠ SEEDED LAZILY, and that is a cost decision — `nextFreeValueId` walks every block arg and every
+	// live op of the function and MATERIALIZES the live-op index array to do it, while this type is
+	// constructed for every function in the module. `InlineManagedPrimitives.ids` carries the same shape
+	// and the same measurement.
+	var ids as ValueMinter
+	var seeded as bool
+	// The current block's sites, in ascending position. Reused across the function's blocks (truncated,
+	// not reallocated) and shared-empty until the first site — see `sharedEmptySitePositions`.
+	var sitePositions as BlockOpPosArray
+	var siteCallees as FuncIndexArray
+	var siteBuffersSeeded as bool
+
+	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, byName FunctionNameIndex, plan LeafPlan, origins ValueOriginRowIndex, stats InlineLeafStats) returns LeafInliner
+		return Self{
+			project: project,
+			module: module,
+			func: func,
+			funcIndex: funcIndex,
+			byName: byName,
+			plan: plan,
+			origins: origins,
+			stats: stats,
+			ids: sharedUnseededLeafMinter,
+			seeded: false,
+			sitePositions: sharedEmptySitePositions,
+			siteCallees: sharedEmptySiteCallees,
+			siteBuffersSeeded: false
+		}
+	end 'create'
+
+	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
+	function valueIds() returns ValueMinter
+		if self.seeded 'already'
+			return self.ids
+		end 'already'
+
+		self.ids = ValueMinter.create(nextFreeValueId(self.module, func: self.func) as ParamCount)
+		self.seeded = true
+		return self.ids
+	end 'valueIds'
+
+	function seedSiteBuffers()
+		if self.siteBuffersSeeded 'already'
+			return
+		end 'already'
+
+		self.sitePositions = BlockOpPosArray.create()
+		self.siteCallees = FuncIndexArray.create()
+		self.siteBuffersSeeded = true
+	end 'seedSiteBuffers'
+
+	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT — and, unlike
+	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends three kinds of block and
+	// none of them can hold a site: a COPIED body is a leaf's body and holds no call by rule 1; the SLOW
+	// arm holds the very call this splice moved, which re-inlining would loop on; and a CONTINUATION
+	// holds ops of the ORIGINAL block, every site in which `inlineSitesIn` has already collected before
+	// it split anything. So one pass over the original blocks IS the whole walk — no worklist, no
+	// "already expanded" marker column, and no chain to follow.
+	function run()
+		let originalBlockCount = self.func.blockRefs.count()
+		for i in 0 upto originalBlockCount 'eachBlock'
+			let blockRef = try self.func.blockRefs.get(i) otherwise panic("LeafInliner.run: blockRefs.get OOB at {i} despite the snapshot bound")
+			self.inlineSitesIn(blockRef)
+		end 'eachBlock'
+	end 'run'
+
+	// ⭐⭐ **ONE BLOCK, ONE FORWARD WALK, THEN A BACKWARD SPLIT PER SITE — never carve-then-rewalk.**
+	// Splitting FORWARD hands each continuation the whole remaining tail and copies it again at the next
+	// site: K sites in a B-op block cost Σ(B − pₖ) ≈ K·B/2, the product term `splitBlockInPlace`'s own
+	// header names. Backwards, the k-th split moves exactly the ops between site k and site k+1, and the
+	// total is B − p₀ — linear, whatever K is.
+	//
+	// ⭐ The block's EXIT lands on the LAST continuation for free rather than by a special case: the
+	// first (rightmost) split takes the terminator, the conditional-branch slot and the outgoing edge
+	// args, and every later split takes the `unset` that one left behind — which is exactly the
+	// un-terminated state each intermediate continuation should be in when its own splice terminates it.
+	function inlineSitesIn(blockRef BlockRef)
+		let siteCount = self.collectSites(blockRef)
+		if siteCount == 0 'noSite'
+			return
+		end 'noSite'
+
+		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE FIRST SPLIT (EC1 review's ordering lesson).**
+		// `nextFreeValueId` derives its floor from the function's LIVE ops, and every splice below drops
+		// a call op out of `opRefs` — so between the drop and the moment the continuation takes that
+		// call's result id as a block arg, the function's live set does not contain it. Seeded inside
+		// that gap, the minter's floor can sit at or below the result id, and the slow arm's fresh
+		// result comes back as the very id the continuation is about to define: two definitions of one
+		// value, which this tier does not refuse and no golden reads back.
+		_ = self.valueIds()
+
+		var contRefs = BlockRefArray.create()
+		contRefs.resize(siteCount)
+		var k = siteCount
+		while k > 0 'eachSiteBackwards'
+			k = k - 1
+			let at = try self.sitePositions.get(k) otherwise panic("LeafInliner.inlineSitesIn: sitePositions.get OOB at {k}")
+			// Split immediately PAST the call, so the call stays the last op of the block on the left and
+			// its continuation begins at the op that followed it.
+			let cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
+			try contRefs.set(k, value: registeredBlockRef(self.module, func: self.func, block: cont)) otherwise panic("LeafInliner.inlineSitesIn: contRefs.set OOB at {k}")
+		end 'eachSiteBackwards'
+
+		var pred = blockRef
+		for i in 0 upto siteCount 'eachSite'
+			let contRef = try contRefs.get(i) otherwise panic("LeafInliner.inlineSitesIn: contRefs.get OOB at {i}")
+			let calleeIndex = try self.siteCallees.get(i) otherwise panic("LeafInliner.inlineSitesIn: siteCallees.get OOB at {i}")
+			self.spliceCallAtTailOf(pred, contRef: contRef, calleeIndex: calleeIndex)
+			pred = contRef
+		end 'eachSite'
+	end 'inlineSitesIn'
+
+	// One forward walk of the block, recording every inlinable site and CENSUSING every other direct
+	// call. It allocates nothing for a block with no site — which is nearly every block in the module —
+	// because the buffers are shared-empty until `considerSite` seeds them.
+	//
+	// ⚠ The `StdOp` match is EXHAUSTIVE: `call` is named and so is every other variant, so a variant
+	// added later fails to compile here until it is consciously placed. A terminator is never a `call`,
+	// so the half this walk omits holds no site.
+	function collectSites(blockRef BlockRef) returns SiteCount
+		if self.siteBuffersSeeded 'reuse'
+			self.sitePositions.truncate(0)
+			self.siteCallees.truncate(0)
+		end 'reuse'
+
+		let opCount = self.blockAt(blockRef).opRefs.count()
+		for pos in 0 upto opCount 'eachOp'
+			match self.opAt(blockRef, pos: pos) 'kind'
+				const or
+					binOp or
+					unaryOp or
+					cmp or
+					binOpImm or
+					cmpImm or
+					div or
+					mod or
+					condBranch or
+					branch or
+					ret or
+					param then break 'kind'
+				call(_, callee, _) then self.considerSite(pos, callee: callee)
+				retVoid or
+					globalAddr or
+					loadIndirect or
+					storeIndirect or
+					osAllocPages or
+					osWriteStdout or
+					rdataAddr or
+					tryCall or
+					errorReturn or
+					osExit or
+					funcAddr or
+					callIndirect or
+					osPanic or
+					osReadClock or
+					osSleepMs or
+					osProcessSpawn or
+					osProcessExitCode or
+					osWaitHandles or
+					osCloseHandle or
+					osWaitHandle or
+					osFreePages or
+					switch or
+					witnessCall or
+					osPipeCreate or
+					osIocpCreate or
+					osEventCreate or
+					osThreadCreate or
+					osLockInit or
+					osLockEnter or
+					osLockLeave or
+					osReadOverlapped or
+					osLastError or
+					osProcessSpawnInherit or
+					osCancelIo or
+					osGetPid or
+					osPipeCreateOutbound or
+					osWriteFile or
+					osReadWallClock or
+					witnessTryCall or
+					osFileOpenRead or
+					osFileClose or
+					osReadFile or
+					osFileOpenWrite or
+					osFileSize or
+					osFileDelete or
+					osFileRename or
+					osFileFindFirst or
+					osFileFindClose or
+					osFileFindNext or
+					osDirCreate or
+					osDirCurrentPath or
+					osFileAttributes or
+					osPanicValue or
+					osCommandLine or
+					osStdHandle or
+					osExecutablePath or
+					osWriteStderr or
+					stackRecordAddr or
+					osOpenNamedSegment or
+					osMapNamedSegment or
+					osTickCountMs or
+					osHandleSetInherit or
+					osPipePeek or
+					osEnvRead or
+					osProcessTerminate or
+					osSocketStartup or
+					osSocketResolve or
+					osSocketFreeAddrInfo or
+					osSocketCreate or
+					osSocketConnect or
+					osSocketSend or
+					osSocketRecv or
+					osSocketClose or
+					osCpuCount or
+					osThreadCpuTicks or
+					osDecommitPages or
+					memFill or
+					osCommitPages or
+					osReservePages or
+					atomicCas or
+					atomicRmw or
+					currentThreadToken or
+					tlsAlloc or
+					tlsSetValue or
+					tlsSlotLoad or
+					osSetEvent or
+					osEnterBackgroundPriority then break 'kind'
+				osFileOpenWriteExecutable then break 'kind'
+				osEnvBlock or
+					osEnvBlockFree then break 'kind'
+				loadAcquire or
+					storeRelease then break 'kind'
+				osHandleFileType then break 'kind'
+				osCreateNamedSegment or
+					osUnmapNamedSegment or
+					osUnpublishNamedSegment or
+					covPoint or
+					osHostSample then break 'kind'
+			end 'kind'
+		end 'eachOp'
+		return self.sitePositions.count()
+	end 'collectSites'
+
+	// ⚠ **THE CALLEE IS A RAW `ByteArray` NAME AND IS COMPARED AS BYTES, NEVER PARSED.** Names like
+	// `__paramDefault#emitCmp#6` and `<Type>.<method>` reach this tier verbatim, and one of the corpus's
+	// own generated names carries a space.
+	//
+	// A callee the index does not know is a RUNTIME body — `__mm_*`, `__str_*`, `__managed_*`, the
+	// synthesized destructor cascades — which are installed AFTER the pipeline and so are absent from
+	// `module.functions` at this point. They are therefore never inlined BY CONSTRUCTION rather than by
+	// a roster this file would have to keep. (`mrt_panic` is not a call at all: it is an `osPanic` op.)
+	function considerSite(pos BlockOpPos, callee ByteArray)
+		let calleeIndex = try self.byName.byName.get(callee) otherwise return
+		if calleeIndex == self.funcIndex 'selfCall'
+			// A self-call cannot be spliced (the body would contain its own copy), and the leaf rule has
+			// already refused the function for holding a call at all — so this is counted rather than
+			// tested for: the two rules agree, and the census says how often.
+			self.stats.noteSelfCall()
+			return
+		end 'selfCall'
+
+		match self.plan.verdictOf(calleeIndex) 'verdict'
+			eligible then self.recordSite(pos, calleeIndex: calleeIndex)
+			panicWithStore then self.stats.notePanicRuleRefusal()
+			tooManyOps then self.stats.noteSizeRefusal(self.plan.isWithinLargerBudget(calleeIndex))
+			notALeaf then break 'verdict'
+		end 'verdict'
+	end 'considerSite'
+
+	function recordSite(pos BlockOpPos, calleeIndex FuncIndex)
+		self.seedSiteBuffers()
+		self.sitePositions.push(pos)
+		self.siteCallees.push(calleeIndex)
+	end 'recordSite'
+
+	// The call is the LAST op of `predRef` by construction — `inlineSitesIn` split immediately past it.
+	// It is read, spliced, and then dropped; only the slow arm re-issues it, verbatim, with a fresh
+	// result.
+	//
+	// ⚠ The dropped op is left behind as an ORPHAN in `module.ops`. That is the tier's own model
+	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why
+	// every reader asks `liveOpIndices` rather than scanning the array.
+	function spliceCallAtTailOf(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex)
+		let tail = self.blockAt(predRef).opRefs.count() - 1
+		// The splice's own ops — the branch into the copied entry, and the slow arm that re-issues this
+		// very call — are the CALLER's statement. The clone loop between them re-points the cursor per
+		// callee op and leaves it there, so the site's span is CARRIED rather than left on the cursor.
+		let siteSpan = self.module.spans.at(self.blockOpRefAt(predRef, pos: tail))
+		self.module.spans.current = siteSpan
+		match self.opAt(predRef, pos: tail) 'site'
+			const or
+				binOp or
+				unaryOp or
+				cmp or
+				binOpImm or
+				cmpImm or
+				div or
+				mod or
+				condBranch or
+				branch or
+				ret or
+				param then self.refuseNotTheSplitCall()
+			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId, siteSpan: siteSpan)
+			retVoid or
+				globalAddr or
+				loadIndirect or
+				storeIndirect or
+				osAllocPages or
+				osWriteStdout or
+				rdataAddr or
+				tryCall or
+				errorReturn or
+				osExit or
+				funcAddr or
+				callIndirect or
+				osPanic or
+				osReadClock or
+				osSleepMs or
+				osProcessSpawn or
+				osProcessExitCode or
+				osWaitHandles or
+				osCloseHandle or
+				osWaitHandle or
+				osFreePages or
+				switch or
+				witnessCall or
+				osPipeCreate or
+				osIocpCreate or
+				osEventCreate or
+				osThreadCreate or
+				osLockInit or
+				osLockEnter or
+				osLockLeave or
+				osReadOverlapped or
+				osLastError or
+				osProcessSpawnInherit or
+				osCancelIo or
+				osGetPid or
+				osPipeCreateOutbound or
+				osWriteFile or
+				osReadWallClock or
+				witnessTryCall or
+				osFileOpenRead or
+				osFileClose or
+				osReadFile or
+				osFileOpenWrite or
+				osFileSize or
+				osFileDelete or
+				osFileRename or
+				osFileFindFirst or
+				osFileFindClose or
+				osFileFindNext or
+				osDirCreate or
+				osDirCurrentPath or
+				osFileAttributes or
+				osPanicValue or
+				osCommandLine or
+				osStdHandle or
+				osExecutablePath or
+				osWriteStderr or
+				stackRecordAddr or
+				osOpenNamedSegment or
+				osMapNamedSegment or
+				osTickCountMs or
+				osHandleSetInherit or
+				osPipePeek or
+				osEnvRead or
+				osProcessTerminate or
+				osSocketStartup or
+				osSocketResolve or
+				osSocketFreeAddrInfo or
+				osSocketCreate or
+				osSocketConnect or
+				osSocketSend or
+				osSocketRecv or
+				osSocketClose or
+				osCpuCount or
+				osThreadCpuTicks or
+				osDecommitPages or
+				memFill or
+				osCommitPages or
+				osReservePages or
+				atomicCas or
+				atomicRmw or
+				currentThreadToken or
+				tlsAlloc or
+				tlsSetValue or
+				tlsSlotLoad or
+				osSetEvent or
+				osEnterBackgroundPriority then self.refuseNotTheSplitCall()
+			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
+			osEnvBlock or
+				osEnvBlockFree then self.refuseNotTheSplitCall()
+			loadAcquire or
+				storeRelease then self.refuseNotTheSplitCall()
+			osHandleFileType then self.refuseNotTheSplitCall()
+			osCreateNamedSegment or
+				osUnmapNamedSegment or
+				osUnpublishNamedSegment or
+				covPoint or
+				osHostSample then self.refuseNotTheSplitCall()
+		end 'site'
+		var pred = self.blockAt(predRef)
+		pred.opRefs.truncate(tail)
+		self.stats.noteInlined()
+	end 'spliceCallAtTailOf'
+
+	// The backstop the two non-`call` arms above share — ONE site, because they say one thing: the split
+	// cut immediately PAST the call, so the call is the last op of the block on the left, and anything
+	// else there means a coordinate moved between the split and this read.
+	//
+	// ⚠ It is a FUNCTION THAT PANICS rather than a function returning the message, because `panic` takes
+	// a string LITERAL (E3005 refuses an expression), so a shared message cannot be shared as a value.
+	function refuseNotTheSplitCall()
+		panic("LeafInliner.spliceCallAtTailOf: the last op of a spliced block of '{String.from(self.func.name)}' is not the call the split cut past")
+	end 'refuseNotTheSplitCall'
+
+	// ⭐⭐ **THE SPLICE.** `predRef` ends in the call (about to be dropped); `contRef` holds everything
+	// that followed it, and — if this is the block's last site — the block's whole exit.
+	function splice(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex, callee ByteArray, args ValueIdArray, resultId ValueId, siteSpan SpanId)
+		let calleeFunc = self.module.getFunc(calleeIndex)
+		if args.count() != calleeFunc.paramCount 'arity'
+			panic("LeafInliner.splice: '{String.from(self.func.name)}' calls '{String.from(callee)}' with {args.count()} argument(s) against {calleeFunc.paramCount} parameter(s) — `lowerCall` emits arguments in declaration order and fills every slot, the trailing layout/witness parameters of a generic callee included, so a mismatch here is a malformed call rather than a shape to decline")
+		end 'arity'
+
+		let subst = self.buildValueColumn(calleeFunc, calleeIndex: calleeIndex, args: args)
+		let blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args))
+		// ⭐ THE SLOW ARM — one per splice, minted only when the callee has a panic block to redirect.
+		// A panic block always HAS a predecessor (it is a guard's `condBranch` target, or a user
+		// `panic(…)`'s own block), so this cannot mint an arm nothing branches to; and were it ever to,
+		// the cost is a dead block holding the call, not a wrong answer.
+		if blocks.hasPanicBlock 'redirectPanics'
+			self.mintSlowArm(contRef, callee: callee, args: args, calleeFunc: calleeFunc, blocks: blocks)
+		end 'redirectPanics'
+
+		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
+		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
+		self.project.valueOrigins.copyRows(self.origins, fromFunc: calleeIndex, toFunc: self.funcIndex, subst: subst, calleeParamCount: calleeFunc.paramCount)
+
+		// The head's own exit was moved onto the continuation by the split, so it is un-terminated here
+		// and carries no edge. The copied entry block takes no block args (`scanLeafBody` refuses a
+		// callee whose entry carries phis), so this branch carries none either.
+		//
+		// ⚠ The cursor is where the body clone above left it — on a CALLEE op — so the site's own span is
+		// restored first: this branch is the caller's call statement, not any line inside the callee.
+		self.module.spans.current = siteSpan
+		self.module.setTerminator(self.blockAt(predRef), op: StdOp.branch(blocks.targetOf(self.calleeEntryBlockId(calleeFunc))))
+	end 'splice'
+
+	// ⭐ **THE DENSE VALUE COLUMN, TOTAL OVER THE CALLEE'S WHOLE ID SPACE — parameters to the site's
+	// arguments, everything else to a fresh caller id.**
+	//
+	// ⭐⭐ **IT MINTS FOR EVERY NON-PARAMETER INDEX, NOT ONLY FOR THE VALUES SOME OP DEFINES, AND THAT IS
+	// WHAT MAKES IT TOTAL RATHER THAN NEARLY TOTAL.** There is no unbound id to read, so
+	// `remapStdOpForClone` can look every value up STRICTLY and a column built against the wrong function
+	// is a panic instead of a silently wrong operand. The price is the handful of ids that go to values
+	// in a DROPPED panic block, or to a gap an earlier pass's orphaned op left in the numbering — a
+	// couple per splice, against a caller value space the register allocator sizes its columns by.
+	//
+	// ⚠ Parameters occupy `0..paramCount-1` BY CONVENTION (`IrValueId.maxon`, `emitParams`), which is why
+	// this is a range rather than a scan for `param` ops. `copyBlockOps` CHECKS each `param` op against
+	// it as it skips the op, so the convention is verified where it is spent rather than assumed here.
+	function buildValueColumn(calleeFunc IrFunction, calleeIndex FuncIndex, args ValueIdArray) returns ValueIdArray
+		let bound = self.plan.valueBoundOf(calleeIndex)
+		var subst = ValueIdArray.create()
+		subst.resize(bound)
+		for i in 0 upto calleeFunc.paramCount 'eachParam'
+			let arg = try args.get(i) otherwise panic("LeafInliner.buildValueColumn: args.get OOB at {i} despite the arity check")
+			try subst.set(i, value: arg) otherwise panic("LeafInliner.buildValueColumn: '{String.from(calleeFunc.name)}' declares {calleeFunc.paramCount} parameter(s) but its value space is only {bound} wide — parameters occupy ids 0..paramCount-1 by the Std ABI's convention")
+		end 'eachParam'
+		for v in valueIdAtParamPosition(calleeFunc.paramCount) upto bound 'eachBodyValue'
+			try subst.set(v, value: self.valueIds().mint()) otherwise panic("LeafInliner.buildValueColumn: subst.set OOB at {v}")
+		end 'eachBodyValue'
+		return subst
+	end 'buildValueColumn'
+
+	// ⭐⭐ **THE CASCADES THIS SITE DECLINES.** Empty for every callee with no narrowed parameter, which is
+	// almost all of them — and that empty `paramGuards` list is what keeps the cost off the common splice:
+	// the loop below runs zero times and no proof is asked.
+	function declinedGuards(calleeFunc IrFunction, args ValueIdArray) returns DeclinedGuards
+		if calleeFunc.paramGuards.isEmpty() 'noNarrowedParameter'
+			return sharedDeclinesNothing
+		end 'noNarrowedParameter'
+
+		var declined = DeclinedGuards.create(calleeFunc.nextBlockId, guardCount: calleeFunc.paramGuards.count())
+		for guard in calleeFunc.paramGuards 'eachGuard'
+			if not self.callerProvesArg(args, guard: guard) 'notProvenHere'
+				continue
+			end 'notProvenHere'
+
+			declined.decline(guard)
+			self.stats.noteDeclinedParamGuard()
+		end 'eachGuard'
+		return declined
+	end 'declinedGuards'
+
+	// ⭐⭐ **DOES *THIS* FRAME ALREADY KNOW THE ARGUMENT IS IN THE CALLEE'S RANGE? — THE TWO PROOFS, AND
+	// THERE ARE EXACTLY TWO.** Both are compared with the containment every range door in the compiler
+	// already uses (`TypeRules`), so this pass reaches no verdict of its own and cannot come to disagree
+	// with the guard it is declining.
+	function callerProvesArg(args ValueIdArray, guard RangeCheckParamGuard) returns bool
+		let arg = try args.get(guard.index) otherwise panic("LeafInliner.callerProvesArg: a callee guarding parameter {guard.index} is called from '{String.from(self.func.name)}' with {args.count()} argument(s) — the arity check has already refused a mismatch")
+		return self.callerParamProves(arg, alias: guard.alias) or self.provenRangeProves(arg, alias: guard.alias)
+	end 'callerProvesArg'
+
+	// **PROOF ONE: THE ARGUMENT IS ONE OF THIS FUNCTION'S OWN NARROWED PARAMETERS.** Its cascade stands at
+	// this function's entry, which dominates every call the body makes, so the value in hand has already
+	// passed a range — and if that range lies inside the callee's, the callee's cascade cannot fail either.
+	// This is the shape EC6's survey measured at 3 of `regMaskContains`' 14 sites (`hintIsTakeable`
+	// forwarding a `RegNum` parameter to two more calls, and `assertOneCallClobber`).
+	//
+	// ⚠ **A REASSIGNED PARAMETER IS EXCLUDED, AND IT IS NOT A CORNER CASE.** `reassignedParamMask` names
+	// the parameters that arrive as a CELL ADDRESS (PBR-2): the range describes what the cell HOLDS, the
+	// body may store a new value into it, and the entry guard reads THROUGH the cell rather than checking
+	// the pointer (`GuardedOperand.pointeeOf`). The id would still match here, and matching it would spend
+	// a proof about the cell's arriving contents on whatever the body last wrote into it.
+	//
+	// ⚠ A LINEAR SCAN over this function's own cascades, which is one per narrowed parameter and never
+	// more than its arity — the bound `entryGuardAlreadyCovers` and `paramAliasOf` already carry.
+	function callerParamProves(arg ValueId, alias RangedTypeAlias) returns bool
+		if arg >= valueIdAtParamPosition(self.func.paramCount) 'notAParameterOfThisFrame'
+			return false
+		end 'notAParameterOfThisFrame'
+		let position = paramPositionOfValueId(arg)
+		if maskHasParam(self.func.reassignedParamMask, param: position) 'arrivesAsACellAddress'
+			return false
+		end 'arrivesAsACellAddress'
+
+		for ownGuard in self.func.paramGuards 'eachOwnGuard'
+			if ownGuard.index == position 'thisParameter'
+				return rangeCoversRange(alias, source: ownGuard.alias)
+			end 'thisParameter'
+		end 'eachOwnGuard'
+
+		return false
+	end 'callerParamProves'
+
+	// **PROOF TWO: SOMETHING RECORDED AN INTERVAL FOR IT (EC7 layer 1).** `for r in 0 upto RegisterFileSize`
+	// gives its counter a range nothing NAMES — as does a `.count()` result, which is no loop's counter —
+	// which the parser records against this
+	// function's own `ValueId` numbering and `LowerMaxonToStd` carries across verbatim (that pass does not
+	// renumber). It is the proof the four hottest `regMaskContains` sites need and the one no declared type
+	// can supply — the counter's written type is the bare `int` its bounds were written at.
+	//
+	// ⚠ **THE PROBE IS MADE HERE, BEHIND A CALLEE THAT ACTUALLY GUARDS A PARAMETER**, and not hoisted into
+	// the per-caller constructor: a `LeafInliner` is built for every function in the module and nearly none
+	// of them splices anything that guards anything, so a probe up there would be one map lookup per
+	// function for an answer almost nobody spends.
+	function provenRangeProves(arg ValueId, alias RangedTypeAlias) returns bool
+		let checks = try self.project.rangeChecks.get(self.func.name) otherwise return false
+		let proven = try provenIntRangeOf(checks.provenValueRanges, value: arg) otherwise return false
+		return rangeCoversIntBounds(alias, low: proven.low, high: proven.high)
+	end 'provenRangeProves'
+
+	function calleeEntryBlockId(calleeFunc IrFunction) returns BlockId
+		let entryRef = try calleeFunc.blockRefs.get(0) otherwise panic("LeafInliner.calleeEntryBlockId: '{String.from(calleeFunc.name)}' has no entry block, which `scanLeafBody` refuses")
+		let entry = try self.module.blocks.get(entryRef) otherwise panic("LeafInliner.calleeEntryBlockId: entry blockRef {entryRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+		return entry.id
+	end 'calleeEntryBlockId'
+
+	// Mint one fresh caller block per NON-PANIC callee block, filling the block column and recording each
+	// new block's ref in callee order.
+	//
+	// A panic block's column entry stays 0 until `mintSlowArm` fills it; nothing reads it in between,
+	// because the ops that name it are copied afterwards.
+	function mintCopiedBlocks(calleeFunc IrFunction, guards DeclinedGuards) returns SpliceBlocks
+		var blocks = SpliceBlocks.create(calleeFunc.nextBlockId, guards: guards)
+		let entryId = guards.entryFrom(self.calleeEntryBlockId(calleeFunc))
+		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
+			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("LeafInliner.mintCopiedBlocks: blockRefs.get OOB at {i}")
+			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("LeafInliner.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+			// ⭐ **A DECLINED CASCADE'S BLOCKS ARE NOT COPIED, AND THIS IS ASKED AHEAD OF THE PANIC TEST**
+			// (EC7): its `__rc_panic` is one of them, and a slow arm minted to catch a panic nothing can
+			// reach would be a dead block holding a REAL CALL — enough to keep the callee alive through
+			// dead-function elimination and to give this frame outgoing-argument space for a call that
+			// never runs.
+			if guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
+				continue
+			end 'insideADeclinedCascade'
+			if self.blockHoldsAPanic(calleeBlock, calleeFunc: calleeFunc) 'panicBlock'
+				blocks.hasPanicBlock = true
+				try blocks.isPanic.set(calleeBlock.id, value: true) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
+				continue
+			end 'panicBlock'
+
+			// The label marks the block the splice ENTERS, which is the callee's entry only while no cascade
+			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
+			// it follows the entry rather than position 0.
+			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label)
+			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
+			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
+			blocks.copiedRefs.push(freshRef)
+			// Coverage follows the code: a copied block's source footprint is the CALLEE block's, which is
+			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
+			self.carryBlockSourceInfo(calleeBlockRef, to: freshRef)
+		end 'eachBlock'
+
+		self.mapDeclinedCascadeHeads(calleeFunc, blocks: blocks, guards: guards)
+		return blocks
+	end 'mintCopiedBlocks'
+
+	// ⭐⭐ **EVERY EDGE INTO A DECLINED CASCADE'S HEAD LANDS ON THE BLOCK THAT CASCADE WOULD HAVE PASSED
+	// CONTROL TO, and it is spelled as a `blockSubst` entry rather than as a rewrite of the edges.** The
+	// substitution column is what `remapStdOpForClone` reads for every terminator it clones AND what
+	// `targetOf` answers the splice's own entry branch from — so writing the redirect there redirects both,
+	// and there is no list of edge kinds to keep in step.
+	//
+	// The cascade's OTHER blocks keep the `0` a resized column starts with, and nothing reads it: a
+	// `__rc_chk` is named only by its cascade's head or by the `__rc_chk` before it, and the `__rc_panic`
+	// only by those — every one of them declined, and none of them copied.
+	function mapDeclinedCascadeHeads(calleeFunc IrFunction, blocks SpliceBlocks, guards DeclinedGuards)
+		if not guards.anyDeclined 'nothingDeclined'
+			return
+		end 'nothingDeclined'
+
+		for guard in calleeFunc.paramGuards 'eachGuard'
+			if not guards.isDeclined(guard.headBlockId) 'stillEmitted'
+				continue
+			end 'stillEmitted'
+
+			let landing = guards.entryFrom(guard.okBlockId)
+			try blocks.blockSubst.set(guard.headBlockId, value: blocks.targetOf(landing)) otherwise panic("LeafInliner.mapDeclinedCascadeHeads: cascade head {guard.headBlockId} of '{String.from(calleeFunc.name)}' is outside its own block-id space")
+		end 'eachGuard'
+	end 'mapDeclinedCascadeHeads'
+
+	// ⭐⭐ **THE PANIC REDIRECT.** One block per splice that re-issues the ORIGINAL call — same callee,
+	// same argument values, a fresh result — and branches to the continuation carrying it. Every panic
+	// block of the callee points here.
+	//
+	// The callee is PURE (the eligibility rule), so re-running it from the start on the same arguments
+	// takes the same path and reaches the same panic, with the same interned message and — because it is
+	// a real call — the same FRAME. That is why `range-check-panic`'s `in clamp / in main / in mrt_start`
+	// is byte-identical with this pass on and off, and why the ~86 `Stack trace:` cases across 17 spec
+	// files are this rule's gate rather than its risk.
+	//
+	// ⚠ The argument array is SHARED with the dropped call op rather than copied — the op is an orphan
+	// and nothing rewrites either. `InlineManagedPrimitives.openPlain` shares the same way.
+	function mintSlowArm(contRef BlockRef, callee ByteArray, args ValueIdArray, calleeFunc IrFunction, blocks SpliceBlocks)
+		let contId = self.blockAt(contRef).id
+		// The slow arm re-runs the call this site inlined, so it belongs to the CALLER's statement — which
+		// is where `spliceCallAtTailOf` left the cursor, the body clone not having started.
+		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		let slowResult = self.valueIds().mint()
+		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
+		self.module.setTerminator(slow, op: StdOp.branch(contId))
+		attachEdge(slow, targetId: contId, argIds: self.returnedValues(calleeFunc, valueId: slowResult))
+
+		for i in 0 upto blocks.isPanic.count() 'eachCalleeBlockId'
+			if not blocks.isPanicBlock(i) 'notAPanicBlock'
+				continue
+			end 'notAPanicBlock'
+
+			try blocks.blockSubst.set(i, value: slow.id) otherwise panic("LeafInliner.mintSlowArm: blockSubst.set OOB at {i}")
+		end 'eachCalleeBlockId'
+	end 'mintSlowArm'
+
+	// The value list a return into the continuation carries: the one value for a value-returning callee,
+	// and NOTHING for a void one. ONE function feeding all THREE users of that arity — the slow arm's
+	// edge, every copied `ret`/`retVoid`'s edge, and the continuation's own block-arg list — so the
+	// positional `blockArgs[k] ↔ edge.argIds[k]` pairing cannot be built from two readings of the same
+	// return type.
+	function returnedValues(calleeFunc IrFunction, valueId ValueId) returns ValueIdArray
+		var out = ValueIdArray.create()
+		match calleeFunc.returnType 'rt'
+			void then break 'rt'
+			value then out.push(valueId)
+		end 'rt'
+		return out
+	end 'returnedValues'
+
+	// ⭐ **THE CONTINUATION'S SINGLE BLOCK ARG IS THE CALL'S ORIGINAL RESULT ID**, which is the whole
+	// reason no op after the site has to change: every one of them still names the value it always did.
+	// Its TYPE is the callee's declared return type — what decides the value's register FILE on x64 and
+	// arm64 and its valtype on wasm, so a float-returning leaf's result stays in an XMM.
+	//
+	// A VOID callee gets none. Its `resultId` is a placeholder the lowering mints and nothing reads (a
+	// void call's result is not a value any op can name), and there is no `ret v` in the body to feed a
+	// block arg with.
+	//
+	// A void callee touches nothing here — no array is built for it, which is the difference between
+	// "the continuation declares no args" and "it declares an empty list", and this pass makes thousands
+	// of continuations.
+	function attachContinuationArg(contRef BlockRef, calleeFunc IrFunction, resultId ValueId)
+		match calleeFunc.returnType 'rt'
+			void then break 'rt'
+			value(inner) then attachBlockArgs(self.blockAt(contRef), valueIds: self.returnedValues(calleeFunc, valueId: resultId), argType: inner)
+		end 'rt'
+	end 'attachContinuationArg'
+
+	// Copy every non-panic block's phis, ops and exit into the fresh blocks `mintCopiedBlocks` minted, in
+	// the same order and skipping the same blocks — so the two walks pair up positionally.
+	function copyBodies(calleeFunc IrFunction, contRef BlockRef, blocks SpliceBlocks, subst ValueIdArray)
+		var copied = 0 as BlockRefIndex
+		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
+			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("LeafInliner.copyBodies: blockRefs.get OOB at {i}")
+			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("LeafInliner.copyBodies: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+			if blocks.guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
+				continue
+			end 'insideADeclinedCascade'
+			if blocks.isPanicBlock(calleeBlock.id) 'panicBlock'
+				continue
+			end 'panicBlock'
+
+			let freshRef = try blocks.copiedRefs.get(copied) otherwise panic("LeafInliner.copyBodies: copiedRefs.get OOB at {copied} — `mintCopiedBlocks` and this walk skip the same blocks in the same order")
+			copied = copied + 1
+			self.copyBlockArgs(calleeBlock, freshRef: freshRef, subst: subst)
+			self.copyBlockOps(calleeBlock, freshRef: freshRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc)
+			self.copyBlockExit(calleeBlock, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc)
+		end 'eachBlock'
+	end 'copyBodies'
+
+	// A copied block's phis, through the value column. Their TYPES come across verbatim — a phi's type is
+	// a property of the value it carries, not of the function it is in.
+	function copyBlockArgs(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray)
+		if calleeBlock.blockArgs.count() == 0 'noPhis'
+			return
+		end 'noPhis'
+
+		var blockArgs = IrBlockArgArray.create()
+		for arg in calleeBlock.blockArgs 'each'
+			blockArgs.push(IrBlockArg.create(clonedValue(arg.valueId, subst: subst), argType: arg.argType))
+		end 'each'
+		var fresh = self.blockAt(freshRef)
+		fresh.blockArgs = blockArgs
+	end 'copyBlockArgs'
+
+	function copyBlockOps(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction)
+		for opIdx in calleeBlock.opRefs 'eachOp'
+			// ⚠ **THE OP IS READ THROUGH `opAtIndex` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
+			// E3070's DOING.** `self.module.ops.get(...)` inline here BORROWS `module`, and `appendOp`
+			// mutates it — which the self-compile refuses (`cannot mutate 'module' via 'appendOp' while it
+			// is borrowed`).
+			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
+			if leafOpRole(op) == LeafOpRole.parameter 'parameterOp'
+				assertParamOpMatchesConvention(op, calleeFunc: calleeFunc)
+				continue
+			end 'parameterOp'
+
+			// ⭐ **THE CLONE KEEPS THE CALLEE'S SPAN, WHICH IS THE WHOLE REASON THE FILE RIDES IN THE ROW.**
+			// A span carried per-FUNCTION would report the caller's file for every inlined body, so a
+			// debugger could never step into one. Read before the append, for the borrow reason above.
+			let calleeSpan = self.module.spans.at(opIdx)
+			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			self.module.spans.current = calleeSpan
+			self.module.appendOp(self.blockAt(freshRef), op: cloned)
+		end 'eachOp'
+	end 'copyBlockOps'
+
+	// ⭐ **A `ret` BECOMES A BRANCH TO THE CONTINUATION carrying what it was returning; every other
+	// terminator is cloned with its block targets remapped.** A callee with two returns therefore gives
+	// the continuation two incoming edges into one block arg, which is precisely what a phi is for.
+	function copyBlockExit(calleeBlock IrBlock, freshRef BlockRef, contRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction)
+		if not calleeBlock.hasTerminatorOp() 'oplessTerminator'
+			self.carryOplessExit(calleeBlock, freshRef: freshRef, calleeFunc: calleeFunc)
+			return
+		end 'oplessTerminator'
+
+		let term = self.opAtIndex(calleeBlock.terminatorIndex(), ofFunc: calleeFunc)
+		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
+		// walk left the cursor on this block's LAST op, which is a different statement.
+		self.module.spans.current = self.module.spans.at(calleeBlock.terminatorIndex())
+		match term 'exit'
+			const or
+				binOp or
+				unaryOp or
+				cmp or
+				binOpImm or
+				cmpImm or
+				div or
+				mod then refuseNotATerminator(calleeFunc)
+			condBranch or
+				branch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
+			ret(retValId) then self.returnToContinuation(freshRef, contRef: contRef, argIds: self.returnedValues(calleeFunc, valueId: clonedValue(retValId, subst: subst)))
+			param or
+				call then refuseNotATerminator(calleeFunc)
+			retVoid then self.returnToContinuation(freshRef, contRef: contRef, argIds: ValueIdArray.create())
+			globalAddr or
+				loadIndirect or
+				storeIndirect or
+				osAllocPages or
+				osWriteStdout or
+				rdataAddr or
+				tryCall or
+				errorReturn or
+				osExit or
+				funcAddr or
+				callIndirect or
+				osPanic or
+				osReadClock or
+				osSleepMs or
+				osProcessSpawn or
+				osProcessExitCode or
+				osWaitHandles or
+				osCloseHandle or
+				osWaitHandle or
+				osFreePages then refuseNotATerminator(calleeFunc)
+			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
+			witnessCall or
+				osPipeCreate or
+				osIocpCreate or
+				osEventCreate or
+				osThreadCreate or
+				osLockInit or
+				osLockEnter or
+				osLockLeave or
+				osReadOverlapped or
+				osLastError or
+				osProcessSpawnInherit or
+				osCancelIo or
+				osGetPid or
+				osPipeCreateOutbound or
+				osWriteFile or
+				osReadWallClock or
+				witnessTryCall or
+				osFileOpenRead or
+				osFileClose or
+				osReadFile or
+				osFileOpenWrite or
+				osFileSize or
+				osFileDelete or
+				osFileRename or
+				osFileFindFirst or
+				osFileFindClose or
+				osFileFindNext or
+				osDirCreate or
+				osDirCurrentPath or
+				osFileAttributes or
+				osPanicValue or
+				osCommandLine or
+				osStdHandle or
+				osExecutablePath or
+				osWriteStderr or
+				stackRecordAddr or
+				osOpenNamedSegment or
+				osMapNamedSegment or
+				osTickCountMs or
+				osHandleSetInherit or
+				osPipePeek or
+				osEnvRead or
+				osProcessTerminate or
+				osSocketStartup or
+				osSocketResolve or
+				osSocketFreeAddrInfo or
+				osSocketCreate or
+				osSocketConnect or
+				osSocketSend or
+				osSocketRecv or
+				osSocketClose or
+				osCpuCount or
+				osThreadCpuTicks or
+				osDecommitPages or
+				memFill or
+				osCommitPages or
+				osReservePages or
+				atomicCas or
+				atomicRmw or
+				currentThreadToken or
+				tlsAlloc or
+				tlsSetValue or
+				tlsSlotLoad or
+				osSetEvent or
+				osEnterBackgroundPriority then refuseNotATerminator(calleeFunc)
+			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
+			osEnvBlock or
+				osEnvBlockFree then refuseNotATerminator(calleeFunc)
+			loadAcquire or
+				storeRelease then refuseNotATerminator(calleeFunc)
+			osHandleFileType then refuseNotATerminator(calleeFunc)
+			osCreateNamedSegment or
+				osUnmapNamedSegment or
+				osUnpublishNamedSegment or
+				covPoint or
+				osHostSample then refuseNotATerminator(calleeFunc)
+		end 'exit'
+	end 'copyBlockExit'
+
+	// ⚠ **A BLOCK CAN HAVE NO TERMINATOR OP AT ALL, AND THAT IS NOT A MALFORMED BLOCK.** The parser marks
+	// the continuation after a fully-terminated `if`/`else` — or after a `match` whose every arm breaks
+	// or panics — `Terminator.dead`: unreachable, and therefore terminated by DECLARATION rather than by
+	// an op (`IrBlock.Terminator`). Copying such a block means copying the SLOT, which is exactly what
+	// `LowerMaxonToStd.carryOplessTerminator` does at the tier boundary and for the same reason —
+	// `IrModule.assertAllBlocksTerminated` demands every block commit to one of the four states.
+	//
+	// ⭐ **THE BLOCK IS COPIED RATHER THAN DROPPED, unlike a panic block**, because a panic block is one
+	// this pass has a REPLACEMENT for (the slow arm) while a dead block has none: if a copied block's
+	// terminator names it, dropping it would leave that branch pointing at a block id the column never
+	// mapped. It costs the caller a few unreachable ops, which the block budget already bounds.
+	// MEASURED: `match-statements.break-only-arms-with-panic-arm` crashed the compiler here before this
+	// arm existed — `Holder.assertUsable`'s `afterbreak` is exactly this shape.
+	function carryOplessExit(calleeBlock IrBlock, freshRef BlockRef, calleeFunc IrFunction)
+		var fresh = self.blockAt(freshRef)
+		match calleeBlock.terminator 'carry'
+			unset then panic("LeafInliner.carryOplessExit: block '{String.from(calleeBlock.label)}' of '{String.from(calleeFunc.name)}' is still `Terminator.unset` — `assertAllBlocksTerminated` refuses that at the end of the parse")
+			dead then fresh.terminator = Terminator.dead
+			fallthrough then panic("LeafInliner.carryOplessExit: block '{String.from(calleeBlock.label)}' of '{String.from(calleeFunc.name)}' is marked `fallthrough`, which is a TARGET-tier layout decision — no Std block carries one")
+			opIndex then panic("LeafInliner.carryOplessExit: block '{String.from(calleeBlock.label)}' of '{String.from(calleeFunc.name)}' names a terminator op, which `hasTerminatorOp` has already excluded")
+		end 'carry'
+	end 'carryOplessExit'
+
+	// A terminator that stays inside the copied body: `branch`, `condBranch` and `switch`.
+	//
+	// ⚠ The callee block's OWN outgoing edges are rebuilt as a FRESH array — never mutated in place, per
+	// `IrBlock`'s phi-model rule: the three tiers share one copy of that model and it reaches back into
+	// the parse memo, so an in-place write corrupts every later compile of the project with nothing
+	// downstream that re-reads it to notice. An edge into a PANIC block is DROPPED rather than
+	// redirected: the slow arm declares no block args, and `branchEdges` is not a successor list, so an
+	// edge exists only where phis are carried.
+	function cloneExit(calleeBlock IrBlock, freshRef BlockRef, term StdOp, subst ValueIdArray, blocks SpliceBlocks)
+		let cloned = remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst)
+		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
+
+		var edges = BranchEdgeArray.create()
+		for edge in calleeBlock.branchEdges 'eachEdge'
+			if blocks.isPanicBlock(edge.targetBlockId) 'toThePanicArm'
+				continue
+			end 'toThePanicArm'
+
+			var argIds = ValueIdArray.create()
+			for argId in edge.argIds 'eachArg'
+				argIds.push(clonedValue(argId, subst: subst))
+			end 'eachArg'
+			edges.push(BranchEdge.create(blocks.targetOf(edge.targetBlockId), argIds: argIds))
+		end 'eachEdge'
+		var fresh = self.blockAt(freshRef)
+		fresh.branchEdges = edges
+	end 'cloneExit'
+
+	function returnToContinuation(freshRef BlockRef, contRef BlockRef, argIds ValueIdArray)
+		let contId = self.blockAt(contRef).id
+		self.module.setTerminator(self.blockAt(freshRef), op: StdOp.branch(contId))
+		attachEdge(self.blockAt(freshRef), targetId: contId, argIds: argIds)
+	end 'returnToContinuation'
+
+	// Does this block hold a panic op? A panic is a BODY op (followed by an unreachable return — see
+	// `InsertRangeChecks.emitPanicBlock`), so the terminator half is not consulted; `scanLeafBody` panics
+	// if one ever reaches a terminator slot.
+	function blockHoldsAPanic(block IrBlock, calleeFunc IrFunction) returns bool
+		for opIdx in block.opRefs 'eachOp'
+			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
+			if leafOpRole(op) == LeafOpRole.panicking 'panics'
+				return true
+			end 'panics'
+		end 'eachOp'
+		return false
+	end 'blockHoldsAPanic'
+
+	// --- block/op access ---
+
+	function blockAt(blockRef BlockRef) returns IrBlock
+		return try self.module.blocks.get(blockRef) otherwise panic("LeafInliner: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
+	end 'blockAt'
+
+	// The flat `module.ops` index a block names at `pos`. Read through a function for `opAtIndex`'s
+	// stated reason: an inline `self.blockAt(...).opRefs.get(...)` borrows `module` across the append
+	// that follows, which the self-compile refuses.
+	function blockOpRefAt(blockRef BlockRef, pos BlockOpPos) returns OpIndex
+		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("LeafInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+	end 'blockOpRefAt'
+
+	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
+		return self.opAtIndex(self.blockOpRefAt(blockRef, pos: pos), ofFunc: self.func)
+	end 'opAt'
+
+	// ⚠ **EVERY OP READ ON A MUTATING PATH GOES THROUGH HERE, and that is E3070 rather than tidiness.**
+	// A `self.module.ops.get(...)` written inline borrows `module` for as long as the value lives, and
+	// this pass appends ops and blocks to `module` in the very next breath, which the SELF-COMPILE
+	// refuses. Reading through a function ends the borrow at the return, the same discipline
+	// `PrimitiveInliner.opAt` follows.
+	function opAtIndex(opIdx OpIndex, ofFunc IrFunction) returns StdOp
+		return try self.module.ops.get(opIdx) otherwise panic("LeafInliner: op index {opIdx} named by a block of '{String.from(ofFunc.name)}' is not in module.ops")
+	end 'opAtIndex'
+
+	// A copied block's source footprint. Read and written in ONE call for `opAtIndex`'s reason: the read
+	// borrows `module` and the write mutates it.
+	function carryBlockSourceInfo(sourceRef BlockRef, to BlockRef)
+		let sourceInfo = try self.module.blockSourceInfo.get(sourceRef) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo has no entry for blockRef {sourceRef}")
+		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
+	end 'carryBlockSourceInfo'
+end 'LeafInliner'
+
+// ⭐ **THE STD-ABI CONVENTION, CHECKED WHERE IT IS SPENT.** `buildValueColumn` maps ids
+// `0..paramCount-1` straight onto the call's arguments instead of scanning for `param` ops, which is
+// right exactly while a `param` op's result id IS its index (`LowerMaxonToStd.emitParams` emits
+// `StdOp.param(i as ValueId, index: i, …)`, and `InsertRangeChecks.rangedParamValue` rests on the same
+// identity). A body that broke it would splice silently, reading the caller's same-numbered values.
+function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
+	match op 'p'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret then refuseNotAParamOp()
+		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
+		call or
+			retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall or
+			errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority then refuseNotAParamOp()
+		osFileOpenWriteExecutable then refuseNotAParamOp()
+		osEnvBlock or
+			osEnvBlockFree then refuseNotAParamOp()
+		loadAcquire or
+			storeRelease then refuseNotAParamOp()
+		osHandleFileType then refuseNotAParamOp()
+		osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample then refuseNotAParamOp()
+	end 'p'
+end 'assertParamOpMatchesConvention'
+
+// The backstop every non-terminator arm of `copyBlockExit` shares — ONE string, for `notTheSplitCall`'s
+// reason. Which op it was is not worth naming: any of them in a terminator slot is the same broken
+// block, and `scanLeafBody` has already refused every op a leaf may not hold.
+function refuseNotATerminator(calleeFunc IrFunction)
+	panic("LeafInliner.copyBlockExit: an op that is not a terminator is in the terminator slot of '{String.from(calleeFunc.name)}'")
+end 'refuseNotATerminator'
+
+// The backstop the two non-`param` arms share — ONE string, for `notTheSplitCall`'s reason.
+function refuseNotAParamOp()
+	panic("assertParamOpMatchesConvention: asked of an op that is not a `param` — its one caller has already classified it as one through `leafOpRole`")
+end 'refuseNotAParamOp'
+
+function requireParamValueIsItsIndex(resultId ValueId, index ParamCount, calleeFunc IrFunction)
+	if resultId != valueIdAtParamPosition(index) 'conventionBroken'
+		panic("LeafInliner: parameter {index} of '{String.from(calleeFunc.name)}' defines value {resultId} — the Std ABI reserves ids 0..paramCount-1 for the parameters IN ORDER, and the splice's value column maps them onto the call's arguments by that identity")
+	end 'conventionBroken'
+	if index >= calleeFunc.paramCount 'pastTheDeclaration'
+		panic("LeafInliner: '{String.from(calleeFunc.name)}' has a `param` op for position {index} but declares {calleeFunc.paramCount} parameter(s)")
+	end 'pastTheDeclaration'
+end 'requireParamValueIsItsIndex'

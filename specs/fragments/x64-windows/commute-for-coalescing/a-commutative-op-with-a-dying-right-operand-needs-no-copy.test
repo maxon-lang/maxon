@@ -1,0 +1,57 @@
+// Test: a-commutative-op-with-a-dying-right-operand-needs-no-copy
+typealias Word = int(i64.min to i64.max)
+
+function classify(flags Word, n Word) returns Word
+	let edge = n and 1
+	let merged = flags or edge
+	return merged + flags
+end 'classify'
+
+function main() returns ExitCode
+	var seen = 0
+	for i in 0 upto 4 'feed'
+		seen = seen + classify(i * 2, n: i)
+	end 'feed'
+	// i = 0,1,2,3 -> flags = 0,2,4,6; edge = 0,1,0,1
+	// merged = 0,3,4,7; merged+flags = 0,5,8,13 -> 26
+	if seen != 26 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.imulRegRegImm32 rdx, rcx, 2
+  __il_body:
+    x64.movRegReg rsi, rcx
+    x64.andRegImm32 rsi, rcx, 1
+    x64.orRegReg rsi, rsi, rdx
+    x64.leaRegRegReg rdx, rsi, rdx
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rdx
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rax, 26
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

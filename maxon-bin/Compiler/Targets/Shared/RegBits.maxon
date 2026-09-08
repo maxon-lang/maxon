@@ -1,0 +1,483 @@
+// RegBits — the bit primitives the register allocator is built on: a value-id BITSET and a
+// physical-register MASK (one bit per register, GPRs at bits 0-15 and XMMs at 16-31). NO `Set`
+// and NO hashing anywhere in the allocator's hot path (design §"Data representation").
+//
+// **A bitset is the right shape INSIDE a block, and the wrong shape ACROSS blocks.** Within a
+// block's backward sweep, bits flip at every op, so a dense row is exactly right. But per-block
+// LIVE SETS are sparse — a handful of live values out of thousands of value ids — and storing them
+// as a `blocks × ceil(values/64)` matrix makes every cost proportional to the value space instead
+// of to the information: a 19,200-block function allocated and zeroed 61 MB of live sets even when
+// only ONE value was ever live. Those sets are now one sparse list per block
+// (`TargetLiveness.LiveSets`), and the
+// matrix — along with the dataflow fixpoint that needed its row union / row difference / row
+// equality primitives — is gone.
+
+// A dense bit-vector: 64-bit words, indexed with an explicit word BASE. Used for the ONE working
+// row a block's backward sweep mutates, and for `forbiddenPhys`; never as a per-block matrix.
+export typealias BitWordArray = Array with MachineWord
+
+// The index of a BIT within a bitset row — a ValueId, wherever the row is a live set — or, as an
+// exclusive upper bound, the row's width in bits. Distinct in PURPOSE from the WORD index that
+// addresses the 64-bit word holding it, and from the BYTE counts the object writers deal in: they
+// are all non-negative integers, and naming them alike is how a bit index ends up passed where a
+// word offset belongs.
+export typealias BitIndex = int(0 to u64.max)
+
+// The index of one 64-bit WORD inside a `BitWordArray` — a row's BASE, or a word within a row.
+export typealias BitWordIndex = int(0 to u64.max)
+
+// A number of 64-bit WORDS: a row's width (`wordsPerRow`), a matrix's total size.
+export typealias BitWordCount = int(0 to u64.max)
+
+// A bit's position within ONE 64-bit word. HARD BOUND: there are 64 of them, so a value outside
+// 0..63 is a bug in the word arithmetic, not a legal position.
+typealias WordBitIndex = int(0 to 63)
+
+// How many bits are SET in one 64-bit word. HARD BOUND at 64 — a full word — which is one MORE
+// than `WordBitIndex` admits, so the two are not interchangeable.
+typealias WordBitCount = int(0 to 64)
+
+// 64 bits per word. Naming the divisor/mask keeps the word/bit split in one place.
+let BitsPerWord = 64
+let BitIndexMask = 0x3F
+let BitWordShift = 6
+
+// The SWAR popcount's field masks (`popcountWord`). Each selects the LOW half of every field of a
+// given width, which is what lets one add sum the pairs of that width in parallel across the word.
+let PopcountPairMask = 0x5555555555555555
+let PopcountNibbleMask = 0x3333333333333333
+let PopcountByteMask = 0x0F0F0F0F0F0F0F0F
+
+// The final fold leaves the whole count in byte 0 (it is at most 64, so it cannot carry out of a byte).
+let PopcountByteSelect = 0xFF
+
+// Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
+// occupies a word and row arithmetic never touches a zero-width slice).
+export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
+	let words = ((bitCount + BitsPerWord - 1) shr BitWordShift) as BitWordCount
+	return words if words > 0 else 1
+end 'bitsetWordsFor'
+
+function wordIndexOf(base BitWordIndex, bit BitIndex) returns BitWordIndex
+	return base + ((bit shr BitWordShift) as BitWordIndex)
+end 'wordIndexOf'
+
+function bitOf(bit BitIndex) returns MachineWord
+	return 1 shl (bit and BitIndexMask)
+end 'bitOf'
+
+// Test bit `bit` of the row starting at word `base`.
+export function bitsetTest(words BitWordArray, base BitWordIndex, bit BitIndex) returns bool
+	let w = try words.get(wordIndexOf(base, bit: bit)) otherwise panic("bitsetTest: word index out of range (base={base}, bit={bit}, count={words.count()})")
+	return (w and bitOf(bit)) != 0
+end 'bitsetTest'
+
+// Set bit `bit` of the row starting at word `base`.
+export function bitsetAdd(words BitWordArray, base BitWordIndex, bit BitIndex)
+	let idx = wordIndexOf(base, bit: bit)
+	let w = try words.get(idx) otherwise panic("bitsetAdd: word index out of range (base={base}, bit={bit}, count={words.count()})")
+	try words.set(idx, value: w or bitOf(bit)) otherwise panic("bitsetAdd: word index out of range on set")
+end 'bitsetAdd'
+
+// Clear bit `bit` of the row starting at word `base`.
+export function bitsetRemove(words BitWordArray, base BitWordIndex, bit BitIndex)
+	let idx = wordIndexOf(base, bit: bit)
+	let w = try words.get(idx) otherwise panic("bitsetRemove: word index out of range (base={base}, bit={bit}, count={words.count()})")
+	try words.set(idx, value: w and not bitOf(bit)) otherwise panic("bitsetRemove: word index out of range on set")
+end 'bitsetRemove'
+
+// The set bits of the row starting at `base`, appended to `out` in ascending order.
+//
+// This is the ONE way to walk a live set, and using it is a performance CONTRACT, not a style
+// preference. A live set is SPARSE — a handful of live values out of thousands of value ids in the
+// function — so a consumer that instead loops `for v in 0 upto valueCount` and tests each bit runs
+// in O(valueCount) where the answer is O(live). Done once per BLOCK (seeding a colorer's in-use
+// mask, seeding the checker's register state) that is O(blocks × values): a QUADRATIC, and
+// measurably the dominant cost of register allocation on a large function. Done once per CLOBBER
+// op (forbidding caller-saved registers for the values live across a call) it is O(calls × values):
+// the same quadratic again.
+//
+// Word-parallel: a word with no live bits costs one compare, so an empty stretch of the value
+// space is skipped 64 ids at a time. `out` is CLEARED first and is meant to be a reusable scratch
+// buffer — pass the same one across blocks so the walk allocates nothing in the hot path.
+export function bitsetCollectRow(words BitWordArray, base BitWordIndex, wordsPerRow BitWordCount, out ValueIdArray)
+	out.clear()
+	for w in 0 upto wordsPerRow 'eachWord'
+		appendSetBitsOfWord(try words.get(base + w) otherwise panic("bitsetCollectRow: word out of range"), bitBase: w shl BitWordShift, out: out)
+	end 'eachWord'
+end 'bitsetCollectRow'
+
+// The set bits of ONE word, emitted as `bitBase + position` — the inner loop of the row walk above.
+function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArray)
+	var remaining = word
+	while remaining != 0 'eachSetBit'
+		// Isolate the lowest set bit, emit its index, then clear it (Kernighan): the loop body
+		// runs once per LIVE value, never once per value id.
+		let lowest = remaining and -remaining
+		out.push(bitBase + (trailingZeroCount(lowest) as BitIndex))
+		remaining = remaining and (remaining - 1)
+	end 'eachSetBit'
+end 'appendSetBitsOfWord'
+
+// The index of the LOWEST set bit of `word`, i.e. its trailing-zero count. Undefined for zero —
+// every caller must exclude it (`appendSetBitsOfWord` — the one inner loop both collectors go
+// through — only calls it on a non-zero word; the Hall census guards on an empty live set).
+// Binary search over the word width — 6 compares, no loop over 64 bits. The six increments below
+// sum to at most 32+16+8+4+2+1 = 63, which is why the result fits `WordBitIndex` by construction.
+export function trailingZeroCount(word MachineWord) returns WordBitIndex
+	var w = word
+	var count = 0 as WordBitIndex
+	if (w and 0xFFFFFFFF) == 0 'hi32'
+		w = w shr 32
+		count = count + 32
+	end 'hi32'
+	if (w and 0xFFFF) == 0 'hi16'
+		w = w shr 16
+		count = count + 16
+	end 'hi16'
+	if (w and 0xFF) == 0 'hi8'
+		w = w shr 8
+		count = count + 8
+	end 'hi8'
+	if (w and 0xF) == 0 'hi4'
+		w = w shr 4
+		count = count + 4
+	end 'hi4'
+	if (w and 0x3) == 0 'hi2'
+		w = w shr 2
+		count = count + 2
+	end 'hi2'
+	if (w and 0x1) == 0 'hi1'
+		count = count + 1
+	end 'hi1'
+	return count
+end 'trailingZeroCount'
+
+// Bits set in one word — SWAR, so the cost is a fixed handful of word ops rather than ONE ITERATION
+// PER SET BIT.
+//
+// It was Kernighan's clear-lowest-set loop, which is right for a SPARSE word and wrong for a DENSE
+// one — and the word this is actually called on is dense. `regMaskPopcount` is the only caller, and
+// its hottest site is `EffectivePools`: `popcount(pool ∖ forbidden(v))` for EVERY value of the
+// function, on EVERY splitter iteration. An UNCONSTRAINED value's mask is the whole pool — 14 bits —
+// so the loop ran its worst case on the overwhelmingly common input, over a value space that itself
+// grows with every split.
+function popcountWord(word MachineWord) returns WordBitCount
+	// Each 2-bit field becomes the count of the bits it held.
+	var w = word - ((word shr 1) and PopcountPairMask)
+	// Sum adjacent pairs into 4-bit fields.
+	w = (w and PopcountNibbleMask) + ((w shr 2) and PopcountNibbleMask)
+	// Sum adjacent nibbles into BYTE fields. Each byte now holds 0..8.
+	w = (w + (w shr 4)) and PopcountByteMask
+	// Fold the eight byte counts down into byte 0. Their total is at most 64, so no field can carry
+	// out of its byte and the low byte is the whole popcount.
+	w = w + (w shr 8)
+	w = w + (w shr 16)
+	w = w + (w shr 32)
+	return w and PopcountByteSelect
+end 'popcountWord'
+
+// ==========================================================================
+// Physical-register masks (one bit per RegNum in the UNIFIED register file)
+// ==========================================================================
+
+// The width of the UNIFIED register file — one allocator serves both ISAs (USER RULING
+// 2026-07-17), so `RegNum`, the masks and the allocator's data structures are sized to the
+// WIDER of the two files. x64 has 32 registers (GPR 0..15, XMM 16..31); arm64 has 63 (GPR
+// x0..x30 = 0..30, SIMD d0..d31 = 31..62). So this is arm64's 63 — and, being one past the
+// last arm64 register AND above every x64 register, it is the "no register" SENTINEL that
+// `Uncolored` / `NoFixedHint` / `noRegister` share for BOTH ISAs.
+//
+// ⚠ x64 uses only the low 32 of this file. It therefore OVER-SIZES a handful of allocator
+// scratch structures (the Hall census columns, `lowestClearRegister`'s scan) by a bounded
+// CONSTANT factor — the cost of one shared file. It changes NO x64 codegen: a value's pool is
+// its own class's registers (0..31 for x64), so `lowestClearRegister` never returns 32..62 and
+// no x64 op ever names one. Verified byte-identical against the committed x64 goldens.
+//
+// ⚠ THIS IS NOT THE PER-TARGET FILE SIZE. The class masks and the enum-vs-file check ask a
+// SPECIFIC target's file (`RegisterFile.size` — 32 for x64, 63 for arm64), never this unified
+// width; using this here would put x64's XMM class mask at bits 16..62 and break the
+// caller-saved clobber assert. See `RegisterFile` and `classRegisterMask`.
+//
+// `RegNum`'s upper bound is this same 63, RESPELLED as a literal because a typealias range bound
+// must be a literal (E2010) — a range cannot name a constant. It is the one copy NOTHING can
+// check: a range bound is erased into the range check itself and is readable by no expression, so
+// there is nothing to compare against. It moves BY HAND with this constant; the failure is at
+// least loud (a widened file with a stale `RegNum` range-check-panics rather than mis-encoding).
+export let RegisterFileSize = 63
+
+// A per-TARGET register file: how many registers it has, and where its GPR/vector boundary
+// falls. The class masks and the "is this pool full?" denominators are asked against THIS, never
+// against the unified `RegisterFileSize` — because the boundary is irreducibly per-ISA (x64 files
+// its XMMs at 16, arm64 its SIMD at 31) and the file WIDTH caps the vector class mask (x64's XMMs
+// stop at 31, arm64's SIMD at 62). Derived from the target so the two numbers live in one place.
+export type RegisterFile
+	// One past the highest register NUMBER of this file (32 for x64, 63 for arm64) — a bit width.
+	export let size as RegCount
+	// The FIRST vector register's number — the GPR/vector boundary (16 for x64, 31 for arm64).
+	export let firstVector as RegNum
+
+	export static function create(size RegCount, firstVector RegNum) returns RegisterFile
+		return Self{size: size, firstVector: firstVector}
+	end 'create'
+end 'RegisterFile'
+
+// The x64 register file: 32 registers, XMMs from 16. Its `size` (32) is the X64Register enum's
+// case count, held to it by `assertRegisterFileMatchesEnum`; its boundary is `FirstXmmRegisterNumber`.
+export function x64RegisterFile() returns RegisterFile
+	return RegisterFile.create(32, firstVector: FirstXmmRegisterNumber)
+end 'x64RegisterFile'
+
+// The FIRST SIMD register's number in the arm64 file — its GPR/SIMD boundary (d0 = RegNum 31), the
+// arm64 twin of `FirstXmmRegisterNumber`. It is the one fact `arm64RegisterFile().firstVector` names,
+// and it is named HERE so the arm64 ENCODER's per-operand class test (`arm64RegNumIsGpr`,
+// `arm64FpField` in Arm64Backend) can read it WITHOUT constructing a `RegisterFile` — exactly as x64's
+// `regClassOf` reads `FirstXmmRegisterNumber` rather than building `x64RegisterFile()` on its hot path.
+//
+// ⚠ WITHOUT THIS the encoder allocated a throwaway `RegisterFile` on EVERY register operand of EVERY
+// op (`arm64GprField` → `arm64RegNumIsGpr` → `arm64RegisterFile()`), which is O(ops) heap objects that
+// only ever read this one constant. MEASURED at ~110k such allocations in the encode phase of a 200-
+// function scalar module — the overwhelming majority of that phase's traffic — all of it pure waste.
+export let Arm64FirstVectorRegister = 31 as RegNum
+
+// The arm64 register file: 63 registers — GPR x0..x30 (0..30), SIMD d0..d31 (31..62). The SIMD
+// boundary at 31 is arm64's, NOT x64's 16; one allocator, two boundaries, chosen by the target. The
+// boundary reads `Arm64FirstVectorRegister`, so the file value and the encoder's per-operand test
+// share one home for "31" (mirroring x64's `RegisterFile.create(32, firstVector: FirstXmmRegisterNumber)`).
+export function arm64RegisterFile() returns RegisterFile
+	return RegisterFile.create(63, firstVector: Arm64FirstVectorRegister)
+end 'arm64RegisterFile'
+
+// The `RegisterFile` of the target the allocator is running for — the ONE dispatcher the shared
+// splitter/census/colorer thread down beside `pool`, so their GPR/vector boundary becomes per-ISA
+// (16 for x64, 31 for arm64) rather than the hardcoded x64 one this file's `regClassOf` still names.
+// The pool masks (`allocatablePool`) dispatch on `target.cpu` separately and each arm names its own
+// file directly; this exists because the allocator's per-value class questions need the SAME file
+// carried through structures that hold `pool` but not `target` (the `LivenessResult`, the census).
+export function registerFileFor(target Target) returns RegisterFile
+	return match target.cpu 'cpu'
+		x64 gives x64RegisterFile()
+		arm64 gives arm64RegisterFile()
+		wasm32 panic("registerFileFor: maxon has no register file for wasm32 (got {targetToString(target)})")
+	end 'cpu'
+end 'registerFileFor'
+
+// Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
+// spilled value occupies exactly 8 bytes. The cold-spill splitter (SplitLiveRanges) sets
+// `func.stackSize = slotCount * SpillSlotBytes`, and the x64 encoder turns a SpillSlot
+// index into a `[rsp + slot * SpillSlotBytes + base]` displacement — the ONE definition of
+// the slot stride, so the splitter's frame-size tally and the encoder's slot offsets agree.
+export let SpillSlotBytes = 8 as StackSize
+
+// How many of those slots a STRUCTURE of `byteCount` bytes occupies, rounded up — the frame reservation a
+// hand-assembled runtime chunk makes for a buffer the OS fills. It is a function rather than a `let` per
+// size for `posixNanosPerFileTimeTick`'s language reason: a global initializer folds `/` as a float.
+export function runtimeFrameSlots(byteCount ParsedInt) returns StackSize
+	return ((byteCount + SpillSlotBytes - 1) / SpillSlotBytes) as StackSize
+end 'runtimeFrameSlots'
+
+// A number of registers, or of simultaneously-live values (register PRESSURE) — the
+// quantity the E5001 feasibility test compares against the pool size. Distinct in
+// PURPOSE from a byte count or a CFG index even though all are non-negative ints.
+export typealias RegCount = int(0 to u64.max)
+
+// A PHYSICAL REGISTER NUMBER: an `X64Register`'s raw value, and the key every register mask, the
+// coloring column and the parallel-move plans are stated in.
+//
+// BOUNDED BY THE UNIFIED REGISTER FILE, and the bound goes to `RegisterFileSize` INCLUSIVE — 63,
+// not 62 — because one-past-the-last-register is the "no register" value three sentinels share:
+// `lowestClearRegister`'s "every register is blocked", the colorer's `Uncolored`, and its
+// `NoFixedHint`. Admitting exactly that one extra value is what lets those sentinels live in the
+// same column as real registers without a second type. 63 covers arm64's SIMD d31 (62); x64 uses
+// only 0..31, and 63 is a valid sentinel for it too (no x64 register is that high).
+//
+// It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
+// IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
+// of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
+export typealias RegNum = int(0 to 63)
+
+// The FIRST XMM's register number in the X64 file — its GPR/XMM boundary, and the bit that
+// classifies one x64 register. Named because `regClassOf` and `x64RegisterFile` would otherwise
+// each spell a bare 16, which is the same fact written twice.
+//
+// ⚠ THIS IS THE X64 BOUNDARY, NOT A UNIVERSAL ONE. arm64 files its SIMD at 31 — one allocator,
+// two boundaries — which is why the per-target `RegisterFile.firstVector` is what the class masks
+// read, and `regClassOf` (x64-boundary) is used only where the register is known to be x64's or
+// is an ABI operand below both boundaries (see `regClassOf`).
+//
+// RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`: a top-level
+// `let` is const-evaluated, and the evaluator does not fold `.rawValue` (E2045, verified —
+// *"Global initializer for 'FirstXmm' is not a constant expression"*). That is a DIFFERENT
+// wall from the one `RegNum`'s bound hits (E2010, a range bound must be a literal), and
+// both end in a respelled number for reasons neither can route around. The enum and this
+// constant must therefore move together — and `assertRegisterFileMatchesEnum` is what makes
+// them, rather than the spec that used to be the only thing watching.
+let FirstXmmRegisterNumber = 16 as RegNum
+
+// `RegisterFileSize` and `FirstXmmRegisterNumber` are respelled literals; this is what keeps them
+// honest. E2045 forbids reading the enum in their INITIALIZERS, but it binds CONST-EVALUATION of a
+// top-level `let` and nothing else — a function body may interrogate the enum (`allCases`,
+// `fromRawValue`), which is the whole reason a check can exist where a derivation cannot. (Where a
+// derivation CAN exist it is strictly better and there is no assert: see
+// `TypeRules.MaxUnguardedShiftCount`.)
+//
+// ⚠ `X64Register.allCases` builds a fresh heap array, so this call costs two allocations per COMPILE,
+// flat in program size because it runs once per module. That is the difference between it and the trap
+// `RegClassCount` documents: the same call on the PER-OP path is four orders of magnitude worse, and the
+// position is the whole of the difference.
+//
+// ⚠ `allCases.count()` is the right comparand only because X64Register is CONTIGUOUS and holds
+// nothing but registers (rax=0..r15=15, xmm0=16..xmm15=31). `x64RegisterFile().size` means "one
+// past the highest x64 register NUMBER" — a bit width — and a case COUNT equals that only under
+// those two properties. Add a non-register case or a gap and this check starts lying: fix it then,
+// do not widen the constant to satisfy it.
+export function assertRegisterFileMatchesEnum()
+	let x64File = x64RegisterFile()
+	if x64File.size != X64Register.allCases.count() 'fileSize'
+		panic("assertRegisterFileMatchesEnum: x64RegisterFile().size is {x64File.size} but the X64Register enum has {X64Register.allCases.count()} cases — every x64 class mask is now the wrong width, so a register outside it is unaddressable and the caller-saved clobber assert drifts. Move x64RegisterFile().size and the enum together.")
+	end 'fileSize'
+
+	// The UNIFIED file must be wide enough to hold every target's registers AND the shared "no
+	// register" sentinel (`RegisterFileSize` itself). If it shrank below a target's file, that
+	// target's registers would be unaddressable by `fullRegisterMask` and its sentinel would collide
+	// with a real register.
+	if RegisterFileSize < x64File.size 'unifiedTooSmall'
+		panic("assertRegisterFileMatchesEnum: RegisterFileSize {RegisterFileSize} is smaller than the x64 file ({x64File.size}) — the unified register file must hold every target's registers plus the sentinel. Move RegisterFileSize and RegNum's bound together.")
+	end 'unifiedTooSmall'
+
+	// ⭐ ASKED AS "THE REGISTER AT THE BOUNDARY IS xmm0", NOT AS A COMPARISON OF TWO NUMBERS — which is
+	// `value == Type.case`, the form E3097 demands. That is not a workaround for the diagnostic; it is
+	// the better question, and the numeric form was a trap twice over:
+	//
+	//   • `FirstXmmRegisterNumber != X64Register.xmm0.rawValue` is E3097 outright, and a bare local
+	//     does NOT dodge it (measured — the checker traces the binding). Only a NARROWING cast does,
+	//     and only because the range check hides the accessor; `as int(0 to u64.max)` is elided and
+	//     E3097 returns. A comparison that compiles only because a cast happens to launder it is a
+	//     line nobody can safely tidy.
+	//   • Worse, that cast PRE-EMPTS this function's whole purpose. `xmm0.rawValue as RegNum` on an
+	//     enum whose xmm0 drifted ABOVE the file range-check-panics *"value outside typealias
+	//     'RegNum'"* (measured) — naming a typealias instead of the two things that disagree, which is
+	//     precisely the "accuse the wrong party" failure the call-order comment in RegisterAllocator
+	//     exists to stop. A check that reports the wrong culprit for half its drifts is half a check.
+	//
+	// ⭐ THE `otherwise` CANNOT FIRE, AND THAT IS THE BEST OUTCOME HERE, NOT A GAP. `FirstXmmRegisterNumber`
+	// is a top-level constant, so this lookup is const-folded and A BOUNDARY THAT NAMES NO REGISTER IS
+	// REFUSED AT BUILD TIME: setting it to 32 does not panic, it fails to compile with
+	// *"E3034: no enum case with raw value '32'"*. The arm exists because the language requires it, and it
+	// panics rather than inventing a register, per the try/otherwise rule.
+	let atBoundary = try X64Register.fromRawValue(FirstXmmRegisterNumber) otherwise panic("assertRegisterFileMatchesEnum: FirstXmmRegisterNumber is {FirstXmmRegisterNumber}, which names no X64Register at all — and E3034 should have refused this at compile time, so reaching here means the constant stopped being constant-folded. Move FirstXmmRegisterNumber and the enum together.")
+
+	if atBoundary != X64Register.xmm0 'xmmBoundary'
+		panic("assertRegisterFileMatchesEnum: FirstXmmRegisterNumber is {FirstXmmRegisterNumber}, but the register the enum puts at that number is not xmm0 — `regClassOf` is THE place the GPR/XMM boundary is decided, so a drifted boundary files a register in the wrong class: an f64 would be colored into a GPR, and `classRegisterMask` would hand out the wrong file twice more. Move FirstXmmRegisterNumber and the enum together.")
+	end 'xmmBoundary'
+end 'assertRegisterFileMatchesEnum'
+
+// The CLASS of a physical register in a GIVEN register file, derived from its number against that
+// file's GPR/vector boundary. This is the per-ISA form the allocator's class-boundary sites use —
+// `assertColouredInClass` classifies a COLORED register (x64's 0..31 at boundary 16, arm64's 0..62
+// at boundary 31), and an arm64 GPR in x19..x28 (RegNum 19..28, above x64's 16 but below arm64's 31)
+// classifies as a GPR here where the x64-boundary `regClassOf` would call it a vector.
+export function regClassIn(reg RegNum, file RegisterFile) returns RegClass
+	return RegClass.xmm if reg >= file.firstVector else RegClass.gpr
+end 'regClassIn'
+
+// The CLASS of a physical register in the X64 file, derived from its number against the x64 boundary.
+//
+// ⚠ THIS USES THE X64 BOUNDARY (16) unconditionally — it is the x64 ENCODER's classifier
+// (`X64Backend.registerClass`), which is inherently x64 and correct at that boundary. Every colored
+// register the ALLOCATOR classifies is per-ISA and goes through `regClassIn(reg, file)` with the
+// target's `RegisterFile` instead; this stays as the x64-specialized entry the encoder names. The
+// boundary test is respelled (not `regClassIn(reg, x64RegisterFile())`) so the encoder's per-register
+// path builds no `RegisterFile` value — it is `FirstXmmRegisterNumber`, which `regClassIn`'s x64
+// caller (`x64RegisterFile().firstVector`) equals by construction (`assertRegisterFileMatchesEnum`).
+export function regClassOf(reg RegNum) returns RegClass
+	return RegClass.xmm if reg >= FirstXmmRegisterNumber else RegClass.gpr
+end 'regClassOf'
+
+// The mask with every bit of ONE register FILE set — every register the hardware has of that
+// class, allocatable or not.
+//
+// ⚠⚠ EVERY POOL-SIZE TEST MUST BE PER CLASS, AND THE TWO FAILURES ARE OPPOSITE. Ask an
+// int's 14 allowed registers whether they are "the whole pool" against a 32-wide
+// `fullRegisterMask()` and the answer is always no ⇒ EVERY value reads CONSTRAINED ⇒ the
+// allocator runs a permanent census over every operand of every op. That is a pure TIME
+// regression, and `scale-test` measures MEMORY, so nothing in the gate battery would see it.
+// Ask the same question per class and the answer is right — but `constrained == 0` comes
+// back for 15 live ints, and the per-class FULL-POOL PIGEONHOLE becomes the only thing that
+// still catches them. Both halves, or one failure survives.
+//
+// ⚠ THIS IS THE FILE, NOT THE POOL, AND THE DIFFERENCE IS TWO REGISTERS. rsp and rbp are the
+// frame and are never allocatable, so the GPR FILE is 16 and a GPR value's POOL is 14. The
+// denominator of a "is this constrained / is this pool full?" test is the POOL's width —
+// `RegisterAllocator.classPoolSizeOf(pool, class)`, which intersects this mask with the pool
+// the target actually offers. A `classPoolSize(class)` returning 16 lived here briefly and was
+// exactly the trap the paragraph above describes, at smaller scale: every unconstrained int
+// reads `14 < 16` ⇒ constrained. The width of a file and the width of a pool are two facts;
+// only one of them is a denominator.
+// Taken against a per-target `RegisterFile`, NOT the unified `RegisterFileSize`: the GPR/vector
+// boundary (`file.firstVector`) and the file's TOP (`file.size`) are both per-ISA — x64 splits at
+// 16 and stops at 32, arm64 splits at 31 and stops at 63. Using the unified 63 as the top would put
+// x64's XMM mask at bits 16..62, and the caller-saved clobber assert (which reads all-XMMs-caller-
+// saved) would then include phantom registers 32..62 and fail. So the vector mask is CAPPED at the
+// target's own file width.
+export function classRegisterMask(class RegClass, file RegisterFile) returns RegMask
+	return match class 'class'
+		gpr gives (1 shl file.firstVector) - 1
+		xmm gives ((1 shl file.size) - 1) and not ((1 shl file.firstVector) - 1)
+	end 'class'
+end 'classRegisterMask'
+
+// The mask with every allocatable bit of BOTH files set (bits 0..RegisterFileSize-1). Derived
+// from `RegisterFileSize` so the file width lives in exactly one place; the "not in
+// the pool" complement is `fullRegisterMask() and not pool`.
+//
+// ⚠ This is the WHOLE MACHINE, not "the pool" of any value — no value may take a register
+// outside its own class, so a per-value question answered against this mask is answering
+// about registers the value can never have. Use `classRegisterMask(regClassOf(v))`. The
+// remaining honest uses are whole-machine ones: complementing a pool to block everything
+// outside it, and forming a scratch mask.
+export function fullRegisterMask() returns RegMask
+	return (1 shl RegisterFileSize) - 1
+end 'fullRegisterMask'
+
+// True iff register number `regNum` is in `mask`.
+export function regMaskContains(mask RegMask, regNum RegNum) returns bool
+	return ((mask shr regNum) and 1) != 0
+end 'regMaskContains'
+
+// `mask` with register number `regNum` added.
+export function regMaskAdd(mask RegMask, regNum RegNum) returns RegMask
+	return mask or (1 shl regNum)
+end 'regMaskAdd'
+
+// `mask` with register number `regNum` removed.
+export function regMaskRemove(mask RegMask, regNum RegNum) returns RegMask
+	return mask and not (1 shl regNum)
+end 'regMaskRemove'
+
+// The single-register mask for `reg`.
+export function regMaskOf(reg X64Register) returns RegMask
+	return 1 shl reg.rawValue
+end 'regMaskOf'
+
+// Number of registers in `mask`.
+export function regMaskPopcount(mask RegMask) returns RegCount
+	return popcountWord(mask as MachineWord) as RegCount
+end 'regMaskPopcount'
+
+// The LOWEST register number (0..31) whose bit is CLEAR in `blocked`, or
+// `RegisterFileSize` (32) if every register is blocked. Picking a register is this
+// single call — no set iteration, no interference-graph neighbour walk.
+//
+// ⚠ It scans BOTH files, so `blocked` must already exclude the other class — the caller
+// blocks everything outside the value's pool (`fullRegisterMask() and not pool`) and the
+// pool is class-filtered. Hand it a mask that does not, and it will hand back an XMM for
+// an int whose GPRs are all taken.
+export function lowestClearRegister(blocked RegMask) returns RegNum
+	for regNum in 0 upto RegisterFileSize 'scan'
+		if not regMaskContains(blocked, regNum: regNum) 'free'
+			return regNum
+		end 'free'
+	end 'scan'
+	return RegisterFileSize
+end 'lowestClearRegister'

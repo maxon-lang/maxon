@@ -1,0 +1,68 @@
+// Test: shl-zero-fills-whatever-the-operand-signedness
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shlDynamic(v Wide, d Num) returns Wide
+	return v shl d
+end 'shlDynamic'
+
+function shlPastWidth(v Wide) returns Wide
+	return v shl 64
+end 'shlPastWidth'
+
+function main() returns ExitCode
+	if shlDynamic(u64.max, d: 63) != i64.min 'topBitOnly'
+		return 1
+	end 'topBitOnly'
+	if shlPastWidth(u64.max) != 0 'everyBitOut'
+		return 2
+	end 'everyBitOut'
+	if shlDynamic(u64.max, d: 100) != 0 'everyBitOutDynamic'
+		return 3
+	end 'everyBitOutDynamic'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body#8:
+    arm64.movImm x0, 9223372036854775808
+  __il_cont#7:
+    arm64.movImm x1, 9223372036854775808
+    arm64.cmp x0, x1
+    arm64.b.eq __il_body#10
+  topBitOnly:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#10:
+    arm64.movImm x0, 0
+  __il_cont#9:
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#4
+  everyBitOut:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 100
+  __il_body#12:
+    arm64.lslv x0, x0, x1
+    arm64.movImm x16, 0
+    arm64.and x0, x0, x16
+  __il_cont#11:
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#6
+  everyBitOutDynamic:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,30 @@
+// Internal hash helper for string types
+//
+// Purpose: Centralize the hash algorithm for string types.
+
+// BytePos is exported by stdlib/String.maxon.
+
+// ============================================
+// Hash helpers (djb2 algorithm)
+// ============================================
+
+/// Hash a `String` using the djb2 algorithm. Returns a 32-bit hash value.
+///
+/// Takes the `String`, not its `__ManagedMemory`, and that is the whole reason this rung exists.
+/// This is the hottest byte-walk in the stdlib — `Map with (String, V)` calls it on every insert and
+/// every lookup — so it is the site that decides whether Stage 4 is a win. Reaching the bytes
+/// through `managed` or `addressableBytes()` would MATERIALIZE a record for a small string once
+/// 4b-2 lands, i.e. one allocation per key hash, and the stage would be a net loss. Going through
+/// `String.byteAt` means 4b-2 changes that one intrinsic's lowering and this function never notices.
+///
+/// The `offset`/`len` window this used to carry (`hashManagedStringRange`) is gone: every caller
+/// hashed the whole string, so the range form was generality nobody had ever asked for.
+public function hashString(s String) returns HashValue
+	var h = 5381
+	let len = s.byteLength()
+	for i in 0 upto len 'hash_loop'
+		let b = try s.byteAt(i) otherwise panic("hashString: byteAt OOB — i < s.byteLength() invariant")
+		h = h * 33 + b
+	end 'hash_loop'
+	return h and 0xFFFFFFFF
+end 'hashString'

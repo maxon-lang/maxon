@@ -1,0 +1,131 @@
+// Test: the-same-borrowed-container-matched-again-inside-its-own-arm
+typealias Integer = int(i64.min to i64.max)
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function depth(m M) returns Integer
+	return match m 'k'
+		silent gives 0
+		text(s) gives match m 'again'
+			silent gives 1
+			text(t) gives 6
+		end 'again'
+	end 'k'
+end 'depth'
+
+function main() returns ExitCode
+	let m = M.text("a re-entrantly matched payload string, long enough for the heap")
+	return depth(m) as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @depth {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#9
+  matcharm#1:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont#10
+  matchnext#9:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#8
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#6
+  matcharm#3:
+    x64.movRegImm32 rbx, 1
+    x64.jmp matchcont#7
+  matchnext#6:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#5
+  matcharm#4:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegImm32 r13, 6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rbx, r13
+  matchcont#7:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+  matchcont#10:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#5:
+  matchdead#8:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]  ; "a re-entrantly matched payload string, long enough for the heap"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect depth
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-same-borrowed-container-matched-again-inside-its-own-arm.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_M
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

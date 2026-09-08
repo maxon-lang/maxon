@@ -1,0 +1,374 @@
+// `spec_test_outcome` MCP tool. Runs the spec-test suite with a filter, then parses
+// the per-test PASS/FAIL lines and each failure's message into structured output.
+// Useful when the LLM wants "did test X pass? if not, what was the message?"
+// without re-scraping the rawTail itself.
+//
+// The runner prints a line per test unconditionally — `PASS spec/test` /
+// `FAIL spec/test: <reason>` — and times no individual test.
+//
+// Inputs (JSON):
+//   filter: String          — required; passed to `--filter=<filter>`
+//   network?: bool          — → --network  (runs the live-network fragments)
+//   target?: String         — passed to `--target=<value>`
+//
+// Output (JSON):
+//   filter, total, passed, failed, durationMs, memoryLeak,
+//   tests: [{spec, test, status}],
+//   failures: [{spec, message}],
+//   rawTail.
+
+let specOutcomeTimeoutMs = 600000
+let rawTailMaxBytes = 4096
+let memoryLeakExitCode = 101
+
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// binary is run against whose specs — resolved and validated by the dispatcher.
+export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
+	let filter = try argsDoc.getString(argsId, key: "filter") otherwise 'noFilter'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: missing required `filter` argument (a pattern matching test names)")
+	end 'noFilter'
+
+	try checkSpecTestFlags(argsDoc, argsId: argsId) otherwise (flag) 'unsupported'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: {unsupportedFlagReason(flag)}")
+	end 'unsupported'
+
+	let binary = try compilerBinary(repoRoot) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome: required binary missing. Build it first via the `build` tool.")
+	end 'noBin'
+
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("--filter={filter}")
+	// See `SpecTestTool`'s arm for why this is a flag rather than a default.
+	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+	if network 'haveNetwork'
+		argv.push("--network")
+	end 'haveNetwork'
+
+	// `target` is passed straight through to `--target=<value>`; `wasm32-wasi` runs the
+	// emitted component under the vendored wasmtime.
+	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+	if not target.isEmpty() 'haveTarget'
+		argv.push("--target={target}")
+	end 'haveTarget'
+
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: specOutcomeTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec_test_outcome: subprocess: {err.displayReason()}")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(timing)
+
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
+	let memoryLeak = result.exitCode() == memoryLeakExitCode
+	let report = parseReport(combined)
+
+	return buildOutcome(filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: report.tests, failures: report.failures, combined: combined)
+end 'specOutcomeHandler'
+
+// The per-test verdicts plus the failure messages scraped from one spec-test run.
+// The two are produced together (a failure message is a continuation of the same
+// FAIL line that carries the verdict), so they are returned together.
+type SpecReport
+	export let tests as SpecTestEntryArray
+	export let failures as SpecFailureSummaryArray
+
+	export static function create(tests SpecTestEntryArray, failures SpecFailureSummaryArray) returns SpecReport
+		return Self{tests: tests, failures: failures}
+	end 'create'
+end 'SpecReport'
+
+// =============================================================================
+// Per-test parsing
+// =============================================================================
+
+// The runner times no individual test, so no duration is carried: a test that took
+// no measurable time and a test that was never timed are different claims, and only
+// one of them is true.
+type SpecTestEntry
+	export var spec as String
+	export var name as String
+	export var passed as bool
+
+	export static function create(spec String, name String, passed bool) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed}
+	end 'create'
+end 'SpecTestEntry'
+
+typealias SpecTestEntryArray = Array with SpecTestEntry
+
+// The runner prints one line per test, unconditionally:
+//   `PASS arithmetic/addition`
+//   `FAIL arithmetic/division: exit code mismatch: expected 3, got 4`
+// and closes with `N passed, M failed`.
+//
+// A FAIL's reason is interpolated VERBATIM and routinely spans lines — a golden
+// mismatch renders a three-line diff, and a failed compile embeds the compiler's
+// whole stderr. So the reason is not "the rest of the line": it runs on until the
+// next verdict or the summary. Column position can't be the terminator either,
+// since captured stderr is itself unindented.
+let PassPrefix = "PASS "
+let FailPrefix = "FAIL "
+
+function parseReport(combined String) returns SpecReport
+	var tests = SpecTestEntryArray.create()
+	var failures = SpecFailureSummaryArray.create()
+
+	let lines = combined.split("\n")
+	let n = lines.count()
+	var i = 0
+	while i < n 'eachLine'
+		let line = try lines.get(i) otherwise panic("parseReport: lines.get OOB — i bounded by n")
+		i = i + 1
+
+		if line.startsWith(PassPrefix) 'passed'
+			let label = try parseVerdictLabel(line, prefix: PassPrefix) otherwise 'notALabel'
+				continue
+			end 'notALabel'
+			tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: true))
+			continue
+		end 'passed'
+
+		if not line.startsWith(FailPrefix) 'notAVerdict'
+			continue
+		end 'notAVerdict'
+
+		let label = try parseVerdictLabel(line, prefix: FailPrefix) otherwise 'notALabel'
+			continue
+		end 'notALabel'
+		tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: false))
+
+		var reason = StringArray.create()
+		reason.push(label.rest)
+
+		// Absorb the reason's continuation lines, stopping at the next verdict or
+		// the trailing summary.
+		while i < n 'reasonLines'
+			let next = try lines.get(i) otherwise panic("parseReport: lines.get OOB (reason) — i bounded by n")
+			if next.startsWith(PassPrefix) or next.startsWith(FailPrefix) 'nextVerdict'
+				break
+			end 'nextVerdict'
+
+			if isSummaryLine(next.trim()) 'summary'
+				break
+			end 'summary'
+
+			reason.push(next)
+			i = i + 1
+		end 'reasonLines'
+
+		failures.push(SpecFailureSummary.create(label.spec, message: "{label.name}: {joinLines(reason).trim()}"))
+	end 'eachLine'
+
+	return SpecReport.create(tests, failures: failures)
+end 'parseReport'
+
+// A verdict line split into its `<spec>`, `<test>`, and whatever trailed the label
+// (a FAIL's `: <reason>`, empty for a PASS).
+type VerdictLabel
+	export let spec as String
+	export let name as String
+	export let rest as String
+
+	export static function create(spec String, name String, rest String) returns VerdictLabel
+		return Self{spec: spec, name: name, rest: rest}
+	end 'create'
+end 'VerdictLabel'
+
+// Split `PASS spec/test` or `FAIL spec/test: reason` after the verdict prefix. A
+// line with no `/` in its label did not come from the runner's verdict printer
+// (compiler output echoed into a reason can start with anything) — it is skipped,
+// not guessed at.
+function parseVerdictLabel(line String, prefix String) returns VerdictLabel throws NotFound
+	let bytes = line.toByteArray()
+	let body = sliceBytes(bytes, from: prefix.byteLength(), until: bytes.count())
+	let bodyBytes = body.toByteArray()
+
+	let slash = firstSlash(body)
+	if slash < 0 'noSlash'
+		throw NotFound.notFound
+	end 'noSlash'
+	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
+
+	// The test name runs to the `:` that opens a FAIL's reason, or to end-of-line
+	// for a PASS. Test names never contain `:`.
+	let nameStart = (slash + 1) as BytePos
+	let total = bodyBytes.count()
+	var colon = nameStart
+	while colon < total 'findColon'
+		let b = try bodyBytes.get(colon) otherwise panic("parseVerdictLabel: get OOB — colon bounded by total")
+		if b == 0x3A 'foundColon'
+			break
+		end 'foundColon'
+		colon = colon + 1
+	end 'findColon'
+
+	let name = sliceBytes(bodyBytes, from: nameStart, until: colon).trim()
+	if name.isEmpty() 'noName'
+		throw NotFound.notFound
+	end 'noName'
+
+	// `colon` sits on the `:` opening a FAIL's reason, or at end-of-line for a PASS
+	// (which carries no reason at all).
+	let reasonStart = colon + 1 if colon < total else total
+	let rest = sliceBytes(bodyBytes, from: reasonStart, until: total).trim()
+	return VerdictLabel.create(spec, name: name, rest: rest)
+end 'parseVerdictLabel'
+
+// Is this the closing `N passed, M failed`? Used only to stop a multi-line failure
+// reason from swallowing the summary.
+function isSummaryLine(line String) returns bool
+	let digits = try restAfterLeadingDigits(line) otherwise 'notANumber'
+		return false
+	end 'notANumber'
+
+	return digits.startsWith(" passed, ")
+end 'isSummaryLine'
+
+// The remainder of `line` after its leading run of ASCII digits; throws when it
+// does not start with one.
+function restAfterLeadingDigits(line String) returns String throws NotFound
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	while i < n 'digits'
+		let b = try bytes.get(i) otherwise panic("restAfterLeadingDigits: get OOB — i bounded by n")
+		if not isAsciiDigit(b) 'endOfDigits'
+			break
+		end 'endOfDigits'
+		i = i + 1
+	end 'digits'
+
+	if i == 0 'noDigits'
+		throw NotFound.notFound
+	end 'noDigits'
+
+	return sliceBytes(bytes, from: i, until: n)
+end 'restAfterLeadingDigits'
+
+// Sentinel typealias for "no match" — kept in this file so the parser
+// helpers stay self-contained.
+typealias FindResult = int(-1 to i64.max)
+
+function firstSlash(s String) returns FindResult
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise panic("firstSlash: bytes.get OOB")
+		if b == 0x2F or b == 0x5C 'sep'
+			return i as FindResult
+		end 'sep'
+		i = i + 1
+	end 'scan'
+	return -1
+end 'firstSlash'
+
+// =============================================================================
+// Failure summaries
+// =============================================================================
+
+type SpecFailureSummary
+	export var spec as String
+	export var message as String
+
+	export static function create(spec String, message String) returns SpecFailureSummary
+		return Self{spec: spec, message: message}
+	end 'create'
+end 'SpecFailureSummary'
+
+typealias SpecFailureSummaryArray = Array with SpecFailureSummary
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(filter String, exitCode ExitInt, durationMs DurationMs, memoryLeak bool, tests SpecTestEntryArray, failures SpecFailureSummaryArray, combined String) returns ToolOutcome
+	var passed = 0
+	var failed = 0
+	let testCount = tests.count()
+	for i in 0 upto testCount 'tally'
+		let entry = try tests.get(i) otherwise panic("buildOutcome: tests.get OOB")
+		if entry.passed 'p'
+			passed = passed + 1
+		end 'p' else 'f'
+			failed = failed + 1
+		end 'f'
+	end 'tally'
+
+	var doc = JsonDoc.create()
+	let filterId = doc.add(JsonNode.stringNode(filter))
+	let exitCodeId = doc.add(JsonNode.numberNode(exitCode as JsonFloat))
+	let durId = doc.add(JsonNode.numberNode(durationMs as JsonFloat))
+	let memoryLeakId = doc.add(JsonNode.boolNode(memoryLeak))
+	let totalId = doc.add(JsonNode.numberNode((passed + failed) as JsonFloat))
+	let passedId = doc.add(JsonNode.numberNode(passed as JsonFloat))
+	let failedId = doc.add(JsonNode.numberNode(failed as JsonFloat))
+	let testsArrId = testsArrayJson(doc, tests: tests)
+	let failuresArrId = failuresArrayJson(doc, failures: failures)
+	let rawTailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: rawTailMaxBytes)))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("filter")
+	children.push(filterId)
+	keys.push("total")
+	children.push(totalId)
+	keys.push("passed")
+	children.push(passedId)
+	keys.push("failed")
+	children.push(failedId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("memoryLeak")
+	children.push(memoryLeakId)
+	keys.push("tests")
+	children.push(testsArrId)
+	keys.push("failures")
+	children.push(failuresArrId)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'
+
+function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = tests.count()
+	for i in 0 upto n 'each'
+		let t = try tests.get(i) otherwise panic("testsArrayJson: tests.get OOB")
+		let specId = doc.add(JsonNode.stringNode(t.spec))
+		let testId = doc.add(JsonNode.stringNode(t.name))
+		let statusId = doc.add(JsonNode.stringNode("PASS" if t.passed else "FAIL"))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		keys.push("spec")
+		children.push(specId)
+		keys.push("test")
+		children.push(testId)
+		keys.push("status")
+		children.push(statusId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'testsArrayJson'
+
+function failuresArrayJson(doc JsonDoc, failures SpecFailureSummaryArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = failures.count()
+	for i in 0 upto n 'each'
+		let f = try failures.get(i) otherwise panic("failuresArrayJson: failures.get OOB")
+		let specId = doc.add(JsonNode.stringNode(f.spec))
+		let msgId = doc.add(JsonNode.stringNode(f.message))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		keys.push("spec")
+		children.push(specId)
+		keys.push("message")
+		children.push(msgId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'failuresArrayJson'

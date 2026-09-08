@@ -1,0 +1,32 @@
+// Test: error.let-field-base-is-immutable
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	export function writeIt(v Integer)
+		inner.value = v
+	end 'writeIt'
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(3))
+	o.writeIt(7)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2013: <fragment>:17:3: cannot assign to immutable variable: 'inner'

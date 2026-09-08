@@ -1,0 +1,22 @@
+// Test: param-unknown-type-member-access
+
+typealias Small = int(0 to 1000)
+
+type Holder
+	export var v as Small
+
+	export static function make(n Small) returns Holder
+		return Self{v: n}
+	end 'make'
+end 'Holder'
+
+function takes(h NoSuchTypeAtAll) returns Small
+	return h.v
+end 'takes'
+
+function main() returns ExitCode
+	return takes(Holder.make(7))
+end 'main'
+---
+CompilerError:
+error E3011: <fragment>:14:9: Unknown type 'NoSuchTypeAtAll'

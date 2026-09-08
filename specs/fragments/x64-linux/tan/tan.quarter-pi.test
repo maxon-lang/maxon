@@ -1,0 +1,38 @@
+// Test: tan.quarter-pi
+function main() returns ExitCode
+	let quarterPi = 0.785398163
+	let result = Math.tan(quarterPi)
+	// Should be approximately 1.0
+	let diff = abs(result - 1.0)
+	if diff < 0.01 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_0.785398163]
+    x64.callDirect Math.tan
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.subsdRegReg xmm0, xmm0, xmm1
+    x64.absF64RegReg xmm0, xmm0
+    x64.movsdRegRip xmm1, [rip + __fconst_0.01]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc belowEqual, ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

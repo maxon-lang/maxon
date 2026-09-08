@@ -1,0 +1,36 @@
+// Test: primitive-conformance.error.non-protocol-equals-result
+typealias Integer = int(0 to u32.max)
+
+interface Weird
+	function equals(other Self) returns Integer
+end 'Weird'
+
+type Thing implements Weird
+	export var v as Integer
+	export static function create(v Integer) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function equals(other Thing) returns Integer
+		return 7
+	end 'equals'
+end 'Thing'
+
+type Pair uses T where T is Weird
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function eq() returns bool
+		return self.a == self.b
+	end 'eq'
+end 'Pair'
+
+typealias ThingPair = Pair with Thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'

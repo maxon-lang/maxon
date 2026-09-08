@@ -1,0 +1,23 @@
+// Test: error.crossfile-enum-member-is-not-reachable-through-an-alias
+// --- file: a.maxon
+typealias Status = int(0 to 5)
+
+export function pick() returns ExitCode
+	var s = 1 as Status
+	s = Status.big
+	return s as ExitCode
+end 'pick'
+
+// --- file: b.maxon
+export enum Status
+	small = 1
+	big = 200
+end 'Status'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+CompilerError:
+error E2010: <fragment>:7:13: Expected 'min or max' but got 'big'

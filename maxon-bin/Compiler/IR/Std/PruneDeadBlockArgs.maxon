@@ -1,0 +1,352 @@
+// PruneDeadBlockArgs — a Std→Std pass that deletes the block-args (phis) NOTHING reads.
+//
+// WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (ARCHITECTURE.md,
+// register allocator §"the contract"), and this is where one came from.
+//
+// The parser builds SSA on the fly, and a loop header's phis must be minted BEFORE the body is
+// parsed. It once minted one per mutable var IN SCOPE, so every `var` declared before a loop got
+// a loop-carried phi — including the ones the loop never touches, and the ones already dead by
+// the time the loop is reached. That is what this pass was built to clean up.
+//
+// ⚠ THE PARSER NO LONGER MINTS THOSE. It reads the loop's ASSIGNED names off the tokens first and
+// carries a phi only for those (`Parser.parseWhileStatement`), so the surplus this pass existed to
+// delete is not created any more — the quadratic that produced it is gone at the source.
+//
+// THE PASS STAYS, AND IT STILL DELETES THINGS. A var the loop ASSIGNS but whose phi nothing reads
+// is still a dead phi (`while … 'l' / junk = a + 5 / end 'l'`, with `junk` never read: the back
+// edge carries the sum, not the phi, so nothing reads the phi at all). The parser cannot know that
+// — "is it assigned" is a question about tokens, "is the phi read" is a question about the IR it
+// has not finished building. So the two are a front end that does not OVERPRODUCE and a Std pass
+// that removes what is genuinely DEAD, and the paragraphs below — the false E5001 they were both
+// written to prevent — are why neither may be dropped.
+//
+// Such a phi is not merely useless — it is SELF-SUSTAINING. The back edge passes the phi to
+// itself, so the phi HAS a use, and liveness keeps it live around the ENTIRE loop. Two
+// sequential loops are all it takes: every accumulator of the first loop reappears as a dead
+// phi in the second loop's header, and then
+//
+//   • `maxlive` inflates by one per dead var, so the loop's measured working set is wrong;
+//   • the splitter forced-spills them around the loop's call — a store AND a reload every
+//     iteration for a value nothing reads;
+//   • and past the 14-register pool the compiler raises E5001 against a program that fits
+//     the machine, ranking the dead phis first among the values to delete ("read 0 times in
+//     the loop" — the tell). ⚠ That tell is NECESSARY, NOT SUFFICIENT: a loop-carried `var` the
+//     loop only ASSIGNS reads 0 there too, because the count excludes branch-edge args, and it is
+//     no surplus at all (ARCHITECTURE, "Known limits" #1). A 0 says "look at the IR", not "a pass
+//     over-produced".
+//
+// The parser has always PROMISED this pruning ("phis for unmutated vars turn out trivial and
+// collapse in the Std-tier phi-elim pass"), but that pass was M4b's `eliminatePhis`, RETIRED
+// at M5 when the register allocator took over SSA destruction — and nothing replaced its
+// pruning half. This is that half, restored as its own pass, which is where it belongs: the
+// allocator must not be the thing that discovers the front end over-produced.
+//
+// USEFULNESS IS A LEAST FIXPOINT, NOT A USE COUNT. A block-arg is useful iff
+//   (a) an OP reads it, or
+//   (b) it is what some edge passes to a USEFUL block-arg.
+// A self-sustaining dead phi satisfies neither — its only use is the edge feeding itself.
+// Asking the question `foldConstOperands` asks ("is this value referenced anywhere, edges
+// included?") would keep every single one of them.
+//
+// IT NEVER REWRITES A VALUE. A dead block-arg has no remaining reader to rewrite: the only
+// references to it are the edge slots this pass removes alongside it. Dropping slot `k` of a
+// block means dropping `blockArgs[k]` AND slot `k` of every incoming edge's `argIds`, so the
+// positional `blockArgs[k] ↔ argIds[k]` alignment the whole phi model rests on is preserved
+// by construction. The values those slots named simply lose a use — which is why the const
+// DCE in `foldConstOperands` runs AFTER this pass: it can then drop a `const` whose only
+// reader was a dead phi's edge.
+//
+// A merely REDUNDANT phi — a var the loop reads but never writes, so the header phi carries a
+// value that never changes — is deliberately LEFT ALONE. It is not dead (the body reads it),
+// and it costs nothing: biased coloring coalesces it with its incoming value into ONE
+// register and SSA destruction drops the resulting self-move. Rewriting it here would buy no
+// register and would require a value substitution this pass is careful not to need.
+
+// A per-value flag, indexed by ValueId. DENSE (ValueIds are function-local and dense), so no
+// Map and no hashing — the same discipline the register allocator's columns follow.
+//
+// Exported with its constructor and its setter: `dropBlockArgs` is shared with
+// `elimTrivialBlockArgs`, and the column that tells it which block-args SURVIVE is what both passes
+// hand it.
+export typealias ValueFlagColumn = Array with bool
+
+// Delete every dead block-arg in every function, in place.
+export function pruneDeadBlockArgs(module StdModule)
+	var removed = 0 as ValueId
+	for func in module.functions 'eachFunc'
+		removed = removed + pruneDeadBlockArgsInFunc(module, func: func)
+	end 'eachFunc'
+
+	let total = removed
+	logDebug(LogCategory.ir, message: function() gives "pruneDeadBlockArgs: removed {total} dead block-arg(s) across {module.funcCount()} function(s)")
+end 'pruneDeadBlockArgs'
+
+// Prune one function. Returns how many block-args it dropped.
+function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+	let bound = blockArgIdBound(module, func: func)
+	if bound == 0 'noBlockArgs'
+		return 0
+	end 'noBlockArgs'
+
+	var isBlockArg = flagColumn(bound)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			setFlag(isBlockArg, v: arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+
+	// Built ONCE and threaded through both walks that resolve an edge's target.
+	let refByBlockId = buildBlockIdIndex(module, func: func)
+
+	// For each block-arg, the values its predecessors pass to it — the positional
+	// `blockArgs[k] ↔ edge.argIds[k]` correspondence INVERTED, indexed by the arg instead of by the
+	// edge, which is the direction the usefulness fixpoint walks. `buildCsr`'s counting sort buckets
+	// the pairs by arg in O(pairs + args).
+	let pairs = collectPhiOperands(module, func: func, refByBlockId: refByBlockId)
+	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
+
+	// USEFUL IS KEPT: this pass's whole answer is which block-args survive, so it hands the shared
+	// dropper its column directly.
+	let useful = computeUsefulBlockArgs(module, func: func, isBlockArg: isBlockArg, feeders: feeders, bound: bound)
+	return dropBlockArgs(module, func: func, refByBlockId: refByBlockId, kept: useful)
+end 'pruneDeadBlockArgsInFunc'
+
+// One past the highest block-arg ValueId in `func` — the size of the dense flag columns
+// below — or 0 when the function has no block-args at all (a straight-line function, which
+// then skips the pass entirely). Sizing the columns by the BLOCK-ARG id space rather than
+// the function's whole value space is safe because `flagOf` reads false for any id above it,
+// and an id above it is by definition not a block-arg.
+//
+// Exported: `elimTrivialBlockArgs` sizes its own dense columns by exactly this space, for exactly
+// this reason. Two copies of "how big is the block-arg id space" would be two chances to size a
+// column wrong.
+export function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
+	var bound = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if arg.valueId + 1 > bound 'higher'
+				bound = arg.valueId + 1
+			end 'higher'
+		end 'eachArg'
+	end 'eachBlock'
+	return bound
+end 'blockArgIdBound'
+
+export function flagColumn(count ValueId) returns ValueFlagColumn
+	var col = ValueFlagColumn.create()
+	col.resize(count)
+	return col
+end 'flagColumn'
+
+export function setFlag(col ValueFlagColumn, v ValueId)
+	try col.set(v, value: true) otherwise panic("blockArgs: flag write for value {v} is outside the block-arg id space")
+end 'setFlag'
+
+// FALSE for any id outside the column: the columns are sized by the block-arg id space, and
+// an edge legitimately passes ids above it (an op result, a parameter). Such a value is not
+// a block-arg, which is exactly what a `false` here means.
+function flagOf(col ValueFlagColumn, v ValueId) returns bool
+	return try col.get(v) otherwise false
+end 'flagOf'
+
+// The positional (block-arg, incoming) pairs of EVERY branch edge in `func` — the phi model,
+// flattened into two parallel columns. `args[i]` names a block-arg; `incoming[i]` is the value some
+// predecessor passes to it. One entry per edge SLOT, so `blockArgs[k] ↔ edge.argIds[k]` is resolved
+// here, once, and nowhere else.
+//
+// BOTH block-arg passes need exactly this, and they need it in OPPOSITE directions —
+//   • `pruneDeadBlockArgs` reads arg → incoming ("what feeds this phi?"), and
+//   • `elimTrivialBlockArgs` reads that AND incoming → arg ("which phis must I re-examine now that
+//     THIS value has changed?"), which is what makes its worklist linear.
+// A CSR in either direction is one `buildCsr` call away from these columns, so the two passes share
+// the WALK and not the index. They used to share neither: each had written its own copy of it, and a
+// second copy of "how the edge slots line up with the block-args" is a second chance to mis-pair a
+// phi with someone else's value — the one mistake the positional model cannot survive.
+export type PhiOperandPairs
+	// `CsrColumn`s because the pairs are the edge list `buildCsr` reads; a read casts back to the value.
+	export var args as CsrColumn
+	export var incoming as CsrColumn
+
+	export static function create(args CsrColumn, incoming CsrColumn) returns PhiOperandPairs
+		return Self{args: args, incoming: incoming}
+	end 'create'
+
+	export function count() returns ValueId
+		return self.args.count()
+	end 'count'
+
+	export function argAt(i ValueId) returns ValueId
+		return try self.args.get(i) otherwise panic("PhiOperandPairs: args.get({i}) OOB against {self.args.count()} pair(s)")
+	end 'argAt'
+
+	export function incomingAt(i ValueId) returns ValueId
+		return try self.incoming.get(i) otherwise panic("PhiOperandPairs: incoming.get({i}) OOB against {self.incoming.count()} pair(s)")
+	end 'incomingAt'
+end 'PhiOperandPairs'
+
+// Collect them. One walk over every edge of every block, in O(edge slots).
+export function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
+	var args = CsrColumn.create()
+	var incoming = CsrColumn.create()
+
+	for blockRef in func.blockRefs 'eachPred'
+		let pred = try module.blocks.get(blockRef) otherwise panic("collectPhiOperands: blockRef from func.blockRefs not in module.blocks")
+		for edge in pred.branchEdges 'eachEdge'
+			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			for k in 0 upto target.blockArgs.count() 'eachSlot'
+				let arg = try target.blockArgs.get(k) otherwise panic("collectPhiOperands: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
+				args.push(arg.valueId)
+				incoming.push(incomingArgAt(edge, k: k, pred: pred, target: target))
+			end 'eachSlot'
+		end 'eachEdge'
+	end 'eachPred'
+
+	return PhiOperandPairs.create(args, incoming: incoming)
+end 'collectPhiOperands'
+
+// The value `edge` passes to its target's k-th block-arg. A count mismatch here is the
+// positional phi model being broken by whatever produced the edge — the parser's on-the-fly
+// SSA or a later pass — so it panics rather than silently mis-pairing a phi with someone
+// else's value.
+function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
+	return try edge.argIds.get(k) otherwise panic("blockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+end 'incomingArgAt'
+
+// BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space (ids are
+// function-local and minted 0..nextBlockId-1). The +1 lets a zero-filled column carry its own
+// "not in this function" sentinel — `IrModule.getBlockByIdIn` is a LINEAR scan of the
+// function's blocks, and calling it once per edge would be O(edges × blocks), the shape the
+// allocator's data-representation contract exists to forbid.
+//
+// Exported, and used by `elimTrivialBlockArgs` too: it is the same index over the same id space,
+// and two copies of it were two chances to resolve an edge onto the wrong block.
+export function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
+	var refByBlockId = ValueIdArray.create()
+	refByBlockId.resize(func.nextBlockId)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockIdIndex: blockRef from func.blockRefs not in module.blocks")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("buildBlockIdIndex: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+	end 'eachBlock'
+	return refByBlockId
+end 'buildBlockIdIndex'
+
+// `from` NAMES THE THING THAT CITED THE ID, and it is not always a predecessor block: the two
+// block-arg passes pass the branching block's label, `insertRangeChecks` passes the function whose
+// recorded guard site cites it. The message therefore says "names" rather than "branches to" — a
+// panic that asserts the wrong provenance sends its reader to the wrong pass.
+export function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("blockById: '{String.from(from)}' names block id {id}, outside its function's block-id space")
+	if refPlusOne == 0 'notInFunction'
+		panic("blockById: '{String.from(from)}' names block id {id}, which is not registered in the function")
+	end 'notInFunction'
+	return try module.blocks.get(refPlusOne - 1) otherwise panic("blockById: blockRef for block id {id} not in module.blocks")
+end 'blockById'
+
+// The least fixpoint of "useful": an OP-read block-arg is useful, and whatever an edge passes
+// to a useful block-arg is useful too. A worklist walk over the feeder CSR, so it is linear —
+// and a self-sustaining dead phi, whose ONLY use is the back edge that feeds it to itself,
+// never enters it.
+function computeUsefulBlockArgs(module StdModule, func IrFunction, isBlockArg ValueFlagColumn, feeders CsrGraph, bound ValueId) returns ValueFlagColumn
+	var opReads = StdValueUseSet.create()
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("pruneDeadBlockArgs: live op index {opIdx} not in module.ops")
+		collectStdOpUses(op, referenced: opReads)
+	end 'eachOp'
+
+	var useful = flagColumn(bound)
+	var worklist = ValueIdArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if opReads.contains(arg.valueId) 'read'
+				markUseful(arg.valueId, useful: useful, worklist: worklist)
+			end 'read'
+		end 'eachArg'
+	end 'eachBlock'
+
+	while worklist.count() > 0 'propagate'
+		let p = try worklist.pop() otherwise panic("pruneDeadBlockArgs: pop from a non-empty worklist")
+		for k in 0 upto feeders.degree(p as CsrIndex) 'eachFeeder'
+			let incoming = feeders.neighbour(p as CsrIndex, k: k)
+			// Only a block-arg can be pruned, so the walk stops at the first non-block-arg on
+			// every feeder chain — an op result or a parameter is already a real def.
+			if flagOf(isBlockArg, v: incoming as ValueId) and not flagOf(useful, v: incoming as ValueId) 'newlyUseful'
+				markUseful(incoming as ValueId, useful: useful, worklist: worklist)
+			end 'newlyUseful'
+		end 'eachFeeder'
+	end 'propagate'
+
+	return useful
+end 'computeUsefulBlockArgs'
+
+function markUseful(v ValueId, useful ValueFlagColumn, worklist ValueIdArray)
+	if flagOf(useful, v: v) 'already'
+		return
+	end 'already'
+	setFlag(useful, v: v)
+	worklist.push(v)
+end 'markUseful'
+
+// DELETE EVERY BLOCK-ARG `kept` DOES NOT MARK, TOGETHER WITH ITS SLOT IN EVERY INCOMING EDGE —
+// the one operation BOTH block-arg passes end in, and the one they may not each write for
+// themselves.
+//
+// Dropping slot `k` of a block means dropping `blockArgs[k]` AND slot `k` of every incoming edge's
+// `argIds`, or the positional `blockArgs[k] ↔ argIds[k]` correspondence the whole phi model rests on
+// is broken — and broken SILENTLY, by handing some phi another value's number. Two copies of that
+// discipline is two chances to break it, and a fix applied to one of them would not read as a bug at
+// the other: they differ only in WHICH block-args survive, never in HOW a survivor's slots are kept
+// in step.
+//
+// THE ORDER IS THE DISCIPLINE. The edges are rewritten FIRST, while every target still declares the
+// block-args its slots are aligned to; the block-arg lists are rebuilt only after every edge has
+// been read. Rebuilding a block's args before its predecessors' edges have been re-cut would leave
+// the edges aligned to a list that no longer exists.
+//
+// Returns the number dropped, which is the number of block-args `kept` left unmarked. Both callers
+// take their answer FROM here rather than counting alongside it, so "how many went" cannot disagree
+// with "how many are gone".
+export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
+	for blockRef in func.blockRefs 'eachPred'
+		var pred = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newEdges = BranchEdgeArray.create()
+		for edge in pred.branchEdges 'eachEdge'
+			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgIds(edge, pred: pred, target: target, kept: kept)))
+		end 'eachEdge'
+		pred.branchEdges = newEdges
+	end 'eachPred'
+
+	var removed = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newArgs = IrBlockArgArray.create()
+		for arg in block.blockArgs 'eachArg'
+			if flagOf(kept, v: arg.valueId) 'keep'
+				newArgs.push(arg)
+			end 'keep' else 'drop'
+				removed = removed + 1
+			end 'drop'
+		end 'eachArg'
+		block.blockArgs = newArgs
+	end 'eachBlock'
+
+	return removed
+end 'dropBlockArgs'
+
+// The values `edge` passes to the block-args its target KEEPS, in slot order — the edge side of the
+// same drop, and the reason it reads the TARGET's block-arg list rather than its own `argIds`: the
+// slot is what the two are aligned by.
+function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, kept ValueFlagColumn) returns ValueIdArray
+	var survivors = ValueIdArray.create()
+	for k in 0 upto target.blockArgs.count() 'eachSlot'
+		let arg = try target.blockArgs.get(k) otherwise panic("dropBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
+		let incoming = incomingArgAt(edge, k: k, pred: pred, target: target)
+		if flagOf(kept, v: arg.valueId) 'keep'
+			survivors.push(incoming)
+		end 'keep'
+	end 'eachSlot'
+	return survivors
+end 'keptArgIds'

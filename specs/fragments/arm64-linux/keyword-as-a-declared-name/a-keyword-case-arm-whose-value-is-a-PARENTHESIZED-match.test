@@ -1,0 +1,57 @@
+// Test: a-keyword-case-arm-whose-value-is-a-PARENTHESIZED-match
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	alpha
+end 'Kw'
+
+enum Pick
+	one
+	two
+end 'Pick'
+
+function classify(k Kw, p Pick) returns Integer
+	return match k 'outer'
+		function gives (match p 'inner'
+			one gives 40
+			two gives 2
+		end 'inner')
+		alpha gives 0
+	end 'outer'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Kw.function, p: Pick.one) + classify(Kw.function, p: Pick.two) + classify(Kw.alpha, p: Pick.one)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm#9:
+    arm64.movImm x0, 40
+  matcharm#21:
+    arm64.movImm x1, 2
+  __il_cont#5:
+    arm64.add x0, x0, x1
+  matcharm#36:
+    arm64.movImm x1, 0
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-keyword-case-arm-whose-value-is-a-PARENTHESIZED-match.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

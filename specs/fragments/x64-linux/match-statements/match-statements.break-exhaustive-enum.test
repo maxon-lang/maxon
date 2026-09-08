@@ -1,0 +1,110 @@
+// Test: match-statements.break-exhaustive-enum
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+	var result = 0
+	match c 'check'
+		empty then break 'check'
+		value(n) then result = n
+	end 'check'
+	return result
+end 'process'
+
+function main() returns ExitCode
+	let a = process(Container.empty)
+	let b = process(Container.value(42))
+	if a == 0 and b == 42 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont#6
+  matchnext#12:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#11
+  matcharm#10:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+  __il_cont#6:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r12, 42
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+  __il_body#14:
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont#5
+  matchnext#19:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead#18
+  matcharm#17:
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+  __il_cont#5:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.cmpRegImm32 r12, 42
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#18:
+  matchdead#11:
+  afterbreak#9:
+  afterbreak#16:
+}

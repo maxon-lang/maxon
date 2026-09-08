@@ -1,0 +1,90 @@
+// Test: match-statements.try-otherwise-stmt
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then try leaf() otherwise return 7
+		default panic("unreachable")
+	end 'k'
+	return 99
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+	return dispatch(1)
+end 'main'
+---
+ExitCode: 7
+---
+func @leaf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @dispatch {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at match-statements.try-otherwise-stmt.test:10: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdefault
+  matcharm:
+    x64.callDirect leaf
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, matchcont
+  tryerr:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdefault:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at match-statements.try-otherwise-stmt.test:13: unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect dispatch
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

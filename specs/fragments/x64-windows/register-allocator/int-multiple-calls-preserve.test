@@ -1,0 +1,50 @@
+// Test: int-multiple-calls-preserve
+
+typealias Integer = int(i64.min to i64.max)
+
+function getTen() returns Integer
+	return 10
+end 'getTen'
+
+function getTwo() returns Integer
+	return 2
+end 'getTwo'
+
+function main() returns ExitCode
+	let a = 5
+	let b = getTen()
+	let c = 7
+	let d = getTwo()
+	return a + b + c + d
+end 'main'
+---
+ExitCode: 24
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 5
+  __il_cont:
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.leaRegRegImm32 r8, rax, 2
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at int-multiple-calls-preserve.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

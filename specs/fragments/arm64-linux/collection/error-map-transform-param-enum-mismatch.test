@@ -1,0 +1,33 @@
+// Test: error-map-transform-param-enum-mismatch
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorArray = Array with Color
+
+function bad(s Shade) returns Color
+	match s 'k'
+		dark then print("saw dark\n")
+		light then print("saw light\n")
+	end 'k'
+	return Color.red
+end 'bad'
+
+function main() returns ExitCode
+	var a = ColorArray.create()
+	a.push(Color.blue)
+	let b = a.map(bad)
+	print("n={b.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:27:12: argument type mismatch for 'transform': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'

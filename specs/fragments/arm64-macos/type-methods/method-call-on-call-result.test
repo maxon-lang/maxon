@@ -1,0 +1,86 @@
+// Test: method-call-on-call-result
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(3)
+	let b = Value.create(5)
+	match a.get().compare(b.get()) 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 3
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 5
+    arm64.leaRegSlot x2, slot1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
+  __il_body#13:
+    arm64.cmp x0, x1
+    arm64.b.ge ifcont#15
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#15:
+    arm64.cmp x0, x1
+    arm64.b.le ifcont#17
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#17:
+    arm64.movImm x0, 1
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#5
+  matcharm#1:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  matchnext#5:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#6
+  matcharm#2:
+    arm64.movImm x0, 1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext#6:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead
+  matcharm#3:
+    arm64.movImm x0, 2
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  matchcont:
+}

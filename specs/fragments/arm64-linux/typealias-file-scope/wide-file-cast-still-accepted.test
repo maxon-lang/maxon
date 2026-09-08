@@ -1,0 +1,46 @@
+// Test: wide-file-cast-still-accepted
+// --- file: narrow.maxon
+typealias Unit = int(1 to 2)
+
+export function unitVal() returns ExitCode
+	let u = 2 as Unit
+	return u
+end 'unitVal'
+
+// --- file: wide.maxon
+typealias Unit = int(0 to u64.max)
+
+export function wideVal() returns ExitCode
+	let w = 40 as Unit
+	return w
+end 'wideVal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return unitVal() + wideVal()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 40
+  __il_cont:
+    arm64.add x0, x0, 2
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

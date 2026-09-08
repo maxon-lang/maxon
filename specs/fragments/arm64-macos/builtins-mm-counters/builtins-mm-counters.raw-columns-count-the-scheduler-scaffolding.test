@@ -1,0 +1,193 @@
+// Test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding
+function work(n ExitCode) returns ExitCode
+	__Builtins.parallelBoundary()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	let before = __Builtins.mmRawAllocTotal()
+	let bytesBefore = __Builtins.mmRawAllocBytes()
+	let p = async work(1)
+	let a = await p
+	let after = __Builtins.mmRawAllocTotal()
+	let bytesAfter = __Builtins.mmRawAllocBytes()
+	var score = a
+	if before == 0 'nothingRawBeforeTheScheduler'
+		score = score + 1
+	end 'nothingRawBeforeTheScheduler'
+	if after > before 'theSchedulerAllocatedRaw'
+		score = score + 2
+	end 'theSchedulerAllocatedRaw'
+	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
+		score = score + 3
+	end 'bytesAreBytesNotACount'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_timer_seq@96 = i64 0
+  __gt_trace_counter@104 = i64 0
+  __gt_proc_count@112 = i64 0
+  __gt_proc_handles_base@120 = i64 0
+  __gt_proc_gts_base@128 = i64 0
+  __gt_proc_wait_snapshot@136 = i64 0
+  __gt_proc_poller@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __sched_progress@160 = i64 0
+  __sched_active_workers@168 = i64 1
+  __sched_max_active_workers@176 = i64 1
+  __sched_tls_index@184 = i64 0
+  __sched_tls_teb_offset@192 = i64 0
+  __sched_procs@200 = i64 0
+  __sched_allm@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __sched_num_procs@232 = i64 0
+  __sched_shutdown_flag@240 = i64 0
+  __sched_lock@248 = i64 0
+  __sched_nmspinning@256 = i64 0
+  __sched_parked_drivers@264 = i64 0
+  __sched_sysmon_started@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @work {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.bl __parallel_boundary
+    arm64.add x0, x19, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#4:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mm_counter_raw_alloc_total
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_raw_alloc_bytes
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 1
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 200], x21
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_await
+    arm64.movRegReg x21, x0
+    arm64.bl __mm_counter_raw_alloc_total
+    arm64.movRegReg x22, x0
+    arm64.bl __mm_counter_raw_alloc_bytes
+    arm64.cmp x19, 0
+    arm64.b.ne critsplit#13
+  nothingRawBeforeTheScheduler:
+    arm64.add x1, x21, 1
+    arm64.b ifcont#2
+  critsplit#13:
+    arm64.movRegReg x1, x21
+  ifcont#2:
+    arm64.cmp x22, x19
+    arm64.b.le ifcont#4
+  theSchedulerAllocatedRaw:
+    arm64.add x1, x1, 2
+  ifcont#4:
+    arm64.sub x0, x0, x20
+    arm64.sub x2, x22, x19
+    arm64.cmp x0, x2
+    arm64.b.le critsplit#15
+  bytesAreBytesNotACount:
+    arm64.add x0, x1, 3
+    arm64.b ifcont#6
+  critsplit#15:
+    arm64.movRegReg x0, x1
+  ifcont#6:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#7:
+    arm64.cbnz x1, __rc_panic#11
+  __rc_chk#12:
+    arm64.cbz x2, __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#10:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

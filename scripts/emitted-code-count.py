@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""emitted-code-count.py - count the compiler's emitted-code defects on a fixed corpus.
+
+The companion instrument to scripts/self-host-ab.sh, and a different question.
+self-host-ab.sh asks "how fast is the code the compiler emits" and takes ~15 minutes;
+this asks "how much of what it emits is known debris" and takes ~10 seconds, so
+it can be run after every edit rather than once per rung.
+
+⚠⚠ THE UNIT CHANGED ON 2026-08-29 AND NUMBERS DO NOT COMPARE ACROSS IT.
+Upstream's "a fragment renders the PROGRAM, and the LIBRARY is not the program"
+made --emit-ir write only the USER's functions; before it, the stdlib and runtime
+bodies came too. Same tree, same compiler, nbody read 8,587 ops before and 837
+after -- that is the instrument's unit changing, not codegen improving. Every
+figure in docs/emitted-code-roadmap.md dated before 2026-08-29, and every one in
+the EC11..EC18 commit messages, is on the OLD unit. Library bodies are opt-in by
+name now (--emit-ir-runtime=<a>,<b>), so a row whose subject lives in the stdlib
+-- refcount traffic in container methods, for one -- cannot be sized from this
+corpus at all and belongs on the self-compile.
+
+It compiles a fixed corpus with --emit-ir and counts, per program:
+
+  ops             total x64.* ops emitted
+  jmp             unconditional jumps
+  jmp->next       jumps whose target is the PHYSICALLY NEXT block: pure debris,
+                  every one a taken branch (docs/emitted-code-roadmap.md, EC11)
+  jmponly-blocks  blocks whose only op is an unconditional jump (EC11)
+  imul-imm        multiplies by an immediate ...
+  imul-pow2       ... of which by a power of two (EC16 folds these into an
+                  addressing mode; EC18 turns the rest into shifts)
+  idiv            integer divides - BOTH `idivReg` (signed) and `divReg` (unsigned),
+                  which are one instruction pair with one cost. 20-40 cycles each,
+                  and EC18 replaces every one whose divisor is a compile-time
+                  constant with a multiply-and-shift sequence
+  call-direct     every emitted `callDirect` - the column the two inlining
+                  passes are graded on, since a call they discharge is one
+                  frame, one argument shuffle and one `ret` the program does
+                  not run (EC5, EC17)
+  mgd-call        calls to a `__managed_*` runtime element primitive - the slow
+                  arms `inlineManagedPrimitives` could not discharge, plus every
+                  site it does not expand (EC15)
+  im-blocks       blocks labelled `__im_*`: the scaffolding one inlined element
+                  access costs, in blocks. EC15 removes the stride fork and one
+                  of the two width arms wherever the element type fixes the
+                  stride, so this falls where `mgd-call` does (EC1, EC15)
+
+Every column is EXACT and reproducible - it counts instructions in a text dump,
+not time - so ANY movement is real and owes an explanation. There is no verdict
+and nothing to pass; read the numbers.
+
+Usage:  python scripts/emitted-code-count.py [--json] [corpus.maxon ...]
+Default corpus: examples/nbody.maxon, examples/fannkuch-redux.maxon, and the
+probe programs under temp/codegen-probe/ when they exist (their sources are
+reproduced in docs/emitted-code-roadmap.md, since temp/ is scratch).
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+THE COMPILER = os.path.join(REPO, "maxon-bin", ".maxon",
+                    "maxon.exe" if os.name == "nt" else "maxon-bin")
+
+JMP = re.compile(r"x64\.jmp\s+(\S+)$")
+LABEL = re.compile(r"(\S+):$")
+IMUL_IMM = re.compile(r"x64\.imulRegRegImm32 [^,]+, [^,]+, (-?\d+)")
+# ONE pattern for both call columns: `mgd-call` is a SUBSET of `call-direct`, so a
+# second regex over the same instruction would be the same fact matched twice.
+CALL_DIRECT = re.compile(r"x64\.callDirect (\S+)$")
+MANAGED_CALLEE_PREFIX = "__managed_"
+
+
+def next_code_line(lines, i):
+    """Index of the next non-blank line after i, or None."""
+    j = i + 1
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    return j if j < len(lines) else None
+
+
+def count(ir_text):
+    lines = ir_text.splitlines()
+    c = {k: 0 for k in ("ops", "jmp", "jmp->next", "jmponly-blocks",
+                        "imul-imm", "imul-pow2", "idiv", "call-direct",
+                        "mgd-call", "im-blocks", "mov")}
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if s.startswith("x64."):
+            c["ops"] += 1
+        # BOTH group-3 divides, and the column name is the SIGNED one only because that is the
+        # commoner form: `idivReg` and `divReg` are one instruction pair with one cost, and counting
+        # only the signed half under-reported this corpus by 10 divides (all five of nbody's and all
+        # five of fmt.maxon's unsigned divides) for as long as the column existed. Widened at EC18.
+        if s.startswith(("x64.idivReg", "x64.divReg")):
+            c["idiv"] += 1
+        # Register-to-register copies. Coalescing's target: 17% of nbody's ops
+        # at ff12c05666, and none of them is a self-move (those are already gone).
+        if s.startswith("x64.movRegReg"):
+            c["mov"] += 1
+        m = CALL_DIRECT.match(s)
+        if m:
+            c["call-direct"] += 1
+            if m.group(1).startswith(MANAGED_CALLEE_PREFIX):
+                c["mgd-call"] += 1
+
+        m = IMUL_IMM.match(s)
+        if m:
+            c["imul-imm"] += 1
+            v = int(m.group(1))
+            if v > 0 and (v & (v - 1)) == 0:
+                c["imul-pow2"] += 1
+
+        m = JMP.match(s)
+        if m:
+            c["jmp"] += 1
+            j = next_code_line(lines, i)
+            if j is not None:
+                lab = LABEL.match(lines[j].strip())
+                if lab and lab.group(1) == m.group(1):
+                    c["jmp->next"] += 1
+
+        # A block whose only op is an unconditional jump: a label line whose
+        # next code line is a jmp. Label lines are indented and end in ':'.
+        if raw.startswith((" ", "\t")) and LABEL.match(s) and not s.startswith("x64."):
+            if s.startswith("__im_"):
+                c["im-blocks"] += 1
+            j = next_code_line(lines, i)
+            if j is not None and JMP.match(lines[j].strip()):
+                c["jmponly-blocks"] += 1
+    return c
+
+
+def emit_ir(src, workdir):
+    """Compile src with --emit-ir into workdir; return the .ir text."""
+    base = os.path.splitext(os.path.basename(src))[0]
+    dst = os.path.join(workdir, os.path.basename(src))
+    if os.path.abspath(src) != os.path.abspath(dst):
+        with open(src, "rb") as fh:
+            data = fh.read()
+        with open(dst, "wb") as fh:
+            fh.write(data)
+    r = subprocess.run([THE COMPILER, "build", os.path.basename(src), "--emit-ir"],
+                       cwd=workdir, capture_output=True, text=True)
+    ir = os.path.join(workdir, base + ".ir")
+    if r.returncode != 0 or not os.path.exists(ir):
+        tail = (r.stdout + r.stderr).strip().splitlines()
+        raise SystemExit("FAILED to compile {}: {}".format(
+            src, tail[-1] if tail else "no .ir produced"))
+    with open(ir, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--json"]
+    as_json = "--json" in sys.argv[1:]
+
+    corpus = args or [p for p in (
+        os.path.join(REPO, "examples", "nbody.maxon"),
+        os.path.join(REPO, "examples", "fannkuch-redux.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "arr.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "cse2.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "cse3.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "probe.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "leaf.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "fmt.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "ec7.maxon"),
+        os.path.join(REPO, "temp", "codegen-probe", "guard.maxon"),
+    ) if os.path.exists(p)]
+
+    if not os.path.exists(THE COMPILER):
+        raise SystemExit("no the compiler binary at {} - build it first".format(THE COMPILER))
+
+    workdir = os.path.join(REPO, "temp", "emitted-code-count")
+    os.makedirs(workdir, exist_ok=True)
+
+    cols = ["ops", "jmp", "jmp->next", "jmponly-blocks",
+            "imul-imm", "imul-pow2", "idiv", "call-direct", "mgd-call",
+            "im-blocks", "mov"]
+    rows, totals = [], {k: 0 for k in cols}
+    for src in corpus:
+        c = count(emit_ir(src, workdir))
+        rows.append((os.path.basename(src), c))
+        for k in cols:
+            totals[k] += c[k]
+
+    if as_json:
+        print(json.dumps({"programs": {n: c for n, c in rows},
+                          "total": totals}, indent=2))
+        return
+
+    width = max([len(n) for n, _ in rows] + [len("TOTAL")])
+    # Each column is as wide as its header or its widest value, whichever is
+    # larger - the header is not always the longest thing in it ("ops"/10389).
+    cw = {k: max([len(k), len(str(totals[k]))]
+                 + [len(str(c[k])) for _, c in rows]) for k in cols}
+
+    def line(label, cell):
+        return "{:<{w}}  {}".format(label, "  ".join(
+            "{:>{c}}".format(cell(k), c=cw[k]) for k in cols), w=width)
+
+    print(line("program", lambda k: k))
+    for name, c in rows:
+        print(line(name, lambda k, c=c: c[k]))
+    print(line("TOTAL", lambda k: totals[k]))
+
+
+if __name__ == "__main__":
+    main()

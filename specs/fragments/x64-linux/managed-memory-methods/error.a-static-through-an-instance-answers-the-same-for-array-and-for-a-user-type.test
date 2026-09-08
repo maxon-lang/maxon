@@ -1,0 +1,24 @@
+// Test: error.a-static-through-an-instance-answers-the-same-for-array-and-for-a-user-type
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type P
+	export var x as Int
+
+	static function make() returns Self
+		return Self{x: 1}
+	end 'make'
+end 'P'
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	_ = arr.create()
+	var p = P.make()
+	_ = p.make()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3036: <fragment>:16:10: 'Array.create' expects 0 argument(s) but 1 were provided
+error E3036: <fragment>:18:8: 'P.make' expects 0 argument(s) but 1 were provided

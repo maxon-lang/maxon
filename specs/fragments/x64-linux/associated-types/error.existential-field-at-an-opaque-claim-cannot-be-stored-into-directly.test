@@ -1,0 +1,46 @@
+// Test: error.existential-field-at-an-opaque-claim-cannot-be-stored-into-directly
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let t as TakerOfT
+
+	export function run() returns Integer
+		return self.t.label()
+	end 'run'
+
+	static function make() returns Self
+		return Self{t: Runner.create(31)}
+	end 'make'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.make().run() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:35:15: Unsupported: storing a value of a CONCRETE type into the interface-typed field 'Box.t' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type

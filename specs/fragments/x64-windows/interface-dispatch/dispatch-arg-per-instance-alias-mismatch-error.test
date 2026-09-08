@@ -1,0 +1,52 @@
+// Test: dispatch-arg-per-instance-alias-mismatch-error
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to 15)
+	export var v as T
+
+	export static function create(v T) returns Pool
+		return Self{v: v}
+	end 'create'
+end 'Pool'
+
+typealias IntPool = Pool with Integer
+
+interface Taker
+	function take(i IntPool.Idx) returns Integer
+end 'Taker'
+
+type Impl implements Taker
+	let base as Integer
+
+	function take(i IntPool.Idx) returns Integer
+		return base + (i as Integer)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Impl'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function go(n Integer) returns Integer
+		return self.item.take(n)
+	end 'go'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias ImplBox = Box with Impl
+
+function main() returns ExitCode
+	print("v={ImplBox.create(Impl.create(20)).go(9999)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:36:20: argument type mismatch for 'i': expected 'IntPool.Idx', got 'int'

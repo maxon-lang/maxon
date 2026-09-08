@@ -1,0 +1,198 @@
+// Test: slice-cow-modify-original
+function main() returns ExitCode
+	var arr = [10, 20, 30, 40, 50]
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
+	// Slice should be unchanged
+	let sliceVal = try sub.get(0) otherwise 0
+	let origVal = try arr.get(1) otherwise 0
+	if sliceVal == 20 'check'
+		if origVal == 99 'check2'
+			return 0
+		end 'check2'
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movImm x1, 1
+    arm64.movImm x2, 4
+    arm64.leaRdata x3, __layout_Array_int
+    arm64.movRegReg x0, x19
+    arm64.bl Array.slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 99
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow#16
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#16
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#16
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#16
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_store
+  __im_slow#16:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.b __im_cont#15
+  __im_store:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+  __im_cont#15:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at slice-cow-modify-original.test:5: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#23
+  __im_load#24:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#30
+  __im_empty#25:
+    arm64.cmp x0, 0
+    arm64.b.ne critsplit#31
+  __im_slow#23:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.b __im_cont#22
+  critsplit#31:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#22
+  critsplit#30:
+    arm64.movRegReg x9, x2
+  __im_cont#22:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x21, 0
+    arm64.b trycont#7
+  tryok#5:
+    arm64.movRegReg x21, x0
+  trycont#7:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#27
+  __im_load#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#32
+  __im_empty#29:
+    arm64.cmp x0, 0
+    arm64.b.ne critsplit#33
+  __im_slow#27:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#26
+  critsplit#33:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#26
+  critsplit#32:
+    arm64.movRegReg x9, x2
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#10
+  tryerr#9:
+    arm64.movImm x0, 0
+  trycont#10:
+    arm64.cmp x21, 20
+    arm64.b.ne ifcont
+  check:
+    arm64.cmp x0, 99
+    arm64.b.ne ifcont
+  check2:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

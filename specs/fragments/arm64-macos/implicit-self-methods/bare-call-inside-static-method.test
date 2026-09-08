@@ -1,0 +1,52 @@
+// Test: bare-call-inside-static-method
+
+typealias Integer = int(i64.min to i64.max)
+
+type Maker
+	export var n as Integer
+
+	static function mk() returns Integer
+		return 7
+	end 'mk'
+
+	static function build() returns Integer
+		return mk() + 1
+	end 'build'
+end 'Maker'
+
+function main() returns ExitCode
+	return Maker.build()
+end 'main'
+---
+ExitCode: 8
+---
+func @Maker.build {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 7
+  __il_cont:
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl Maker.build
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at bare-call-inside-static-method.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,137 @@
+/// A set of characters for use with string trimming and character classification.
+/// @category Text
+///
+/// Predefined sets are available via static methods, matching Swift's CharacterSet:
+///   CharacterSet.whitespaces()             - Unicode whitespace (Zs category + HT)
+///   CharacterSet.whitespacesAndNewlines()  - All Unicode whitespace including newlines
+///   CharacterSet.newlines()                - Newline characters (Zl, Zp + control newlines)
+///   CharacterSet.decimalDigits()           - Unicode decimal digits (Nd category)
+///   CharacterSet.letters()                 - Unicode letters and marks (L*, M* categories)
+///   CharacterSet.lowercaseLetters()        - Unicode lowercase letters (Ll category)
+///   CharacterSet.uppercaseLetters()        - Unicode uppercase/titlecase (Lu, Lt categories)
+///   CharacterSet.alphanumerics()           - Unicode letters, marks, and numbers
+///   CharacterSet.punctuation()             - Unicode punctuation (P* categories)
+///   CharacterSet.symbols()                 - Unicode symbols (S* categories)
+///   CharacterSet.controlCharacters()       - Unicode control/format (Cc, Cf categories)
+///
+/// Custom sets can be created from a set of characters:
+///   CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])
+typealias CharSet = Set with Character
+typealias CategoryBitmask = int(0 to 1073741822)
+
+public type CharacterSet
+	let chars as CharSet
+	let categoryMask as CategoryBitmask
+
+	// Built-in sets: 'chars' holds extra characters not covered by category bitmask,
+	// 'categoryMask' holds OR'd bitmask of Unicode General Category codes.
+	// For custom sets, 'categoryMask' is 0 and 'chars' holds all characters.
+
+	// Whitespace: Zs category + HT (U+0009)
+	static let cachedWhitespaces = CharacterSet{chars: CharSet from ['\t'], categoryMask: 8388608}
+
+	// Newlines: Zl|Zp categories + LF, CR, CRLF, VT, FF, NEL
+	static let cachedNewlines = CharacterSet{chars: CharSet from ['\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], categoryMask: 50331648}
+
+	// Whitespace + Newlines: Zs|Zl|Zp categories + HT, LF, CR, CRLF, VT, FF, NEL
+	static let cachedWhitespacesAndNewlines = CharacterSet{chars: CharSet from ['\t', '\n', '\r', '\r\n', '\x0B', '\x0C', '\u0085'], categoryMask: 58720256}
+
+	// Decimal digits: Nd category
+	static let cachedDecimalDigits = CharacterSet{chars: CharSet from ['0'], categoryMask: 512}
+
+	// Lowercase letters: Ll category
+	static let cachedLowercaseLetters = CharacterSet{chars: CharSet from ['a'], categoryMask: 4}
+
+	// Uppercase letters: Lu|Lt categories
+	static let cachedUppercaseLetters = CharacterSet{chars: CharSet from ['A'], categoryMask: 10}
+
+	// Letters: Lu|Ll|Lt|Lm|Lo|Mn|Mc|Me categories
+	static let cachedLetters = CharacterSet{chars: CharSet from ['a'], categoryMask: 510}
+
+	// Alphanumerics: Lu|Ll|Lt|Lm|Lo|Mn|Mc|Me|Nd|Nl|No categories
+	static let cachedAlphanumerics = CharacterSet{chars: CharSet from ['a'], categoryMask: 4094}
+
+	// Punctuation: Pc|Pd|Pe|Pf|Pi|Po|Ps categories
+	static let cachedPunctuation = CharacterSet{chars: CharSet from ['!'], categoryMask: 520192}
+
+	// Symbols: Sc|Sk|Sm|So categories
+	static let cachedSymbols = CharacterSet{chars: CharSet from ['$'], categoryMask: 7864320}
+
+	// Control characters: Cc|Cf categories
+	static let cachedControlCharacters = CharacterSet{chars: CharSet from ['\x00'], categoryMask: 201326592}
+
+	/// Space and tab characters (no newlines)
+	public static function whitespaces() returns CharacterSet
+		return CharacterSet.cachedWhitespaces
+	end 'whitespaces'
+
+	/// Newline characters (LF, CR, CRLF, VT, FF, NEL, LS, PS)
+	public static function newlines() returns CharacterSet
+		return CharacterSet.cachedNewlines
+	end 'newlines'
+
+	/// All whitespace and newline characters
+	public static function whitespacesAndNewlines() returns CharacterSet
+		return CharacterSet.cachedWhitespacesAndNewlines
+	end 'whitespacesAndNewlines'
+
+	/// Unicode decimal digits (Nd category)
+	public static function decimalDigits() returns CharacterSet
+		return CharacterSet.cachedDecimalDigits
+	end 'decimalDigits'
+
+	/// Unicode lowercase letters (Ll category)
+	public static function lowercaseLetters() returns CharacterSet
+		return CharacterSet.cachedLowercaseLetters
+	end 'lowercaseLetters'
+
+	/// Unicode uppercase and titlecase letters (Lu, Lt categories)
+	public static function uppercaseLetters() returns CharacterSet
+		return CharacterSet.cachedUppercaseLetters
+	end 'uppercaseLetters'
+
+	/// Unicode letters and marks (L*, M* categories)
+	public static function letters() returns CharacterSet
+		return CharacterSet.cachedLetters
+	end 'letters'
+
+	/// Unicode letters, marks, and numbers
+	public static function alphanumerics() returns CharacterSet
+		return CharacterSet.cachedAlphanumerics
+	end 'alphanumerics'
+
+	/// Unicode punctuation (P* categories)
+	public static function punctuation() returns CharacterSet
+		return CharacterSet.cachedPunctuation
+	end 'punctuation'
+
+	/// Unicode symbols (S* categories)
+	public static function symbols() returns CharacterSet
+		return CharacterSet.cachedSymbols
+	end 'symbols'
+
+	/// Unicode control and format characters (Cc, Cf categories)
+	public static function controlCharacters() returns CharacterSet
+		return CharacterSet.cachedControlCharacters
+	end 'controlCharacters'
+
+	/// Create a custom character set from a set of characters.
+	public static function from (chars CharSet) returns CharacterSet
+		return CharacterSet{chars: chars, categoryMask: 0}
+	end 'from'
+
+	/// Returns true if the given character is in this set.
+	public function contains(c Character) returns bool
+		if chars.contains(c) 'exact'
+			return true
+		end 'exact'
+		if categoryMask != 0 'category'
+			let cat = unicodeGeneralCategory(c.codepoint())
+			let bit = (categoryMask shr cat) and 1
+			if bit == 1 'match'
+				return true
+			end 'match'
+		end 'category'
+		return false
+	end 'contains'
+end 'CharacterSet'

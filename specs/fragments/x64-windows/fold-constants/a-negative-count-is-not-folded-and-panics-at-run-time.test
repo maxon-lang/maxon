@@ -1,0 +1,73 @@
+// Test: a-negative-count-is-not-folded-and-panics-at-run-time
+typealias Word = int(i64.min to i64.max)
+
+function shiftLeft(v Word, n Word) returns Word
+	return v shl n
+end 'shiftLeft'
+
+function main() returns ExitCode
+	return shiftLeft(1, n: -1) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+func @shiftLeft {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, shiftok
+  shiftneg:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-negative-count-is-not-folded-and-panics-at-run-time.test:5: negative shift count\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  shiftok:
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.sarRegImm8 rsi, rsi, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm rdx, 18446744073709551615
+  __il_slow:
+    x64.callDirect shiftLeft
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-negative-count-is-not-folded-and-panics-at-run-time.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

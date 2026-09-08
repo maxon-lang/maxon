@@ -1,0 +1,203 @@
+// Test: top-level-var-array-literal
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 52
+---
+data {
+  __data_items@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_items
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 12
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#16
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __im_slow#16
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc belowEqual, __im_slow#16
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_slow#16
+  __im_viewed:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_store
+  __im_slow#16:
+    x64.callDirect __managed_set
+    x64.jmp __im_cont#15
+  __im_store:
+    x64.leaRegRegImm32 rcx, rsi, 8
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.movRegReg r10, rax
+  __im_cont#15:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at top-level-var-array-literal.test:5: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.leaRegGlobal rax, __data_items
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#34
+  __im_empty#25:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#35
+  __im_slow#23:
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#22
+  critsplit#35:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+    x64.jmp __im_cont#22
+  critsplit#34:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+  __im_cont#22:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont#5
+  tryok#3:
+    x64.movRegReg rbx, r8
+  trycont#5:
+    x64.leaRegGlobal rax, __data_items
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#27
+  __im_load#28:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#36
+  __im_empty#29:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#37
+  __im_slow#27:
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#26
+  critsplit#37:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+    x64.jmp __im_cont#26
+  critsplit#36:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#6
+  tryerr#7:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#8
+  tryok#6:
+    x64.movRegReg r12, r8
+  trycont#8:
+    x64.leaRegGlobal rax, __data_items
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 2
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 2
+    x64.jcc belowEqual, __im_slow#31
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 16
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#38
+  __im_empty#33:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#39
+  __im_slow#31:
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#30
+  critsplit#39:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+    x64.jmp __im_cont#30
+  critsplit#38:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rsi
+  __im_cont#30:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#11
+  tryok#9:
+    x64.movRegReg rax, r8
+  trycont#11:
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at top-level-var-array-literal.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

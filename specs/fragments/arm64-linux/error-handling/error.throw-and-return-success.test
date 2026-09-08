@@ -1,0 +1,29 @@
+// Test: error.throw-and-return-success
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test that throwing function can return success value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+	if shouldFail 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

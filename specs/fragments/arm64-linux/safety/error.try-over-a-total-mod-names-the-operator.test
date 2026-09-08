@@ -1,0 +1,15 @@
+// Test: error.try-over-a-total-mod-names-the-operator
+typealias Integer = int(i64.min to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let n = ident(i64.min)
+	let r = try (n mod -1) otherwise 5
+	return r as ExitCode
+end 'main'
+---
+CompilerError:
+error E3055: <fragment>:10:10: try requires a throwing function: this `mod` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch

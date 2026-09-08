@@ -1,0 +1,218 @@
+// Shared IR identifier types used across all dialect phases.
+//
+// ValueId: unique identifier for a value produced by an IR op. Function-local
+// and dense, allocated from a per-function counter. Minted by the PARSER (every
+// Maxon op's result gets one at emit time) and passed through verbatim by
+// `lowerMaxonToStd` — the Maxon, Std, and Target tiers all name values the same
+// way. ValueIds 0..paramCount-1 are reserved for parameters by Std-ABI
+// convention, so each function's counter is seeded at `paramCount`.
+//
+// The Maxon tier deliberately does NOT identify values by source-name slices:
+// its result names were only ever synthetic `$tN` counters, so routing them
+// through a heap String + ByteArray and a byte-keyed map bought a second dense
+// counter and nothing else. (User *variables* are `VarSlot`s, not values, and
+// real SSA construction is `mem2reg`'s job at the Std tier.) Identifier TEXT
+// that is not a value — a field name, a method name — stays a `ByteArray`.
+//
+// VarSlot: unique identifier for a local variable slot (stack slot) within a function.
+// BlockId: stable identifier for a basic block within a function; preserved
+// across phase lowerings so terminators can name the same target block.
+// ParamCount: the number of parameters a function takes.
+// StdTypeArray: array of StdType (function parameter/return type lists).
+
+export typealias ValueId = int(0 to u64.max)
+
+// Dense value-operand list — call arguments, enum payloads, match bindings, and
+// the block-arg lists on `BranchEdge`. A flat i64 array, NOT an array of heap
+// name objects: that is the whole point of minting ValueIds in the parser.
+export typealias ValueIdArray = Array with ValueId
+export typealias VarSlot = int(0 to u64.max)
+export typealias BlockId = int(0 to u64.max)
+export typealias BlockIdArray = Array with BlockId
+
+export typealias BlockIdSet = Set with BlockId
+
+// ⭐ **ONE PARSER MARK OVER ONE FUNCTION'S SSA VALUES — a set of the values that carry it.** The marks
+// that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's
+// slot, P1.7 slice 2b), `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the
+// `Array` around it, R4.4), `Parser.unsignedMaxLiterals` and `Parser.writtenNegativeLiterals` (the two
+// halves of what a bit-63-set constant's 64 bits cannot say); each field's own header says what its mark
+// DECIDES and why a set rather than a list.
+//
+// ⭐ **ONE ALIAS RATHER THAN ONE PER MARK, BECAUSE THE PURPOSE IS THE SHARED ONE (review, R4.4).** What a
+// name has to describe here is the shape every mark column is written against — `ValueMarkColumn` below is
+// one type for the same reason. The per-mark purpose is carried by the FIELD name, which is where it varies.
+//
+// ⚠ **IT LIVES BESIDE `ValueId` RATHER THAN IN THE PARSER BECAUSE ONE OF THESE MARKS CROSSES THE TIER
+// BOUNDARY.** `writtenNegativeLiterals` is read by `InsertRangeChecks` at the Std tier, so it rides
+// `FunctionRangeChecks` (`Project.maxon`) — and a type three files must name is not the parser's to hold.
+export typealias ValueMarkSet = Set with ValueId
+
+// ⭐⭐ **"THIS FUNCTION MARKED NOTHING" AS A SPELLED STATE, ONE COLUMN TYPE FOR EVERY PER-VALUE MARK.** A
+// shared empty `ValueMarkSet` cannot carry it: a module-level `let` container is IMAGE DATA, so a
+// construction literal seeded from one holds a private DEEP COPY, and a test asking whether a field holds
+// the shared record answers false whatever it was seeded with.
+//
+// ⚠ **IT LIVES BESIDE `ValueMarkSet` FOR THAT ALIAS'S OWN REASON**: `writtenNegativeLiterals` crosses the
+// tier boundary on `FunctionRangeChecks` and is read by `InsertRangeChecks`, so a type three files must
+// name is not the parser's to hold.
+export union ValueMarkColumn
+	unwritten
+	entries(marked ValueMarkSet)
+end 'ValueMarkColumn'
+
+export let noValueMarks = ValueMarkColumn.unwritten
+
+// ⭐ **THE INSTALL, ONCE FOR EVERY MARK COLUMN.** Ten fields hold one of these and differ only in which
+// field that is, which Maxon cannot abstract over — so the two halves a write needs are written here and
+// each field's door is the two lines that spend them. `unwritten` is a state the caller REPLACES, so the
+// install ANSWERS the column rather than writing through it.
+export function installedValueMarks(column ValueMarkColumn) returns ValueMarkColumn
+	match column 'state'
+		unwritten then break 'state'
+		entries then return column
+	end 'state'
+
+	return ValueMarkColumn.entries(ValueMarkSet.create())
+end 'installedValueMarks'
+
+// The set an installed column holds. The refusal is an invariant break rather than a reachable case: every
+// caller stores `installedValueMarks`' answer first.
+export function markSetOf(column ValueMarkColumn) returns ValueMarkSet
+	match column 'state'
+		unwritten then panic("markSetOf: the column holds no set — a writer stores `installedValueMarks`' answer before asking")
+		entries(marked) then return marked
+	end 'state'
+end 'markSetOf'
+
+// Is `value` in this column? A column nothing has written answers without hashing.
+export function valueIsMarked(column ValueMarkColumn, value ValueId) returns bool
+	match column 'state'
+		unwritten then return false
+		entries(marked) then return marked.contains(value)
+	end 'state'
+end 'valueIsMarked'
+
+// The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
+// `exclude` (the default) removed — the "which successors does this table actually have?" question the
+// CFG asks at every tier (Maxon await-CFG walk, Target CFG build, wasm landing structure). A dense table
+// REPEATS a block across many slots (a range/`or` arm fills several), so the distinct set is small — but
+// the array is `span` slots long (up to 4096), and deduping it with a per-slot linear membership scan is
+// O(span × distinct), which is QUADRATIC in the arm count of an all-distinct dense match (span ≈ distinct
+// ≈ N — the bytecode/keyword-dispatch shape a jump table is FOR). The hash set makes it O(span): one pass,
+// O(1) membership. Shared here — beside `BlockIdArray` — so the three tiers that need it call ONE
+// implementation rather than each spelling the same quadratic loop.
+export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
+	var out = BlockIdArray.create()
+	if caseTargets.count() == 0 'noSlots'
+		return out
+	end 'noSlots'
+
+	// ⛔⛔ **A DENSE COLUMN OVER THE ID SPACE, NOT A HASH SET — AND THAT IS A REACHABILITY FACT BEFORE IT IS
+	// A COST ONE.** A `Set with BlockId` probes through the element's `hash`, which is a WITNESS DISPATCH,
+	// and this function is on the register allocator's POOL-WORKER path: the CFG build reaches it for every
+	// jump-table block of every function. A message that dispatches somewhere the compiler cannot name makes
+	// every address-taken function in the program message-reachable (E3143's widening), which refused the
+	// whole pool over a module `var` in the query engine that no allocator code goes near.
+	//
+	// It costs no more asymptotically and hashes nothing: block ids are FUNCTION-LOCAL and dense
+	// (`IrFunction.nextBlockId` counts from zero), so this is the same sizing every other dense column in
+	// the allocator already takes — `FuncTopology.localByBlockId` is a column over exactly this id space.
+	var highest = exclude
+	for target in caseTargets 'eachSlotForTheBound'
+		if target > highest 'higher'
+			highest = target
+		end 'higher'
+	end 'eachSlotForTheBound'
+
+	var seen = BoolArray.create()
+	seen.resize(highest + 1)
+	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
+	// real targets — no separate `!= exclude` compare per slot.
+	try seen.set(exclude, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past `exclude`, which the bound above folds in")
+	for target in caseTargets 'eachSlot'
+		if not (try seen.get(target) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")) 'fresh'
+			try seen.set(target, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")
+			out.push(target)
+		end 'fresh'
+	end 'eachSlot'
+	return out
+end 'distinctSwitchTargets'
+
+// Linear membership over a BlockId list — the "does this list already hold this id?" question. Used for a
+// ONE-SHOT scan over a bounded list (the critical-edge retarget asks whether a switch's table names the
+// split edge's old target, once per split), NOT inside a per-slot loop: `distinctSwitchTargets` is the
+// linear-total answer wherever the question is asked once per slot of a dense table. Shared here so the
+// callers that need a single membership test call ONE implementation rather than spelling the loop.
+export function blockIdArrayContains(list BlockIdArray, value BlockId) returns bool
+	for id in list 'each'
+		if id == value 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'blockIdArrayContains'
+
+// BlockRef: an index into a module's flat blocks array. Functions record their
+// ordered set of blocks as a BlockRefArray.
+export typealias BlockRef = int(0 to u64.max)
+export typealias BlockRefArray = Array with BlockRef
+export typealias ParamCount = int(0 to u64.max)
+
+// The Std ABI numbers a function's parameters first: parameter `position` owns ValueId `position`, and
+// position `paramCount` is the first id a body value can hold. These two are the ONE spelling of that
+// convention, in each direction.
+export function valueIdAtParamPosition(position ParamCount) returns ValueId
+	return position as ValueId
+end 'valueIdAtParamPosition'
+
+export function paramPositionOfValueId(value ValueId) returns ParamCount
+	return value as ParamCount
+end 'paramPositionOfValueId'
+
+// A dense column of parameter POSITIONS — the shape the parameter-mutation edge graph indexes its two
+// endpoints with (`SemanticCheck.CallParamEdges`). Same dense-int representation as `OpIndexArray`,
+// named apart because it holds parameter positions.
+export typealias ParamCountArray = Array with ParamCount
+export typealias StdTypeArray = Array with StdType
+
+// ValueIdRef: a mutable per-function counter for allocating ValueIds.
+//
+// The PARSER owns the primary one, reset per function and seeded at `paramCount`
+// (params implicitly occupy 0..paramCount-1 by Std-ABI convention). Every later
+// pass that SYNTHESIZES ops — the 1:N desugarings in `lowerMaxonToStd`, the Std
+// optimizers — builds its own ref seeded from `scanMaxValueId(func) + 1` so its
+// new values cannot collide with the parser's. Allocation is function-local:
+// each function's numbering is independent of every other.
+export type ValueIdRef
+	export var nextId as ValueId
+
+	export static function create(startId ValueId) returns ValueIdRef
+		return Self{nextId: startId}
+	end 'create'
+end 'ValueIdRef'
+
+export function allocValueId(ref ValueIdRef) returns ValueId
+	let id = ref.nextId
+	ref.nextId = ref.nextId + 1
+	return id
+end 'allocValueId'
+
+// OpIndex: a plain integer index into a module's flat ops array.
+// Shared across all IR phases (Maxon, Std, Target).
+//
+// A block's `opRefs` and a function's `blockRefs` are flat ARRAYS of these, not linked
+// lists. They were `List` once, which cost a heap node per op reference plus a heap
+// iterator per traversal — ~17% of every allocation the compiler made — and bought
+// nothing: `List`'s only asymptotic edge is O(1) insert at a NODE, and every caller here
+// names a POSITION, so it paid `walkTo`'s O(n) pointer chase anyway. Indexed access, which
+// the register allocator does constantly, was O(n) on a list and is O(1) on an array.
+export typealias OpIndex = int(0 to u64.max)
+export typealias OpIndexArray = Array with OpIndex
+
+// An op's position WITHIN ONE BLOCK — an index into `block.opRefs` (or into the
+// `collectBlockOps` list, which appends the terminator). Restarts at 0 in every block, and
+// SHIFTS whenever the splitter splices an op in, which is why nothing caches one. Distinct
+// from `OpIndex`, which indexes the module's flat ops array.
+export typealias BlockOpPos = int(0 to u64.max)
+export typealias BlockOpPosArray = Array with BlockOpPos

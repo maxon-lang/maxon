@@ -1,0 +1,17 @@
+// Test: error-default-on-overloaded-name
+typealias Integer = int(i64.min to i64.max)
+
+function show(n Integer = 1) returns Integer
+	return n
+end 'show'
+
+function show(s String) returns Integer
+	return 2
+end 'show'
+
+function main() returns ExitCode
+	return show()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:4:25: Unsupported: a default value on parameter 'n' of 'show' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default

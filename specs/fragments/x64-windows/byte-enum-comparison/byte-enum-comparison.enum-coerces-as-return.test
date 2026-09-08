@@ -1,0 +1,41 @@
+// Test: byte-enum-comparison.enum-coerces-as-return
+
+typealias Byte = int(0 to u8.max)
+
+enum Punct
+	colon = 58
+	comma = 44
+end 'Punct'
+
+function colonByte() returns Byte
+	return Punct.colon
+end 'colonByte'
+
+function main() returns ExitCode
+	let r = colonByte()
+	if r == 58 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.movRegImm32 rax, 58
+  __il_cont:
+    x64.cmpRegImm32 rax, 58
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

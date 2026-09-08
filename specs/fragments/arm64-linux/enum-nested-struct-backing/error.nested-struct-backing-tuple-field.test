@@ -1,0 +1,19 @@
+// Test: error.nested-struct-backing-tuple-field
+typealias Wide = int(0 to 100)
+typealias Pair = (Wide, Wide)
+
+type Meta
+	export let pair as Pair
+	export let n as Wide
+end 'Meta'
+
+enum Task
+	quick = Meta{pair: 1, n: 2}
+end 'Task'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.int.int` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`

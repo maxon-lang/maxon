@@ -1,0 +1,63 @@
+// Test: nested-in-the-right-operand
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function main() returns ExitCode
+	var code = 0
+	if f() or (t() and t()) 'a'
+		code = code + 1
+	end 'a'
+	if t() and (f() or t()) 'b'
+		code = code + 2
+	end 'b'
+	if f() or (t() and f()) 'c'
+		code = code + 4
+	end 'c'
+	return code
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __il_body#27:
+    arm64.movImm x1, 1
+  scmerge#4:
+    arm64.cbz x1, __il_body#33
+  a:
+    arm64.movImm x0, 1
+  __il_body#33:
+    arm64.movImm x1, 1
+  scmerge#10:
+    arm64.cbz x1, __il_body#39
+  b:
+    arm64.add x0, x0, 2
+  __il_body#39:
+    arm64.movImm x1, 0
+  scmerge#16:
+    arm64.cbz x1, ifcont
+  c:
+    arm64.add x0, x0, 4
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at nested-in-the-right-operand.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

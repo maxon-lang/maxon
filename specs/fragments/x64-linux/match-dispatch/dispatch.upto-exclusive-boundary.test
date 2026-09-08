@@ -1,0 +1,96 @@
+// Test: dispatch.upto-exclusive-boundary
+function classify(x Integer) returns Integer
+	return match x 'm'
+		10 upto 20 gives 1
+		20 upto 30 gives 2
+		30 gives 3
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `upto` excludes its upper: 10..20 covers 10..19, 20..30 covers 20..29, and 30 is its own arm.
+	var n = 0 as ExitCode
+	if classify(19) == 1 'a'
+		n = n + 1
+	end 'a'
+	if classify(20) == 2 'b'
+		n = n + 1
+	end 'b'
+	if classify(29) == 2 'c'
+		n = n + 1
+	end 'c'
+	if classify(30) == 3 'd'
+		n = n + 1
+	end 'd'
+	if classify(9) == 0 'e'
+		n = n + 1
+	end 'e'
+	return n
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+  matcharm#16:
+    x64.movRegImm32 rcx, 1
+  __il_cont#14:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matcharm#26
+  a:
+    x64.movRegImm32 rax, 1
+  matcharm#26:
+    x64.movRegImm32 rcx, 2
+  __il_cont#23:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, matcharm#35
+  b:
+    x64.leaRegRegImm32 rax, rax, 1
+  matcharm#35:
+    x64.movRegImm32 rcx, 2
+  __il_cont#32:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, matcharm#45
+  c:
+    x64.leaRegRegImm32 rax, rax, 1
+  matcharm#45:
+    x64.movRegImm32 rcx, 3
+  __il_cont#41:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc notEqual, matchdefault
+  d:
+    x64.leaRegRegImm32 rax, rax, 1
+  matchdefault:
+    x64.movRegImm32 rcx, 0
+  __il_cont#50:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, critsplit
+  e:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.upto-exclusive-boundary.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

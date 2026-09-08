@@ -1,0 +1,133 @@
+// Test: a-keyword-named-condition-after-a-case-list-spelling-block-keywords
+typealias Idx = int(0 to 100)
+
+enum Kw
+	while
+	match
+	for
+	omega
+end 'Kw'
+
+function span(to Idx, from Idx) returns Idx
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+	return from - to
+end 'span'
+
+function tagOf(k Kw) returns Idx
+	match k 'm'
+		while then return 1
+		match then return 2
+		for then return 3
+		omega then return 0
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return (span(50, from: 8) + tagOf(Kw.omega)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @span {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#4
+  __rc_chk#5:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#3
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:11: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#3:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#7
+  __rc_chk#8:
+    arm64.cmp x1, 100
+    arm64.b.le __rc_ok#6
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:11: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#6:
+    arm64.cmp x0, x1
+    arm64.b.lt ifcont
+  forward:
+    arm64.sub x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#10
+  __rc_chk#11:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#9
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:13: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#9:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#13
+  __rc_chk#14:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:15: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#12:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 50
+    arm64.movImm x1, 8
+    arm64.bl span
+    arm64.movImm x1, 3
+  __il_body:
+    arm64.jumpTable x1, default=matchdead [[0]=matcharm#6, [1]=matcharm#7, [2]=matcharm#8, [3]=matcharm#9] @__jumptable_4
+  matchdead:
+  matcharm#6:
+    arm64.movImm x1, 1
+    arm64.b __il_cont
+  matcharm#7:
+    arm64.movImm x1, 2
+    arm64.b __il_cont
+  matcharm#8:
+    arm64.movImm x1, 3
+    arm64.b __il_cont
+  matcharm#9:
+    arm64.movImm x1, 0
+  __il_cont:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

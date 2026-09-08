@@ -1,0 +1,41 @@
+// Test: cmp-shifted-imm12-band
+typealias Val = int(i64.min to i64.max)
+
+function base(p Val) returns Val
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(16773120)
+	if not (x == 16773120) 'eqTop'
+		return 21
+	end 'eqTop'
+	if x > 16773120 'gtTop'
+		return 22
+	end 'gtTop'
+	if not (x < 16777216) 'ltPair'
+		return 23
+	end 'ltPair'
+	if x == 16777216 'eqPair'
+		return 24
+	end 'eqPair'
+	let y = base(16777216)
+	if not (y == 16777216) 'eqPairSelf'
+		return 25
+	end 'eqPairSelf'
+	if not (y > 16773120) 'gtTopFromPair'
+		return 26
+	end 'gtTopFromPair'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

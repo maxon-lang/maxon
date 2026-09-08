@@ -1,0 +1,523 @@
+/// Type-safe filesystem path with platform-aware separator.
+/// @category System
+#if os(Windows)
+	let pathSeparator = "\\"
+	let pathSeparatorByte = 92
+	let otherSeparatorByte = 47
+#else
+	let pathSeparator = "/"
+	let pathSeparatorByte = 47
+	let otherSeparatorByte = 92
+#endif
+
+public enum FilePathError implements Error
+	invalidCharacter
+	notFileURL
+	noParent
+end 'FilePathError'
+
+// An offset into the path's own `String` bytes, so `String.BytePos`'s bound holds here too: one
+// `__ManagedMemory`, a signed machine word long.
+typealias PathByteOffset = int(0 to u64.max)
+
+// Caller guarantees index is in bounds
+
+public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
+	public let path as String
+
+	/// Create FilePath from a string literal via `FilePath from "..."` syntax.
+	/// Panics if the path contains invalid characters or is a non-file URL.
+	static function init(value String) returns FilePath
+		return try create(value) otherwise panic("FilePath: invalid path")
+	end 'init'
+
+	/// Create FilePath from an explicit string.
+	/// Accepts file:// URLs (extracts the path) or regular path strings.
+	public static function from (path String) returns FilePath throws FilePathError
+		return try create(path)
+	end 'from'
+
+	/// The EMPTY path, built without the `create` ladder - and NOT as a shorthand.
+	///
+	/// `create` resolves a file URL first, and `URL.parse` asks a `CharacterSet`, which is a `Set`: its
+	/// probe dispatches the element's `hash` through a WITNESS SLOT. A caller on a green thread pays for
+	/// that in a way no ordinary caller does - a dispatch a reachability walk cannot follow widens the
+	/// shared-global rule (E3143) to every address-taken function in the program - and it buys nothing
+	/// here: the empty string has no scheme to resolve, no character to refuse and no separator to
+	/// normalize, so `create("")` and this answer the same `FilePath{path: ""}`.
+	public static function empty() returns FilePath
+		return FilePath{path: ""}
+	end 'empty'
+
+	/// Resolve URL, validate characters, normalize separators.
+	static function create(input String) returns FilePath throws FilePathError
+		let resolved = try resolveFileURL(input)
+		#if os(Windows)
+			if hasInvalidChars(resolved) 'bad'
+				throw FilePathError.invalidCharacter
+			end 'bad'
+		#endif
+		return FilePath{path: normalizeSeparators(resolved)}
+	end 'create'
+
+	#if os(Windows)
+		/// Check for characters that are invalid in Windows filesystem paths:
+		/// control chars (0x01-0x1F), <, >, ", |, ?, *
+		static function hasInvalidChars(path String) returns bool
+			let len = path.byteLength()
+			var i = 0
+			while i < len 'scan'
+				let b = path.byteAtOrPanic(i)
+				if b >= 1 and b <= 31 'control'
+					return true
+				end 'control'
+				// < = 60, > = 62, " = 34, | = 124, ? = 63, * = 42
+				if b == 60 or b == 62 or b == 34 or b == 124 or b == 63 or b == 42 'special'
+					return true
+				end 'special'
+				i = i + 1
+			end 'scan'
+			return false
+		end 'hasInvalidChars'
+	#endif
+
+	/// Replace non-native separators with the platform-native separator.
+	static function normalizeSeparators(path String) returns String
+		let len = path.byteLength()
+		if len == 0 'empty'
+			return path
+		end 'empty'
+		// Scan for any non-native separator byte
+		var hasOther = false
+		var i = 0
+		while i < len 'scan'
+			if path.byteAtOrPanic(i) == otherSeparatorByte 'found'
+				hasOther = true
+				break
+			end 'found'
+			i = i + 1
+		end 'scan'
+		if not hasOther 'noChange'
+			return path
+		end 'noChange'
+		#if os(Windows)
+			return path.replace("/", with: "\\")
+		#else
+			return path.replace("\\", with: "/")
+		#endif
+	end 'normalizeSeparators'
+
+	/// Detect file:// URLs and extract the filesystem path.
+	/// Returns the path unchanged if not a URL.
+	/// Throws FilePathError.notFileURL for non-file URL schemes.
+	static function resolveFileURL(input String) returns String throws FilePathError
+		// Quick check: must contain "://" to be a URL
+		let len = input.byteLength()
+		var hasScheme = false
+		var i = 0
+		while i + 2 < len 'scan'
+			// ':' = 58, '/' = 47
+			if input.byteAtOrPanic(i) == 58 'colon'
+				if input.byteAtOrPanic(i + 1) == 47 'slash1'
+					if input.byteAtOrPanic(i + 2) == 47 'slash2'
+						hasScheme = true
+						break
+					end 'slash2'
+				end 'slash1'
+			end 'colon'
+			i = i + 1
+		end 'scan'
+		if not hasScheme 'notURL'
+			return input
+		end 'notURL'
+		// Parse as URL
+		let url = try URL.parse(input) otherwise 'parseErr'
+			return input
+		end 'parseErr'
+		// Check scheme is "file"
+		if url.scheme() != "file" 'notFile'
+			throw FilePathError.notFileURL
+		end 'notFile'
+		#if os(Windows)
+			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
+			var filePath = url.path()
+			let pathLen = filePath.byteLength()
+			if pathLen >= 3 'checkDrive'
+				// Check for /X: pattern (slash + alpha + colon)
+				let urlPathBytes = filePath.addressableBytes()
+				if filePath.byteAtOrPanic(0) == 47 'leadingSlash'
+					let driveByte = filePath.byteAtOrPanic(1)
+					if filePath.byteAtOrPanic(2) == 58 'hasColon'
+						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
+							let trimmed = try urlPathBytes.slice(1, pathLen) otherwise panic("FilePath: drive-strip slice — pathLen >= 3 guaranteed")
+							filePath = String.init(trimmed)
+						end 'isDrive'
+					end 'hasColon'
+				end 'leadingSlash'
+			end 'checkDrive'
+			return filePath
+		#else
+			return url.path()
+		#endif
+	end 'resolveFileURL'
+
+	/// The platform-native path separator string.
+	public static function separator() returns String
+		return pathSeparator
+	end 'separator'
+
+	// --- Stringable ---
+	public function toString() returns String
+		return path
+	end 'toString'
+
+	/// Returns a copy of `s` suitable for case-insensitive comparison
+	/// on the host filesystem. Windows: lower-cased clone (NTFS treats
+	/// `C:\Foo` and `c:\foo` as the same path). POSIX: returned as-is.
+	///
+	/// `String.toLower` mutates its receiver's managed buffer in place,
+	/// so the clone is mandatory — otherwise this would silently lower-
+	/// case the caller's string (typically the FilePath's own `path`
+	/// field), and every later read of `.path` (subprocess spawn, file
+	/// I/O, error reporting) would see the lower-cased copy.
+	static function canonicalForCompare(s String) returns String
+		#if os(Windows)
+			return s.clone().toLower()
+		#else
+			return s
+		#endif
+	end 'canonicalForCompare'
+
+	// --- Equatable ---
+
+	/// Path equality matching the host filesystem's semantics:
+	/// case-insensitive on Windows, exact byte match on POSIX.
+	public function equals(other FilePath) returns bool
+		return canonicalForCompare(path) == canonicalForCompare(other.path)
+	end 'equals'
+
+	// --- Hashable ---
+
+	/// Hash that agrees with `equals`: case-insensitive on Windows
+	/// so map lookups find an entry inserted with `C:\foo` when
+	/// queried with `c:\Foo`.
+	public function hash() returns HashValue
+		return canonicalForCompare(path).hash()
+	end 'hash'
+
+	// --- Containment test ---
+
+	/// True when this path lies inside `dir` (i.e. `dir` is a proper
+	/// ancestor directory of `self`, or `self == dir`). Component-
+	/// aware: appends the platform separator before testing the
+	/// prefix so `/foo/bar` is NOT considered to be inside `/foo/ba`.
+	/// Case semantics match `equals` (case-insensitive on Windows,
+	/// exact on POSIX).
+	public function isInside(dir FilePath) returns bool
+		if equals(dir) 'same'
+			return true
+		end 'same'
+		let dirStr = dir.path
+		if dirStr.isEmpty() 'emptyDir'
+			return false
+		end 'emptyDir'
+		let needle = "{dirStr}{pathSeparator}"
+		return canonicalForCompare(path).startsWith(canonicalForCompare(needle))
+	end 'isInside'
+
+	// --- Query ---
+
+	public function isEmpty() returns bool
+		return path.isEmpty()
+	end 'isEmpty'
+
+	public function isAbsolute() returns bool
+		let len = path.byteLength()
+		#if os(Windows)
+			// Drive letter: X:\ (e.g. C:\)
+			if len >= 3 'checkDrive'
+				let b0 = path.byteAtOrPanic(0)
+				let b1 = path.byteAtOrPanic(1)
+				let b2 = path.byteAtOrPanic(2)
+				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
+				if b1 == 58 and b2 == 92 'hasDriveColon'
+					// a-z = 97-122, A-Z = 65-90
+					if (b0 >= 65 and b0 <= 90) or (b0 >= 97 and b0 <= 122) 'isDrive'
+						return true
+					end 'isDrive'
+				end 'hasDriveColon'
+			end 'checkDrive'
+			// UNC path: starts with \\
+			if len >= 2 'checkUNC'
+				let u0 = path.byteAtOrPanic(0)
+				let u1 = path.byteAtOrPanic(1)
+				if u0 == 92 and u1 == 92 'isUNC'
+					return true
+				end 'isUNC'
+			end 'checkUNC'
+			// Rooted path: starts with single backslash (e.g. \path — absolute to current drive)
+			if len >= 1 'checkRooted'
+				if path.byteAtOrPanic(0) == 92 'isRooted'
+					return true
+				end 'isRooted'
+			end 'checkRooted'
+		#else
+			// Unix: starts with /
+			if len >= 1 'checkSlash'
+				if path.byteAtOrPanic(0) == 47 'isAbsUnix'
+					return true
+				end 'isAbsUnix'
+			end 'checkSlash'
+		#endif
+		return false
+	end 'isAbsolute'
+
+	public function isRelative() returns bool
+		return not isAbsolute()
+	end 'isRelative'
+
+	// --- Component extraction ---
+
+	/// Scan backwards for the last path separator.
+	/// Returns the byte index + 1, or 0 if none found.
+	function lastSepPlusOne() returns PathByteOffset
+		let len = path.byteLength()
+		if len == 0 'empty'
+			return 0
+		end 'empty'
+		var i = path.byteLength()
+		while i > 0 'scan'
+			i = i - 1
+			if path.byteAtOrPanic(i) == pathSeparatorByte 'isSep'
+				return i + 1
+			end 'isSep'
+		end 'scan'
+		return 0
+	end 'lastSepPlusOne'
+
+	/// Get the filename (last path component). Returns the full path if no separator.
+	public function filename() returns String
+		let sepPlusOne = lastSepPlusOne()
+		if sepPlusOne == 0 'noSep'
+			return path
+		end 'noSep'
+		let len = path.byteLength()
+		let nameManaged = try path.addressableBytes().slice(sepPlusOne, len) otherwise 'nameSliceErr'
+			panic("FilePath.filename: slice — sepPlusOne from lastSepPlusOne, always <= len")
+		end 'nameSliceErr'
+		return String.init(nameManaged)
+	end 'filename'
+
+	/// Get the file extension including the dot, or empty string if none.
+	/// Leading dots are not treated as extension separators (e.g. ".gitignore" has no extension).
+	public function fileExtension() returns String
+		let name = filename()
+		let nameLen = name.byteLength()
+		if nameLen <= 1 'tooShort'
+			return ""
+		end 'tooShort'
+		// Scan backwards for '.', but skip position 0 (leading dot)
+		let nameBytes = name.addressableBytes()
+		var i = name.byteLength()
+		while i > 1 'scan'
+			i = i - 1
+			if name.byteAtOrPanic(i) == 46 'isDot'
+				let extManaged = try nameBytes.slice(i, nameLen) otherwise 'extSliceErr'
+					panic("FilePath.fileExtension: slice — i from backwards scan, always <= nameLen")
+				end 'extSliceErr'
+				return String.init(extManaged)
+			end 'isDot'
+		end 'scan'
+		return ""
+	end 'fileExtension'
+
+	/// Get the filename without extension (stem).
+	public function stem() returns String
+		let name = filename()
+		let nameLen = name.byteLength()
+		if nameLen <= 1 'tooShort'
+			return name
+		end 'tooShort'
+		let nameBytes = name.addressableBytes()
+		var i = name.byteLength()
+		while i > 1 'scan'
+			i = i - 1
+			if name.byteAtOrPanic(i) == 46 'isDot'
+				let stemManaged = try nameBytes.slice(0, i) otherwise 'stemSliceErr'
+					panic("FilePath.stem: slice — i from backwards scan, always < nameLen")
+				end 'stemSliceErr'
+				return String.init(stemManaged)
+			end 'isDot'
+		end 'scan'
+		return name
+	end 'stem'
+
+	/// Get the parent directory path. Throws if no parent exists.
+	public function parent() returns FilePath throws FilePathError
+		let sepPlusOne = lastSepPlusOne()
+		if sepPlusOne == 0 'noSep'
+			throw FilePathError.noParent
+		end 'noSep'
+		let parentManaged = try path.addressableBytes().slice(0, sepPlusOne - 1) otherwise 'parentSliceErr'
+			panic("FilePath.parent: slice — sepPlusOne > 0 guaranteed, so sepPlusOne-1 >= 0")
+		end 'parentSliceErr'
+		let parentStr = String.init(parentManaged)
+		return FilePath{path: parentStr}
+	end 'parent'
+
+	// --- Manipulation ---
+
+	/// Join this path with a child component using the platform-native separator.
+	public function join(component String) returns FilePath
+		if path.isEmpty() 'emptyBase'
+			return FilePath{path: normalizeSeparators(component)}
+		end 'emptyBase'
+		let normalized = normalizeSeparators(component)
+		// Check if path already ends with a separator
+		let lastByte = path.byteAtOrPanic(path.byteLength() - 1)
+		if lastByte == pathSeparatorByte 'hasSep'
+			return FilePath{path: "{path}{normalized}"}
+		end 'hasSep'
+		return FilePath{path: "{path}{pathSeparator}{normalized}"}
+	end 'join'
+
+	/// Join with another FilePath component.
+	public function join(component FilePath) returns FilePath
+		return join(component.path)
+	end 'join'
+
+	/// Replace the file extension. newExt should include the dot (e.g. ".exe").
+	/// If no extension exists, the new extension is appended.
+	public function changeExtension(newExt String) returns FilePath
+		let sepPlusOne = lastSepPlusOne()
+		let name = filename()
+		let nameLen = name.byteLength()
+		let nameBytes = name.addressableBytes()
+		// Find dot in filename (skip leading dot)
+		var dotPos = 0
+		var foundDot = false
+		if nameLen > 1 'canScan'
+			var i = name.byteLength()
+			while i > 1 'scan'
+				i = i - 1
+				if name.byteAtOrPanic(i) == 46 'isDot'
+					dotPos = i
+					foundDot = true
+					break
+				end 'isDot'
+			end 'scan'
+		end 'canScan'
+		if foundDot 'hasDot'
+			let stemManaged = try nameBytes.slice(0, dotPos) otherwise 'stemSliceErr2'
+				panic("FilePath.changeExtension: stem slice — dotPos from backwards scan, always < nameLen")
+			end 'stemSliceErr2'
+			let stemStr = String.init(stemManaged)
+			if sepPlusOne == 0 'noParent2'
+				return FilePath{path: "{stemStr}{newExt}"}
+			end 'noParent2'
+			let parentManaged = try path.addressableBytes().slice(0, sepPlusOne) otherwise 'parentSliceErr2'
+				panic("FilePath.changeExtension: parent slice — sepPlusOne from lastSepPlusOne, always <= len")
+			end 'parentSliceErr2'
+			let parentStr = String.init(parentManaged)
+			return FilePath{path: "{parentStr}{stemStr}{newExt}"}
+		end 'hasDot'
+		if sepPlusOne == 0 'noParent'
+			return FilePath{path: "{name}{newExt}"}
+		end 'noParent'
+		let parentManaged = try path.addressableBytes().slice(0, sepPlusOne) otherwise 'parentSliceErr3'
+			panic("FilePath.changeExtension: parent slice — sepPlusOne from lastSepPlusOne, always <= len")
+		end 'parentSliceErr3'
+		let parentStr = String.init(parentManaged)
+		return FilePath{path: "{parentStr}{name}{newExt}"}
+	end 'changeExtension'
+
+	/// Returns self (paths are normalized on construction).
+	public function normalize() returns FilePath
+		return self
+	end 'normalize'
+
+	// --- Resolution ---
+
+	/// Resolve this path against a base directory, returning an absolute FilePath.
+	/// If this path is already absolute, returns self unchanged.
+	public function resolve(base FilePath) returns FilePath
+		if isAbsolute() 'alreadyAbsolute'
+			return self
+		end 'alreadyAbsolute' else 'relative'
+			return base.join(path)
+		end 'relative'
+	end 'resolve'
+
+	/// Compute this path relative to `base`. Returns the suffix of `self.path`
+	/// after stripping `base.path` and any trailing separator.
+	///
+	/// Throws `FilePathError.noParent` when `self` is not contained within
+	/// `base` (no shared prefix or only a partial component match). Callers
+	/// that want a fallback should use `try ... otherwise`.
+	///
+	/// Examples:
+	///   - base="/proj",   self="/proj/utils/helpers.maxon" -> "utils/helpers.maxon"
+	///   - base="/proj",   self="/proj/main.maxon"          -> "main.maxon"
+	///   - base="/proj",   self="/proj"                     -> ""
+	///   - base="/proj/",  self="/proj/main.maxon"          -> "main.maxon"
+	///   - base="/proj",   self="/other/x.maxon"            -> throws noParent
+	public function relativeTo(base FilePath) returns FilePath throws FilePathError
+		// Normalize away any trailing separator on `base` so callers that pass
+		// a directory with a trailing slash don't trip `startsWith`'s
+		// component-boundary check (which expects a separator AFTER the prefix
+		// in `self`, not as the last byte of `prefix`).
+		let basePath = base.path
+		let baseLen = basePath.byteLength()
+		var trimmedBase = base
+		if baseLen > 0 'maybeTrim'
+			let baseBytes = basePath.addressableBytes()
+			let lastByte = basePath.byteAtOrPanic(baseLen - 1)
+			if lastByte == pathSeparatorByte or lastByte == otherSeparatorByte 'trailingSep'
+				let trimmedManaged = try baseBytes.slice(0, baseLen - 1) otherwise 'trimErr'
+					panic("FilePath.relativeTo: trim slice — baseLen > 0 guaranteed")
+				end 'trimErr'
+				trimmedBase = FilePath{path: String.init(trimmedManaged)}
+			end 'trailingSep'
+		end 'maybeTrim'
+		if not startsWith(trimmedBase) 'notUnder'
+			throw FilePathError.noParent
+		end 'notUnder'
+		let trimmedLen = trimmedBase.path.byteLength()
+		let selfLen = path.byteLength()
+		if trimmedLen == selfLen 'exact'
+			return FilePath{path: ""}
+		end 'exact'
+		// startsWith guarantees the byte at trimmedLen is a separator. Skip it.
+		var start = trimmedLen
+		let selfBytes = path.addressableBytes()
+		let firstByte = path.byteAtOrPanic(start)
+		if firstByte == pathSeparatorByte or firstByte == otherSeparatorByte 'hasSep'
+			start = start + 1
+		end 'hasSep'
+		if start >= selfLen 'allConsumed'
+			return FilePath{path: ""}
+		end 'allConsumed'
+		let relManaged = try selfBytes.slice(start, selfLen) otherwise 'sliceErr'
+			panic("FilePath.relativeTo: slice — start < selfLen guaranteed")
+		end 'sliceErr'
+		return FilePath{path: String.init(relManaged)}
+	end 'relativeTo'
+
+	/// Check whether this path starts with the given directory prefix.
+	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
+	public function startsWith(prefix FilePath) returns bool
+		let selfStr = path
+		let prefixStr = prefix.path
+		if not selfStr.startsWith(prefixStr) 'noMatch'
+			return false
+		end 'noMatch'
+		let prefixLen = prefixStr.byteLength()
+		let selfLen = selfStr.byteLength()
+		// Exact match or next character is a separator
+		if prefixLen == selfLen 'exact'
+			return true
+		end 'exact'
+		let nextByte = selfStr.byteAtOrPanic(prefixLen)
+		return nextByte == pathSeparatorByte or nextByte == otherSeparatorByte
+	end 'startsWith'
+end 'FilePath'

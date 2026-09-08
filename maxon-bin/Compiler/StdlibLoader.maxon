@@ -1,0 +1,381 @@
+// The stdlib LOADER — it enumerates every `.maxon` file under the checkout's `stdlib/`, top level and
+// subdirectories alike, and registers each one into the query database exactly as a user source is.
+//
+// ⭐ **IT LOADS ALL OF `stdlib/`, WITH ONE NAMED EXCLUSION** — `stdlib/Internals.maxon`, stated
+// beside the loader below. It is a permanent decision about one file, not a filter with a lifetime.
+//
+// ⚠ **NOTHING OUTSIDE THIS FILE MAY KNOW WHAT THE LOADER SKIPS — and that includes owning a type, a
+// constant or an error case on its behalf.** That rule outlived the filter and still binds the
+// exclusion: the directory walk is `Compiler.collectMaxonSources`, the user walk's own, and the path
+// array is `MaxonSourcePathArray`, declared beside it. Everything downstream deals in two durable facts
+// — "is this function STDLIB source or USER source?" and "is it reachable from `main`?" — computed in
+// `StdlibSource.maxon`. Both were true while the filter stood and both are true now, which is why the
+// deletion touched no pass: a pass that had reasoned in terms of "whitelisted" would have had to be
+// rewritten that day, and none did.
+//
+// ⭐ HOW A LOADED MODULE REACHES USER CODE. Each file is registered into the query database
+// (`fileChanged`) exactly like a user source, so it flows through the SAME tokenize → signature-index →
+// parse → merge spine with no query-spine change. Its declarations therefore populate `funcSignatures`,
+// and a user program can call `Clock.nowMs()` though the program itself contains no Clock.
+//
+// ⭐ **LOAD ORDER: WHATEVER THE FILESYSTEM SAYS. THE LOADER DOES NOT SORT, ON PURPOSE.**
+// `queryProgramSignatures` sweeps EVERY file's tokens for declarations before any file is parsed,
+// so visibility is order-independent (ARCHITECTURE's query-spine section).
+//
+// ⚠ **AND THE COMPILER DOES NOT SORT FOR DETERMINISM EITHER — a sort here would be the WRONG FIX** (user
+// ruling, 2026-07-24). Forcing a canonical input order does not remove an order dependence; it makes
+// one *reliably hidden*, so a latent "this only works because the files arrived in this order" bug
+// stays latent until the machine, the filesystem or a refactor changes the order. **The compiler must
+// not depend on file order to work correctly**, and the way that stays true is by not constraining the
+// input, so any dependence surfaces where it can be fixed. Where an ORDER genuinely matters it is
+// canonicalized at the point of emission, from something stable — never by constraining what the
+// loader was handed.
+//
+// ⭐ MEASURED, not assumed, by running the loaders in raw `Directory.list` order and again in
+// DELIBERATELY REVERSED order (2026-07-24; the numbers are in this rung's optimization-log row):
+//
+//   • SEMANTICS DO NOT MOVE. Reversing the USER directory walk (`Compiler.loadSourceDirectory`, the one
+//     that actually walks many files today) leaves all 1586 x64 tests and all 1394 wasm tests PASSING,
+//     and reversing the stdlib walk over 48 modules — measured with the filter deleted, which is what the
+//     tree does unconditionally today — produces a program that runs identically and Target IR that is a
+//     PURE PERMUTATION of the other order's, the same lines in a different order. Nothing computes a
+//     different answer.
+//
+//   • ⚠ EMISSION ORDER DOES. Reversing the user walk moves 14 committed cross-file fragments: 13 are
+//     `func @…` blocks in a different order, and one swaps which of two same-named FILE-PRIVATE globals
+//     gets the `$1` disambiguating suffix — both assigned by the order the files were encountered. So
+//     the emitted byte image is a function of the filesystem's order today. That is real and it is NOT
+//     repaired by sorting the input, which would only hide it: the repair belongs at the point of
+//     emission, deriving the order from something stable like the declaration name. Reported, not
+//     papered over — see PLAN.md.
+//
+// ⚠ **THERE IS NO SEPARATE PARSED-STDLIB CACHE.** These files are registered as ordinary sources,
+// so the query spine's content-hash memo already covers them and a second cache would be the same
+// fact stored twice. A worker compiles thousands of programs in one process, so that memo keeps a
+// stdlib file's TOKENS for the life of the PROCESS rather than of a `Project`
+// (`QueryEngine.sharedFileMemos`), and the loop below is what admits them. The shared store sits
+// BEHIND the per-`Project` cache and is read only on its miss, and it holds only what is a pure
+// function of the file's BYTES — never a PARSED module, which carries interned ids a fold rewrites
+// in place.
+//
+// ⭐ THE ONE INVARIANT, WHICH OUTLIVED THE FILTER AND IS NOW THE WHOLE RULE: adding a module to
+// `stdlib/` changes NOTHING for a program that does not reach it. A program that never calls Clock must
+// compile to the exact bytes it did before `stdlib/Clock.maxon` existed — same x64 goldens, same
+// wasm/arm64 output. Two mechanisms compose to guarantee that:
+//
+//   1. Dead-function elimination (`DeadFunctionElimination.eliminateDeadFunctions`) drops every stdlib
+//      function no reachable code calls, at the target-neutral backend entry — so an unused Clock never
+//      reaches isel/regalloc/encode and never lands in a golden, on any target.
+//
+//   2. ⚠ But DFE runs at the Std tier, AFTER `scanRuntimeUsage` has already decided which RUNTIME FLOOR
+//      the program carries (heap / GT scheduler / wall clock) by walking the MERGED MAXON MODULE.
+//      Clock.nowMs's body calls `__gt_now_ns` and WallClock.nowUnixSeconds's calls `__clock_now_unix_s`,
+//      so a NAIVE load would make `scanRuntimeUsage` install the GT scheduler + the wall-clock `.data`
+//      slots for a program that never reads a clock — slots DFE does not prune (it prunes FUNCTIONS,
+//      never `.data`). MEASURED before that gate: a bare `return 7` grew from 1512 to 2488 code bytes
+//      and gained 24 `.data` slots. `StdlibFacts.unreachable` is what closes it, and it is stated as
+//      reachability rather than as membership precisely because the fix outlives this file.
+//
+// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES — MEASURED WHEN `File.maxon`
+// FIRST BECAME LOADABLE (R4.7 / N2).** Both mechanisms above prune what a program does not CALL. Neither
+// can prune what a program does not SPELL, because a name is resolved before there is any code to
+// eliminate: a `typealias` in a stdlib module is nameable from every program the moment the FILE lands,
+// and SO IS ITS RANGE. `stdlib/File.maxon:45` writes `export typealias Byte = int(0 to u8.max)` and was
+// the first stdlib module loaded to declare `Byte` at all (checked at the source against the nine
+// modules loaded before it — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"` literal's element is
+// that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s roster), so on that day a
+// byte literal's element acquired declared BOUNDS for the first time and `a.set(0, value: n)` gained the
+// narrowing check it had been missing — moving ONE committed golden,
+// `byte-string-literal.detached-literal-drops-clean`, in a program that never mentions `File`. The move
+// is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against `0 to 255`, so the
+// guard cannot fire; same stdout, same exit code) — but the emitted bytes DID move, and the sentence
+// above says they may not.
+//
+// ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
+// names it DECLARES — and a declared name is not something a program opts into.** That is not a loophole
+// to route around; it is the same door that supplies `ByteArray` to `byte-string-literal.top-level-let`,
+// which this rung deliberately used. A module may not be weighed on its FUNCTIONS alone: weigh every
+// DECLARATION it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF
+// mints instances of.
+//
+// ⛔⛔ **AND `export` IS NOT THE DISCRIMINATOR — SAYING IT WAS IS A RULE THE NEXT MODULE WOULD FAIL BY
+// (N2 review). MEASURED: delete the `export` from `stdlib/File.maxon:45` and the moved golden below is
+// still emitted, byte-identically.** Two independent mechanisms make the keyword unreadable here, and
+// either one alone is enough:
+//   • `Parser.typeAliasVisibility` hands EVERY `typealias` in a stdlib source file `Visibility.global`,
+//     `export`ed or not — so for a STDLIB module the keyword is never consulted at all.
+//   • The whole-program folds that actually carried the golden — `RangedAliasRegistry.widenStorageBytesFor`
+//     ⇒ `storageBytesInEveryFile` (the stride) and `record`'s `multiplyDeclared` ⇒ `settleRangeContests`
+//     (the range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every
+//     declaration in the program, private ones included. This half holds for a USER file too.
+// ⇒ **weigh every ranged `typealias` a candidate module declares, `export`ed or not.** A module audited on
+// its `export`s alone would wave a file-private `typealias Byte = int(0 to 1000)` straight through, and it
+// would move exactly the same goldens.
+//
+// ⭐ THE COLLISION RULE FOR ADDING A MODULE TO `stdlib/`. It was written when adding a module here meant
+// adding a whitelist entry, and every clause of it survives the whitelist unchanged: the loader now takes
+// the whole directory, so writing a file into `stdlib/` IS the decision the rule governs, and it is made
+// with no list to edit. A stdlib module must declare no name a user program declares and no builtin
+// type/name.
+//   • FREE-FUNCTION-name collisions split by WHOSE they are, and this bullet said E3006 for both.
+//     ⚠ **A USER `function sleep` AGAINST `Sleep.maxon`'S IS NOT A COLLISION — THE USER WINS**, because N1
+//     files a contested free function under its module DIRECTORY and `stdlib/` is not the user's root. See
+//     the measured sentence far below, and `stdlib-loading.md` for the pinned pair. Two stdlib modules in
+//     the SAME directory are still the ordinary duplicate (E3006, `commitFuncSignatures` in ParseStaging),
+//     because one directory is one namespace; two in DIFFERENT stdlib directories contest instead, and a
+//     bare call to the name from a user file is then E3095. Either way it is a maintainer's bug in `stdlib/`.
+//   • ⚠⚠ **TYPE-name collisions against a USER program ARE NO LONGER COLLISIONS — THE USER WINS AND THE
+//     STDLIB DECLARATION MOVES (A1s wave 2).** A user `type`/`enum`/`union`/`interface`/ranged-`typealias`
+//     spelled like a stdlib module's NOMINAL declaration shadows it: the stdlib one is renamed into the
+//     reserved `__` space and the user keeps the bare name, so both live at once and each side's own code
+//     sees its own. `specs/stdlib-user-shadows.md` is the rule, the measurement and the pins. ⇒ The
+//     old warning here — "a stdlib module RESERVES its type names program-wide, so weigh a module whose
+//     names are ordinary English words" — IS RETIRED, and that is the point of the wave: `Clock`,
+//     `ParseError` and `Promise` cost a user program nothing. A METHOD of a shadowed type moves with it
+//     (`Clock.nowMs` becomes `__Clock.nowMs`), which is why the bullet above is about FREE functions.
+//     ⚠ What DOES still refuse the program is a stdlib module using a contested spelling as a MEMBER
+//     name — a field, a method or an argument label — because user code can reach a member and its tokens
+//     are never rewritten. That is E3112, and it is checked, not assumed.
+//   • TYPE-name collisions BETWEEN TWO STDLIB MODULES are still caught LOUDLY by the merge, and shadowing
+//     does not touch them: it is about PROVENANCE, and two stdlib declarations have the same one. Two
+//     stdlib modules declaring one type name is a maintainer's bug in `stdlib/`.
+//   • TYPE-name-vs-BUILTIN collisions are the one shape still SILENT, and they remain the maintainer's
+//     responsibility. The compiler has no builtin-type-redeclaration diagnostic — a user `type String` compiles
+//     today as a distinct nominal, and the builtin names are not in the type-name registry at all — so
+//     enforcing one is a general language matter, not a scaffolding one. Clock declares
+//     `Clock`/`WallClock` and time typealiases, none of them builtin, so it cannot hit this. Do not put
+//     a module that redeclares a builtin under `stdlib/`.
+//   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — which is why the builtin is RETIRED FIRST,
+//     and `stdlib/Sleep.maxon` is the module that was brought up that way. `Parser.parseCallNamed` recognizes
+//     a set of BARE names — `trunc` and `runProcess` among them — BEFORE `emitCall`
+//     consults any registry, so while one of them claims a name, a CALL to that name never reaches a
+//     declaration of it: such a module loads code no ordinary call site can reach — `sleep(5)`
+//     still emitted the builtin's `__gt_sleep` — while charging the per-module load cost for zero
+//     delivered capability, and the name has TWO routes, because `let f = sleep` is not a call site and
+//     took the address of the declaration the call sites could not see.
+//     ⚠ The shadowing was NOT this file's doing and predated it: a user file declaring its own
+//     `function sleep` compiled with the declaration silently unlinked, no diagnostic and a wrong answer
+//     (measured on plain user code). The repair was to delete the bare-name builtin and let the stdlib
+//     declaration be authoritative, which moved 15 committed goldens across 7 specs — 14 gaining the
+//     call frame `@sleep` now is, and one holding the builtin's bespoke argument rejection, replaced by
+//     the ordinary one against `sleep(milliseconds Milliseconds)`. MEASURED, in a controlled A/B in one
+//     worktree: the module costs +683 allocations / +31,308 bytes on EVERY compile, identical at rung 0
+//     and rung 5 of the scale ladder, and the emitted code of a program that never sleeps is
+//     byte-identical (`codeBytes` equal at all six rungs — DFE prunes the module it does not reach).
+//     ⇒ THE RULE: do not put a module whose function name a bare builtin claims under `stdlib/`. Retire the
+//     builtin first. ⭐ **APPLIED A SECOND TIME AT BATCH2 slice 6**, to `graphemeBreakProperty` and
+//     `isExtendedPictographic` — the same shape with the same wrong answer (`p=0` where `p=164` is
+//     correct), and the module it unblocked is `helpers/string/grapheme.maxon`.
+//     ⚠⚠ **AND WHAT A STDLIB MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER — the sentence here and in
+//     `specs/stdlib-loading.md` said `E3006` and NEITHER WAS EVER RUN.** MEASURED at slice 6: a user
+//     program declaring its own `function sleep(milliseconds Ms)` compiles clean and ITS body is
+//     what runs. N1's namespaces made the user's declaration outrank the
+//     stdlib's, and the E3006 claim — written when they did not exist — simply aged out. It is now a CASE
+//     rather than a sentence (`stdlib-loading.a-user-free-function-outranks-the-stdlib-modules`), because a
+//     refusal nothing runs is a claim. ⇒ the bare-builtin rule above is unchanged and is the one that bites:
+//     a NAME the chain claims is reached by no declaration at all, user's or stdlib's.
+//     ⛔⛔ **AND THAT FIRST CASE WAS A POSITIVE CONTROL, WHICH ON ITS OWN PINNED NOTHING.** Its user `sleep`
+//     returns nothing and so does `Sleep.maxon`'s, so it could not tell "the call reached the user's
+//     declaration" from "the call read whichever declaration folded last" — and the second was the truth.
+//     MEASURED at slice 6 on the NEGATIVE control: a user `function sleep(m Ms) returns Ms` was refused
+//     `E2004: Function 'sleep' does not return a value`, from the void signature of `stdlib/Sleep.maxon`.
+//     The fault was never in this file or in the set of modules loaded — the whole-program sweep files every
+//     declaration under its BARE name first, and a root declaration keeps that key, so the stdlib's fold was
+//     overwriting the user's own signature there. `SignatureIndex.refileContestedFreeFunction` now hands the
+//     bare key back to the root declaration, and `namespaces.md`'s `root-declaration-owns-the-bare-key` cases
+//     pin the same defect with no stdlib in it at all. ⇒ **a module's user-outranks-it claim needs a case in
+//     which the two declarations DIFFER**; one where they agree is a control that agrees with the bug.
+//     ⚠ **AND CHECK THE ROSTER AT ITS SOURCE — `parseCallNamed`'s bare-name `if` chain — NEVER against a
+//     list written here or in a spec.** This bullet is deliberately not one: nothing makes a prose roster
+//     agree with the chain, and both prose copies of it were already wrong. They named four of the FIFTEEN
+//     names standing after `sleep` left, omitting `spawnReadLine` and all seven `subp*` — so a maintainer
+//     checking a module against the list rather than the chain would have been told a claimed name was
+//     free, and got back exactly the silent shadow this rule exists to prevent.
+//   • ⚠ **AND THE FREE-FUNCTION CHECK HAS A SECOND SURFACE THE BULLET ABOVE DOES NOT REACH: `stdlib/`'s
+//     OWN FREE FUNCTIONS** (W5 review). That bullet asks one question — *does a BARE BUILTIN claim this
+//     name?* — against `parseCallNamed`'s chain, and the type-name bullet asks the stdlib-vs-stdlib question
+//     for TYPES ("two stdlib modules declaring one type name is a maintainer's bug in `stdlib/`"). Nobody
+//     asked it for free FUNCTIONS, and `export` is not read at the folds that matter, so a file-private one
+//     counts. ⇒ **ask BOTH: against the chain, and against every free function the other stdlib modules
+//     declare.**
+//     ✅ **THE ONE THAT WAS WAITING IS NO LONGER A COLLISION, AND THE RULE ABOVE STILL STANDS.**
+//     `stdlib/Console.maxon:178` and `stdlib/Subprocess.maxon:782` — both at `stdlib/`'s top level, so one
+//     directory — both declare
+//     `stripTrailingCR` — over a `ByteArray` and a `String` respectively. Two files of one directory
+//     declaring one free-function name are now an OVERLOAD SET (`specs/cross-file-overload-set.md`),
+//     and these two differ in their parameter spelling, so each registers under its own and each file's
+//     calls reach its own. ⚠ **What is still a collision is the SAME spelling in two files**, which is
+//     E3006 by construction — so the question this bullet asks is unchanged; only its answer for a pair that
+//     DIFFERS has moved from "duplicate" to "overload".
+//   • ⚠⚠ **A STDLIB MODULE'S OWN BODY MUST NOT BE TYPE-PARAMETERIZED BY A USER DECLARATION — and this clause
+//     is here because the four above did NOT cover it, twice.** Every bullet so far is about a NAME the
+//     module DECLARES colliding with one the user declares. This one is about a TYPE the module's body
+//     merely USES, resolving differently per program: `__ManagedMemory` is registered as an alias of
+//     `Array with Byte`, and `Byte` is a name a user may declare — so a module whose body passes a
+//     `__ManagedMemory` around stops compiling in any program that writes `typealias Byte = int(0 to 1000)`,
+//     WITHOUT NAMING ANYTHING THE MODULE DOES. The module is parsed by every program, so the blast radius is
+//     every program, and the diagnostic points at a stdlib line the author never opened.
+//     ⚠ MEASURED TWICE, three rungs apart, with the same two `specs/bytearray-element-size.md` cases
+//     and the same sentence — `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got
+//     'Array_Byte'` — first inside `stdlib/URL.maxon` (BATCH2 slice 1), then inside `stdlib/CommandLine.maxon`
+//     at `String.init(managed)` (the command-line rung).
+//     ⇒ THE RULE: a value a stdlib module receives from the COMPILER (an intrinsic's result, a synthesized
+//     view) must carry a compiler-owned type, not one spelled out of user-declarable names.
+//     `SignatureIndex.SynthesizedByteElementName` is that answer for bytes and carries the whole argument.
+//     ⚠ **THE SHADOWING MECHANISM DOES NOT REACH THIS AND MUST NOT BE REACHED FOR.** A1s wave 2 rewrites the
+//     identifier TOKENS of a stdlib module, which cures a name the module WRITES; `stdlib/CommandLine.maxon`
+//     never writes `Byte` at all. The fix belongs where the type is MINTED, not where it is spelled.
+//     ⇒ CHECKING IT is a build, not a reading: compile a program that declares its own `Byte` as a wide
+//     range and calls NOTHING in the module. If the module appears in the output, this clause has been hit.
+
+// ⛔ **THE ONE FILE UNDER `stdlib/` THIS LOADER DOES NOT LOAD**, by USER RULING: `stdlib/Internals.maxon`
+// is a slab allocator and refcount runtime, 98 raw runtime functions written over the privileged
+// `__Internals.*` namespace. This compiler's runtime is not a stdlib module at all — it is Std-tier IR
+// the compiler emits itself (`Compiler/Runtime/MmRuntime.maxon`) — so loading this file would put a
+// SECOND allocator, with its own heap and its own refcounts, into every program compiled.
+//
+// ⭐ **IT NEEDS NO TEST OF ITS OWN, BECAUSE IT FAILS CLOSED IN BOTH DIRECTIONS OF DRIFT — LOUDLY, ON
+// EVERY COMPILE IN THE TREE.** Delete the exclusion and the file is loaded: its declarations carry the
+// reserved `__` prefix and `Internals.maxon` is NOT one of the modules `Queries.declaresCompilerInternalNames`
+// exempts, so `Parser.requireUnreservedName` refuses its first `__mm_incref` declaration with `E2051`
+// and nothing compiles. RENAME the file and this constant stops matching — the file is loaded under its
+// new name and the same E2051 refuses it. Neither drift can leave the compiler quietly carrying two
+// allocators, which is why the exclusion is one comparison and not a mechanism with a spec behind it.
+//
+// ⭐ **SABOTAGE-MEASURED at the deletion, not asserted**: with this constant pointed at a name no file
+// bears — which simulates BOTH drift directions at once — the very next compile of
+// `function main() returns ExitCode / return 7` answered
+// `error E2051: stdlib\Internals.maxon:140:10: identifier '__mm_incref' is reserved`, against exit 7 and
+// 1,592 code bytes intact. ⚠ **NO LINE NUMBER IS QUOTED IN THE RULE ABOVE, DELIBERATELY**: the ruling of
+// 2026-08-05 recorded this refusal at `:26:10` and it is at `:140:10` today — the file moved underneath
+// the citation, which is exactly what a line number into another file does. The DIAGNOSTIC is the
+// durable fact; the position is not.
+let SupersededRuntimeModule = "Internals.maxon"
+
+// ⭐ **THE LOADER ANSWERS "WHICH PATH DO YOU SKIP?" — IT DOES NOT PUBLISH THE NAME.** The header's rule is
+// that nothing outside this file may OWN a copy of what the loader skips; a caller that asks and is told
+// owns nothing, and the day the exclusion changes it changes here alone.
+//
+// It exists because the spec runner's `--- stdlib-overlay:` machinery stages a COPY of `stdlib/` and then
+// refuses an overlay naming *"not a file the compiler loads"* — a guard it was enforcing by asking whether
+// the file was in the copy, which is a different question. `Testing/SpecTestRunner.copyStdlibSources` now
+// skips this path when staging, so the two questions coincide again and the refusal means what it says.
+//
+// ⚠ Returns the PATH, not the name, so the caller hoists ONE `join` out of its own walk exactly as
+// `loadStdlibSources` does. A `contains`-style predicate taking a path would have to rebuild that `join`
+// per file, which is the allocation this file's own header measured and rejected.
+export function supersededRuntimeModulePath(stdlibDir FilePath) returns FilePath
+	// Interpolated for the E3007 reason stated at the call site in `loadStdlibSources`.
+	return stdlibDir.join("{SupersededRuntimeModule}")
+end 'supersededRuntimeModulePath'
+
+// ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
+// (see the header on why it does not sort). Called by `loadProject`
+// AFTER the user's own sources are loaded (so a directory build's output name still derives from a user
+// file, not from a stdlib module, and an empty user project still fails with `noSourceFiles` rather than
+// silently compiling only stdlib).
+//
+// ⚠ THE ENUMERATION IS `Compiler.collectMaxonSources` — the SAME function that walks the user's own
+// root — because "which files under this directory are Maxon sources?" is one question and `stdlib/`
+// is not entitled to its own answer to it. A second walk here would be free to drift on the extension,
+// on the build manifest, and on every ignore rule either walk grows.
+//
+// ⚠ LOUD, NEVER SILENT. An unreadable module propagates `readError` naming it; a PARSE failure surfaces
+// through the ordinary parse-diagnostic path (`queryParseOps` → `reportParseError`), which already
+// renders the file path. There is no arm that drops a stdlib module quietly.
+export function loadStdlibSources(project Project) throws CompileError
+	var found = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(project.stdlibDir, into: found)
+
+	// ⛔ **A `stdlib/` THAT CONTRIBUTES NOTHING IS A REFUSAL, NEVER A QUIET ZERO — and this guard exists
+	// because DELETING THE WHITELIST TOOK THE OLD ONE AWAY.** `listWhitelistedModule` resolved each listed
+	// name and threw `fileNotFound` when it was gone, so a `stdlib/` missing its contents was caught HERE,
+	// by name. Enumeration has no such floor: a walk that finds nothing returns an empty array and every
+	// caller downstream sees a program that simply contains no stdlib. That is reachable without anyone
+	// deleting a file — `collectMaxonSources` asks `isIgnoredDirectory` about its ROOT, so a `.maxonignore`
+	// in any ancestor of the checkout makes the walk return 0 rather than throw.
+	//
+	// The symptom without this line is a PANIC far downstream and in another file
+	// (`Project.requireCorpusDeclaredEnum`: *"this compile declares no enum of that name"*), naming a
+	// declaration rather than the directory that failed to arrive. `stdlibNotFound` already renders the
+	// sentence that is actually true — *"could not locate the stdlib/ directory (every compile loads
+	// stdlib source)"* — so the floor needs no new error case, and it reintroduces no list: it asserts
+	// that the walk found SOMETHING, never what.
+	if found.isEmpty() 'stdlibContributedNothing'
+		throw CompileError.stdlibNotFound
+	end 'stdlibContributedNothing'
+
+	let usersOwn = registeredPathsWhenTheRootIsInsideStdlib(project)
+
+	// Built off `project.stdlibDir` — the very directory the walk above enumerated — so both sides of
+	// the comparison come out of the same `join` and a `/`-spelled constant matches an enumerated `\`
+	// path on Windows. ⚠ It is `project.stdlibDir` and NOT a checkout constant deliberately: the spec
+	// runner aims a compile at a STAGED copy of `stdlib/` (`stdlibDirOverride`), and a hardcoded path
+	// would silently stop excluding there. Hoisted out of the loop — one `join` per compile, not one per
+	// file. (`supersededRuntimeModulePath` interpolates because a bare module-`let` literal stays untyped
+	// and matches BOTH `FilePath.join` overloads, String and FilePath — an E3007 ambiguity, the same
+	// reason `StdlibSource.locateStdlibDir` interpolates `StdlibDirName`.)
+	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(project.stdlibDir)
+
+	for path in found 'each'
+		if path.equals(supersededByTheCompilersOwnRuntime) 'superseded'
+			continue
+		end 'superseded'
+
+		if usersOwn.contains(path) 'theUsersOwnFile'
+			continue
+		end 'theUsersOwnFile'
+
+		try loadOneSourceFile(project, path: path)
+		// RECORDED, because it is the answer to "which of this compile's files are stdlib source?" and
+		// this loop is the one place that knows it for free — every path here came out of an enumeration
+		// of `stdlib/`. Re-deriving it later by testing each source path against that directory costs
+		// four String allocations a question (see StdlibSource's header).
+		project.stdlibSourcePaths.push(path)
+		// AND ADMITTED to the process-wide token memo, from the same loop and for the same reason: this
+		// is the one place that knows a file came out of an enumeration of `stdlib/`, and a memo that
+		// outlives the `Project` has to be told which files are worth the memory. See
+		// `QueryEngine.sharedFileMemos`, and the header bullet above on why this is that memo's SCOPE
+		// widening rather than a second cache beside it.
+		try markSharedTokenSource(project, path: path)
+	end 'each'
+end 'loadStdlibSources'
+
+// ⚠ **A FILE THE PROJECT ALREADY REGISTERED MUST NOT BE LOADED A SECOND TIME**, and the one way a
+// single file can be reached by BOTH walks is a user root that lies under `stdlib/` — which is exactly
+// what `maxon build stdlib/Clock.maxon` is, the command that compiles one stdlib module on its own
+// to see what it still owes.
+//
+// It matters because the query database keys a source on its `FilePath` and `FilePath.equals` compares
+// the path TEXT (case-insensitively on Windows) rather than resolving it — so a relative
+// `stdlib/Clock.maxon` and this loader's absolute spelling of the SAME FILE are two identities,
+// `fileChanged` dedups neither against the other, and the file is parsed twice: every function in it
+// then collides with ITSELF. MEASURED before this guard: FIVE `E3006 duplicate definition of function
+// 'Clock.nowMs'`, each pointing at Clock's own lines. The ABSOLUTE spelling of the same command was
+// already clean, which is what identifies the fault as the spelling and not the double load.
+//
+// ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so one
+// `isInside` settles it for the whole compile and an ordinary project pays nothing per file and gets an
+// empty set. That bound is the point and not an optimization: re-deriving stdlib-ness per FILE was
+// measured at +60…+1,920 allocations across the scale ladder and rejected (StdlibSource's header), and
+// making a compile's diagnostics carry resolved paths instead was measured HERE at +824…+5,009 — a
+// guard that cost either would be that decision undone.
+//
+// The file stays the USER's: they named it as their project, so its functions are user source and a
+// diagnostic raised in it belongs at its own lines — which are lines they asked to compile.
+function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns MaxonSourcePathSet
+	var registered = MaxonSourcePathSet.create()
+
+	// ⚠ `Project.rootIsUnderStdlibDirectory`, not a fourth spelling of the same `resolve` + `isInside`:
+	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
+	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header.
+	let cwd = Directory.currentPath()
+	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootIsElsewhere'
+		return registered
+	end 'rootIsElsewhere'
+
+	for path in project.db.sourcePaths 'each'
+		registered.insert(path.resolve(cwd))
+	end 'each'
+	return registered
+end 'registeredPathsWhenTheRootIsInsideStdlib'

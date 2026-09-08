@@ -1,0 +1,68 @@
+// Test: dispatch.upto-min-upto-min-empty
+function classify(x Integer) returns Integer
+	return match x 'm'
+		-9223372036854775808 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `min upto min` is also empty. The wrap bug turned it into `[i64.min, i64.max]`, matching every
+	// value; that the ordinary values below still fall to default proves the arm is dead.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
+	return n
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  matchdefault#13:
+    arm64.movImm x1, 0
+  __il_cont#10:
+    arm64.cmp x1, 0
+    arm64.b.ne matchdefault#18
+  a:
+    arm64.movImm x0, 1
+  matchdefault#18:
+    arm64.movImm x1, 0
+  __il_cont#15:
+    arm64.cmp x1, 0
+    arm64.b.ne matchdefault#23
+  b:
+    arm64.add x0, x0, 1
+  matchdefault#23:
+    arm64.movImm x1, 0
+  __il_cont#20:
+    arm64.cmp x1, 0
+    arm64.b.ne ifcont
+  c:
+    arm64.add x0, x0, 1
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.upto-min-upto-min-empty.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

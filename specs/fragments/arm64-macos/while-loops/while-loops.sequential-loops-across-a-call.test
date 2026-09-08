@@ -1,0 +1,83 @@
+// Test: while-loops.sequential-loops-across-a-call
+function work(x Integer) returns Integer
+	return x + 1
+end 'work'
+
+function big(n Integer) returns Integer
+	var total = 0
+	var a = 1
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a = a + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a
+	var b = 1
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b = b + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 14
+---
+func @big {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 1
+    arm64.movImm x2, 0
+  whilehdr#1:
+    arm64.cmp x2, x0
+    arm64.b.ge whileexit#3
+  __il_body#8:
+    arm64.add x2, x2, 1
+  __il_cont#7:
+    arm64.add x1, x1, x2
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.movImm x2, 1
+    arm64.movImm x3, 0
+  whilehdr#4:
+    arm64.cmp x3, x0
+    arm64.b.ge whileexit#6
+  __il_body#10:
+    arm64.add x3, x3, 1
+  __il_cont#9:
+    arm64.add x2, x2, x3
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.add x0, x1, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.bl big
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.sequential-loops-across-a-call.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

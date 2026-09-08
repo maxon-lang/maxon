@@ -1,0 +1,26 @@
+// Test: error-default-on-an-overloaded-name-a-second-directory-contests
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num) returns Num
+	return a
+end 'pick'
+
+export function pick(a Num, b Num = 5) returns Num
+	return a * 100 + b + 5
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return alpha.pick(2) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: alpha/<fragment>:9:35: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default

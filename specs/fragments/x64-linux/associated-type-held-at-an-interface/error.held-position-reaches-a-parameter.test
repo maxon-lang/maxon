@@ -1,0 +1,53 @@
+// Test: error.held-position-reaches-a-parameter
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Sink uses Item
+	function take(it Item) returns Integer
+end 'Sink'
+
+type OneCursor implements Cursor
+	var pos as Integer
+
+	export static function create() returns Self
+		return Self{pos: 7}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'OneCursor'
+
+type Adder implements Sink with OneCursor
+	let base as Integer
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	export function take(it OneCursor) returns Integer
+		return self.base + it.current()
+	end 'take'
+end 'Adder'
+
+typealias CursorSink = Sink with Cursor
+
+function useIt(s CursorSink) returns Integer
+	return s.take(OneCursor.create())
+end 'useIt'
+
+function main() returns ExitCode
+	print("{useIt(Adder.create(20))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:41:34: Unsupported: an interface instance's associated-type binding declared at the interface type 'Cursor' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so an argument's witness half is dropped — and unlike a result, whose conformer the impl that produces it pins statically, an argument's table is the CALLER's and differs per call site, so no slot of the callee's table can supply it. Hold the associated type at an interface only where every requirement that writes it RETURNS it, or bind it to a concrete conformer

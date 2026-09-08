@@ -1,0 +1,103 @@
+// Test: match-break.string-scrutinee-chain-dispatch
+function main() returns ExitCode
+	var total = 0
+	let words = ["red", "green", "blue"]
+	for w in words 'each'
+		match w 'check'
+			"green" then break
+			default then total = total + 1
+		end 'check'
+		total = total + 10
+	end 'each'
+	return total
+end 'main'
+---
+ExitCode: 32
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata r12, [rip + __str_rec_3]  ; "red"
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "green"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "blue"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
+  __im_cont:
+    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "green"
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matchnext
+  matcharm:
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
+  matchnext:
+    x64.leaRegRegImm32 rax, rbx, 1
+  matchcont:
+    x64.leaRegRegImm32 rax, rax, 10
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at match-break.string-scrutinee-chain-dispatch.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,340 @@
+// Arm64Runtime — the arm64 OS boundary: HOW this backend reaches the kernel, and the entry stub
+// `mrt_start` that bridges Maxon's `main` to process exit. The arm64 twin of `X64Runtime`.
+//
+// ⭐ ONE FACT SPLITS THE TWO arm64 OSes, AND IT IS NOT THE OBJECT FORMAT. **macOS forbids raw
+// syscalls**: every OS primitive must go through libSystem, which forces a dynamic linker, a GOT,
+// dyld chained fixups, ad-hoc code signing and an LC_UUID. **Linux permits them**, so the same
+// primitives become a bare `svc #0` and NONE of that apparatus exists — no PT_INTERP, no GOT, no
+// import table, a static ET_EXEC. That single difference is why the Mach-O writer is 948 lines and
+// the ELF writer is a third of it, and it is asked here, once, by `arm64OsCallKind`.
+//
+// ⭐ THE STUB IS HAND-ASSEMBLED, NOT A MODULE FUNCTION. x64's `mrt_start` is built from `TargetOp`s
+// and prepended to the module (`prependEntryStub`), because every instruction it needs — `push`,
+// `call rel32`, the IAT `call [rip]` — is a `TargetOp`. The arm64 stub cannot be: on macOS it
+// terminates through a dyld-bound GOT slot, which has no `TargetOp` channel outside this backend.
+// So it is hand-assembled here into a `FunctionCodeChunk` from `Arm64Backend`'s encoder primitives,
+// exactly as `X64Runtime` hand-assembles its panic runtime. The chunk is laid out FIRST in `.text`
+// (`buildArm64Backend`), so the image's entry point is its offset.
+//
+// EVERY OTHER RUNTIME FAMILY IS A SEPARATE FILE'S. What this one owns is the boundary question and the
+// stub; the panic runtime, the fault runtime, each OS's host surface and the green-thread floor are
+// appended beside it by `buildArm64Backend`, and each is gated on the `RuntimeUsage` bit or the OS
+// question that decides whether the program can reach it at all.
+
+// How the arm64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
+// (`osExit`/`osWriteStdout`/`osAllocPages`) and by the entry stub below, so those four sites cannot
+// drift on which OSes this backend supports or on how each one gets there.
+export enum Arm64OsCallKind
+	// A GOT-indirect libSystem call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`), the slot
+	// named by an `OsImportSlot` and bound by dyld. macOS's only route.
+	importCall
+	// A raw supervisor call (`movz x8, #number; svc #0`), the number named per-primitive. Linux's.
+	syscall
+end 'Arm64OsCallKind'
+
+// Exported: the isel (`StdToArm64Conversion`) asks it for every OS-primitive lowering and for the
+// mmap flag word, and this stub asks it for its exit route — the one place either can ask.
+export function arm64OsCallKind(os Os) returns Arm64OsCallKind
+	return match os 'os'
+		macos gives Arm64OsCallKind.importCall
+		linux gives Arm64OsCallKind.syscall
+		windows panic("arm64OsCallKind: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi panic("arm64OsCallKind: wasm32-wasi is not an arm64 target — the wasm backend reaches the OS through WASI imports, not through this file")
+	end 'os'
+end 'arm64OsCallKind'
+
+// ⭐⭐ **WHICH SYSTEM REGISTER HOLDS THIS OS THREAD'S PER-THREAD BASE (L4).** The second per-OS question this
+// backend asks, and it is DELIBERATELY NOT `arm64OsCallKind` re-read: that one answers *how this backend
+// reaches the kernel*, this one answers *which register the kernel left the thread pointer in*. The two
+// happen to split the same two OSes today, and fusing them is how a hypothetical third lane would inherit
+// the wrong answer from a question it was never asked.
+export enum Arm64ThreadPointerSource
+	// `TPIDRRO_EL0` with the CPU number masked out of its low three bits — Darwin's TSD base.
+	darwinMaskedReadOnly
+	// `TPIDR_EL0` verbatim — the writable register a raw static Linux image owns outright, because nothing
+	// else on that lane reads or writes it. `Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk` is its writer.
+	linuxWritable
+end 'Arm64ThreadPointerSource'
+
+// Exported: the isel (`StdToArm64Conversion.lowerTlsSlotLoad`) and the two hand-assembled current-P readers
+// in `Arm64GtRuntime` ask it — the one place either can.
+export function arm64ThreadPointerSource(os Os) returns Arm64ThreadPointerSource
+	return match os 'os'
+		macos gives Arm64ThreadPointerSource.darwinMaskedReadOnly
+		linux gives Arm64ThreadPointerSource.linuxWritable
+		windows panic("arm64ThreadPointerSource: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi panic("arm64ThreadPointerSource: wasm32-wasi is not an arm64 target — a WASI component has no OS-thread concept at all, let alone a thread-pointer register")
+	end 'os'
+end 'arm64ThreadPointerSource'
+
+// THE AArch64 LINUX SYSCALL NUMBERS ARE NOT HERE. They are one table, in `Arm64LinuxRuntime` — the file
+// named for the OS whose facts they are, exactly as `X64LinuxRuntime` holds x86-64's. This file holds the
+// OS-boundary QUESTION (`arm64OsCallKind`) and the entry stub; the answers live with their lane.
+
+// Build `mrt_start` and return it as a `FunctionCodeChunk`. It bridges Maxon's `main` (AAPCS64,
+// ExitCode in x0) to the platform's process-exit primitive — which takes its code in x0 too, so the
+// value flows through with no move on either OS:
+//
+//   macOS:                                   Linux:
+//     bl   mrt_runtime_init
+//     [bl __module_init]                       [bl __module_init]
+//     bl   main                                bl   main
+//     [bl __maxon_global_cleanup]              [bl __maxon_global_cleanup]
+//     [bl __cov_dump, x0 parked in x19]        [bl __cov_dump, x0 parked in x19]
+//     adrp x16, _exit@GOTPAGE                  movz x8, #94        ; __NR_exit_group
+//     ldr  x16, [x16, _exit@GOTOFF]            svc  #0
+//     blr  x16
+//     brk  #0                                  brk  #0
+//
+// NO FRAME, and the reason differs per OS but the conclusion does not. The stub never touches sp, so
+// the OS's 16-byte-aligned entry sp survives to the `bl` by construction. On macOS dyld enters through
+// a call-like path; on Linux the kernel enters `_start` with **x30 UNDEFINED** — there is no return
+// address — so the stub must never `ret`. It does not: both routes end in a non-returning exit, and
+// the `brk #0` catches the impossible fall-through rather than letting execution run off into the next
+// function.
+//
+// ⚠ **THE SECOND HALF OF THAT ARGUMENT USED TO BE "the scalar core has no backtrace that would need
+// x29/x30 chained", AND SINCE A3n THERE IS ONE** (`Arm64PanicRuntime.buildArm64WalkFramesChunk`). The
+// stub stays frameless anyway, but for a DIFFERENT reason, and the difference matters to anyone editing
+// either side: `mrt_start` is never a LINK in the chain, only its last symbolized NAME. `main`'s own
+// frame record carries the return address INTO this stub at `[x29+8]`, which is what prints `in
+// mrt_start`; the walk then follows `[x29+0]`, which is whatever the loader left in x29 because this
+// stub never writes it. Two INDEPENDENT things stop it there, and neither is the chain: the walk's
+// TEXT GUARD rejects any return address outside `[mrt_start, __symtable)` (measured on macOS — dyld's
+// x29 is a live stack address, the load succeeds, and the address above it is not this image's code),
+// and a `cbz` catches a null frame pointer (Linux, where execve zeroes the GPRs). Give this stub a
+// frame record, or drop either guard, and the walk's termination changes.
+//
+// argv is captured here, and where it is captured from is per-OS within arm64. dyld hands macOS
+// `mrt_start` argc/argv in x0/x1. The Linux kernel does not: it enters with argc at `[sp]`, argv at
+// `sp+8`, envp after its NUL terminator, and x0/x1 architecturally unspecified — which is why this arm is
+// a `match os` rather than one sequence.
+//
+// ⚠ **THE CAPTURE IS THE FIRST THING THE STUB DOES, BEFORE ANY `bl`.** On macOS a call would clobber
+// x0/x1; on Linux — where the capture must read the stack — anything that perturbs sp would move the
+// two words out from under it. Both hazards are avoided by the same placement, which is why it is
+// stated once rather than per arm.
+//
+// `leakCheck` gates the future MM leak bridge exactly as the x64 stub does; it is `false` for the
+// scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
+// initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
+// top-level `var`, which is every program in the scalar corpus.
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var iatRelocs = RelocationArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+
+	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read (MAC7). It rides
+	// `usesCommandLine`, so a program that never asks for its arguments carries neither the capture nor
+	// the words — the one-bit-two-tiers arrangement every other runtime family here uses.
+	if captureArgv 'argv'
+		emitArm64ArgvCapture(code, rdataRelocs: rdataRelocs, os: os)
+	end 'argv'
+
+	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL (L4).** Every other lane
+	// asks the platform for a variable — `GetEnvironmentVariableA` on Windows, `getenv` through libSystem on
+	// macOS — and a raw static image has neither, so the one moment the vector is reachable is HERE, where
+	// the kernel left it on the stack. It rides `LinuxRuntime.linuxReadsEnvironment` — the scheduler's
+	// `MAXON_MAX_PROCS` read, terminal detection's `NO_COLOR`/`TERM`, and the DebugStream attach's
+	// `MAXON_DEBUGSTREAM` — because none of the three implies either of the others.
+	//
+	// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits, so it
+	// re-reads `sp` rather than depending on a register the other arm happened to leave behind.
+	if captureEnvp 'envp'
+		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
+	end 'envp'
+
+	// ⭐ **THE FAULT HANDLER IS INSTALLED BEFORE ANY OTHER `bl`, SO THE FIRST INSTRUCTION IT COVERS IS THE
+	// FIRST ONE THAT COULD FAULT.** `mrt_runtime_init` takes no argument and returns nothing, so there is
+	// nothing to move around it; it is gated on `arm64OsInstallsFaultHandler` because a `bl` to a chunk
+	// the lane's appender did not lay down is a link failure rather than a diagnostic.
+	if arm64OsInstallsFaultHandler(os) 'faultHandler'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: RuntimeInitName)
+	end 'faultHandler'
+
+	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
+	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
+	// silently drop exactly the allocations a program makes before `main`. It takes no argument and returns
+	// nothing, so there is nothing to move around it — `__module_init`'s shape.
+	if debugStream 'debugStreamAttach'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: DsInitName)
+	end 'debugStreamAttach'
+
+	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
+	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
+	// no argument and returns nothing, so there is nothing to move around it.
+	if initGlobals 'moduleInit'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
+	end 'moduleInit'
+
+	// bl <entry> — filed as a CallFixup; concat resolves it to the entry's `.text` offset (mirrors x64's
+	// `callDirect(entryFunction)`). `entryFunction` is `Project.entryFunctionName`, already the `ByteArray`
+	// spelling the fixup matches a function's name against.
+	arm64EmitBranchLink(code, callFixups: callFixups, targetName: entryFunction)
+
+	// Release every managed global AFTER `main` and BEFORE the leak gate — a global released after the
+	// gate would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands
+	// it back in x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows
+	// through both with no move at all.
+	if initGlobals 'globalCleanup'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
+	end 'globalCleanup'
+
+	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (MAC3).**
+	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument, which
+	// this stub had no arm for until the scheduler reached this lane: AFTER the global cleanup, because a
+	// released managed global may be the last owner of a handle whose drop lets a green thread finish; and
+	// BEFORE `__mm_leak_check`, because a worker M's `__gt_reclaim` steps the very counters that gate reads,
+	// so an un-joined scheduler makes a clean program report 101 intermittently.
+	//
+	// `__gt_drain_at_exit` is shaped like `__mm_leak_check` deliberately — ExitCode in x0, ExitCode out — so
+	// on AAPCS64 the value flows through it with no move at all, exactly as it does through the two gates
+	// around it. A program with no scheduler carries neither the call nor the function.
+	if drainGreenThreads 'greenThreadDrain'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtDrainAtExitName)
+	end 'greenThreadDrain'
+
+	// The leak gate (future MM milestone). `__mm_leak_check` is an ordinary AAPCS64 function — it
+	// takes the ExitCode in x0 and returns the adjusted code (or 101) in x0 — so the value flows
+	// straight through with no move. Never emitted for the scalar core (`leakCheck` is false).
+	if leakCheck 'leakGate'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: MmLeakCheckName)
+	end 'leakGate'
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag, and
+	// the leak check is the last thing that can still free a box — so the trace's final events happen above
+	// this line.
+	//
+	// ⛔⛔ **AND THE EXIT CODE MUST BE PARKED ACROSS IT, WHICH IS NOT TRUE OF THE TWO GATES ABOVE.**
+	// `__mm_leak_check` and `__gt_drain_at_exit` are shaped to take the code and hand it back, so it flows
+	// through them in x0 with no move. `__ds_shutdown` is a VOID function, and x0 is exactly the register
+	// AAPCS64 lets one return in — so a traced program's exit code is whatever the detach happened to leave
+	// there. MEASURED: `mm-trace/string-builder-append-allocates-no-record-per-append` answered 0 where its
+	// spec pins 4. x19 is callee-saved, so the compiled detach restores it, and `mrt_start` owes it to nobody.
+	if debugStream 'debugStreamDetach'
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x19), rn: arm64RuntimeReg(Arm64Register.x0))
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: DsShutdownName)
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x19))
+	end 'debugStreamDetach'
+
+	// ⭐⭐ **PUBLISH THE COUNTERS, ON A GATE OF ITS OWN AND AFTER THE LEAK GATE** — the arm64 arm of
+	// `BackendDispatch.appendCoverageDump`, whose header carries both halves of that placement: a dump fused
+	// into `__mm_leak_check` would be absent from an allocation-free instrumented build, and a dump ahead of
+	// the gate would let the file surface's own allocations read as a leak.
+	//
+	// ⛔ **THE EXIT CODE IS PARKED, AND HERE IT MUST BE TWICE OVER**: x0 is AAPCS64's return register AND its
+	// first argument register, so the status this call takes is written over the very value being carried.
+	// x19 is callee-saved, so the compiled dump restores it, and `mrt_start` owes it to nobody — the detach
+	// above parks in the same register for the same reason.
+	//
+	// ⚠ **NO FRAME IS LAID FOR IT AND NONE IS OWED.** This stub never touches sp, so the OS's 16-byte-aligned
+	// entry sp is still what AAPCS64 requires at this `bl`, exactly as it is at the `bl` to `main`.
+	if dumpCoverage 'coverageDump'
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x19), rn: arm64RuntimeReg(Arm64Register.x0))
+		arm64EmitMovImm(code, rd: arm64RuntimeReg(Arm64Register.x0), value: MxcovStatusCompleted as MachineWord)
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: CoverageDumpName)
+		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x19))
+	end 'coverageDump'
+
+	// Terminate with the ExitCode already in x0. macOS records the `_exit` GOT slot as a Relocation
+	// the Mach-O writer patches (the twin of x64's `iatCall` → ExitProcess); Linux needs no
+	// relocation at all, which is the whole shape of this rung.
+	match arm64OsCallKind(os) 'exitRoute'
+		importCall then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: osImportSlotIndex(OsImportSlot.exit))
+		syscall then arm64EmitSyscall(code, number: Arm64LinuxSyscallExitGroup)
+	end 'exitRoute'
+
+	// brk #0 — SIGTRAP if the exit primitive ever returns (it does not); stops execution running off
+	// the end of this chunk into the next function rather than trusting it never to return.
+	arm64EmitBrk(code)
+
+	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+end 'buildArm64EntryStubChunk'
+
+// ⭐ **STASH `argc` AND `argv` WHERE THE Std TIER CAN READ THEM.** Two `.data` words and two stores; the
+// only per-OS part is which two places the pair is read FROM.
+//
+// ⚠ **THE ADDRESS GOES THROUGH x16 (IP0), WHICH IS FREE AT PROCESS ENTRY AND IS THE ONE SCRATCH NO ABI
+// CONTRACT HERE CLAIMS.** x0/x1 hold the values being stored on macOS, and the mandated ADRP+ADD pair needs
+// a destination that is neither.
+function emitArm64ArgvCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
+	match os 'argvLocation'
+		macos then emitArm64ArgvFromEntryRegisters(code, rdataRelocs: rdataRelocs)
+		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane — a WASI component has no `mrt_start` and no arm64 `.text` at all, so an `Os.wasi` reaching this stub is a target-construction bug")
+		linux then emitArm64ArgvFromEntryStack(code, rdataRelocs: rdataRelocs)
+		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes, so an `Os.windows` reaching the arm64 entry stub is a target-construction bug")
+	end 'argvLocation'
+end 'emitArm64ArgvCapture'
+
+// dyld enters `mrt_start` with `argc` in x0 and `argv` in x1 — the two registers an AAPCS64 `main(argc,
+// argv)` would have received, which is exactly how the platform's own start-up files read them.
+function emitArm64ArgvFromEntryRegisters(code ByteArray, rdataRelocs RdataRelocationArray)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+end 'emitArm64ArgvFromEntryRegisters'
+
+// ⭐⭐ **THE LINUX KERNEL PUTS THE VECTOR ON THE STACK, NOT IN REGISTERS.** `execve` enters `_start` with
+// **argc at `[sp]`, argv at `sp+8`** (the pointers themselves, NUL-terminated, with envp following) and with
+// **x0..x7 architecturally UNSPECIFIED** — so the macOS capture two lines up is not merely a different
+// spelling of this one, it would store whatever the kernel happened to leave in x0/x1.
+//
+// ⚠ **argv IS AN ADDRESS THIS STUB COMPUTES, NOT A WORD IT LOADS.** `[sp]` holds the COUNT, but `sp+8` IS
+// the vector: `argv[0]` lives there. So argc is a load and argv is an `add`.
+//
+// ⚠ **THE ENTRY `sp` IS READ INTO x17 (IP1) FIRST.** A `ldr` off SP would encode, but the `add` for
+// `sp+8` and the ADRP+ADD address pair both want an ordinary GPR, and x16 (IP0) is already the address
+// scratch `emitArm64ArgvStore` claims. x17 is the other intra-procedure-call temporary, free at process
+// entry and claimed by nothing here. The capture runs before any `bl` (see the stub), so nothing has
+// perturbed sp when this reads it.
+function emitArm64ArgvFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
+	let stackTop = arm64RuntimeReg(Arm64Register.x17)
+	arm64EmitMovFromSp(code, dest: stackTop)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(Arm64Register.x0), baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitAddImmSigned(code, rd: arm64RuntimeReg(Arm64Register.x1), rn: stackTop, imm: LinuxEntryArgvOffset)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+end 'emitArm64ArgvFromEntryStack'
+
+// ⭐⭐ **`envp` IS `argv + (argc + 1) * 8`, AND THE `+ 1` IS argv's OWN NUL TERMINATOR.** The Linux kernel
+// lays the entry stack as `[sp] = argc`, then `argc` argument pointers, then a NULL, then the environment
+// pointers, then another NULL. So relative to the entry `sp` the environment begins at `(argc + 2) * 8` —
+// one word for the count, `argc` for the vector, one for its terminator.
+//
+// ⚠ **IT IS A COMPUTED ADDRESS, NOT A WORD LOADED FROM ANYWHERE.** Nothing in the entry frame holds a
+// pointer to the environment; the only way to it is this arithmetic, which is why the capture cannot be
+// deferred to the first `getenv`-shaped call the way the other lanes' can.
+//
+// ⚠ **x17 (IP1) HOLDS THE ENTRY `sp`, AND x16 (IP0) IS `emitArm64ArgvStore`'s ADDRESS SCRATCH** — the same
+// division of the two intra-procedure-call temporaries `emitArm64ArgvFromEntryStack` makes, and for the same
+// reason: this runs before any `bl`, so nothing has perturbed sp and neither temporary is claimed.
+function emitArm64EnvpCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
+	match os 'envpLocation'
+		linux then emitArm64EnvpFromEntryStack(code, rdataRelocs: rdataRelocs)
+		macos then panic("buildArm64EntryStubChunk: arm64-macOS reads an environment variable through libSystem's `getenv` and captures no vector — `captureEnvp` is asked only of the Linux lane, so a `true` here is a backend wiring bug")
+		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler")
+		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane")
+	end 'envpLocation'
+end 'emitArm64EnvpCapture'
+
+function emitArm64EnvpFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
+	let stackTop = arm64RuntimeReg(Arm64Register.x17)
+	let envp = arm64RuntimeReg(Arm64Register.x0)
+
+	arm64EmitMovFromSp(code, dest: stackTop)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: envp, baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitAddImmSigned(code, rd: envp, rn: envp, imm: LinuxEntryEnvpSkippedWords)
+	arm64EmitLslImm(code, rd: envp, rn: envp, sh: LinuxEntryWordScaleBits)
+	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: envp, rn: stackTop, rm: envp)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: LinuxEnvpLabel, src: Arm64Register.x0)
+end 'emitArm64EnvpFromEntryStack'
+
+// A word index scales to a byte offset by the machine word width, spelled as a shift because `lsl` is what
+// the instruction takes. Derived from `SpillSlotBytes`'s 8 rather than written as a 3.
+let LinuxEntryWordScaleBits = 3 as ShiftCount
+
+// One captured register into one `.data` word.
+function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)
+	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x16), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: SpillSlotBytes)
+end 'emitArm64ArgvStore'

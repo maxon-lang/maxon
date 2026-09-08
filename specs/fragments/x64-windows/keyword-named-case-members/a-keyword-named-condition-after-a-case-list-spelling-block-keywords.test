@@ -1,0 +1,148 @@
+// Test: a-keyword-named-condition-after-a-case-list-spelling-block-keywords
+typealias Idx = int(0 to 100)
+
+enum Kw
+	while
+	match
+	for
+	omega
+end 'Kw'
+
+function span(to Idx, from Idx) returns Idx
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+	return from - to
+end 'span'
+
+function tagOf(k Kw) returns Idx
+	match k 'm'
+		while then return 1
+		match then return 2
+		for then return 3
+		omega then return 0
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return (span(50, from: 8) + tagOf(Kw.omega)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @span {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#4
+  __rc_chk#5:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, __rc_ok#3
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:11: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#3:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#7
+  __rc_chk#8:
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc lessEqual, __rc_ok#6
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:11: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#6:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, ifcont
+  forward:
+    x64.movRegReg r8, rcx
+    x64.subRegReg r8, rcx, rdx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk#11:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#9
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:13: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#9:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg r8, rdx
+    x64.subRegReg r8, rdx, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#13
+  __rc_chk#14:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok#12
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:15: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#12:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 50
+    x64.movRegImm32 rdx, 8
+    x64.callDirect span
+    x64.movRegImm32 rax, 3
+  __il_body:
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#6, [1]=matcharm#7, [2]=matcharm#8, [3]=matcharm#9] @__jumptable_4
+  matchdead:
+  matcharm#6:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont
+  matcharm#7:
+    x64.movRegImm32 rax, 2
+    x64.jmp __il_cont
+  matcharm#8:
+    x64.movRegImm32 rax, 3
+    x64.jmp __il_cont
+  matcharm#9:
+    x64.movRegImm32 rax, 0
+  __il_cont:
+    x64.leaRegRegReg r8, r8, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-keyword-named-condition-after-a-case-list-spelling-block-keywords.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

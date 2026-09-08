@@ -1,0 +1,23 @@
+// Test: stdlib-user-shadows.user-enum-shadows-a-listed-module
+enum ParseError implements Error
+	Invalid = 1
+end 'ParseError'
+
+function main() returns ExitCode
+	let e = ParseError.Invalid
+	return match e 'which'
+		Invalid gives 5
+	end 'which'
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  matcharm:
+    arm64.movImm x0, 5
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

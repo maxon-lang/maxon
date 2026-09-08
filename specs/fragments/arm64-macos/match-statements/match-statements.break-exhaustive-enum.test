@@ -1,0 +1,103 @@
+// Test: match-statements.break-exhaustive-enum
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+	var result = 0
+	match c 'check'
+		empty then break 'check'
+		value(n) then result = n
+	end 'check'
+	return result
+end 'process'
+
+function main() returns ExitCode
+	let a = process(Container.empty)
+	let b = process(Container.value(42))
+	if a == 0 and b == 42 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+  __il_body#7:
+    arm64.movImm x19, 0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __il_cont#6
+  matchnext#12:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#11
+  matcharm#10:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+  __il_cont#6:
+    arm64.bl __mm_decref
+    arm64.movImm x20, 42
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+  __il_body#14:
+    arm64.movImm x20, 0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __il_cont#5
+  matchnext#19:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#18
+  matcharm#17:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+  __il_cont#5:
+    arm64.bl __mm_decref
+    arm64.cmp x19, 0
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
+  andrhs:
+    arm64.cmp x20, 42
+    arm64.cset x0, eq
+  scmerge:
+    arm64.cbz x0, ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead#18:
+  matchdead#11:
+  afterbreak#9:
+  afterbreak#16:
+}

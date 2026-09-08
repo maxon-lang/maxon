@@ -1,0 +1,105 @@
+// Test: shift-ranged-operand-is-64-bit
+typealias I32 = int(-2147483648 to 2147483647)
+typealias U32 = int(0 to 4294967295)
+typealias Num = int(i64.min to i64.max)
+
+function shlBy(v Num, d Num) returns Num
+	return v shl d
+end 'shlBy'
+
+function shrBy(v Num, d Num) returns Num
+	return v shr d
+end 'shrBy'
+
+function main() returns ExitCode
+	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
+	// answer needs all 64.
+	let narrow = -8 as I32
+	if narrow shl 29 != shlBy(-8, d: 29) 'signedFoldVsEmitted'
+		return 1
+	end 'signedFoldVsEmitted'
+	if narrow shl 29 != -4294967296 'signedValue'
+		return 2
+	end 'signedValue'
+
+	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
+	// `shr 33` would have quietly become `shr 1`.
+	if narrow shr 33 != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
+		return 3
+	end 'signedCountFoldVsEmitted'
+	if narrow shr 33 != -1 'signedCountValue'
+		return 4
+	end 'signedCountValue'
+
+	// NARROW UNSIGNED. Zero-filling, and still 64 bits wide.
+	let wide = 4294967295 as U32
+	if wide shl 33 != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
+		return 5
+	end 'unsignedFoldVsEmitted'
+	if wide shr 4 != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
+		return 6
+	end 'unsignedShrFoldVsEmitted'
+	if wide shr 4 != 268435455 'unsignedShrValue'
+		return 7
+	end 'unsignedShrValue'
+
+	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
+	// agree with it rather than merely with each other.
+	let plain = -8 as Num
+	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
+		return 8
+	end 'rangedAgreesWithPlain'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 18446744069414584320
+  __il_body#18:
+    arm64.movImm x1, 18446744069414584320
+  __il_cont#17:
+    arm64.cmp x0, x1
+    arm64.b.eq ifcont#4
+  signedFoldVsEmitted:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+  __il_cont#19:
+    arm64.cmp x0, -1
+    arm64.b.eq ifcont#8
+  signedCountFoldVsEmitted:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 18446744065119617024
+  __il_body#22:
+    arm64.movImm x1, 18446744065119617024
+  __il_cont#21:
+    arm64.cmp x0, x1
+    arm64.b.eq ifcont#10
+  unsignedFoldVsEmitted:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 268435455
+  __il_cont#23:
+    arm64.movImm x16, 268435455
+    arm64.cmp x0, x16
+    arm64.b.eq ifcont#16
+  unsignedShrFoldVsEmitted:
+    arm64.movImm x0, 6
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,31 @@
+// Test: error.crossfile-a-contested-name-does-not-credit-the-other-declaration
+// --- file: a.maxon
+typealias Container = int(0 to 5)
+
+export function useA() returns ExitCode
+	let c = 4 as Container
+	return c
+end 'useA'
+
+// --- file: b.maxon
+export union Container
+	empty
+	holds(s String)
+end 'Container'
+
+export function fromB() returns ExitCode
+	let c = Container.holds("hi")
+
+	match c 'pick'
+		empty then return 0
+		holds(s) then return 3 if s.equals("hi") else 0
+	end 'pick'
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useA() + fromB()
+end 'main'
+---
+CompilerError:
+error E3092: <fragment>:11:14: exported type 'Container' is never referenced outside its declaring file

@@ -1,0 +1,81 @@
+// Test: first-class-function.field-value-called-as-statement-discarded
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let h = Handler.create(inc)
+	h.op(10)
+	return h.op(41)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @inc {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.leaRegFunc rax, [rip + __fnref_inc]
+    x64.movRegImm32 rcx, 0
+    x64.leaRegSlot rbx, slot0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 0
+    x64.callReg r12
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
+    x64.movRegImm32 rcx, 41
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.field-value-called-as-statement-discarded.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,22 @@
+// Test: error.nested-struct-backing-leaf-type
+typealias Wide = int(0 to 100)
+
+type Inner
+	export let n as Wide
+	export let label as String
+end 'Inner'
+
+type Meta
+	export let inner as Inner
+end 'Meta'
+
+enum Task
+	quick = Meta{inner: Inner{n: 1, label: 2}}
+end 'Task'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:2: Unsupported: field 'label' of the `Inner` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of

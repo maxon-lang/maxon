@@ -1,0 +1,149 @@
+// Test: stack-growth-chunk
+function deepRecurse(n Integer) returns Integer
+	Runtime.yield()
+	if n == 0 'base'
+		return 0
+	end 'base'
+	return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function main() returns ExitCode
+	let p = async deepRecurse(200)
+	let r = await p
+	return r as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 200
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_envp@240 = i64 0
+  __mrt_tls_next_key@248 = i64 0
+  __mrt_errno@256 = i64 0
+  __mrt_tls_ready@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
+}
+
+func @deepRecurse {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect Runtime.yield
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, ifcont
+  base:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rbx, -1
+    x64.callDirect deepRecurse
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 200
+    x64.leaRegFunc rcx, [rip + deepRecurse]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+chunk @__gt_morestack {
+    0000: 49 89 62 f8 49 8d 62 f8 55 53 41 54 41 55 41 56
+    0010: 41 57 51 52 41 50 41 51 56 57 50 48 83 ec 50 f2
+    0020: 0f 11 44 24 20 f2 0f 11 4c 24 28 f2 0f 11 54 24
+    0030: 30 f2 0f 11 5c 24 38 f2 0f 11 64 24 40 f2 0f 11
+    0040: 6c 24 48 4c 89 db 4c 8b 63 18 4c 8b 6b 20 4d 89
+    0050: ee 4d 01 f6 bf 00 00 00 00 4c 89 f6 ba 03 00 00
+    0060: 00 41 ba 22 00 00 00 49 b8 ff ff ff ff ff ff ff
+    0070: ff 41 b9 00 00 00 00 b8 09 00 00 00 0f 05 49 89
+    0080: c7 fc 4c 89 ff 4c 01 f7 4c 29 ef 4c 89 e6 4c 89
+    0090: e9 f3 a4 4c 89 f8 4c 01 f0 4c 29 e8 4c 29 e0 4c
+    00a0: 89 e1 4c 01 e9 4c 39 e5 0f 82 0c 00 00 00 48 39
+    00b0: cd 0f 83 03 00 00 00 48 01 c5 48 89 ac 24 b0 00
+    00c0: 00 00 48 89 e9 4d 89 f8 4d 01 f0 4d 29 e8 4d 89
+    00d0: f9 4d 01 f1 48 85 c9 0f 84 3b 00 00 00 4c 39 c1
+    00e0: 0f 82 32 00 00 00 4c 39 c9 0f 83 29 00 00 00 4c
+    00f0: 8b 19 4d 39 e3 0f 82 15 00 00 00 4d 89 e2 4d 01
+    0100: ea 4d 39 d3 0f 83 06 00 00 00 49 01 c3 4c 89 19
+    0110: 48 8b 09 e9 bc ff ff ff 4c 89 7b 18 4c 89 73 20
+    0120: 4c 89 f9 48 81 c1 a0 03 00 00 48 89 4b 50 48 89
+    0130: c5 4c 89 e7 4c 89 ee b8 0b 00 00 00 0f 05 48 89
+    0140: e8 f2 0f 10 44 24 20 f2 0f 10 4c 24 28 f2 0f 10
+    0150: 54 24 30 f2 0f 10 5c 24 38 f2 0f 10 64 24 40 f2
+    0160: 0f 10 6c 24 48 48 83 c4 50 4c 8b 54 24 68 49 01
+    0170: c2 58 5f 5e 41 59 41 58 5a 59 41 5f 41 5e 41 5d
+    0180: 41 5c 5b 5d 48 81 c4 08 00 00 00 4c 89 d4 c3
+}

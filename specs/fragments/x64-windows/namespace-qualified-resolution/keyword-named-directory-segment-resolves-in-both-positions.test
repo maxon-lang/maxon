@@ -1,0 +1,58 @@
+// Test: keyword-named-directory-segment-resolves-in-both-positions
+// --- file: lib/from/h.maxon
+typealias Integer = int(0 to 125)
+
+export typealias Score = int(0 to 100)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let s = 5 as lib.from.Score
+	return ((lib.from.helper() as lib.from.Score) + s) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rax, 7
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'lib.from.Score'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.leaRegRegImm32 r8, rax, 5
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

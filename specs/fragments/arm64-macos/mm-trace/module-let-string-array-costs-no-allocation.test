@@ -1,0 +1,119 @@
+// Test: module-let-string-array-costs-no-allocation
+let Headings = ["## Deferred", "## Notes"]
+
+function main() returns ExitCode
+	let first = try Headings.get(0) otherwise ""
+	let second = try Headings.get(1) otherwise ""
+	return (first.byteLength() + second.byteLength() + Headings.count()) as ExitCode
+end 'main'
+---
+ExitCode: 21
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __ds_base@32 = i64 0
+  __ds_buf_size@40 = i64 0
+  __ds_buf_mask@48 = i64 0
+  __ds_start_ts@56 = i64 0
+  __ds_lock@64 = i64 0
+  __mm_alloc_id@72 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __strtab_rec_6
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow#11
+  __im_load#12:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#22
+  __im_empty#13:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#23
+  __im_slow#11:
+    arm64.bl __managed_get
+    arm64.b __im_cont#10
+  critsplit#23:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#10
+  critsplit#22:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#10:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.leaRdata x19, __str_rec_7  ; ""
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont:
+    arm64.leaRdata x0, __strtab_rec_6
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#15
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 8
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#24
+  __im_empty#17:
+    arm64.cmp x2, 0
+    arm64.b.ne critsplit#25
+  __im_slow#15:
+    arm64.bl __managed_get
+    arm64.b __im_cont#14
+  critsplit#25:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#14
+  critsplit#24:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont#14:
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#20
+  tryerr#5:
+    arm64.leaRdata x0, __str_rec_7  ; ""
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_body#21:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont:
+    arm64.add x0, x1, x0
+    arm64.leaRdata x1, __strtab_rec_6
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at module-let-string-array-costs-no-allocation.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

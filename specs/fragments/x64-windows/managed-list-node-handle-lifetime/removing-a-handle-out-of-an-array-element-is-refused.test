@@ -1,0 +1,17 @@
+// Test: removing-a-handle-out-of-an-array-element-is-refused
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
+typealias NodeBag = Array with StrNode
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let n = chain.insertLast("a heap string long enough to be a real allocation")
+	var bag = NodeBag.create()
+	bag.push(n)
+	let got = chain.remove(try bag.get(0) otherwise panic("bag.get: index 0 of a one-element bag"))
+	print("[{got}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:18: Unsupported: `__ManagedList.remove` takes the element OUT of the node, so its handle must be one this statement can mark as moved — a name (`remove(n)`) or an insertion on this same chain, handed in inline. A handle arriving any other way — out of a field, an element, a call result, a merge — would go on answering `value()` from the emptied slot with nothing left to refuse the read; bind it to a name first, or use `detach`, which leaves the element where it is

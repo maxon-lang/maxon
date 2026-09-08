@@ -1,0 +1,405 @@
+// Test: streaming-subprocess-env.inherit-updating-reaches-the-streaming-child
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo")
+	argv.push("%MAXON_STREAM_ENV_PROBE%")
+
+	let inheritCwd = try FilePath.from("") otherwise return 3
+	let childEnvironment = Environment.inheritUpdating(["MAXON_STREAM_ENV_PROBE": "seen"])
+	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.name("cmd"), arguments: argv, workingDirectory: inheritCwd, environment: childEnvironment) otherwise return 4
+	let line = try child.readStdoutLine() otherwise return 5
+	let code = try child.wait() otherwise return 6
+	child.release()
+
+	print("line={line} childCode={code}\n")
+	return line.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __io_iocp@248 = i64 0
+  __io_done_event@256 = i64 0
+  __io_init_done@264 = i64 0
+  __io_pending@272 = i64 0
+  __io_pipe_seq@280 = i64 0
+  __subp_table@288 = i64 0
+  __subp_last_error@296 = i64 0
+  __slab_arena_list@304 = i64 0
+  __slab_arena_map_l1@312 = i64 0
+  __slab_state@320 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 184
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_39]  ; "/c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_40]  ; "echo"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_41]  ; "%MAXON_STREAM_ENV_PROBE%"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_42]  ; ""
+    x64.callDirect FilePath.from
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.leaRegRdata r13, [rip + __str_rec_43]  ; "MAXON_STREAM_ENV_PROBE"
+    x64.leaRegRdata rax, [rip + __str_rec_44]  ; "seen"
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.storeSlotReg slot11, r8
+    x64.loadRegBaseDisp.word64 r14, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeSlotReg slot17, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot14, r13
+    x64.leaRegRegImm32 r15, r13, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r14, slot17
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r14
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r14
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.loadRegSlot rax, slot13
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegImm32 rcx, r14, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot18, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r14
+    x64.loadRegSlot rax, slot18
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.storeBaseDispReg.word64 [rax + 8], r14
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.leaRegRdata r9, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.loadRegSlot r13, slot11
+    x64.movRegReg rcx, r13
+    x64.loadRegSlot rdx, slot14
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.leaRegRdata r13, [rip + __str_rec_45]  ; "cmd"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.movRegReg r9, r14
+    x64.callDirect StreamingSubprocess.spawnWithEnvironment
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot3, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r13, 4
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Environment
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.readStdoutLine
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot4, r15
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r15, 5
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Environment
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r15
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.wait
+    x64.storeSlotReg slot16, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Environment
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 6
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.release
+    x64.leaRegRdata rax, [rip + __str_rec_46]  ; "line="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot15, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.storeSlotReg slot12, rax
+    x64.loadRegBaseDisp.word64 r12, [r15 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_47]  ; " childCode="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.loadRegSlot rcx, slot16
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot9, r8
+    x64.leaRegRdata rax, [rip + __str_rec_48]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg rcx, rcx, r13
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r12, slot9
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot8
+    x64.loadRegSlot r12, slot7
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot6
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+  __il_body:
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_152]  ; "panic at streaming-subprocess-env.inherit-updating-reaches-the-streaming-child.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_Environment
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,147 @@
+// Test: a-method-that-binds-its-payload-and-recurses
+typealias Integer = int(i64.min to i64.max)
+typealias Depth = int(0 to 10)
+
+union M
+	silent
+	text(body String)
+
+	export function spin(d Depth) returns Integer
+		return match self 'k'
+			silent gives 0
+			text(s) gives 1 + self.spin((d - 1) if d > 0 else 0) if d > 0 else 1
+		end 'k'
+	end 'spin'
+end 'M'
+
+function main() returns ExitCode
+	let m = M.text("a recursively bound payload string, long enough for the heap")
+	return m.spin(4) as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @M.spin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 10
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-method-that-binds-its-payload-and-recurses.test:9: Range check failed: value outside typealias 'Depth'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont#11
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.cmpRegImm32 r12, 0
+    x64.setccReg greater, rax
+    x64.jcc lessEqual, ternaryfalse#7
+  ternarytrue#6:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse#4
+  ternarytrue#3:
+    x64.leaRegRegImm32 rdx, r12, -1
+    x64.jmp matchcont#5
+  ternaryfalse#4:
+    x64.movRegImm32 rdx, 0
+  matchcont#5:
+    x64.movRegReg rcx, rbx
+    x64.callDirect M.spin
+    x64.leaRegRegImm32 rbx, r8, 1
+    x64.jmp matchcont#8
+  ternaryfalse#7:
+    x64.movRegImm32 rbx, 1
+  matchcont#8:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+  matchcont#11:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]  ; "a recursively bound payload string, long enough for the heap"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 8], r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect M.spin
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-method-that-binds-its-payload-and-recurses.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_M
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

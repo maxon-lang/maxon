@@ -1,0 +1,23 @@
+// Test: written-field-on-a-container-alias-is-refused
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Plain
+	typealias Nums = Array with ExitCode
+
+	static function make() returns Count
+		var n = Nums{count: 3}
+		return n.count()
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	let c = Plain.make()
+	if c == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:16: Unsupported: a field written inside `Nums{…}` — the literal builds the EMPTY container `Nums.create()` builds, and a builtin container has no user-writable fields; fill it after creating it

@@ -1,0 +1,18 @@
+// Test: error.a-sized-containers-buffer-may-not-lose-an-element
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function drop()
+		try managed.remove(0) otherwise ignore
+	end 'drop'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.drop()
+	return v.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'remove' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'remove' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length

@@ -1,0 +1,26 @@
+// Test: error.a-different-shape-returned-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+typealias Unary = function(n Integer) returns Integer
+typealias Pair = function(a Integer, b Integer) returns Integer
+
+function addBoth(a Integer, b Integer) returns Integer
+	return a + b
+end 'addBoth'
+
+function pickPair() returns Pair
+	return addBoth
+end 'pickPair'
+
+function pickUnary() returns Unary
+	let p = pickPair()
+	return p
+end 'pickUnary'
+
+function main() returns ExitCode
+	let u = pickUnary()
+	print("{u(1)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'

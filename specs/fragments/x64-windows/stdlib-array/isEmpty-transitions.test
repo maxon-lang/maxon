@@ -1,0 +1,118 @@
+// Test: isEmpty-transitions
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+
+	if arr.isEmpty() == false 'e1'
+		return 1
+	end 'e1'
+
+	arr.push(42)
+
+	if arr.isEmpty() == true 'e2'
+		return 2
+	end 'e2'
+
+	_ = try arr.pop() otherwise 0
+
+	if arr.isEmpty() == false 'e3'
+		return 3
+	end 'e3'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+  __il_cont#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont#2
+  e1:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rdx, 42
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+  __il_cont#12:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, ifcont#4
+  e2:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.leaRegRdata rdx, [rip + __layout_Array_Int]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.pop
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, __il_body#15
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+  __il_cont#14:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont#9
+  e3:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

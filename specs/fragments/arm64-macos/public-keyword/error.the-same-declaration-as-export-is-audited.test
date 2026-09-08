@@ -1,0 +1,19 @@
+// Test: error.the-same-declaration-as-export-is-audited
+// --- file: api/lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function neverCalledFromOutside() returns Integer
+	return 5
+end 'neverCalledFromOutside'
+
+export function entry() returns Integer
+	return neverCalledFromOutside()
+end 'entry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+CompilerError:
+error E3092: api/<fragment>:5:17: exported function 'api.neverCalledFromOutside' is never referenced outside its declaring file

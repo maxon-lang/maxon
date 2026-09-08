@@ -1,0 +1,24 @@
+// Test: unsigned-full-alias-admits-a-bit-63-hex-literal
+typealias Slot = int(0 to u64.max)
+
+function take(s Slot) returns Slot
+	return s
+end 'take'
+
+function main() returns ExitCode
+	if take(0xFFFFFFFFFFFFFFFE) == 0xFFFFFFFFFFFFFFFE 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  ok:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

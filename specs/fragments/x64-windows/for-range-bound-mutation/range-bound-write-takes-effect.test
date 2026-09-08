@@ -1,0 +1,51 @@
+// Test: range-bound-write-takes-effect
+function main() returns ExitCode
+	var n = 1
+	var total = 0
+	for i in n upto 4 'l'
+		n = n + 10
+		total = total + i
+	end 'l'
+	return (total + n) as ExitCode
+end 'main'
+---
+ExitCode: 37
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg rdx, rcx
+    x64.movRegReg rcx, rax
+  forhdr:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc greaterEqual, forexit
+  l:
+    x64.leaRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rdx, rdx, rax
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.leaRegRegReg r8, rdx, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at range-bound-write-takes-effect.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

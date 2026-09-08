@@ -1,0 +1,59 @@
+// Test: inner-alias-shadowing-another-type-wins-at-the-static-door
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Other
+	export var b as ExitCode
+
+	export static function create(v ExitCode) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Other'
+
+type Plain
+	typealias Other = Pair with ExitCode
+
+	static function make() returns ExitCode
+		let p = Other.create(9)
+		return p.a
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Plain.make {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 9
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl Plain.make
+    arm64.epilogue 16
+    arm64.ret
+}

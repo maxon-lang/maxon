@@ -1,0 +1,12 @@
+// Test: error.reserve-then-stage-without-publishing-is-refused
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var a = StringArray.create()
+	a.reserve(4)
+	try a.managed.set(0, value: "staged") otherwise return 1
+	return 42
+end 'main'
+---
+CompilerError:
+error E3109: <fragment>:7:16: 'managed.set' cannot store an element of 'String': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length

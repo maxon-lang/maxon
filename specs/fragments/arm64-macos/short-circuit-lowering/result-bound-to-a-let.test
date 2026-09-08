@@ -1,0 +1,69 @@
+// Test: result-bound-to-a-let
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function main() returns ExitCode
+	let a = t() and t()
+	let b = t() and f()
+	let c = f() or t()
+	var code = 0
+	if a 'a'
+		code = code + 1
+	end 'a'
+	if b 'b'
+		code = code + 2
+	end 'b'
+	if c 'c'
+		code = code + 4
+	end 'c'
+	return code
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body#19:
+    arm64.movImm x0, 1
+  __il_body#23:
+    arm64.movImm x1, 0
+  __il_body#27:
+    arm64.movImm x2, 1
+  scmerge:
+    arm64.movImm x3, 0
+    arm64.cbz x0, critsplit
+  a:
+    arm64.movImm x0, 1
+    arm64.b ifcont#8
+  critsplit:
+    arm64.movRegReg x0, x3
+  ifcont#8:
+    arm64.cbz x1, ifcont#10
+  b:
+    arm64.add x0, x0, 2
+  ifcont#10:
+    arm64.cbz x2, ifcont#12
+  c:
+    arm64.add x0, x0, 4
+  ifcont#12:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at result-bound-to-a-let.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

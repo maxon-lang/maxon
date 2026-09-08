@@ -1,0 +1,35 @@
+// Test: error.a-handle-of-another-service-is-refused
+type Calc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Calc'
+
+type Logger
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function say(peer Calc.handle)
+		peer.bump()
+	end 'say'
+end 'Logger'
+
+function main() returns ExitCode
+	let c = spawn Calc.create()
+	let l = spawn Logger.create()
+	l.say(l)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'

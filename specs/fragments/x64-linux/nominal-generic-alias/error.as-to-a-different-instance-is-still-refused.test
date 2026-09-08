@@ -1,0 +1,19 @@
+// Test: error.as-to-a-different-instance-is-still-refused
+typealias Wide = int(0 to u64.max)
+typealias Narrow = int(0 to 63)
+typealias WideCol = Array with Wide
+typealias NarrowCol = Array with Narrow
+
+function widthOf(c NarrowCol) returns ExitCode
+	return c.count() as ExitCode
+end 'widthOf'
+
+function main() returns ExitCode
+	var w = WideCol.create()
+	w.push(5)
+	let n = w as NarrowCol
+	return widthOf(n)
+end 'main'
+---
+CompilerError:
+error E3131: <fragment>:14:12: Cannot cast to 'NarrowCol': a container's elements have a storage layout of their own, so 'WideCol' cannot be retagged as one — build the container with the element type you need, or convert it element by element

@@ -1,0 +1,67 @@
+// Test: loop-calls-a-function-that-writes-the-global
+
+
+var counter = 0
+
+function bump()
+	counter = counter + 1
+end 'bump'
+
+function main() returns ExitCode
+	var seen = 0
+	var n = 0
+	while n < 5 'loop'
+		bump()
+		seen = seen + counter
+		n = n + 1
+	end 'loop'
+	return seen
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+  whilehdr:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc greaterEqual, whileexit
+  __il_body:
+    x64.leaRegGlobal rcx, __data_counter
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_counter
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+  __il_cont:
+    x64.leaRegGlobal rcx, __data_counter
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg r8, r8, rcx
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at loop-calls-a-function-that-writes-the-global.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,244 @@
+/// SHA-256 cryptographic hash function.
+/// @category Crypto
+typealias Word32 = int(i64.min to i64.max)
+typealias Sha256Words = Array with Word32
+
+// The eight-word hash state (FIPS 180-4 section 5.3.3), held in a fixed-size Vector.
+//
+// It was eight scalars, "so round bookkeeping doesn't require bounds-checked indexing" — and that
+// reason is kept rather than overridden: eight scalars live across the whole block loop do not fit
+// the register pool. A Vector carries its SIZE in its TYPE, which is what a plain Array cannot say
+// — the state is eight words for the whole of this file's life and no code here can grow or shrink
+// it, because the surface has no operation that could.
+//
+// ⚠ THE SENTENCE THAT STOOD HERE CLAIMED THE ACCESSES CARRY NO BOUNDS CHECK. That was true of one
+// compiler for one rung (a constant index took an elided runtime entry) and it was never true of the
+// call site below that matters: `sha256AddIntoState` takes `slot` as a PARAMETER, which no compiler
+// folds. W190 retired the elision with the members — `get`/`set` are declared methods now — so every
+// access here is checked, and what the fixed size buys is the guarantee about the LENGTH rather than
+// the absence of a test.
+typealias Sha256State = Vector with 8 Word32
+
+// SHA-256 round constants (FIPS 180-4 section 4.2.2)
+let sha256KTable = [
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+	0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+	0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+	0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+	0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+	0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+function sha256RotR(v Word32, n Word32) returns Word32
+	let right = v shr n
+	let left = (v shl (32 - n)) and 0xFFFFFFFF
+	return (right or left) and 0xFFFFFFFF
+end 'sha256RotR'
+
+function sha256Ch(a Word32, b Word32, c Word32) returns Word32
+	let notA = (0xFFFFFFFF xor a) and 0xFFFFFFFF
+	return ((a and b) xor (notA and c)) and 0xFFFFFFFF
+end 'sha256Ch'
+
+function sha256Maj(a Word32, b Word32, c Word32) returns Word32
+	return ((a and b) xor (a and c) xor (b and c)) and 0xFFFFFFFF
+end 'sha256Maj'
+
+function sha256BigSigma0(v Word32) returns Word32
+	let r2 = sha256RotR(v, n: 2)
+	let r13 = sha256RotR(v, n: 13)
+	let r22 = sha256RotR(v, n: 22)
+	return (r2 xor r13 xor r22) and 0xFFFFFFFF
+end 'sha256BigSigma0'
+
+function sha256BigSigma1(v Word32) returns Word32
+	let r6 = sha256RotR(v, n: 6)
+	let r11 = sha256RotR(v, n: 11)
+	let r25 = sha256RotR(v, n: 25)
+	return (r6 xor r11 xor r25) and 0xFFFFFFFF
+end 'sha256BigSigma1'
+
+function sha256SmSigma0(v Word32) returns Word32
+	let r7 = sha256RotR(v, n: 7)
+	let r18 = sha256RotR(v, n: 18)
+	let s3 = (v shr 3) and 0xFFFFFFFF
+	return (r7 xor r18 xor s3) and 0xFFFFFFFF
+end 'sha256SmSigma0'
+
+function sha256SmSigma1(v Word32) returns Word32
+	let r17 = sha256RotR(v, n: 17)
+	let r19 = sha256RotR(v, n: 19)
+	let s10 = (v shr 10) and 0xFFFFFFFF
+	return (r17 xor r19 xor s10) and 0xFFFFFFFF
+end 'sha256SmSigma1'
+
+function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
+	// The caller (sha256Compress's schedule loop) guarantees off+3 < buf.count(); the otherwise
+	// branch is unreachable but must be syntactically present since Array.get throws.
+	let b0 = try buf.get(off) otherwise 0
+	let b1 = try buf.get(off + 1) otherwise 0
+	let b2 = try buf.get(off + 2) otherwise 0
+	let b3 = try buf.get(off + 3) otherwise 0
+	return (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
+end 'sha256ReadBE32'
+
+// Fold the 64-byte block at `blockOff` into `state` — FIPS 180-4 section 6.2.2.
+//
+// It is a function of its own rather than the body of sha256's block loop because the message
+// schedule, the padding buffer and the block offset are then not all live at once: the compression
+// needs the schedule and the state, and the caller needs the buffer and the offset.
+function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
+	// Message schedule: 64 extended words. An Array and not a Vector, because round r reads
+	// w[r-2], w[r-7], w[r-15], w[r-16] — indexes computed from a loop counter, which no fixed size
+	// makes constant. All four are in range by the loop header, so the otherwise branches below are
+	// unreachable.
+	var w = Sha256Words.create()
+	w.reserve(64)
+
+	var wi = 0
+	while wi < 16 'readWords'
+		w.push(sha256ReadBE32(padded, off: blockOff + wi * 4))
+		wi = wi + 1
+	end 'readWords'
+
+	while wi < 64 'extend'
+		// wi is in [16, 64); wi-16 >= 0 and wi-2 < 64 so all indexes are in w's range.
+		let wm2 = try w.get(wi - 2) otherwise panic("sha256: extend w[wi-2] unreachable")
+		let wm7 = try w.get(wi - 7) otherwise panic("sha256: extend w[wi-7] unreachable")
+		let wm15 = try w.get(wi - 15) otherwise panic("sha256: extend w[wi-15] unreachable")
+		let wm16 = try w.get(wi - 16) otherwise panic("sha256: extend w[wi-16] unreachable")
+		let s0 = sha256SmSigma0(wm15)
+		let s1 = sha256SmSigma1(wm2)
+		w.push((wm16 + s0 + wm7 + s1) and 0xFFFFFFFF)
+		wi = wi + 1
+	end 'extend'
+
+	// Round r uses the constant table only as the addend K[r] + W[r], and nothing after the
+	// extension above needs the two apart — so they are summed here, once, and the round loop then
+	// walks ONE array with `for … in`. That is what keeps random, bounds-checked indexing out of the
+	// compression loop, which is where it would be paid 64 times per block.
+	var r = 0
+	for kv in sha256KTable 'foldRoundConstants'
+		let raw = try w.get(r) otherwise panic("sha256: schedule index unreachable")
+		try w.set(r, value: (raw + kv) and 0xFFFFFFFF) otherwise panic("sha256: schedule index unreachable")
+		r = r + 1
+	end 'foldRoundConstants'
+
+	var a = try state.get(0) otherwise panic("sha256: state index unreachable")
+	var b = try state.get(1) otherwise panic("sha256: state index unreachable")
+	var c = try state.get(2) otherwise panic("sha256: state index unreachable")
+	var d = try state.get(3) otherwise panic("sha256: state index unreachable")
+	var ve = try state.get(4) otherwise panic("sha256: state index unreachable")
+	var f = try state.get(5) otherwise panic("sha256: state index unreachable")
+	var g = try state.get(6) otherwise panic("sha256: state index unreachable")
+	var hv = try state.get(7) otherwise panic("sha256: state index unreachable")
+
+	// T1 and T2 are spelled as FIPS 180-4 section 6.2.2 writes them, with K[r] + W[r] already summed
+	// into wri above.
+	for wri in w 'rounds'
+		let t1 = (hv + sha256BigSigma1(ve) + sha256Ch(ve, b: f, c: g) + wri) and 0xFFFFFFFF
+		let t2 = (sha256BigSigma0(a) + sha256Maj(a, b: b, c: c)) and 0xFFFFFFFF
+
+		hv = g
+		g = f
+		f = ve
+		ve = (d + t1) and 0xFFFFFFFF
+		d = c
+		c = b
+		b = a
+		a = (t1 + t2) and 0xFFFFFFFF
+	end 'rounds'
+
+	sha256AddIntoState(state, slot: 0, addend: a)
+	sha256AddIntoState(state, slot: 1, addend: b)
+	sha256AddIntoState(state, slot: 2, addend: c)
+	sha256AddIntoState(state, slot: 3, addend: d)
+	sha256AddIntoState(state, slot: 4, addend: ve)
+	sha256AddIntoState(state, slot: 5, addend: f)
+	sha256AddIntoState(state, slot: 6, addend: g)
+	sha256AddIntoState(state, slot: 7, addend: hv)
+end 'sha256Compress'
+
+// state[slot] = (state[slot] + addend) mod 2^32 — the block's contribution, written once for the
+// eight slots that all owe it.
+//
+// ⚠ IT SAID "`slot` is a constant at every call site, so both accesses are decided at compile time
+// and neither is bounds-checked", AND THAT WAS FALSE WHERE IT WAS WRITTEN. The eight CALLERS pass
+// constants; `slot` inside this body is a parameter, and a parameter is what
+// `vector-static-index.an-index-that-is-a-parameter-keeps-the-check` exists to say no compiler folds.
+// Both accesses are checked, and the `otherwise` arms below are unreachable because the callers pass
+// 0..7 into an eight-slot type — which is a fact about the TYPE, not about the index.
+function sha256AddIntoState(state Sha256State, slot Word32, addend Word32)
+	let current = try state.get(slot as ElementIndex) otherwise panic("sha256: state index unreachable")
+	try state.set(slot as ElementIndex, value: (current + addend) and 0xFFFFFFFF) otherwise panic("sha256: state index unreachable")
+end 'sha256AddIntoState'
+
+/// Compute the SHA-256 hash of data. Returns a 32-byte ByteArray.
+public function sha256(data ByteArray) returns ByteArray
+	// Initial hash state from FIPS 180-4 section 5.3.3.
+	var h = Sha256State.create()
+	try h.set(0, value: 0x6a09e667) otherwise panic("sha256: state index unreachable")
+	try h.set(1, value: 0xbb67ae85) otherwise panic("sha256: state index unreachable")
+	try h.set(2, value: 0x3c6ef372) otherwise panic("sha256: state index unreachable")
+	try h.set(3, value: 0xa54ff53a) otherwise panic("sha256: state index unreachable")
+	try h.set(4, value: 0x510e527f) otherwise panic("sha256: state index unreachable")
+	try h.set(5, value: 0x9b05688c) otherwise panic("sha256: state index unreachable")
+	try h.set(6, value: 0x1f83d9ab) otherwise panic("sha256: state index unreachable")
+	try h.set(7, value: 0x5be0cd19) otherwise panic("sha256: state index unreachable")
+
+	let msgLen = data.count()
+	let bitLen = msgLen * 8
+
+	var padded = ByteArray.create()
+	padded.reserve(msgLen + 72)
+	padded.append(data)
+	padded.push(0x80)
+
+	while padded.count() mod 64 != 56 'pad'
+		padded.push(0)
+	end 'pad'
+
+	padded.push((bitLen shr 56) and 0xFF)
+	padded.push((bitLen shr 48) and 0xFF)
+	padded.push((bitLen shr 40) and 0xFF)
+	padded.push((bitLen shr 32) and 0xFF)
+	padded.push((bitLen shr 24) and 0xFF)
+	padded.push((bitLen shr 16) and 0xFF)
+	padded.push((bitLen shr 8) and 0xFF)
+	padded.push(bitLen and 0xFF)
+
+	var blockOff = 0
+	while blockOff < padded.count() 'processBlocks'
+		sha256Compress(h, padded: padded, blockOff: blockOff)
+		blockOff = blockOff + 64
+	end 'processBlocks'
+
+	var result = ByteArray.create()
+	result.reserve(32)
+	emitBE32(result, val: try h.get(0) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(1) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(2) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(3) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(4) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(5) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(6) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(7) otherwise panic("sha256: state index unreachable"))
+	return result
+end 'sha256'
+
+function emitBE32(result ByteArray, val Word32)
+	result.push((val shr 24) and 0xFF)
+	result.push((val shr 16) and 0xFF)
+	result.push((val shr 8) and 0xFF)
+	result.push(val and 0xFF)
+end 'emitBE32'

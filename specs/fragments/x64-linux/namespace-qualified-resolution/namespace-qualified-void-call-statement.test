@@ -1,0 +1,105 @@
+// Test: namespace-qualified-void-call-statement
+// --- file: lib/inner/deep.maxon
+typealias Integer = int(0 to 125)
+
+export function bump(v Integer) returns Integer
+	return v + 1
+end 'bump'
+
+export function shout()
+	print("shouted")
+end 'shout'
+
+// --- file: lib/top.maxon
+typealias Integer = int(0 to 125)
+
+export function twice(v Integer) returns Integer
+	return v + v
+end 'twice'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	lib.inner.shout()
+	let v = lib.inner.bump(20)
+	return lib.twice(v)
+end 'main'
+---
+ExitCode: 42
+---
+func @shout {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "shouted"
+    x64.callDirect print
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rcx, 125
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at top.maxon:3: Range check failed: value outside typealias 'Integer'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#1:
+    x64.leaRegRegReg r8, rcx, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at top.maxon:4: Range check failed: value outside typealias 'Integer'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#4:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect shout
+  __rc_ok#4:
+    x64.movRegImm32 rcx, 21
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#11:
+    x64.cmpRegImm32 rcx, 125
+    x64.jcc greater, __il_slow
+  __rc_ok#10:
+    x64.leaRegRegReg r8, rcx, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk#13:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect twice
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

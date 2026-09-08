@@ -1,0 +1,19 @@
+// Test: error.a-captured-scalar-still-has-no-members
+typealias Integer = int(i64.min to i64.max)
+typealias LazyMessage = function() returns String
+
+function lazy(make LazyMessage)
+	print("{make()}")
+end 'lazy'
+
+function run(n Integer)
+	lazy(function() gives "n={n.doubled()}")
+end 'run'
+
+function main() returns ExitCode
+	run(21)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:28: Unsupported: a field access or method call on the captured 'n', which is declared 'int' and not a struct type (only a struct has fields and methods)

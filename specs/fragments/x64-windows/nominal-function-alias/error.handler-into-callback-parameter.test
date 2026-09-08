@@ -1,0 +1,26 @@
+// Test: error.handler-into-callback-parameter
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function pickHandler() returns Handler
+	return addOne
+end 'pickHandler'
+
+function runCallback(f Callback) returns Integer
+	return f(20)
+end 'runCallback'
+
+function main() returns ExitCode
+	let h = pickHandler()
+	let r = runCallback(h)
+	print("{r}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:10: argument type mismatch for 'f': expected 'Callback', got 'Handler'

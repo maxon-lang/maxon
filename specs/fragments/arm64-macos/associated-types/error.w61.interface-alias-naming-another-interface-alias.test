@@ -1,0 +1,25 @@
+// Test: error.w61.interface-alias-naming-another-interface-alias
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	typealias Nested = Array with ElementArray
+	function absorb(value Nested)
+end 'Holder'
+
+type Crate implements Holder with Num
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value Num)
+		print("{value}\n")
+	end 'absorb'
+end 'Crate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3011: <fragment>:6:32: Unknown type 'Holder.ElementArray'

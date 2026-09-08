@@ -1,0 +1,89 @@
+// Test: reserved-space-module-declarations-reach-a-user-program
+function rank(e __ManagedListError) returns ExitCode
+	return match e 'which'
+		empty gives 1
+		endOfList gives 2
+		nodeNotInList gives 3
+		nodeAlreadyInList gives 4
+	end 'which'
+end 'rank'
+
+function main() returns ExitCode
+	return rank(__ManagedListError.nodeNotInList)
+end 'main'
+---
+ExitCode: 3
+---
+func @rank {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4] @__jumptable_1
+  matchdead:
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matcharm#2:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matcharm#3:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matcharm#4:
+    x64.movRegImm32 r8, 4
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at reserved-space-module-declarations-reach-a-user-program.test:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+  __il_body:
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#3, [1]=matcharm#4, [2]=matcharm#5, [3]=matcharm#6] @__jumptable_2
+  matchdead:
+  matcharm#3:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont
+  matcharm#4:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont
+  matcharm#5:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont
+  matcharm#6:
+    x64.movRegImm32 rax, 4
+  matchcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
+    x64.callDirect rank
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

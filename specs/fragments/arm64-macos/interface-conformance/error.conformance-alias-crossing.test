@@ -1,0 +1,30 @@
+// Test: error.conformance-alias-crossing
+
+typealias Integer = int(i64.min to i64.max)
+typealias A = int(0 to 100)
+typealias B = int(0 to 100)
+
+interface Processor
+	function process(value A) returns Integer
+end 'Processor'
+
+type Widget implements Processor
+	var v as Integer
+
+	function process(value B) returns Integer
+		return value
+	end 'process'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var w = Widget.create()
+	return w.process(7)
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:11:6: Partial interface implementation: type 'Widget' has 1 method(s) with wrong signature:
+  - process(value B) returns Integer (expected process(value A) returns Integer)

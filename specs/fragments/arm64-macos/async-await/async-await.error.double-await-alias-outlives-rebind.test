@@ -1,0 +1,21 @@
+// Test: async-await.error.double-await-alias-outlives-rebind
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello world"
+end 'makeText'
+
+function main() returns ExitCode
+		var p = async makeText()
+		let q = p
+		let a = await p
+		p = async makeText()
+		let b = await q
+		let c = await p
+		print(a)
+		print(b)
+		print(c)
+		return 0
+end 'main'
+---
+CompilerError:
+error E3142: <fragment>:12:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again

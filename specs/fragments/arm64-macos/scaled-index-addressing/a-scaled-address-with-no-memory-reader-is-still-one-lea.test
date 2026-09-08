@@ -1,0 +1,78 @@
+// Test: a-scaled-address-with-no-memory-reader-is-still-one-lea
+typealias Word = int(i64.min to i64.max)
+
+function scaledAddress(base Word, i Word) returns Word
+	return base + i * 8
+end 'scaledAddress'
+
+function sharedScaling(base Word, i Word) returns Word
+	let scaled = i * 8
+	let hi = base + scaled
+	let lo = base - scaled
+	return hi + lo + scaled
+end 'sharedScaling'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 4 'feed'
+		seed = seed + scaledAddress(i, i: i + 1) + sharedScaling(i, i: i + 2)
+	end 'feed'
+	// scaledAddress: 8, 17, 26, 35 = 86.  sharedScaling: 2*base + 8*(i+2) = 16, 26, 36, 46 = 124.
+	if seed != 210 'value'
+		return 1
+	end 'value'
+	if scaledAddress(0, i: seed) != 1680 'scaleOfARuntimeValue'
+		return 2
+	end 'scaleOfARuntimeValue'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  forhdr:
+    arm64.cmp x1, 4
+    arm64.b.ge forexit
+  feed:
+    arm64.add x2, x1, 1
+  __il_body#11:
+    arm64.arm64AddLsl x3, x1, x2, lsl #3
+  __il_cont#10:
+    arm64.add x0, x0, x3
+    arm64.add x3, x1, 2
+  __il_body#12:
+    arm64.lsl x3, x3, 3
+    arm64.add x4, x1, x3
+    arm64.sub x1, x1, x3
+    arm64.add x1, x4, x1
+    arm64.add x1, x1, x3
+  __il_cont#9:
+    arm64.add x0, x0, x1
+  forstep:
+    arm64.movRegReg x1, x2
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, 210
+    arm64.b.eq __il_body#14
+  value:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  __il_body#14:
+    arm64.lsl x0, x0, 3
+  __il_cont#13:
+    arm64.cmp x0, 1680
+    arm64.b.eq ifcont
+  scaleOfARuntimeValue:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

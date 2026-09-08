@@ -1,0 +1,58 @@
+// Test: false-direction-and-boundary
+function main() returns ExitCode
+	let x = 5
+	var r = 0
+	if x == 6 'eqFalse'
+		r = r + 1
+	end 'eqFalse'
+	if x != 5 'neFalse'
+		r = r + 2
+	end 'neFalse'
+	if x > 5 'gtBoundary'
+		r = r + 4
+	end 'gtBoundary'
+	if x <= 5 'leBoundary'
+		r = r + 8
+	end 'leBoundary'
+	if x >= 5 'geBoundary'
+		r = r + 16
+	end 'geBoundary'
+	if x < 5 'ltFalse'
+		r = r + 32
+	end 'ltFalse'
+	return r
+end 'main'
+---
+ExitCode: 24
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+  leBoundary:
+    x64.leaRegRegImm32 rax, rax, 8
+  geBoundary:
+    x64.leaRegRegImm32 rax, rax, 16
+  ifcont#10:
+    x64.movRegReg r8, rax
+  ifcont#12:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at false-direction-and-boundary.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

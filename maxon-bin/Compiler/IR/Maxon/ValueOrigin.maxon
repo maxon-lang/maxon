@@ -1,0 +1,530 @@
+// ValueOrigin — the (funcIndex, ValueId) -> Maxon OpIndex map that lets a diagnostic
+// discovered at the TARGET tier (the register allocator's E5001, M5.7) point back at
+// source. Source spans die at the Maxon->Std boundary by design (`SourceRangeTable` is
+// keyed by Maxon op index and does not survive `lowerMaxonToStd`'s fresh module), but
+// two things DO survive verbatim through Maxon -> Std -> Target: a value's `ValueId`
+// (function-local, minted by the parser) and a function's INDEX (1:1 across all three
+// tiers — see LowerMaxonToStd.prepareSkeleton). So a Target-tier ValueId maps back here
+// to the Maxon op that defined it, and that op's index indexes `Project.opRanges` for a
+// `SourceRange` — the full Target-ValueId -> source-span chain.
+//
+// **WHY THREE SCALAR COLUMNS AND NOT `Array with <a record type>`.** A `type` has
+// reference semantics, so an `Array with ValueOrigin`-struct would be an array of
+// POINTERS to heap-boxed, refcounted records — one live heap object per value, retained
+// for the whole build. That is exactly the box `SourceRange.maxon` documents and dodges
+// with dense scalar columns, and this table inherits that discipline wholesale: three
+// `Array with int` columns are dense i64 buffers, **zero heap objects per value.** A
+// `SourceRange` is materialized only on the COLD path (a diagnostic), never during a
+// normal build.
+//
+// **This is a MAXON-TIER, whole-program structure.** It lives per-file on
+// `FileParseArtifact` (recorded inside the `emitOp`/`emitTerminator` choke points, so a
+// value cannot be minted by an op without an origin — the same lockstep argument that
+// protects `SourceRangeTable`) and whole-program on `Project` (folded by `mergeArtifact`
+// with the function + op offsets the merge applies). The Std and Target tiers carry no
+// copy — the ValueIds they name index straight back into this table.
+//
+// **General, NOT E5001-specific.** M6's ownership checker needs exactly this map to say
+// "value moved HERE, used THERE"; it is (funcIndex, ValueId) -> origin infrastructure,
+// not a register-allocator private.
+//
+// **What it does NOT cover: phi/block-arg values.** A block-arg (loop/merge phi) is
+// minted OUTSIDE `emitOp` (it is defined at a block entry, by no op), so it has no entry
+// here — exactly as `UseIndex.defKindOf` reports `phiDef` (and `requireDefOp` refuses) for it. A consumer that
+// needs the source of a phi chases it to an incoming value on one of its edges (each of
+// which IS op-defined and so IS in this table); the E5001 diagnostic does precisely that.
+
+// A dense column of function indices, one per recorded value origin. Same dense-int
+// representation as `ValueIdArray`/`OpIndexArray` and a DIFFERENT type from either — each names its own
+// quantity, and `as` is the door between two of them.
+export typealias FuncIndexArray = Array with FuncIndex
+
+// The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
+// (`literal`/`binOp`/`unaryOp`/`compare`/`call`), `none` for one that defines none
+// (`ret`/`retVoid`/`condBranch`/`branch` — they USE or branch, never produce a value).
+// A UNION, not a sentinel `ValueId`: `ValueId` has no "absent" member, and a sentinel is
+// exactly what the project forbids (No sentinel return values).
+export union MaxonOpResult
+	none
+	value(id ValueId)
+end 'MaxonOpResult'
+
+// The result-value an op defines, EXHAUSTIVE over every `MaxonOp` (no bare `default`),
+// so a new op variant is a COMPILE error here — it cannot slip into the IR minting a
+// value with no recorded origin. The value-producing arms return their `result` field;
+// the branch/return arms return `none`.
+export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
+	return match op 'result'
+		call(result, _, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		literal(result, _, _) gives MaxonOpResult.value(result)
+		ret or
+			retVoid gives MaxonOpResult.none
+		binOp(result, _, _, _) gives MaxonOpResult.value(result)
+		unaryOp(result, _, _) gives MaxonOpResult.value(result)
+		compare(result, _, _, _, _) gives MaxonOpResult.value(result)
+		condBranch or
+			branch gives MaxonOpResult.none
+		// The varAccess band: an address and a load DEFINE a value; a store is a statement and
+		// defines none — the same split `ret`/`retVoid` sit on either side of.
+		globalAddr(result, _) gives MaxonOpResult.value(result)
+		loadIndirect(result, _, _, _) gives MaxonOpResult.value(result)
+		storeIndirect gives MaxonOpResult.none
+		// A string literal DEFINES a value — the `.rdata` record's address (P1.2 wave A).
+		stringLiteral(result, _) gives MaxonOpResult.value(result)
+		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
+		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none (P1.4b).
+		tryCall(result, _, _, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		throwError or
+			propagateError or
+			panicAbort gives MaxonOpResult.none
+		// P1.5-A1: a `functionRef` DEFINES its result (a code address, like `literal`); an `indirectCall`
+		// DEFINES its result (the call's return value, like `call`).
+		functionRef(result, _) gives MaxonOpResult.value(result)
+		indirectCall(result, _, _) gives MaxonOpResult.value(result)
+		// P1.5-B1a: an async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
+		asyncCall(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		await (result, _) gives MaxonOpResult.value(result)
+		// P1.5-B2b: a throwing await DEFINES its primary result (its error-flag second result is
+		// compiler-synthetic and needs no source origin), exactly as `tryCall` does.
+		tryAwait(result, _, _) gives MaxonOpResult.value(result)
+		// P1.6-B1: `sizeof(T)` DEFINES its result (the type's byte size), so it carries a source origin like
+		// any other value-producing op — the register-pressure diagnostic maps its ValueId back through this.
+		sizeofType(result, _) gives MaxonOpResult.value(result)
+		// P1.7 slice 2: a `b"…"` byte-string literal DEFINES a value — the owned Array record's pointer.
+		constArrayLiteral(result, _, _, _) gives MaxonOpResult.value(result)
+		// The dense-match jump table is a terminator — it branches, defining no value, like `condBranch`/`branch`.
+		switch gives MaxonOpResult.none
+		// A witness dispatch DEFINES its result (the dispatched method's return value), so it carries a source
+		// origin like any other value-producing call (P1.7a slice 2a).
+		witnessDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		// A throwing witness dispatch's PRIMARY result is its origin-bearing value, exactly as a `tryCall`'s
+		// is; its error flag is compiler-synthetic and needs no source origin.
+		witnessTryDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		// A rendered panic defines nothing, exactly as `panicAbort` does — it aborts.
+		panicAbortValue gives MaxonOpResult.none
+		// The error-flag encode DEFINES the flag a routed bare `throw` hands its block handler — a value
+		// like any other arithmetic result, and the routed edge names it.
+		errorFlagEncode(result, _, _) gives MaxonOpResult.value(result)
+		// A `spawn` DEFINES the mailbox pointer the parser stores into the handle box.
+		serviceSpawn(result, _, _) gives MaxonOpResult.value(result)
+		// A SEND defines a VOID result — SV1's message is fire-and-forget, so there is no reply for that slot
+		// to carry, and it exists for the reason a void `call`'s does: every op in this dialect that a statement
+		// can be names its result.
+		serviceSend(result, _, _, _) gives MaxonOpResult.value(result)
+		// ⭐ A REPLY CELL defines the PROMISE an awaitable send hands back (SV2) — a value the parser binds,
+		// slots into the request box and awaits, so it needs an origin exactly as every other one does.
+		serviceReplyCell(result, _) gives MaxonOpResult.value(result)
+		immortalStructRecord(result, _, _) gives MaxonOpResult.value(result)
+		immortalStringTable(result, _, _, _) gives MaxonOpResult.value(result)
+		// A coverage counter is a statement, not an expression — it defines no value, like `storeIndirect`.
+		covPoint gives MaxonOpResult.none
+	end 'result'
+end 'maxonOpResultValue'
+
+// The outcome of an origin lookup: `found(opIndex)` for a value defined by a Maxon op,
+// `none` for a value with no op origin (a phi/block-arg, or a value not in this table).
+// A union rather than a sentinel op index — an out-of-range index would silently
+// misattribute a diagnostic to the wrong op.
+export union ValueOriginLookup
+	none
+	found(opIndex OpIndex)
+end 'ValueOriginLookup'
+
+// The outcome of a PARAMETER-origin lookup: `found(range)` for a value that is a
+// function parameter (its declaration span), `none` for any other value. A union
+// rather than a sentinel `SourceRange.none()`: an all-zero range is indistinguishable
+// from a real span at byte 0, and would silently point a diagnostic at the top of the
+// file — the same trap `SourceRangeTable.get` panics on.
+export union ParamOriginLookup
+	none
+	found(range SourceRange)
+end 'ParamOriginLookup'
+
+// ParamOriginTable — the (funcIndex, param ValueId) -> declaration SourceRange store, the
+// companion to ValueOriginTable for the one class of user value NO op defines: a function
+// PARAMETER. Parameters occupy ValueIds 0..paramCount-1 and are materialized at entry by a
+// backend-emitted capture move (`mov virtual(i), argReg[i]`), not by a Maxon op, so they
+// have no ValueOriginTable entry — exactly as `UseIndex.defKindOf` returns `none`
+// for a param-incoming. But a parameter is a USER-VISIBLE, deletable value: the E5001
+// diagnostic (and M6's ownership checker) must map a parameter in a blocking set back to its
+// DECLARATION span, so the parser records that span here as the parameter is bound.
+//
+// Same dense-scalar-column discipline as `ValueOriginTable`/`SourceRangeTable`: the span is
+// decomposed into four `Array with int` columns (plus the two key columns), so there is ZERO
+// heap object per parameter. A `SourceRange` is materialized only on the COLD path (a
+// diagnostic). Entries are sparse (one per parameter) and scanned linearly — only a
+// diagnostic asks, and a function's parameter list is tiny.
+export type ParamOriginTable
+	var funcIndices as FuncIndexArray
+	var valueIds as ValueIdArray
+	var startBytes as ByteOffsetArray
+	var endBytes as ByteOffsetArray
+	var lines as LineNumberArray
+	var columns as ColumnNumberArray
+
+	export static function create() returns ParamOriginTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.funcIndices.count()
+	end 'count'
+
+	// Record that parameter `valueId` in function `funcIndex` is declared at `range`.
+	// The six columns are only ever pushed together here, so they stay the same length by
+	// construction.
+	export function record(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+		self.funcIndices.push(funcIndex)
+		self.valueIds.push(valueId)
+		self.startBytes.push(range.startByte)
+		self.endBytes.push(range.endByte)
+		self.lines.push(range.line)
+		self.columns.push(range.column)
+	end 'record'
+
+	// The declaration span of parameter `valueId` in function `funcIndex`, or `none` when
+	// `valueId` is not a recorded parameter of that function (any body value). A linear scan
+	// — THE COLD PATH — and a parameter appears at most once, so the first match is
+	// authoritative.
+	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.lookup: funcIndices.get OOB at {i}")
+			if f != funcIndex 'otherFunc'
+				continue
+			end 'otherFunc'
+			let v = try self.valueIds.get(i) otherwise panic("ParamOriginTable.lookup: valueIds.get OOB at {i}")
+			if v == valueId 'match'
+				let startByte = try self.startBytes.get(i) otherwise panic("ParamOriginTable.lookup: startBytes.get OOB at {i}")
+				let endByte = try self.endBytes.get(i) otherwise panic("ParamOriginTable.lookup: endBytes.get OOB at {i}")
+				let line = try self.lines.get(i) otherwise panic("ParamOriginTable.lookup: lines.get OOB at {i}")
+				let column = try self.columns.get(i) otherwise panic("ParamOriginTable.lookup: columns.get OOB at {i}")
+				return ParamOriginLookup.found(SourceRange.create(startByte, endByte: endByte, line: line, column: column))
+			end 'match'
+		end 'each'
+		return ParamOriginLookup.none
+	end 'lookup'
+
+	// Fold another table's parameter origins onto the end of this one, shifting each entry's
+	// function index by `funcOffset` — the same relocation `IrModule.merge` applies to the
+	// artifact's functions. ValueIds and spans pass through verbatim (ValueIds are
+	// function-local; a span is absolute in its own file's source buffer). No `opOffset`
+	// analogue: these entries store spans, not op indices.
+	export function appendFrom(source ParamOriginTable, funcOffset FuncIndex)
+		for i in 0 upto source.count() 'each'
+			let f = try source.funcIndices.get(i) otherwise panic("ParamOriginTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("ParamOriginTable.appendFrom: valueIds.get OOB at {i}")
+			let startByte = try source.startBytes.get(i) otherwise panic("ParamOriginTable.appendFrom: startBytes.get OOB at {i}")
+			let endByte = try source.endBytes.get(i) otherwise panic("ParamOriginTable.appendFrom: endBytes.get OOB at {i}")
+			let line = try source.lines.get(i) otherwise panic("ParamOriginTable.appendFrom: lines.get OOB at {i}")
+			let column = try source.columns.get(i) otherwise panic("ParamOriginTable.appendFrom: columns.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, range: SourceRange.create(startByte, endByte: endByte, line: line, column: column))
+		end 'each'
+	end 'appendFrom'
+
+	// The `ValueOriginTable.remapFunctionIndices` half for parameter spans — see that header for WHY a
+	// renumbering has to reach these rows at all, and for the in-place compaction rationale (allocates
+	// nothing; byte-identical to a rebuild). Same rule: a row whose function was dropped goes, and a
+	// survivor's key moves to the function's new position.
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+		var write = 0 as OpCount
+		for read in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
+			let isLive = try reached.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the parameter-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+			if not isLive 'droppedFunc'
+				continue
+			end 'droppedFunc'
+
+			let newFunc = try newIndexOfOld.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}")
+			let valueId = try self.valueIds.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.get OOB at {read}")
+			let startByte = try self.startBytes.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.get OOB at {read}")
+			let endByte = try self.endBytes.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.get OOB at {read}")
+			let line = try self.lines.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.get OOB at {read}")
+			let column = try self.columns.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.get OOB at {read}")
+			try self.funcIndices.set(write, value: newFunc) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.set OOB at {write}")
+			try self.valueIds.set(write, value: valueId) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.set OOB at {write}")
+			try self.startBytes.set(write, value: startByte) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.set OOB at {write}")
+			try self.endBytes.set(write, value: endByte) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.set OOB at {write}")
+			try self.lines.set(write, value: line) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.set OOB at {write}")
+			try self.columns.set(write, value: column) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.set OOB at {write}")
+			write = write + 1
+		end 'each'
+
+		self.funcIndices.resize(write)
+		self.valueIds.resize(write)
+		self.startBytes.resize(write)
+		self.endBytes.resize(write)
+		self.lines.resize(write)
+		self.columns.resize(write)
+	end 'remapFunctionIndices'
+end 'ParamOriginTable'
+
+// ValueOriginTable — the (funcIndex, ValueId) -> Maxon OpIndex store, as three dense
+// scalar columns. Entry `i` records that value `valueIds[i]` in function `funcIndices[i]`
+// was defined by the Maxon op at `opIndices[i]`. One entry per value-PRODUCING op (a
+// value is defined exactly once — SSA single-def — so no (funcIndex, valueId) pair is
+// ever recorded twice).
+export type ValueOriginTable
+	var funcIndices as FuncIndexArray
+	var valueIds as ValueIdArray
+	var opIndices as OpIndexArray
+	// Parameter declaration spans (the values NO op defines) — carried alongside the
+	// op-origin columns so `Project.valueOrigins` answers BOTH "which op defined value v"
+	// and "where was parameter v declared" from one table. See ParamOriginTable.
+	var paramOrigins as ParamOriginTable
+
+	export static function create() returns ValueOriginTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), opIndices: OpIndexArray.create(), paramOrigins: ParamOriginTable.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.funcIndices.count()
+	end 'count'
+
+	// Record that value `valueId` in function `funcIndex` originates at Maxon op
+	// `opIndex`. Appended in lockstep with the op stream by `FileParseArtifact.emitOp`
+	// (the only site that mints an op-defined value), so a value cannot enter the IR
+	// without its origin. The three columns are only ever pushed together here, so they
+	// stay the same length by construction.
+	export function record(funcIndex FuncIndex, valueId ValueId, opIndex OpIndex)
+		self.funcIndices.push(funcIndex)
+		self.valueIds.push(valueId)
+		self.opIndices.push(opIndex)
+	end 'record'
+
+	// Record that parameter `valueId` in function `funcIndex` is declared at `range`.
+	// Delegates to the parameter sub-table; called by `FileParseArtifact.recordParamOrigin`
+	// as the parser binds each parameter (a param is minted by no op, so it cannot ride the
+	// `record` op-lockstep and needs its own recording site).
+	export function recordParam(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+		self.paramOrigins.record(funcIndex, valueId: valueId, range: range)
+	end 'recordParam'
+
+	// The declaration span of parameter `valueId` in function `funcIndex`, or `none` for any
+	// non-parameter value. The E5001 diagnostic tries this FIRST: a parameter in a blocking
+	// set resolves to its declaration here, never to the op-origin/phi chase (which no param
+	// participates in).
+	export function paramRange(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+		return self.paramOrigins.lookup(funcIndex, valueId: valueId)
+	end 'paramRange'
+
+	// The Maxon op index that defined value `valueId` in function `funcIndex`, or `none`
+	// when no op did (a phi/block-arg, or a value minted after parsing — a spill reload /
+	// rematerialized constant). A linear scan: THE COLD PATH — only a diagnostic asks. A
+	// value defined by an op appears exactly once, so the first match is authoritative.
+	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ValueOriginLookup
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.lookup: funcIndices.get OOB at {i}")
+			if f != funcIndex 'otherFunc'
+				continue
+			end 'otherFunc'
+			let v = try self.valueIds.get(i) otherwise panic("ValueOriginTable.lookup: valueIds.get OOB at {i}")
+			if v == valueId 'match'
+				let opIndex = try self.opIndices.get(i) otherwise panic("ValueOriginTable.lookup: opIndices.get OOB at {i}")
+				return ValueOriginLookup.found(opIndex)
+			end 'match'
+		end 'each'
+		return ValueOriginLookup.none
+	end 'lookup'
+
+	// Fold another table's entries onto the end of this one, shifting each entry's
+	// function index by `funcOffset` and op index by `opOffset` — the offsets
+	// `IrModule.merge` applies as it relocates the artifact's functions + ops into the
+	// whole-program module. `mergeArtifact` calls this in lockstep with that merge, so
+	// the shifted entries name the merged module's function + op indices. ValueIds pass
+	// through verbatim (they are function-local and the merge preserves them).
+	// ⭐ **FOLLOW A RENUMBERING OF `module.functions`** — drop the rows of functions that went, and move
+	// each survivor's key to its new position.
+	//
+	// These rows are keyed POSITIONALLY (see `appendFrom`, which files them by shifting each artifact's
+	// indices onto the merged module's numbering), so the key is only meaningful against the exact
+	// function array it was filed against. `eliminateDeadFunctions` REBUILDS that array, and the register
+	// allocator asks these tables using a function's post-prune position — so without this, every
+	// function after the first pruned one resolves its values against a DIFFERENT function's rows. That is
+	// not a missing answer but a WRONG one: the E5001 register-pressure diagnostic reports a span from
+	// the wrong function, or — when the wrong function has no row for that ValueId — trips
+	// `RegisterPressureDiagnostic`'s "resolves to NO source span … This is a COMPILER BUG" panic on what
+	// is really an ordinary user program. (Measured: identical program, 5 unreachable functions ahead of
+	// the pressure-failing one, E5001 → that panic.)
+	// ⭐ COMPACTED IN PLACE — a survivor row's remapped key is written back over the leftmost free slot
+	// and the trailing dropped rows are resized away, rather than pushed into three fresh columns. This
+	// allocates NOTHING: the columns are sized by the program's value count, so a push-built rebuild costs
+	// O(rows) bytes (2–5× the survivor count under the geometric growth policy, see Array's header) on
+	// EVERY compile that drops a function from the middle — which compiling stdlib source into every program
+	// made the common case
+	// (an unused Clock drops while the emitted runtime, appended after it, survives; measured at ~2.6% of
+	// total compile bytes across the scale ladder). The result is byte-identical to the rebuild — same
+	// survivor rows in the same order with the same remapped `funcIndex` — so E5001 span resolution is
+	// unchanged; this is a memory optimization, not a semantic one. The `write <= read` invariant holds at
+	// every step (a survivor consumes at most one slot per row scanned), so a slot is always read before it
+	// can be overwritten.
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+		var write = 0 as OpCount
+		for read in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
+			let isLive = try reached.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the value-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+			if not isLive 'droppedFunc'
+				continue
+			end 'droppedFunc'
+
+			let newFunc = try newIndexOfOld.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}")
+			let valueId = try self.valueIds.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.get OOB at {read}")
+			let opIndex = try self.opIndices.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.get OOB at {read}")
+			try self.funcIndices.set(write, value: newFunc) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.set OOB at {write}")
+			try self.valueIds.set(write, value: valueId) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.set OOB at {write}")
+			try self.opIndices.set(write, value: opIndex) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.set OOB at {write}")
+			write = write + 1
+		end 'each'
+
+		self.funcIndices.resize(write)
+		self.valueIds.resize(write)
+		self.opIndices.resize(write)
+
+		self.paramOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
+	end 'remapFunctionIndices'
+
+	// ⭐⭐ **THE ROWS OF A CHOSEN FEW FUNCTIONS, GROUPED, IN ONE PASS — because `lookup` is a SCAN and a
+	// pass that asks it per value is a quadratic.** `inlineLeaves` copies a leaf callee's body into every
+	// caller that names it, and every value the copy defines needs the callee value's origin row so the
+	// E5001 diagnostic can still resolve it (`RegisterPressureDiagnostic.classifyValue` reaches RULE 3's
+	// panic on a value in NO table). Asked one row at a time that is `sites × rows` — thousands of splices
+	// against a table with one entry per value-producing op in the whole program.
+	//
+	// ⚠ **IT INDEXES ONLY THE FUNCTIONS `selected` NAMES, AND THAT IS THE COST DECISION.** The rows array
+	// would otherwise be a second copy of the whole table (one `OpIndex` per value in the program) for a
+	// consumer that reads a few hundred tiny functions' worth of it. `rowStarts` stays dense over the
+	// function space — it is one word per function, and a sparse map here would be a hash probe on the
+	// splice path.
+	export function indexRowsOfFunctions(selected BoolArray, funcCount FuncIndex) returns ValueOriginRowIndex
+		var rowStarts = OpIndexArray.create()
+		rowStarts.resize(funcCount + 1)
+		for i in 0 upto self.count() 'countEach'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
+				continue
+			end 'notWanted'
+			// Counted into slot `f + 1`, so the prefix sum below turns the counts into starts in place.
+			let at = f + 1
+			let prior = try rowStarts.get(at) otherwise panic("ValueOriginTable.indexRowsOfFunctions: row {i} names function index {f}, which is outside the {funcCount}-function module this index was asked for")
+			try rowStarts.set(at, value: prior + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {at}")
+		end 'countEach'
+
+		var total = 0 as OpIndex
+		for f in 0 upto funcCount + 1 'prefixSum'
+			total = total + (try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}"))
+			try rowStarts.set(f, value: total) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {f}")
+		end 'prefixSum'
+
+		var rows = OpIndexArray.create()
+		rows.resize(total)
+		// A SEPARATE write cursor per function, so `rowStarts` survives the scatter intact — advancing
+		// `rowStarts` itself would leave every entry naming its function's END and the starts would have
+		// to be read back off the previous slot, which is the off-by-one this whole shape invites.
+		var cursor = OpIndexArray.create()
+		cursor.resize(funcCount)
+		for f in 0 upto funcCount 'seedCursor'
+			try cursor.set(f, value: try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}")) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
+		end 'seedCursor'
+		for i in 0 upto self.count() 'scatterEach'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
+				continue
+			end 'notWanted'
+			let at = try cursor.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.get OOB at {f}")
+			try rows.set(at, value: i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rows.set OOB at {at}")
+			try cursor.set(f, value: at + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
+		end 'scatterEach'
+
+		return ValueOriginRowIndex.create(rowStarts, rows: rows)
+	end 'indexRowsOfFunctions'
+
+	// ⭐ **THE ORIGIN ROWS OF `fromFunc`, RE-FILED AGAINST `toFunc` UNDER `subst` — what an inlined body's
+	// fresh values need in order to stay resolvable by a diagnostic.** The op index is carried VERBATIM:
+	// it names the Maxon op in the CALLEE that defined the value, whose span is the callee's own source
+	// line — which is the honest answer for a copy of that op, and the same answer the out-of-line callee
+	// would have given.
+	//
+	// ⚠⚠ **A ROW OUTSIDE THE COLUMN IS SKIPPED, AND THAT IS THE MAXON-VS-STD ID SPACES RATHER THAN A
+	// BROKEN COLUMN.** This table is filed at the MAXON tier, one row per value-producing Maxon op; the
+	// column is sized by the callee's STD `nextFreeValueId`. The Std lowering passes ids through verbatim
+	// and mints ABOVE them, so the two agree for every value that survives — but a Maxon op the lowering
+	// does not materialize leaves its value id recorded here and defined by nothing at the Std tier, and
+	// if that id was the function's highest it sits past the Std bound. Such a row describes a value the
+	// splice did not copy because it does not exist to copy, so there is nothing to re-file.
+	// (MEASURED: it fires on `Array.clone` and on `Vector.count`'s callees.)
+	// ⛔⛔ **A ROW NAMING A PARAMETER IS SKIPPED, NOT RE-FILED — `lookup`'s OWN INVARIANT DEFENDED WHERE IT
+	// IS SPENT.** The splice's column maps a callee's ids `0..paramCount-1` onto the CALL SITE's argument
+	// values, which are the caller's own and already carry the caller's own origin rows. Re-filing a
+	// parameter row through it would give one value in one function TWO rows — and `lookup` is a scan that
+	// returns the first match and states, in as many words, that "a value defined by an op appears exactly
+	// once, so the first match is authoritative". The second row would win or lose by table order, and the
+	// symptom would be an E5001 naming the wrong source line rather than anything that fails.
+	//
+	// ⚠ **THIS WAS A PANIC FOR ONE COMMIT, ON THE CLAIM THAT A PARAMETER IS MINTED BY NO OP — AND THE CLAIM
+	// WAS FALSE AT THE CODE.** MEASURED 2026-08-26 by the landing battery: two spec workers DIED — function
+	// 564 of the `sha256` program and function 412 of the `stdlib-loading` program each carry an
+	// op-origin row for value 1, inside their parameter ids. `maxonOpResultValue` admits any value-producing
+	// Maxon op, and the parser files one for some parameters (which producer is not identified here —
+	// `ParamOriginTable` also holds them, so `lookup`'s first match already decides between the two rows
+	// for a parameter, pre-EC5). What this function owes is only to add no THIRD row: the value the
+	// parameter maps to at the splice is the caller's argument, whose rows the caller filed itself.
+	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
+		for k in index.firstRowOf(fromFunc) upto index.endRowOf(fromFunc) 'eachRow'
+			let row = index.rowAt(k)
+			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
+			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
+			if v < valueIdAtParamPosition(calleeParamCount) 'rowNamesAParameter'
+				continue
+			end 'rowNamesAParameter'
+
+			let cloned = try subst.get(v) otherwise continue
+			self.record(toFunc, valueId: cloned, opIndex: opIndex)
+		end 'eachRow'
+	end 'copyRows'
+
+	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
+		for i in 0 upto source.count() 'each'
+			let f = try source.funcIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("ValueOriginTable.appendFrom: valueIds.get OOB at {i}")
+			let o = try source.opIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: opIndices.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, opIndex: o + opOffset)
+		end 'each'
+		// The parameter sub-table merges with the SAME function offset (its ValueIds and spans
+		// pass through verbatim), in lockstep with the op-origin fold above.
+		self.paramOrigins.appendFrom(source.paramOrigins, funcOffset: funcOffset)
+	end 'appendFrom'
+end 'ValueOriginTable'
+
+// Is `funcIndex` one of the functions an index was asked to cover? A column shorter than the module is
+// answered `false` rather than refused: a caller that selected nothing beyond function K has no rows to
+// find past it, and reading the length as the answer is what lets the caller size its column by the
+// functions it cares about instead of by the module.
+function isSelectedFunction(selected BoolArray, funcIndex FuncIndex) returns bool
+	return try selected.get(funcIndex) otherwise false
+end 'isSelectedFunction'
+
+// The CSR `indexRowsOfFunctions` builds: `rows[rowStarts[f] .. rowStarts[f + 1])` are the origin-table
+// row indices of function `f`, for every `f` its `selected` column named (and an EMPTY range for every
+// other, which is what makes an unselected function safe to ask about rather than a panic).
+//
+// It is a row-index permutation and not a copy of the columns, so it costs one word per selected row and
+// stays honest if the table is appended to afterwards — which `copyRows` does, once per splice.
+export type ValueOriginRowIndex
+	var rowStarts as OpIndexArray
+	var rows as OpIndexArray
+
+	export static function create(rowStarts OpIndexArray, rows OpIndexArray) returns ValueOriginRowIndex
+		return Self{rowStarts: rowStarts, rows: rows}
+	end 'create'
+
+	export function firstRowOf(funcIndex FuncIndex) returns OpIndex
+		return try self.rowStarts.get(funcIndex) otherwise panic("ValueOriginRowIndex.firstRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
+	end 'firstRowOf'
+
+	export function endRowOf(funcIndex FuncIndex) returns OpIndex
+		return try self.rowStarts.get(funcIndex + 1) otherwise panic("ValueOriginRowIndex.endRowOf: function index {funcIndex} is outside the {self.rowStarts.count() - 1}-function span this index was built over")
+	end 'endRowOf'
+
+	export function rowAt(position OpIndex) returns OpIndex
+		return try self.rows.get(position) otherwise panic("ValueOriginRowIndex.rowAt: position {position} is outside the {self.rows.count()} indexed row(s)")
+	end 'rowAt'
+end 'ValueOriginRowIndex'

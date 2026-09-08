@@ -1,0 +1,120 @@
+// Test: overload-default-supplied-explicitly-on-one-member
+typealias Integer = int(i64.min to i64.max)
+
+function width(value Integer, unit String = "mm") returns Integer
+	return value + unit.count()
+end 'width'
+
+function width(value bool, unit String = "inches") returns Integer
+	if value 'yes'
+		return unit.count()
+	end 'yes'
+	return 0
+end 'width'
+
+function main() returns ExitCode
+	return (width(3, unit: "centimetre") + width(true)) as ExitCode
+end 'main'
+---
+ExitCode: 19
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @width {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callDirect String.count
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @width#bool#String {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  yes:
+    x64.movRegReg rcx, rdx
+    x64.callDirect String.count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "centimetre"
+    x64.callDirect width
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 1
+    x64.callDirect __paramDefault#width#bool#String#1
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect width#bool#String
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at overload-default-supplied-explicitly-on-one-member.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__paramDefault#width#bool#String#1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "inches"
+    x64.callDirect __str_retain
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

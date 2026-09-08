@@ -1,0 +1,120 @@
+// Test: compiler-reserved-base-type-is-nameable-at-a-parameter
+
+typealias HitCount = int(0 to u64.max)
+
+function countIn(s String, chars CharacterSet) returns HitCount
+	var seen = 0
+	for c in s 'scan'
+		if chars.contains(c) 'hit'
+			seen = seen + 1
+		end 'hit'
+	end 'scan'
+	return seen
+end 'countIn'
+
+function main() returns ExitCode
+	return countIn("a b c", chars: CharacterSet.whitespaces()) as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __data_CharacterSet.cachedWhitespaces@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @countIn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc greaterEqual, forexit
+  scan:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect findGraphemeEnd
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __char_at
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect CharacterSet.contains
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  hit:
+    x64.leaRegRegImm32 r13, r13, 1
+  ifcont:
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  forstep:
+    x64.movRegReg r14, r15
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "a b c"
+    x64.callDirect CharacterSet.whitespaces
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect countIn
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at compiler-reserved-base-type-is-nameable-at-a-parameter.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_CharacterSet
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

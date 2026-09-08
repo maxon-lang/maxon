@@ -1,0 +1,1086 @@
+// GlobalDataTable — the backend's TWO data images. `.rdata`/`.rodata` holds the read-only
+// payloads (String and byte-string blobs, float islands, jump tables, witness tables, layout
+// descriptors); `.data` holds the writable ones (a scalar slot per top-level `var`, plus a
+// contiguous reserved RUN per `registerDataBlob` caller). Every image writer serializes the two
+// images and resolves code→data relocations against the offsets recorded here.
+//
+// ⭐ EVERY LOOKUP IS O(1) BY CONSTRUCTION — `nameIndex`, `dataIndex`, `dataBlobIndex`,
+// `rdataOffsets`, `valueDedup`. A payload is registered once and REFERENCED many times, so
+// answering "where does this label live?" by scanning is Θ(payloads × references), which is the
+// shape every index in this file exists to kill.
+//
+// ⭐ **A RUNTIME'S OWN COUNTER IMAGE — a coverage `.mxcov` header plus its counters — IS A
+// `.data` RUN, NOT A SECTION OF ITS OWN.** `.data` is writable and every writer already reaches
+// it (`dataSectionRipRelDisp32`, `dataSectionArm64Adrp`+`PageOff`), so a private section would
+// buy a reloc kind and a writer arm per format, plus an extra loadable segment, for no
+// capability this table does not already have.
+
+// `nameIndex`: registered global name → its index in `names`/`values` (O(1)
+// membership + lookup). `valueDedup`: a previously-registered byte payload →
+// its synthetic name, so a repeat registration of identical content returns the
+// existing entry in O(1) instead of scanning every prior value.
+export typealias GlobalNameIndexMap = Map with (String, MachineWord)
+export typealias GlobalDedupMap = Map with (ByteArray, String)
+
+// ⭐⭐ **EVERY `.rdata` PAYLOAD IS STORED PADDED TO A MULTIPLE OF THIS — WHICH IS WHAT MAKES EVERY
+// PAYLOAD'S OFFSET A MULTIPLE OF IT TOO**, by induction from zero, in `appendRdataPayload`: the one
+// writer of a slot's offset is the one place the discipline can live.
+//
+// ⚠ **IT USED TO BE ONE PRODUCER'S RULE ABOUT THE WHOLE SECTION, AND THAT IS THE BUG IT CLOSES.**
+// `StringRuntime.stringBlobBytes` padded ITS blobs to 8 and its comment claimed the consequence for
+// everyone — *"once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section"* —
+// while `installSlabRuntime` registered a 129-byte and a 249-byte table through the same door. 129 + 249
+// = 378 ≡ 2 (mod 8), so from that point the cursor was PERMANENTLY 2 mod 8 and every String record
+// registered afterwards (`installEnumLookupHelpers`, which runs later) landed misaligned. On arm64-macOS
+// a record's `buffer@0` is a dyld chained-fixup rebase whose chain links by a 4-byte-granular delta, so
+// `MachOWriter.writeMachoRdataRebases` panicked and killed the spec worker; on x64 the same image was
+// emitted misaligned-but-working and NOTHING SAID SO. A whole-section invariant cannot be one
+// registrant's habit — it has to be the table's, enforced where slots are appended.
+//
+// ⚠ **8 AND NOT 4**, though the chained-fixup stride that catches the break is 4: the slots being aligned
+// are POINTERS (a String record's `buffer@0`, a witness table's method slots, a layout descriptor's), so
+// 8 is what the loads want and 4 is merely the coarsest granularity at which the breakage becomes visible.
+let RdataPayloadAlignment = 8 as BytePos
+
+// The byte a payload is padded WITH. Named because it is read back rather than merely written: a text
+// payload's pad is indistinguishable from its NUL terminator, which is exactly what lets
+// `TargetPrinter.quotedPayloadText` stop at the first one and never render alignment as content.
+let RdataPadByte = 0 as Byte
+
+// The synthetic-label prefix a dense-`match` jump table's `.rdata` blob is minted under
+// (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in a
+// fragment golden and never collides with them.
+let JumpTableLabelPrefix = "__jumptable_"
+
+// ⭐⭐ **A FLOAT ISLAND IS NAMED BY ITS VALUE — `__fconst_-5.5`, not `__fconst_1`.** It is minted HERE,
+// beside the jump table's, because minting an `.rdata` label is this table's job and not a lowering's;
+// the two isels were carrying a `"__fconst_"` constant apiece, the arm64 copy saying *"Mirrors x64's"* — a mirror
+// being exactly what a shared fact must not need.
+//
+// ⭐ **WHY THE VALUE AND NOT A COUNTER.** A `{prefix}{nextStringId}` mint numbers off ONE counter shared by
+// every `.rdata` prefix, so the id a float island gets is a BUILD-ORDER ARTIFACT of everything registered
+// before it: measured, listing the first stdlib module containing literals moved **317 committed
+// fragments**, and an unreachable string-returning function appended to `utf16.maxon` renumbered a
+// two-float program's islands though no user program mentioned a string. A content-derived label cannot
+// move for a reason outside its own value — and, the point of the change, a reader of a golden fragment
+// sees the NUMBER the program is about instead of an index into a table the fragment does not
+// print — the label reads `__float_-5.5`.
+//
+// ⚠ The text is `NumberParsing.scalarConstantText`'s — the SAME renderer an E3005 range bound and a
+// `data {}` f64 slot go through, so a label, a diagnostic and a golden's data section cannot come to
+// disagree about what `3.14` is. Rendering it here with a second `float.textFromBits` call would have been
+// the same one-fact-twice as the two isels' deleted prefix constants, one line after saying so.
+//
+// ⚠ The injectivity the label rests on is that renderer's: shortest-ROUND-TRIP means distinct doubles get
+// distinct text, `-0` keeps its sign, and a non-finite pattern renders as its own hex bits rather than as
+// an `inf`/`nan` word that would collapse every NaN PAYLOAD onto one name.
+let FloatConstantLabelPrefix = "__fconst_"
+
+// A float constant's IEEE bit pattern to the label minted for it — see `registerFloatConstant`.
+export typealias FloatConstantLabelMap = Map with (ParsedInt, String)
+
+// ⭐⭐ **WHAT A `.rdata` PAYLOAD *IS*, recorded by the party that knows — the registering caller — at the
+// one moment it is known.** The table has always held a label, some bytes and an offset, which is
+// everything the WRITERS need and nothing a READER can interpret: `TargetPrinter` is handed a
+// `leaRegRdata` naming eight opaque bytes and cannot tell a String's text from its 56-byte record, from a
+// jump table, from a witness table's zero-filled blob.
+//
+// ⚠ **IT IS NOT DERIVED FROM THE LABEL, AND THAT IS THE WHOLE POINT.** Routing by name is a rule this
+// compiler has already refused once: the section a payload lands in is decided by its RELOCATION KIND —
+// `RdataRelocKind.ripRelDisp32` for an island, `dataSectionRipRelDisp32` for a global — and the label's
+// TEXT is never consulted on the way. `SignatureIndex.DataLabelPrefix` carries the MEASUREMENT that
+// settled it (set to `"zzz_"`, the suite's globals still land in `.data` and still answer right) and the
+// `classifyGlobalLabel` that was deleted over it. ⚠ That argument used to be stated a second time, in the
+// two isels' own float-prefix headers, and those went with the prefix constants — so it lives HERE now,
+// which is also where the kind it justifies is declared.
+//
+// A prefix test would also fail OPEN: a payload registered under a structural label
+// (`__layout_Sizer_bool`, a witness table) wears no prefix a matcher could enumerate, and a NEW producer
+// would silently join whichever arm its name happened to match.
+//
+// What closes the set is that `kind` is a REQUIRED PARAMETER of both registration doors: a new producer
+// cannot compile without naming one, and every existing producer named its own. (Not "one arm, one call
+// site" — `slabTable` has three calls and `unicodeTable` two. The arms partition PRODUCERS, not calls.)
+// `appendRdataPayload` — the ONE writer of a slot's bookkeeping — records the kind beside the offset and
+// the name, so the kind cannot come to disagree with the payload it describes.
+// ⚠⚠ **THE ORDER IS A BAND, AND `TargetPrinter.rdataPayloadNote` READS IT AS ONE.** The TEXT kinds are
+// FIRST and contiguous, so that match reads as four groups rather than eleven arms. Declare a text kind
+// in the TEXT BAND and anything else outside it, and say which you did — a kind in the wrong group has
+// its bytes rendered as characters. The match is exhaustive either way, so a new kind cannot compile until it has been placed.
+export enum RdataPayloadKind
+	// --- TEXT: bytes a reader can read, so a golden renders them beside the label ---
+	// A String literal's payload — its bytes and a NUL. The pad to `RdataPayloadAlignment` is the
+	// table's, applied to every kind alike by `appendRdataPayload`.
+	stringBlob
+	// A green-thread trace tag's text (`GtRuntime`). No terminator: the length rides beside it.
+	traceTag
+	// The DebugStream activation environment variable's name, as a cstring (`DebugStreamRuntime`).
+	envName
+	// Where a `--coverage` binary writes its `.mxcov`, as a cstring (`CoverageRuntime`). Baked at BUILD
+	// time rather than derived from argv[0] at run time: deriving it means a heap allocation on a path the
+	// dump must be able to take after a fault, for a fact the compiler already knows.
+	coveragePath
+	// --- STRUCTURE: bytes only a decoder can read, so a golden shows the label alone ---
+	// A float island: eight IEEE bytes. It needs no note — its LABEL is its value
+	// (`registerFloatConstant`).
+	floatConstant
+	// The 56-byte String record that POINTS at a blob (`buildStringRecordBytes`).
+	stringRecord
+	// A byte-string / const-array literal's blob (`registerByteArrayLiteralBlob`). ⚠ NOT text: a
+	// byte-string literal holding raw bytes and an `Array with int` literal both come through here, and
+	// rendering arbitrary bytes as characters would put an escape storm in a golden that says nothing
+	// about the case it is named after.
+	byteArrayBlob
+	// A dense-`match` jump table's i32 slots, zero at registration and patched by the writer.
+	jumpTable
+	// An interface conformance's method-slot table (`IrInterface.witnessTableLabel`).
+	witnessTable
+	// A generic instance's layout descriptor (`__layout_*`).
+	layoutDescriptor
+	// The slab allocator's size-to-class and geometry tables.
+	slabTable
+	// A Unicode character-database table (`UnicodeCategoryRuntime`).
+	unicodeTable
+	// The 48-byte Array record a module-level byte-array constant IS
+	// (`ManagedMemoryRuntime.registerImmortalByteArrayRecord`). Six machine words, and the bytes it names are a
+	// byte blob rather than text, so it renders as a bare label — the `byteArrayBlob` answer for the record
+	// over it.
+	byteArrayRecord
+	// The BOX a module-level `let` holding a constructed struct of scalars IS
+	// (`LowerMaxonToStd.lowerImmortalStructRecord`) — its declared fields at their declared offsets, behind
+	// the synthetic allocation header that marks it immortal. It is its own kind rather than a
+	// `byteArrayRecord` because the two share no layout: that one is six machine words a runtime reads by
+	// name, this one is whatever the author declared.
+	structRecord
+	// ⭐ The ELEMENT BUFFER of a module-level `let` holding an array of string literals
+	// (`ManagedMemoryRuntime.registerImmortalStringTableRecord`) — one slot per element, each holding the
+	// ADDRESS of that element's own immortal String record once a writer has baked it
+	// (`PendingRdataAbsReloc`). It is the first payload in the image whose every word is a pointer, which is
+	// why it is not a `byteArrayBlob`: that kind's bytes are the elements themselves.
+	//
+	// ⚠ APPENDED AT THE END OF THE ENUM, past the text band, per this enum's own band rule.
+	stringTableBuffer
+end 'RdataPayloadKind'
+
+// The kind column, parallel to `names`/`values` — see `GlobalDataTable.payloadKinds`.
+export typealias RdataPayloadKindArray = Array with RdataPayloadKind
+
+// A String literal RECORD's label to the BLOB's label it points at — see `GlobalDataTable.recordBlobLabels`.
+export typealias RecordBlobLabelMap = Map with (String, String)
+
+// An `.rdata` label → its byte offset within the section. The read-only twin of `dataIndex`, and
+// it exists for that field's reason: answering "where does this constant live?" with a linear sum
+// over every prior payload would be Θ(constants × references), the shape
+// `sortBySizeDescendingStable` was rewritten to kill.
+export typealias RdataOffsetMap = Map with (String, ByteOffset)
+
+// ⭐⭐ **A DATA→DATA ABSOLUTE FIXUP: the slot at `rdataLabel + offsetInLabel` must hold the RUNTIME ADDRESS
+// of `targetLabel`.** No such address exists until a writer lays `.rdata` out, so the producer SEEDS the
+// slot with the target's rdata OFFSET and records this triple; EVERY writer patches the 8 bytes once its
+// section base is known. Both labels are `.rdata` labels this same table minted, so their offsets come from
+// `rdataOffsetOf`.
+//
+// ⚠ **THE SEED IS THE TARGET'S OFFSET AND NOT 0, BECAUSE `registerRdataConstant` DEDUPES BY BYTES** — see
+// `BufferOwnership.immortalRecordBytes`. A zero placeholder would collapse two payloads that differ only in
+// what they point AT, and each collapsed payload's relocations would then fight over one slot.
+//
+// TWO shapes need it, and the second is why it carries an offset rather than naming `buffer@0`:
+//   * an immortal record's `buffer@0` → its byte blob (a String literal, a module-level byte-array constant);
+//   * a slot INSIDE an element buffer → another image record, which is what a module-level `let` holding an
+//     array of string literals is: a table of ADDRESSES rather than of values.
+//
+// ⚠ **AN ADDRESS COSTS A RELOCATION PER FORMAT, WHERE A DISTANCE COSTS NONE** — see
+// `PendingRdataSelfRelReloc`, which carries the self-relative channel and the reason to prefer it wherever a
+// reader already holds the referring blob's own base. This channel is for the slots whose reader does not:
+// `__managed_get` strides into a buffer and loads a POINTER, with nothing to add it to.
+//
+// It is the DATA→DATA sibling of `PendingRdataReloc` (the data→TEXT patch that fills a witness-table method
+// slot or a layout descriptor's function slots); like it, it is carried on the data table rather than the
+// code relocation list, because it patches the rdata IMAGE and not the `.text` bytes.
+export type PendingRdataAbsReloc
+	export let targetLabel as String
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
+
+	export static function create(targetLabel String, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataAbsReloc
+		return Self{targetLabel: targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'PendingRdataAbsReloc'
+
+export typealias PendingRdataAbsRelocArray = Array with PendingRdataAbsReloc
+
+// ⭐ THE DATA→TEXT SIBLING of `PendingRdataAbsReloc`: a slot INSIDE a `.rdata` blob must hold the ABSOLUTE VA
+// of a `.text` function, and no `.text` VA exists until the writer lays out the code section. THREE slots
+// need it — a WITNESS-TABLE method slot (P1.7a slice 2a, one per interface method per conformance, and by far
+// the most numerous), and a managed-opaque-`T` layout descriptor's `destroyFunc@40` (slice 3b-ii) and
+// `copyFunc@32` (slice 3b-vi-b-β) — so the type is named for the CHANNEL and not for any one of them; a
+// comment naming only the descriptor sent readers hunting for a managed opaque array in programs that had
+// none. The emitter (`ensureWitnessTable` / `ensureLayoutDescriptor`) leaves the slot 0 and records this triple;
+// EVERY writer patches the 8 bytes at
+// `rdataOffsetOf(rdataLabel) + offsetInLabel` with `funcName`'s runtime address once `.text`'s base is
+// known. `funcName` is a `.text` function this table's writer resolves through the debug-symbol map (as
+// `Arm64FuncAdrpReloc.funcName` resolves to `textOffset`); `rdataLabel` is a `.rdata` label this same table
+// minted (offset via `rdataOffsetOf`). It is carried on the DATA TABLE, not the code-relocation list,
+// because it patches the rdata IMAGE, not the `.text` bytes — the exact reason `PendingRdataAbsReloc` above is.
+export type PendingRdataReloc
+	export let funcName as ByteArray
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
+
+	export static function create(funcName ByteArray, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataReloc
+		return Self{funcName: funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'PendingRdataReloc'
+
+export typealias PendingRdataRelocArray = Array with PendingRdataReloc
+
+// ⭐⭐ **THE DATA→**DATA** SIBLING THAT NEEDS NO WRITER AT ALL.** A slot inside a `.rdata` blob must hold
+// the location of ANOTHER `.rdata` blob — today exactly one thing wants it this way, a witness table's
+// associated slot naming the nested table `__witness_<binding>.<heldAt>` (see
+// `IrInterface.witnessAssociatedSlotOffset`).
+//
+// ⚠⚠ **IT HOLDS A DISTANCE, NOT AN ADDRESS, AND THAT IS WHAT MAKES IT FORMAT-FREE — SO IT IS THE CHANNEL TO
+// REACH FOR WHENEVER THE READER ALREADY HOLDS THE REFERRING BLOB'S OWN BASE.** Two labels in ONE section
+// have a DISTANCE that is fixed the moment the image is concatenated: the same number under a fixed base and
+// under PIE, and the same number again on wasm because the blob is one run of linear memory. So the reader
+// adds the slot to the address it loaded it through, and nothing anywhere has to know which format it is
+// being loaded by — which is why this bake lives in `rdataImage`, the one place the section is assembled.
+//
+// ⚠ **AN ADDRESS IS THE OTHER ANSWER AND IT COSTS A WRITER ARM PER FORMAT** — `PendingRdataAbsReloc` above.
+// The `.text` channel is format-specific in three incompatible ways (an absolute VA on fixed-base PE/ELF, a
+// funcref-TABLE INDEX on wasm, a dyld CHAINED-FIXUP REBASE on Mach-O), and the absolute data→data channel
+// pays the same toll in the same four writers. It is paid because an image object must be able to NAME
+// another where its reader holds nothing to add a distance to: `__managed_get` strides into an element
+// buffer and loads one word, and that word has to be the element's address on its own.
+//
+// ⇒ **THE TWO ARE A CHOICE, NOT A LADDER.** Prefer this one; take the absolute one when the reader is a
+// runtime that cannot know it is reading image data at all.
+//
+// ⇒ it is baked in `rdataImage`, which is the ONE place the section is assembled and therefore the only
+// place that cannot be forgotten by a writer. `targetLabel` and `rdataLabel` are both labels this table
+// minted; the value written is `rdataOffsetOf(targetLabel) - rdataOffsetOf(rdataLabel)`, the distance from
+// the blob's OWN base — so the reader, which already holds that base as the address it loaded the slot
+// through, adds once.
+//
+// ⚠ **THE DISTANCE IS SIGNED AND BOTH DIRECTIONS GENUINELY OCCUR, so it is written as a 64-bit two's
+// complement and the reader's add WRAPS.** Which blob is registered first is a fact about mint ORDER, not
+// about the program: a nested table minted by this very call lands after its referrer, and one an earlier
+// conformance already minted lands before it. Forcing the order was considered and cannot be done — two
+// interfaces may hold each other's positions, and the mint's own memo (which is what stops that recursing
+// forever) is exactly what leaves the second reference pointing forward.
+type PendingRdataSelfRelReloc
+	export let targetLabel as String
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
+
+	export static function create(targetLabel String, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataSelfRelReloc
+		return Self{targetLabel: targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'PendingRdataSelfRelReloc'
+
+export typealias PendingRdataSelfRelRelocArray = Array with PendingRdataSelfRelReloc
+
+// `to - from` as the 64-bit pattern a WRAPPING add reproduces — the backward case written as its two's
+// complement, because `ByteOffset` is `int(0 to u64.max)` and cannot hold a negative at all. `to == from`
+// cannot occur (two distinct labels never share an offset) but is answered anyway, as 0, rather than being
+// asserted about: the identity `from + result == to` (mod 2^64) is what every reader depends on, and it holds
+// for all three cases without a special one.
+function twosComplementDistance(to ByteOffset, from ByteOffset) returns MachineWord
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	// `(u64.max - d) + 1` rather than `0 - d`, which the range would refuse. `d >= 1` here, so the sum is at
+	// most `u64.max` and the addition cannot overflow either.
+	return (u64.max - (from - to)) + 1
+end 'twosComplementDistance'
+
+// The rdata payloads themselves — one raw byte blob per registered global.
+export typealias ByteArrayArray = Array with ByteArray
+
+// Does `bytes` begin with `prefix`? The byte-slice twin of `String.startsWith`, for the
+// name comparisons that now run on source slices rather than heap Strings.
+export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool
+	if prefix.count() > bytes.count() 'tooShort'
+		return false
+	end 'tooShort'
+
+	for i in 0 upto prefix.count() 'each'
+		let b = try bytes.get(i) otherwise panic("bytesStartWith: i < prefix.count() <= bytes.count() by the guard above, but get({i}) failed")
+		let p = try prefix.get(i) otherwise panic("bytesStartWith: i < prefix.count() by the loop bound, but get({i}) failed")
+		if b != p 'differs'
+			return false
+		end 'differs'
+	end 'each'
+
+	return true
+end 'bytesStartWith'
+
+// --- The `.data` section: writable globals (P1.0d.5b) ---
+
+// `dataIndex`: a data-section label → its index in `dataSection`. The O(1) membership +
+// lookup twin of `nameIndex`, and it exists for that field's reason: answering "where does this
+// label live?" with a linear scan per reference is Θ(globals × references).
+export typealias DataSectionIndexMap = Map with (String, MachineWord)
+
+// ONE writable `.data` slot: a top-level `var`.
+//
+// ⚠ IT CARRIES THE VALUE, NOT THE BYTES. The image is rendered from `(value, valueType)` by
+// `dataSectionImage`, once, at write time. Storing both a value and its serialized bytes
+// would be this project's signature bug — one fact written down twice — with the two free to
+// disagree about what `i8 1` is; and the RequiredData gate reads the same pair the image
+// does, so a spec cannot pin a layout the writer does not emit.
+//
+// `offset` is assigned by `layOutDataSection`, which is also the only writer of it.
+export type DataSectionEntry
+	export var label as String
+	export var valueType as StdType
+	export var value as ParsedInt
+	export var offset as ByteOffset
+
+	export static function create(label String, valueType StdType, value ParsedInt) returns DataSectionEntry
+		return Self{label: label, valueType: valueType, value: value, offset: 0}
+	end 'create'
+end 'DataSectionEntry'
+
+export typealias DataSectionEntryArray = Array with DataSectionEntry
+
+// The byte a reserved run's pad carries. Named because the pad is READ BACK rather than merely
+// written: a counter run's slots are zero at start-up, so a reader striding one slot past the
+// count it was told finds a plain zero instead of whatever the next global holds.
+let DataBlobPadByte = 0 as Byte
+
+// ⭐⭐ **ONE CONTIGUOUS RESERVED RUN IN `.data`, ADDRESSED BY A SINGLE LABEL** — what a runtime
+// needs when it indexes into its own image at a computed stride (a coverage `.mxcov` header
+// followed by N u64 counters is the shape that asks for it).
+//
+// ⚠ **N SEPARATE 8-BYTE `DataSectionEntry`s WOULD NOT DO IT.** They stay adjacent only by the
+// ACCIDENT that they share a size class and `sortBySizeDescendingStable` is stable — a single
+// top-level `f64 var` in the program being compiled lands in the middle of the run. And a dump
+// of the run is ONE write of ONE address range, which it can only be if the range is contiguous
+// by construction rather than by coincidence.
+//
+// `offset` is assigned by `GlobalDataTable.layOut`, which stays the single writer of every
+// `.data` offset — a run's included.
+type DataBlobEntry
+	export let label as String
+	// The run as the table stores it: the registrant's bytes padded by `dataBlobStoredRun`.
+	// Mutable because `stampDataBlob` rewrites the contents of an already-placed run.
+	export var bytes as ByteArray
+	export var offset as ByteOffset
+
+	export static function create(label String, bytes ByteArray) returns DataBlobEntry
+		return Self{label: label, bytes: bytes, offset: 0}
+	end 'create'
+end 'DataBlobEntry'
+
+typealias DataBlobEntryArray = Array with DataBlobEntry
+
+export type GlobalDataTable
+	export var names as StringArray
+	export var values as ByteArrayArray
+	// Monotonic id for minting synthetic `__str_<id>` names for ad-hoc payloads.
+	export var nextStringId as MachineWord
+	export var nameIndex as GlobalNameIndexMap
+	// What each payload IS — see `RdataPayloadKind`. Parallel to `names`/`values` and pushed in the same
+	// call by `appendRdataPayload`, exactly as those two are — and `rdataImage`'s `requireColumnsAgree`
+	// checks all THREE lengths, so this column is proved alongside the two it rides with rather than
+	// merely asserted to ride with them.
+	export var payloadKinds as RdataPayloadKindArray
+	export var valueDedup as GlobalDedupMap
+	// The `.data` slots, IN LAYOUT ORDER — which is the order the image is written in and the
+	// order `RequiredData` pins. `layOutDataSection` is the single writer of both this array's
+	// order and every entry's `offset`.
+	export var dataSection as DataSectionEntryArray
+	export var dataIndex as DataSectionIndexMap
+	// ⭐ The contiguous reserved runs — see `DataBlobEntry`. Laid out BEFORE the scalar slots,
+	// which is what leaves `layOut`'s zero-padding claim intact: every run is stored padded to
+	// `MaxDataSlotBytes`, so the summed run length is a multiple of the widest slot and the first
+	// scalar still starts on a multiple of its own size. The claim gains a class ABOVE the four
+	// size classes rather than a hole between them.
+	var dataBlobs as DataBlobEntryArray
+	// A run's label → its index in `dataBlobs`, written at REGISTRATION because registration order
+	// IS run layout order: `layOut` reorders only the scalars.
+	var dataBlobIndex as DataSectionIndexMap
+	// Whether `layOut` has assigned the `.data` offsets. A run registered afterwards would be
+	// concatenated by `dataSectionImage` at an offset nothing assigned, so the door refuses.
+	var dataLaidOut as bool
+	// Each `.rdata` payload's offset, assigned AT REGISTRATION — see RdataOffsetMap and
+	// `registerRdataConstant`. `.rdata` needs no `layOut` twin: unlike `.data`, whose slots are
+	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
+	// are known the moment they are appended.
+	export var rdataOffsets as RdataOffsetMap
+	// ⭐⭐ **WHERE INSIDE ITS PAYLOAD EACH LABEL POINTS — 0 for every payload but an IMMORTAL RECORD, whose
+	// payload opens with the synthetic allocation header it is addressed through
+	// (`MmRuntime.immortalBoxHeaderBytes`).** The header and the record are ONE payload so the section
+	// packer cannot separate them, and the label names the RECORD so a read is still a bare `lea` with no
+	// displacement to add.
+	//
+	// ⚠ `rdataOffsets` above stays the payload's own START, which is what `rdataImage`'s drift assert
+	// compares against; `rdataOffsetOf` — what every writer and relocation resolves through — adds this.
+	// A label absent here points at its payload's first byte.
+	export var rdataLabelOffsets as RdataOffsetMap
+	// The running total bytes registered so far — the offset the NEXT `.rdata` payload lands at,
+	// maintained beside every push rather than re-summed. It is a SECOND copy of a fact `values`
+	// already holds (the concatenated length), so `rdataImage`'s drift assert is what keeps the two
+	// honest: it walks the payloads and panics if any recorded offset disagrees with the actual image
+	// position. See `registerRdataConstant` for why the copy is worth its guard.
+	var rdataSizeSoFar as ByteOffset
+	// The `.rdata` slots every writer patches with another `.rdata` payload's runtime address — see
+	// PendingRdataAbsReloc. Empty for a program holding no image record at all.
+	export var pendingRdataAbsRelocs as PendingRdataAbsRelocArray
+	// ⭐ **WHICH BLOB EACH RECORD NAMES, keyed by the record's label** — the `buffer@0` subset of
+	// `pendingRdataAbsRelocs` above, indexed for LOOKUP. Written in the same call, by
+	// `recordStringBufferFixup`, so the two cannot come to disagree about a pairing.
+	//
+	// ⚠ It is an INDEX and not a second list, for `rdataOffsets`' stated reason: the reader asks per
+	// REFERENCE (`TargetPrinter` renders the string a `leaRegRdata` addresses, and a program addresses one
+	// record many times) while the pairs are per LITERAL, so a scan of the array would be
+	// Θ(references × literals) — the exact shape this file's header says the linear scans were
+	// rewritten to kill. The writer walks the list; only a reader wanting ONE pairing comes here.
+	export var recordBlobLabels as RecordBlobLabelMap
+	// ⚠⚠ **THE FLOAT LABELS ALREADY MINTED, KEYED BY BITS — AND THIS MEMO IS NOT A TIDINESS CHOICE, IT IS
+	// THE COST.** Deriving the label runs `float.textFromBits`, which is a shortest-ROUND-TRIP search: an
+	// exact bignum decimal expansion, then up to seventeen candidate re-reads to find the fewest digits that
+	// read back as the same double. That is the right answer and an expensive one, and a program mentions a
+	// given float MANY times — so deriving it per OCCURRENCE is the same work repeated, where the byte-keyed
+	// pool this door replaced was O(1).
+	//
+	// MEASURED, as a same-base same-machine A/B against a control build: bypassing this memo
+	// costs **+690,334 allocations in `phase:isel` at rung 5 — +23.3% OF THAT PHASE** and turns the whole
+	// change from a decaying share into a growing one (+0.81% → +1.52% across the ladder, versus +0.148% →
+	// +0.046% with it). Keyed on the BITS rather than on the rendered label, because the bits are what a
+	// caller holds and the label is the expensive half.
+	//
+	// ⚠ **THE FIRST READING OF THIS COST WAS WRONG BY 70x, AND THE REASON IS WORTH THE LINE:** it was taken
+	// against the last row of `docs/optimization-log.md` rather than against a build. That row is a TREND
+	// ENTRY, not a control — it was minted from a different tree at a different time — and it read +5.0%
+	// where a real control reads +0.046%. Everything a scale delta is attributed to has to be A/B’d against a
+	// binary you built.
+	export var floatConstantLabels as FloatConstantLabelMap
+	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a `.rdata` slot with a
+	// `.text` function's VA — a witness-table method slot, or a managed-opaque-`T` descriptor's
+	// `destroyFunc@40`/`copyFunc@32`. See PendingRdataReloc. Empty for a program that conforms nothing to an
+	// interface and holds no managed-opaque-`T` array (all but the P1.7-generics corpus).
+	export var pendingRdataRelocs as PendingRdataRelocArray
+	// Every  slot holding a distance to ANOTHER  blob — see PendingRdataSelfRelReloc.
+	export var pendingRdataSelfRelRelocs as PendingRdataSelfRelRelocArray
+	// ⭐ **THE `.symtab` IMAGE — the FOURTH emitted section this table renders**, beside `.rdata`, `.data`
+	// and the string fixups. EMPTY for every ordinary build, and the section is then omitted entirely by
+	// the PE writer, so a normal program's binary is byte-for-byte what it was before this field existed.
+	//
+	// Its one payload today is the DebugStream `MXDS_TAGS` name blob, which `maxon monitor` finds by
+	// scanning the executable (see `DebugStreamRuntime`). It is a whole IMAGE rather than a registry of
+	// payloads because nothing REFERENCES it: no relocation points into `.symtab` — the consumer parses
+	// the file — so there are no offsets to hand out and nothing for a label to name.
+	export var symdataImage as ByteArray
+	// ⭐ **THE DEBUGSTREAM TAG TABLE — `names[i]` is the type name wire tag `i` resolves to.** It lives
+	// here rather than beside its format because this is the object every writer and the one reader
+	// already hold: the LOWERING that interns a user type's name has it as `self.globalData`, the runtime
+	// installs have it threaded, and the backend renders the blob out of it. Seeded with the fixed roster
+	// (`mmTagRosterNames`) so a runtime chunk's tag is a compile-time constant and needs no interning.
+	//
+	// ⚠ Seeded UNCONDITIONALLY, even for a build with `--debugstream` off. It is ten strings, and making
+	// the seeding conditional would put a flag test into this constructor — which every compile runs — to
+	// save them. Nothing renders the blob unless the flag is on, and `userTagIndex` refuses to grow the
+	// table in an untraced build, so the cost stops here.
+	export var debugStreamTags as DebugStreamNameTable
+	// ⭐⭐ **THE INTERNED-NAME TABLE — `names[i]` is what a Log event's u16 name field resolves to.** Its
+	// entries come from `__DebugStream.nameId("…")`, a compile-time NAME rather than a runtime value, which
+	// is what keeps the structured trace tier zero-alloc: the call becomes this index and the text exists
+	// only in `MXDS_STRS`.
+	//
+	// ⚠⚠ **IT IS GROWN UNCONDITIONALLY, WHERE THE TAG TABLE ABOVE IS NOT, AND THE ASYMMETRY IS THE WHOLE
+	// CONTRACT.** A tag index is chosen BY the compiler for a box the program never sees, so an untraced
+	// build can decline to mint one (`userTagIndex`). A name id is a VALUE the program computes and may
+	// print — so it may not depend on a compiler flag, or `--debugstream` would change what a program
+	// answers. Only the BLOB is gated; the numbering is not: the index must be stable whether or not
+	// the blob is emitted.
+	export var debugStreamNames as DebugStreamNameTable
+
+	export static function create() returns GlobalDataTable
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), dataBlobs: DataBlobEntryArray.create(), dataBlobIndex: DataSectionIndexMap.create(), dataLaidOut: false, rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
+	end 'create'
+
+	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
+	// twin of the `.data` half below.
+	//
+	// ⚠ **THE FLOAT ISLANDS NO LONGER COME THROUGH HERE, and this line used to say they did.** They are
+	// named by their VALUE now (`registerFloatConstant`) and take the LABELLED door below, which is what stops
+	// their label being a build-order artifact — and what stopped the byte-dedup below handing a float island
+	// a `__str_blob_` label, which it was measurably doing.
+	//
+	// IDENTICAL CONTENT RETURNS THE EXISTING LABEL, in O(1), through `valueDedup`. That is not a
+	// micro-optimization: a program mentioning `3.14` in fifty places gets ONE 8-byte island and
+	// fifty references to it, and the dedup is keyed on the rendered BYTES, so two constants that
+	// are the same number written differently (`2.0` and `2.00`) still share one island.
+	//
+	// The offset is assigned HERE, as `rdataSizeSoFar` — the running total of everything registered
+	// before it, advanced by this payload's own length AS it is pushed. That keeps both
+	// `rdataOffsetOf` AND the registration itself O(1): re-deriving the offset by summing every prior
+	// payload made the build of N distinct constants Θ(N²), which the field this replaces flagged as
+	// debt to pay "if `.rdata` ever holds thousands of entries (P1.2 strings)" — and a String literal
+	// registers TWO constants (blob + record) with literals-per-program unbounded, so P1.2 is that
+	// moment. `rdataImage` walks the same array in the same order and ASSERTS the recorded offset
+	// agrees with the image position, so the running total and the bytes it names cannot drift.
+	//
+	// ⚠ **ON THE DEDUP PATH THE CALLER'S `kind` IS DISCARDED, AND THAT IS CORRECT**: the slot already
+	// exists and is already what its first registrant made it. Two producers whose bytes coincide share ONE
+	// payload — that is what dedup means — and the kind describes the payload, not the request. (A producer
+	// that must keep its own slot regardless of content has the labelled door below instead, which is how the
+	// float islands stopped being handed a `__str_blob_` label.)
+	//
+	// ⛔⛔ **`labelAt` IS NOT DISCARDED, BECAUSE IT IS THE ONE THING A POOL HIT CANNOT BE WRONG ABOUT.** It
+	// says where inside the payload the label points, so a hit whose incumbent disagrees would hand this
+	// caller an address 24 or 32 bytes from the record it asked for and every field read would be off by a
+	// header. The bytes cannot rule it out: an immortal record's payload opens with a header, and nothing
+	// stops a byte-string blob from containing those same bytes. A disagreeing hit therefore takes a slot of
+	// its own rather than the pool's — the same answer the float islands got from the labelled door, for the
+	// same reason, and it costs one payload in a case a program has to go out of its way to construct.
+	export function registerRdataConstant(prefix String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset = 0) returns String
+		if let pooled = try self.valueDedup.get(bytes) 'poolHit'
+			if self.labelOffsetOf(pooled) == labelAt 'sameShape'
+				return pooled
+			end 'sameShape'
+
+			// A byte coincidence between two SHAPES. This registration takes a slot of its own and the pool
+			// keeps its incumbent, so neither producer is ever handed the other's address and a third
+			// registration of the incumbent's shape still hits the pool.
+			return self.mintRdataConstant(prefix, bytes: bytes, kind: kind, labelAt: labelAt)
+		end 'poolHit'
+
+		let label = self.mintRdataConstant(prefix, bytes: bytes, kind: kind, labelAt: labelAt)
+		self.valueDedup.upsert(bytes, value: label)
+		return label
+	end 'registerRdataConstant'
+
+	// Mint the next synthetic label and append its payload — the fresh half of the door above, WITHOUT the
+	// pool join, which only the first registrant of a shape makes.
+	function mintRdataConstant(prefix String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset) returns String
+		let label = "{prefix}{self.nextStringId}"
+		self.nextStringId = self.nextStringId + 1
+		self.appendRdataPayload(label, bytes: bytes, kind: kind, labelAt: labelAt)
+		return label
+	end 'mintRdataConstant'
+
+	// Append one FRESH `.rdata` payload under `label`: assign its offset (the running total), advance the
+	// total by this payload's length, and index it by name. The ONE writer of a new rdata slot's offset/name
+	// bookkeeping — shared by `registerRdataConstant`'s fresh path and `registerRdataConstantLabeled` so the
+	// two cannot come to disagree about how a slot is recorded. The byte-keyed `valueDedup` pool is
+	// deliberately NOT touched here: only the label-minting caller joins it (a structural descriptor label
+	// must never be handed back as a later bytes-dedup answer), so pool membership — the sole real difference
+	// between the two callers — stays with the caller that owns it.
+	//
+	// ⭐ **IT IS ALSO WHERE THE SECTION'S ALIGNMENT IS ESTABLISHED**, and being the one writer of an
+	// offset is what qualifies it: the payload is stored PADDED to `RdataPayloadAlignment`, so the
+	// running total it advances is always a multiple of that, so the offset it hands the NEXT payload is
+	// aligned too. The invariant is therefore local and checkable in one line — *every stored payload's
+	// length is a multiple of 8* — rather than a property each producer has to preserve and one of them
+	// silently did not. See `RdataPayloadAlignment` for the defect that shape produced.
+	function appendRdataPayload(label String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset)
+		if labelAt > bytes.count() 'labelPastPayload'
+			panic("GlobalDataTable.appendRdataPayload: '{label}' would be addressed at offset {labelAt} of a {bytes.count()}-byte payload — a label names a point WITHIN what it registers, and an EMPTY payload (a `b\"\"` blob) has only its start")
+		end 'labelPastPayload'
+
+		let payload = rdataStoredPayload(bytes)
+		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
+		self.rdataLabelOffsets.upsert(label, value: labelAt)
+		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
+		self.nameIndex.upsert(label, value: self.names.count())
+		self.names.push(label)
+		self.values.push(payload)
+		self.payloadKinds.push(kind)
+	end 'appendRdataPayload'
+
+	// ⭐ RESERVE an `.rdata` jump-table blob of `slotCount` i32 slots, returning the UNIQUE label that names
+	// it. The `nextStringId`-minted label makes each switch's table distinct (a byte-dedup would fuse two
+	// different tables — every table is all-zero placeholders at registration, patched per-slot by the WRITER
+	// once section addresses are known, so it MUST NOT join the bytes-keyed `valueDedup` pool). Reserving the
+	// zero bytes fixes the blob's `.rdata` offset now, so `rdataOffsetOf(label)` answers before the writer
+	// patches. The offset/name bookkeeping is the shared `appendRdataPayload`, so `rdataImage`'s drift assert
+	// covers it too.
+	export function registerJumpTable(slotCount ElementIndex) returns String
+		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
+		self.nextStringId = self.nextStringId + 1
+		var bytes = ByteArray.create()
+		bytes.growFilled(slotCount * JumpTableSlotBytes, value: 0)
+		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable, labelAt: 0)
+		return label
+	end 'registerJumpTable'
+
+	// ⭐ **REGISTER A FLOAT CONSTANT’S `.rdata` ISLAND, returning the label — the door BOTH isels come
+	// through** (`StdToX64Conversion.lowerFloatConst`, `StdToArm64Conversion.lowerFloatConst`), which is why
+	// it is one function and not two identical three-line sequences.
+	//
+	// ⭐ **IT TAKES THE BITS AND NOTHING ELSE — the PAYLOAD is minted here too, and that is the rest of the
+	// mirror the label prefix used to be half of.** Each isel used to render the island's eight bytes
+	// itself, x64 through `stdTypeStorageBytes(valueType)` and arm64 through an `Arm64DoubleBytes` of its
+	// own, so "an f64 island is eight little-endian IEEE bytes" was written twice and the width three
+	// times. It is derived once here, from the one type table (`stdTypeStorageBytes(StdType.f64)`), so the
+	// two targets agree by construction rather than by two files staying in step. What each isel keeps is
+	// the part that is genuinely its own: the `requireScalarDouble` check and which load op carries the
+	// label.
+	//
+	// ⚠ Minting inside `firstSighting` — not at the call — is also what makes the `floatConstantLabels`
+	// memo cover the WHOLE cost: a repeated float used to re-render its bytes into a fresh `ByteArray` at
+	// every occurrence and then have them ignored, since the memo hit returns before any payload is read.
+	//
+	// ⚠ **IT TAKES THE LABELLED DOOR, NOT `registerRdataConstant`, and the difference is load-bearing twice
+	// over.** That door does not advance the shared counter — which is the whole point of a value-named
+	// label — and it does not join the BYTES-keyed dedup pool, which was actively producing a wrong reading:
+	// an 8-byte float payload that byte-equals a short NUL-padded String blob was handed the STRING’s label,
+	// so **625 float-load lines across 124 committed goldens named a `__str_blob_`**
+	// (`arm64.fpLoadRdata d0, [rdata + __str_blob_44]`). Dedup is not lost — it becomes label-keyed, which is
+	// STRONGER: equal values share an island because they share a NAME, and `requireIdenticalPayload` turns a
+	// label-space collision into a panic rather than a silently shared constant. (Sabotage-verified: a mint
+	// returning one label for every value panics on the second distinct float, naming the label.)
+	//
+	// ⚠ **LEAVING THE POOL HAS A PRICE AND IT IS MEASURED: `phase:encode` +19,701 allocations at rung 5,
+	// +5.2% of that phase** — the WHOLE of what this change costs, and it is unrelated to the memo above (it
+	// is identical with the memo on and off). A float payload that used to be answered by a byte-identical
+	// String blob now gets its own `.rdata` slot, so there are more payloads and more relocations to resolve.
+	// That is the cost of the wrong reading it removes, and it does not grow: the change is +0.148% of the
+	// whole compile at rung 0 DECAYING to +0.046% at rung 5, its delta growing ×1.12…×1.68 per doubling
+	// (below ×2 ⇒ sublinear), with CPU −0.7%…−3.3% and `codeBytes` IDENTICAL at all six rungs.
+	export function registerFloatConstant(bits ParsedInt) returns String
+		return try self.floatConstantLabels.get(bits) otherwise 'firstSighting'
+			let label = "{FloatConstantLabelPrefix}{scalarConstantText(bits, isFloat: true)}"
+			self.floatConstantLabels.upsert(bits, value: label)
+			return self.registerRdataConstantLabeled(label, bytes: scalarImage(bits, byteCount: stdTypeStorageBytes(StdType.f64)), kind: RdataPayloadKind.floatConstant)
+		end 'firstSighting'
+	end 'registerFloatConstant'
+
+	// ⭐ REGISTER a read-only constant under an EXACT, caller-supplied label — the layout-descriptor
+	// twin of `registerRdataConstant` (P1.6-B1). A descriptor's label is STRUCTURAL
+	// (`__layout_Sizer_bool`, from the instance's base + argument names), so it must be the label
+	// verbatim — not a `{prefix}{nextStringId}` mint, whose numeric suffix is a build-order artifact the
+	// golden fragments and `verify-warm-rebuild` would see move. Idempotent by LABEL: a second call for
+	// the same instance (a descriptor referenced at two call sites) returns without re-registering.
+	//
+	// ⚠ It deliberately does NOT participate in the bytes-keyed `valueDedup` pool: a descriptor and a
+	// String literal that happened to share bytes must keep their own labels, and a descriptor must never
+	// be handed back as the dedup answer to a later `registerRdataConstant`. The offset/name bookkeeping is
+	// the shared `appendRdataPayload` — `registerRdataConstant`'s fresh path minus the dedup join, so
+	// `rdataImage`'s drift assert covers it too.
+	export function registerRdataConstantLabeled(label String, bytes ByteArray, kind RdataPayloadKind, labelAt ByteOffset = 0) returns String
+		if self.rdataOffsets.contains(label) 'alreadyRegistered'
+			self.requireIdenticalPayload(label, bytes: bytes)
+			return label
+		end 'alreadyRegistered'
+
+		self.appendRdataPayload(label, bytes: bytes, kind: kind, labelAt: labelAt)
+		return label
+	end 'registerRdataConstantLabeled'
+
+	// ⭐ **IDEMPOTENT MEANS *THE SAME BYTES*, AND UNTIL THIS EXISTED THE TABLE NEVER ASKED.** Every label
+	// reaching `registerRdataConstantLabeled` is STRUCTURAL — derived from the thing it names — so a second
+	// registration under one label is exactly one of two things: the SAME payload (the idempotence the
+	// function's contract promises), or TWO payloads whose derivations produced one name. The second is a
+	// label-space collision, and first-write-wins made it a silently wrong constant: the newcomer's bytes are
+	// dropped, every reference to its label resolves to the incumbent's, and nothing is reported.
+	//
+	// ⚠ **BOTH OF TODAY'S CALLERS MEMOIZE BEFORE THEY ASK** (`ensureWitnessTable` on the label,
+	// `ensureLayoutDescriptor` on the gid), so a repeat under one label is not the hot path this walks — it is
+	// the case that should not happen. The byte compare is therefore free in practice AND it is the only thing
+	// standing between a colliding derivation and a wrong `.rdata` constant, which is why it is not left to
+	// the callers: a caller's memo protects that caller, and this protects the TABLE.
+	//
+	// ⚠ **THE ASYMMETRY IS WHAT THIS CLOSES.** `rdataOffsetOf` and `dataSectionOffsetOf` both PANIC BY NAME
+	// on a label that is MISSING — an invariant break they refuse to paper over — while the write side
+	// accepted a label already taken without so much as comparing it. One end of the same map held two
+	// opposite opinions about how much it could be trusted.
+	//
+	// ⚠ **IT IS A BACKSTOP, NOT THE CURE FOR ANY PARTICULAR COLLISION, and the witness-label join is the
+	// case that proves the difference.** Two witness tables of equal method count carry BYTE-IDENTICAL
+	// zero-filled blobs — what distinguishes them is their RELOCATIONS, which are not payload — and the
+	// mint's own label-keyed memo returns before this is ever reached. Injectivity has to be a property of
+	// the LABEL (`IrInterface.witnessTableLabel`); what this catches is the residue: two derivations of one
+	// name whose CONTENT also disagrees, which is the `__layout_` family's shape.
+	function requireIdenticalPayload(label String, bytes ByteArray)
+		// ⚠ Compared in the STORED form, because that is what `payloadOf` returns: `appendRdataPayload`
+		// pads to `RdataPayloadAlignment`, so comparing the incumbent's padded bytes against a caller's
+		// raw ones would report every odd-length payload as a collision with itself.
+		let existing = self.payloadOf(label)
+		let incoming = rdataStoredPayload(bytes)
+		if not existing.equals(incoming) 'differs'
+			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} and {incoming.count()} STORED bytes — each padded up to RdataPayloadAlignment, so a 13- and a 17-byte payload read here as 16 and 24) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
+		end 'differs'
+	end 'requireIdenticalPayload'
+
+	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute address, AND index
+	// the pairing for the readers that ask what a record points at. Two acts in one call because a record
+	// registered without either half is wrong in a different way: without the fixup its `buffer@0` is a small
+	// integer, without the index `stringBlobLabelOfRecord` panics.
+	export function recordStringBufferFixup(recordLabel String, blobLabel String)
+		self.recordRdataAbs64InRdata(blobLabel, rdataLabel: recordLabel, offsetInLabel: ManagedRecordBufferOffset)
+		self.recordBlobLabels.upsert(recordLabel, value: blobLabel)
+	end 'recordStringBufferFixup'
+
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `targetLabel`'s runtime address
+	// — see PendingRdataAbsReloc. Both are `.rdata` labels this table minted, and neither offset need be
+	// known yet: every writer resolves them through `rdataOffsetOf` once its section base is fixed.
+	export function recordRdataAbs64InRdata(targetLabel String, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataAbsRelocs.push(PendingRdataAbsReloc.create(targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordRdataAbs64InRdata'
+
+	// ⭐ **THE BLOB AN IMMORTAL RECORD NAMES — the question "what does this `.rdata` slot MEAN?" for the
+	// one kind whose bytes are a POINTER rather than the thing pointed at.** Emitted code addresses such a
+	// record BY the record (`leaRegRdata rcx, [rip + __str_rec_1]`), never by its blob, so a reader following
+	// the label alone reaches the struct and stops one hop short of the payload.
+	//
+	// A record with no pairing is an invariant break rather than a case. There are exactly two doors —
+	// `StringRuntime.registerStringLiteralRecord` and `ManagedMemoryRuntime.registerImmortalByteArrayRecord`
+	// — and each registers the blob, the record and this fixup as ONE act, because a record registered
+	// without the fixup carries the blob rdata OFFSET where a pointer belongs.
+	export function stringBlobLabelOfRecord(recordLabel String) returns String
+		return try self.recordBlobLabels.get(recordLabel) otherwise panic("GlobalDataTable.stringBlobLabelOfRecord: '{recordLabel}' is registered as an immortal record but names no blob — both registering doors write the blob, the record and the fixup in one act, so a record without a pairing means a third door was cut")
+	end 'stringBlobLabelOfRecord'
+
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `funcName`'s absolute `.text`
+	// VA — see PendingRdataReloc. `rdataLabel` is a `.rdata` label this table minted (offset via
+	// `rdataOffsetOf`); `funcName` is a `.text` function the writer resolves through the debug-symbol map.
+	export function recordFuncAbs64InRdata(funcName ByteArray, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataRelocs.push(PendingRdataReloc.create(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordFuncAbs64InRdata'
+
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `targetLabel`'s distance from
+	// `rdataLabel`'s own base — see PendingRdataSelfRelReloc. Both are `.rdata` labels this table minted, and
+	// neither offset need be known yet: the bake runs when the section is assembled.
+	export function recordRdataBlobRelativeOffset(targetLabel String, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataSelfRelRelocs.push(PendingRdataSelfRelReloc.create(targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordRdataBlobRelativeOffset'
+
+	// The byte image of `.rdata` — the payloads concatenated in registration order, with every
+	// BLOB-RELATIVE slot baked (see `PendingRdataSelfRelReloc`). That bake lives here, and not in each
+	// writer beside the three format-specific ones, precisely because it is NOT format-specific: a distance
+	// within one section is the same number under every image format and every base, so giving each writer
+	// its own copy would be one fact written four times with nothing keeping them honest — and a wrong copy
+	// would be 8 opaque bytes in a witness table on ONE target, with no diagnostic anywhere.
+	//
+	// The `dataSectionImage` twin, including its drift assert and for the same reason: an entry
+	// whose recorded offset disagrees with the running position means the offsets a relocation
+	// resolves against and the bytes the writer emits have parted company, which is a silently
+	// wrong constant rather than a crash.
+	//
+	// ⭐ **NO PADDING HAPPENS HERE, AND THAT IS THE POINT OF DOING IT AT REGISTRATION.** Every payload
+	// was stored padded to `RdataPayloadAlignment` by `appendRdataPayload`, so concatenating them in
+	// registration order lands each one exactly on its recorded offset — which is what lets the drift
+	// assert below stay an EQUALITY. An image that padded as it went would have to relax that check to
+	// "not past it", and the check is the only thing standing between a relocation's idea of where a
+	// constant is and where these bytes actually put it. The section's own RVA alignment remains the
+	// writer's business; this is alignment WITHIN the section, which the writers cannot see.
+	export function rdataImage() returns ByteArray
+		self.requireColumnsAgree()
+
+		var image = ByteArray.create()
+		for (iter, payload) in self.values.withIterator() 'each'
+			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
+			let offset = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataImage: '{label}' has no recorded offset — every label registerRdataConstant mints gets one in the same call")
+			if image.count() != offset 'drift'
+				panic("GlobalDataTable.rdataImage: '{label}' is recorded at offset {offset} but the image has reached {image.count()} — the offsets relocations resolve against and the bytes this places have drifted")
+			end 'drift'
+			image.append(payload)
+		end 'each'
+
+		self.bakeBlobRelativeOffsets(image)
+		return image
+	end 'rdataImage'
+
+	// ⭐ **THE THREE PARALLEL COLUMNS ARE THE SAME LENGTH.** `appendRdataPayload` pushes name, payload and
+	// kind in one call, which is what MAKES that true — this is what CHECKS it, at the one moment the whole
+	// table is walked. Without it `payloadKinds` had no guard at all: `rdataImage`'s per-row `names.get`
+	// covers the first two by accident of reading them, and a kind column short by one would go unnoticed
+	// until some later `payloadKindOf` gave a `leaRegRdata` the kind of a DIFFERENT payload — a note
+	// describing the wrong slot, or bytes rendered as text that are not text.
+	function requireColumnsAgree()
+		if self.names.count() != self.values.count() or self.payloadKinds.count() != self.values.count() 'columnDrift'
+			panic("GlobalDataTable.requireColumnsAgree: the .rdata columns have drifted — {self.names.count()} names, {self.values.count()} payloads, {self.payloadKinds.count()} kinds — `appendRdataPayload` pushes all three in one call and is the only writer, so a second writer has been cut")
+		end 'columnDrift'
+	end 'requireColumnsAgree'
+
+	// Write each blob-relative slot's distance into the assembled image. IDEMPOTENT — it writes an absolute
+	// distance rather than adjusting one — so a second `rdataImage()` (the wasm backend builds its own image
+	// beside the native one) produces the identical bytes.
+	function bakeBlobRelativeOffsets(image ByteArray)
+		for reloc in self.pendingRdataSelfRelRelocs 'each'
+			let base = self.rdataOffsetOf(reloc.rdataLabel)
+			let target = self.rdataOffsetOf(reloc.targetLabel)
+			patchQword(image, offset: base + reloc.offsetInLabel, value: twosComplementDistance(target, from: base))
+		end 'each'
+	end 'bakeBlobRelativeOffsets'
+
+	// The byte offset of `label`'s payload within `.rdata` — the door the x64 relocation resolver
+	// asks through, and the exact mirror of `dataSectionOffsetOf`. A miss is an invariant break,
+	// not a case: every label reaching here came from a `movsdRegRip` this table minted.
+	export function rdataOffsetOf(label String) returns ByteOffset
+		let start = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataOffsetOf: no .rdata constant is labelled '{label}' — every label a `movsdRegRip` carries is one registerRdataConstant minted")
+		return start + self.labelOffsetOf(label)
+	end 'rdataOffsetOf'
+
+	// How far into its payload `label` points — see `rdataLabelOffsets`. A label with no entry names the
+	// payload's first byte, which is every payload but an immortal record's.
+	function labelOffsetOf(label String) returns ByteOffset
+		return try self.rdataLabelOffsets.get(label) otherwise 0
+	end 'labelOffsetOf'
+
+	// ⭐ **THE ONE `label` → COLUMN INDEX STEP**, so the three readers below cannot come to disagree about
+	// what a missing name means. Like `rdataOffsetOf`, a miss is an invariant break rather than a case:
+	// every label reaching any of them is one this table minted.
+	function payloadIndexOf(label String, what String) returns MachineWord
+		return try self.nameIndex.get(label) otherwise panic("GlobalDataTable.{what}: no .rdata payload is labelled '{label}' — every label reaching here is one `appendRdataPayload` recorded, in the same call that gave it its offset")
+	end 'payloadIndexOf'
+
+	// The BYTES registered under `label`. Read by `requireIdenticalPayload`'s collision compare and by
+	// `TargetPrinter`, which renders a String blob's text beside the label that names it.
+	export function payloadOf(label String) returns ByteArray
+		let index = self.payloadIndexOf(label, what: "payloadOf")
+		return try self.values.get(index) otherwise panic("GlobalDataTable.payloadOf: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
+	end 'payloadOf'
+
+	// WHAT the payload under `label` is — see `RdataPayloadKind`. The question a reader of the table must
+	// ask before interpreting any of its bytes.
+	export function payloadKindOf(label String) returns RdataPayloadKind
+		let index = self.payloadIndexOf(label, what: "payloadKindOf")
+		return try self.payloadKinds.get(index) otherwise panic("GlobalDataTable.payloadKindOf: nameIndex maps '{label}' to {index}, which payloadKinds does not hold — the kind is pushed in the same `appendRdataPayload` call as the name and the payload, so the three columns cannot disagree")
+	end 'payloadKindOf'
+
+	// ⭐ RESERVE a contiguous `.data` run of `bytes.count()` bytes under `label` — the writable
+	// twin of `registerJumpTable`. `bytes` is the run's INITIAL image, which `stampDataBlob`
+	// may rewrite once a value the code had to be final to know is available.
+	//
+	// ⚠ **IT MUST PRECEDE `layOut`**, the single writer of every `.data` offset. A run registered
+	// afterwards would be concatenated into the image by `dataSectionImage` at an offset nothing
+	// assigned, displacing every scalar behind it — a wrong address for every global in the
+	// program, reported nowhere.
+	export function registerDataBlob(label String, bytes ByteArray)
+		if self.dataLaidOut 'afterLayout'
+			panic("GlobalDataTable.registerDataBlob: '{label}' arrives after layOut has assigned every .data offset — the run would be emitted at an offset nothing assigned and would displace every scalar global behind it")
+		end 'afterLayout'
+
+		if self.dataBlobIndex.contains(label) 'alreadyReserved'
+			panic("GlobalDataTable.registerDataBlob: '{label}' already names a reserved .data run — one label names one address, so a second reservation would leave every reference resolving to whichever run the index kept")
+		end 'alreadyReserved'
+
+		self.dataBlobIndex.upsert(label, value: self.dataBlobs.count())
+		self.dataBlobs.push(DataBlobEntry.create(label, bytes: dataBlobStoredRun(bytes)))
+	end 'registerDataBlob'
+
+	// ⭐ REWRITE a reserved run's contents where it already lies. A producer whose image embeds a
+	// value knowable only after the code is final registers a placeholder and stamps it here.
+	//
+	// ⚠ **THE STAMP'S LENGTH MUST EQUAL THE RESERVED RUN'S EXACTLY** — that is the registered
+	// length rounded up to `MaxDataSlotBytes`, since `dataBlobStoredRun` pads. A stamp free to
+	// resize would move every scalar laid out behind the run while every `globalAddr` already
+	// emitted still carries the old offset, so the mismatch is refused by name rather than
+	// resolved in either direction.
+	export function stampDataBlob(label String, bytes ByteArray)
+		let index = try self.dataBlobIndex.get(label) otherwise panic("GlobalDataTable.stampDataBlob: no .data run is labelled '{label}' — a stamp rewrites a run `registerDataBlob` reserved, so an unknown label means the reservation never ran or the two spell it differently")
+		var entry = try self.dataBlobs.get(index) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+		if bytes.count() != entry.bytes.count() 'lengthDiffers'
+			panic("GlobalDataTable.stampDataBlob: '{label}' reserves {entry.bytes.count()} bytes but the stamp carries {bytes.count()} — the reserved run is the registered length padded up to {MaxDataSlotBytes}, and resizing it would move every scalar global behind it")
+		end 'lengthDiffers'
+
+		entry.bytes = bytes
+	end 'stampDataBlob'
+
+	// ⭐ LAY OUT THE `.data` SECTION: order the slots, then assign each its offset. The SINGLE
+	// writer of `dataSection`, `dataIndex` and every offset in the section — a reserved run's as
+	// much as a scalar entry's — so the image, the relocation resolver and the RequiredData gate
+	// cannot hold three opinions of where a global lives.
+	//
+	// **SORTED BY STORAGE SIZE, LARGEST FIRST — which is what makes the padding zero.** Every
+	// size here is a power of two and no larger than 8, so laying the widest out first means
+	// each slot's offset is already a multiple of its own size when it is reached: the 8-byte
+	// slots fill offsets 0,8,16…, and the 1-byte slots that follow need no alignment at all.
+	// Declaration order would not do it — `var flag = false` then `var counter = 42` would put
+	// an 8-byte slot at offset 1 and force 7 bytes of padding to fix it. This is exactly what
+	// `specs/static-variables.md`'s six `RequiredData` cases pin, and the spec says so in its
+	// own words ("sorted largest-first, no padding needed").
+	//
+	// **THE SORT IS STABLE, and that is part of the contract too**: `data-section-multiple-bools`
+	// pins three equal-sized slots in DECLARATION order (`i8 1`, `i8 0`, `i8 1` for `a`,`b`,`c`).
+	// An unstable sort would order them by whatever the algorithm did that day, and the layout
+	// of a program would stop being a function of its source.
+	export function layOut(declared DataSectionEntryArray)
+		self.dataSection = sortBySizeDescendingStable(declared)
+		self.dataIndex = DataSectionIndexMap.create()
+
+		// ⭐ **THE RESERVED RUNS GO FIRST, AND THE ZERO-PADDING CLAIM ABOVE SURVIVES IT EXACTLY**:
+		// `dataBlobStoredRun` stores every run padded to `MaxDataSlotBytes`, so their total is a
+		// multiple of the widest slot and the first scalar still meets its own size class. Runs are
+		// laid out in registration order, which is why `dataBlobIndex` can be written at the door.
+		var offset = 0 as ByteOffset
+		for i in 0 upto self.dataBlobs.count() 'eachRun'
+			var blob = try self.dataBlobs.get(i) otherwise panic("GlobalDataTable.layOut: dataBlobs.get OOB at {i} despite the upto bound")
+			blob.offset = offset
+			offset = offset + (blob.bytes.count() as ByteOffset)
+		end 'eachRun'
+
+		for i in 0 upto self.dataSection.count() 'each'
+			// A `var` binding, so the entry's `offset` is written THROUGH the reference the array
+			// holds — `DataSectionEntry` is a `type`, so this is the very object the array stores,
+			// not a copy of it.
+			var entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
+			if self.dataBlobIndex.contains(entry.label) 'labelCollision'
+				panic("GlobalDataTable.layOut: '{entry.label}' is both a declared global and a reserved .data run — one label names one address, and `dataSectionOffsetOf` answers runs first, so the global would be unreachable")
+			end 'labelCollision'
+
+			entry.offset = offset
+			self.dataIndex.upsert(entry.label, value: i)
+			offset = offset + (stdTypeStorageBytes(entry.valueType) as ByteOffset)
+		end 'each'
+
+		self.dataLaidOut = true
+	end 'layOut'
+
+	// The byte image of the `.data` section, in layout order: the reserved runs verbatim, then
+	// each scalar slot rendered from its `(value, valueType)`. Little-endian, matching every
+	// other integer this backend writes.
+	//
+	// It needs no padding logic and asserts that it needs none: `dataBlobStoredRun` padded every
+	// run and `layOut` ordered the slots so each lands naturally aligned, so the image is simply
+	// the concatenation. An entry whose offset disagrees with the running position means the
+	// layout and the image have drifted, which panics rather than emitting a silently misaligned
+	// global.
+	export function dataSectionImage() returns ByteArray
+		var image = ByteArray.create()
+		for blob in self.dataBlobs 'eachRun'
+			if image.count() != blob.offset 'runDrift'
+				panic("GlobalDataTable.dataSectionImage: run '{blob.label}' is laid out at offset {blob.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
+			end 'runDrift'
+			image.append(blob.bytes)
+		end 'eachRun'
+
+		for entry in self.dataSection 'each'
+			if image.count() != entry.offset 'drift'
+				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
+			end 'drift'
+			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
+		end 'each'
+		return image
+	end 'dataSectionImage'
+
+	// The byte offset of `label`'s slot within `.data` — the door the x64 relocation resolver
+	// asks through, for a scalar slot and a reserved run alike, which is why a run needs no reader
+	// of its own. A miss is an invariant break, not a case: every label reaching here came from a
+	// `globalAddr` the parser emitted off the very arena `layOut` was fed, or from a run some
+	// runtime reserved.
+	export function dataSectionOffsetOf(label String) returns ByteOffset
+		if let runIndex = try self.dataBlobIndex.get(label) 'reservedRun'
+			let blob = try self.dataBlobs.get(runIndex) otherwise panic("GlobalDataTable.dataSectionOffsetOf: dataBlobIndex maps '{label}' to {runIndex}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+			return blob.offset
+		end 'reservedRun'
+
+		let index = try self.dataIndex.get(label) otherwise panic("GlobalDataTable.dataSectionOffsetOf: no .data slot or reserved run is labelled '{label}' — every label a `globalAddr` carries is one the top-level `var` arena declared or one `registerDataBlob` reserved")
+		let entry = try self.dataSection.get(index) otherwise panic("GlobalDataTable.dataSectionOffsetOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
+		return entry.offset
+	end 'dataSectionOffsetOf'
+end 'GlobalDataTable'
+
+// The widest a `.data` slot can be. `StdTypeInfo.storageBytes` tops out at 8 (`i64`/`u64`/`f64`)
+// and every value it can take is a power of two — the SAME fact `GlobalDataTable.layOut` already
+// rests its zero-padding claim on, named here because `sortBySizeDescendingStable` is the code
+// that walks the size classes and would otherwise re-state the bound as a literal.
+let MaxDataSlotBytes = 8 as BytePos
+
+// `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
+// sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.
+//
+// ⭐ **ONE STABLE PASS PER SIZE CLASS — O(globals), not Θ(globals²).** The sizes are not an open
+// set to be compared pairwise: `StdTypeInfo.storageBytes` is one of 1, 2, 4, 8 and nothing else
+// (see `MaxDataSlotBytes`), so "largest first" is FOUR appends-in-order, not a sort. Each pass
+// appends the entries of one class in declaration order, which is what makes it stable by
+// construction — `data-section-multiple-bools` pins three equal-sized slots in declaration order,
+// and nothing here can reorder them because nothing here compares them.
+//
+// ⚠ An insertion sort here would be Θ(n²) in the ORDINARY case, not the pathological one: a scan
+// that stops at the first STRICTLY smaller entry never stops early when every global is one size
+// — every global an `int`, the commonest program there is — and rescans the whole placed list for
+// every entry.
+function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
+	var sorted = DataSectionEntryArray.create()
+	var size = MaxDataSlotBytes
+	while size > 0 'eachSizeClass'
+		for entry in declared 'each'
+			if stdTypeStorageBytes(entry.valueType) == size 'thisClass'
+				sorted.push(entry)
+			end 'thisClass'
+		end 'each'
+		size = size shr 1
+	end 'eachSizeClass'
+
+	// Every entry landed in exactly one class, or the walk above does not cover the type table.
+	// It cannot today — the passes are 8/4/2/1 and `StdTypeInfo` declares nothing else — but a
+	// dropped entry would be SILENT and it would be a wrong answer, not a crash: the slot would
+	// vanish from `dataSection` while `dataIndex` never learned it, and the first `globalAddr`
+	// naming it would panic somewhere else entirely. The day a 16-byte `StdType` is declared, this
+	// says so here, where the fix is.
+	if sorted.count() != declared.count() 'droppedAnEntry'
+		panic("sortBySizeDescendingStable: laid out {sorted.count()} of {declared.count()} .data slot(s) — a global's storage size is not one of the {MaxDataSlotBytes}/4/2/1-byte classes this walks, so StdTypeInfo has grown a width the layout does not cover")
+	end 'droppedAnEntry'
+
+	return sorted
+end 'sortBySizeDescendingStable'
+
+// A reserved `.data` run as the table STORES it: the registrant's bytes, zero-padded up to
+// `MaxDataSlotBytes`.
+//
+// ⭐⭐ **THE PAD IS THE TABLE'S JOB AND NOT THE REGISTRANT'S, AND THAT IS WHY THE ALIGNMENT IS
+// `MaxDataSlotBytes` RATHER THAN A NUMBER OF ITS OWN.** Runs are laid out ahead of the scalars, so
+// the first scalar starts at the summed run length, and `layOut`'s zero-padding claim holds only
+// if that sum is a multiple of the widest slot — which is exactly the bound this constant names.
+// A coverage image is `40 + 8N` bytes and satisfies it already; nothing makes the NEXT producer
+// do so, and a whole-section invariant left to a producer's habit is how `.rdata`'s cursor came to
+// sit permanently 2 mod 8 (see `RdataPayloadAlignment`). Rounding here means a run can never be
+// the thing that breaks it.
+//
+// ⚠ The pad is part of the RUN, so `stampDataBlob` compares against the padded length: a producer
+// that reserved an odd length stamps the rounded run, not the length it asked for.
+function dataBlobStoredRun(bytes ByteArray) returns ByteArray
+	let storedCount = alignUp(bytes.count(), alignment: MaxDataSlotBytes)
+	if storedCount == bytes.count() 'alreadyAligned'
+		return bytes
+	end 'alreadyAligned'
+
+	var padded = ByteArray.create()
+	padded.append(bytes)
+	padded.growFilled(storedCount as ElementIndex, value: DataBlobPadByte)
+	return padded
+end 'dataBlobStoredRun'
+
+// A payload as the table STORES it: the caller's bytes, zero-padded up to `RdataPayloadAlignment`.
+//
+// ⚠ **THE ALREADY-ALIGNED PATH RETURNS THE ARGUMENT UNTOUCHED, AND IT IS THE COMMON ONE** — a String
+// record is 56 bytes, a float island 8, a jump table `4 × slotCount` for an even slot count — so the
+// discipline costs no copy for the payloads that already satisfied it, and the ones it does copy are the
+// handful of odd-length tables that broke the cursor in the first place.
+//
+// ⚠ The padding is invisible to every consumer by construction: a text payload is read to its NUL
+// (`TargetPrinter.quotedPayloadText`, and `length@8` for a String), and a structural payload is decoded by
+// a reader that knows its own slot count. Nothing derives a count from a stored payload's length.
+function rdataStoredPayload(bytes ByteArray) returns ByteArray
+	let storedCount = alignUp(bytes.count(), alignment: RdataPayloadAlignment)
+	if storedCount == bytes.count() 'alreadyAligned'
+		return bytes
+	end 'alreadyAligned'
+
+	var padded = ByteArray.create()
+	padded.append(bytes)
+	padded.growFilled(storedCount as ElementIndex, value: RdataPadByte)
+	return padded
+end 'rdataStoredPayload'
+
+// `value` rendered as a standalone `byteCount`-byte little-endian payload — what
+// `registerFloatConstant` mints a float island out of.
+//
+// ⭐ It goes through `LayoutDescriptor.appendLittleEndianScalar`, the SAME serializer the `.data` image
+// above and a constant array literal's `.rdata` blob both use, which is the point: an f64 constant in
+// `.rdata` and an f64 global in `.data` are the same 8 bytes of IEEE pattern, and there is exactly one piece
+// of code that decides what those bytes are. A second renderer here would be this project's signature bug —
+// one fact written twice — with the two free to disagree about what `3.14` is.
+
+export function scalarImage(value ParsedInt, byteCount BytePos) returns ByteArray
+	var bytes = ByteArray.create()
+	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
+	return bytes
+end 'scalarImage'

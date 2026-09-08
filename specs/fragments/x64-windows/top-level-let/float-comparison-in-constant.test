@@ -1,0 +1,31 @@
+// Test: float-comparison-in-constant
+let LT = -1.0 > -2.0
+let GE = 2.5 >= 2.5
+
+function main() returns ExitCode
+	if LT and GE 'both'
+		return 1
+	end 'both'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  andrhs:
+    x64.movRegImm32 rax, 1
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  both:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

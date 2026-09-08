@@ -1,0 +1,109 @@
+// Test: managed-array-arguments-in-stack-slots
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function totalCount(a Integer, b Integer, c Integer, d Integer, e Integer, f IntArray, g IntArray, h IntArray) returns Integer
+	return a + b + c + d + e + f.count() + g.count() + h.count()
+end 'totalCount'
+
+function main() returns ExitCode
+	var first = IntArray.create()
+	first.push(1)
+	first.push(2)
+	var second = IntArray.create()
+	second.push(3)
+	second.push(4)
+	second.push(5)
+	var third = IntArray.create()
+	third.push(6)
+	return totalCount(10, b: 20, c: 30, d: 40, e: 50, f: first, g: second, h: third)
+end 'main'
+---
+ExitCode: 156
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 6
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_push
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.leaRegRegImm32 rax, rax, 150
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+    x64.leaRegRegReg r14, rax, rcx
+  __il_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r14, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at managed-array-arguments-in-stack-slots.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

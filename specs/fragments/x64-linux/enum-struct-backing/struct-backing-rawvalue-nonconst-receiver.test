@@ -1,0 +1,34 @@
+// Test: struct-backing-rawvalue-nonconst-receiver
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let value as Latency
+end 'Meta'
+
+enum TestOp
+	add = Meta{value: 1}
+	mul = Meta{value: 3}
+end 'TestOp'
+
+// `op` is a parameter — not a compile-time-known case — so `op.rawValue.value`
+// cannot be const-folded and must materialize the backing struct at runtime.
+function latencyOf(op TestOp) returns Latency
+	return op.rawValue.value
+end 'latencyOf'
+
+function main() returns ExitCode
+	return latencyOf(TestOp.mul)
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.movRegImm32 r8, 3
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}

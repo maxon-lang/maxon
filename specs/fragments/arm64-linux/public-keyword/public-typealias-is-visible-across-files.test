@@ -1,0 +1,23 @@
+// Test: public-typealias-is-visible-across-files
+// --- file: api/types.maxon
+public typealias Score = int(0 to 100)
+
+// --- file: app/main.maxon
+function scoreOf(s Score) returns Score
+	return s
+end 'scoreOf'
+
+function main() returns ExitCode
+	return scoreOf(11)
+end 'main'
+---
+ExitCode: 11
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 11
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

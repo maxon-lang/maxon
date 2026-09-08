@@ -1,0 +1,194 @@
+// Runtime/CoverageRuntime.maxon — HOW AN INSTRUMENTED PROGRAM PUBLISHES ITS COUNTERS.
+//
+// A `--coverage` build increments a counter per coverage point into a reserved `.data` run
+// (`CoverageImageGlobal`), which already holds a complete `.mxcov` image: the header the compiler stamped
+// followed by the counters themselves. So the dump is not a serializer — the bytes are already the file —
+// and the whole runtime is one status store and one write.
+//
+// ⭐⭐ **`__cov_dump` ALLOCATES NOTHING AND TAKES NO LOCK, WHICH IS WHAT MAKES IT CALLABLE FROM A PATH THE
+// PROGRAM IS ALREADY FAILING ON.** Its out-param scratch is a FRAME slot, its path is an `.rdata` cstring
+// baked at build time, and its buffer is the reserved run itself. A dump that had to ask the allocator for
+// anything could not be reached from a panic, which is exactly where a PARTIAL measurement is worth most.
+//
+// ⭐⭐ **A WRITE FAILURE IS SILENT, AND THAT IS THE CONTRACT.** Instrumentation must not change what the
+// measured program prints or what it exits with — a build flag that made a program noisier would be
+// measuring something other than the program. The ABSENCE of the file IS the report: every driver refuses
+// a run it has no data for, naming the missing path.
+//
+// ⭐ **ONE Std BODY SERVES ALL FOUR NATIVE LANES.** `osFileOpenWrite`/`osWriteFile`/`osFileClose` are
+// lowered by x64-windows, x64-linux, arm64-macOS and arm64-linux alike (`HostFacility.managedFile`), so
+// there is no per-backend hand assembly here — the reference compiler emits one writer per backend, and
+// this is the departure. `Main.runBuild` refuses `--coverage` on a target without that facility, which is
+// the one place that question is asked.
+
+// ⭐ **THE ONE ENTRY POINT BOTH DUMP SITES CALL.** Exported to the two entry stubs, to each backend's
+// hand-assembled `mrt_panic`, and to the reachability prune's root set — nothing in a Maxon module can
+// name it, so the prune would otherwise drop it and leave those chunks calling a function nothing laid out.
+export let CoverageDumpName = b"__cov_dump"
+
+// The file write under it. Split from the dump so the dump stays "store the status, hand over the image",
+// which is the shape a fault path can reuse unchanged.
+let CoverageWriteFileName = b"__cov_write_file"
+
+// The label prefix the baked output path is registered under.
+let CoveragePathRdataPrefix = "__cov_path_"
+
+// ⚠ **THE OUT-PARAM SCRATCH IS A FRAME SLOT, NOT A `.data` WORD.** `osWriteFile` requires a pointer to
+// write its byte count into, and a shared global there is `ClockRuntime`'s W212 defect: two Ms are inside
+// one function without needing a yield point between them, so one thread's count lands in the other's
+// word. A per-CALL need gets per-CALL storage.
+let CoverageScratchBytes = 8 as StackSize
+let CoverageScratchSlot = 0 as SpillSlot
+
+// The open's failure answer, which every lane's host surface reports in Win32's vocabulary.
+let CoverageInvalidHandle = -1 as ParsedInt
+
+// ⭐ **WHERE THE COUNTERS WILL BE WRITTEN, RESOLVED THE MOMENT THE OUTPUT PATH IS.** ABSOLUTE, because the
+// measured program may be launched from anywhere and must still publish beside its own binary — the
+// reference driver takes the same decision (`Path.GetFullPath(outputPath) + ".mxcov"`). A build that was not
+// asked to instrument records nothing, so the `.rdata` cstring exists only where something reads it.
+export function recordCoverageDataPath(project Project, outputPath FilePath)
+	if not project.coverage 'notInstrumented'
+		return
+	end 'notInstrumented'
+
+	project.coverageDataPath = coverageDataPathOf(outputPath.resolve(Directory.currentPath()))
+end 'recordCoverageDataPath'
+
+// The counter file beside `outputPath`: the WHOLE output name with the suffix appended, extension and all
+// (`foo.exe` -> `foo.exe.mxcov`). Spelled once here because the two ends of the same fact read it — the
+// path BAKED into an instrumented image, and the removal of a stale one ahead of every build.
+function coverageDataPathOf(outputPath FilePath) returns String
+	return "{outputPath.toString()}{MxcovDataExtension}"
+end 'coverageDataPathOf'
+
+// ⭐ **REMOVE THE COUNTER FILE BESIDE `outputPath`, UNCONDITIONALLY** — `discardDebugInfoSidecar`'s twin and
+// its argument exactly: DROPPING `--coverage` must not leave the previous run's counters beside a fresh
+// uninstrumented executable. The build-ids would refuse that pair, but only at the moment somebody tried to
+// report on it. It is a REMOVAL, so an unspellable path is simply nothing to remove.
+export function discardCoverageData(outputPath FilePath)
+	let dataPath = try FilePath.from(coverageDataPathOf(outputPath)) otherwise return
+
+	try File.delete(dataPath) otherwise ignore
+end 'discardCoverageData'
+
+// ⭐⭐ **RESERVE THE COUNTER IMAGE — a complete `.mxcov` from the first byte, not a blank run.** A binary
+// killed before it dumps still holds this header, and a reader that finds a plausible magic, this build's
+// point count and `ABORTED` learns exactly what happened; a run of zeros would be a file no reader could
+// tell from garbage.
+//
+// The build-id is the one field that cannot be known yet, so it goes in as a placeholder and
+// `stampCoverageImage` rewrites the run once `.text` is final.
+export function reserveCoverageImage(project Project)
+	if not project.coverage 'notInstrumented'
+		return
+	end 'notInstrumented'
+
+	project.globalData.registerDataBlob(CoverageImageGlobal, bytes: buildMxcovImage(CoveragePlaceholderBuildId, pointCount: project.covPoints.count() as MxcovPointIndex))
+end 'reserveCoverageImage'
+
+// ⭐⭐ **THE REAL BUILD-ID, WRITTEN OVER THE RESERVATION WHERE IT ALREADY LIES.** The id is a fold of the
+// emitted `.text` and the run is in `.data`, so this rewrite cannot change the number it writes — and
+// `stampDataBlob` refuses a stamp that would resize the run, which is what keeps every scalar global behind
+// it at the offset already emitted into the code.
+//
+// ⛔ It is the SAME fold the `.mxdbg` sidecar records (`codeBuildId`). A report joins the two artifacts and
+// refuses a pair whose ids differ, so two spellings that agree today would be a refusal waiting for the day
+// they stop.
+//
+// ⚠⚠ **THE `.data` IMAGE IS RE-DERIVED, AND STAMPING THE TABLE ALONE IS NOT ENOUGH.** Each backend SNAPSHOTS
+// the section into `codeResult.dataPrelude` while it is still assembling, and the writers serialize that
+// snapshot without ever looking at the table again. MEASURED without this line: a `.mxcov` carrying a
+// build-id of 0. Re-deriving rather than patching the snapshot at the run's offset keeps ONE renderer of the
+// section.
+//
+// ⚠ **IT MUST RUN AGAINST A `.text` THE WRITER HAS ALREADY PATCHED** — `Compiler.compileMeasured` states why,
+// and it is the one caller, which is why the instrumented-build test is asked there rather than here.
+export function stampCoverageImage(project Project, codeResult CodeResult)
+	codeResult.globalData.stampDataBlob(CoverageImageGlobal, bytes: buildMxcovImage(codeBuildId(codeResult.code), pointCount: project.covPoints.count() as MxcovPointIndex))
+	codeResult.dataPrelude = codeResult.globalData.dataSectionImage()
+end 'stampCoverageImage'
+
+// What the reservation carries where the build-id will go. Never observed: the stamp above runs on every
+// instrumented build, before the image reaches a file.
+let CoveragePlaceholderBuildId = 0 as HashDigest
+
+// Install the coverage dump, on the bit the driver DECLARES — nothing in a Maxon module names either entry
+// point, so there is nothing for a scan to discover (`RuntimeUsage.usesCoverage`).
+//
+// Appended AFTER the pipeline, already-lowered Std, like every other runtime install. What runs over that
+// appended band is stated once, in `Compiler.compileToCodeResult`'s install block.
+export function installCoverageRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, dataPath String, pointCount MxcovPointIndex)
+	if not usage.usesCoverage 'notInstrumented'
+		return
+	end 'notInstrumented'
+
+	let pathLabel = globalData.registerRdataConstant(CoveragePathRdataPrefix, bytes: cStringBytes(dataPath), kind: RdataPayloadKind.coveragePath)
+	buildCoverageDump(module, pathLabel: pathLabel.toByteArray(), pointCount: pointCount)
+	buildCoverageWriteFile(module)
+end 'installCoverageRuntime'
+
+// `__cov_dump(status)` — stamp the run's outcome into the image's own header, then publish the image.
+//
+// The status is a PARAMETER rather than a constant because the two callers disagree about it and must: the
+// entry stub reports a run that reached its own exit, and a fault path reports one that did not.
+function buildCoverageDump(module StdModule, pathLabel ByteArray, pointCount MxcovPointIndex)
+	var func = IrFunction.createFromStd(CoverageDumpName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let status = 0 as ValueId
+
+	let image = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(image, label: CoverageImageGlobal.toByteArray()))
+	module.appendOp(entry, op: StdOp.storeIndirect(image, offset: MxcovOffStatus as ByteOffset, valueId: status, valueType: StdType.i64))
+
+	let path = ids.mint()
+	module.appendOp(entry, op: StdOp.rdataAddr(path, label: pathLabel))
+	let length = emitConst(module, block: entry, value: covImageSize(pointCount) as ParsedInt, ids: ids)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: CoverageWriteFileName, args: threeArgs(path, second: image, third: length)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCoverageDump'
+
+// `__cov_write_file(pathCstr, buf, len)` — create-or-truncate, one synchronous write, close.
+//
+// ⚠ **BOTH EXITS ARE A BARE RETURN AND NEITHER REPORTS.** An open that failed leaves no handle to close and
+// nothing to say; a write that failed is closed by the same arm that closes a write that worked. See this
+// file's header for why a diagnostic here would be the defect rather than the courtesy.
+function buildCoverageWriteFile(module StdModule)
+	var func = IrFunction.createFromStd(CoverageWriteFileName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var opened = module.addBlock(func, label: b"covwrite")
+	var giveUp = module.addBlock(func, label: b"covnofile")
+
+	emitParams(module, block: entry, count: 3)
+	let path = 0 as ValueId
+	let buffer = 1 as ValueId
+	let length = 2 as ValueId
+
+	func.stackSize = CoverageScratchBytes
+
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osFileOpenWrite(handle, pathPtrId: path))
+	let invalid = emitConst(module, block: entry, value: CoverageInvalidHandle, ids: ids)
+	let usable = emitCmp(module, block: entry, a: handle, b: invalid, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(usable, thenBlockId: opened.id, elseBlockId: giveUp.id))
+
+	module.setTerminator(giveUp, op: StdOp.retVoid)
+
+	// The byte count the write insists on being handed somewhere to put — this call's frame, never a shared
+	// word. Its VALUE is never read: a short write is as unreportable as a failed one.
+	let written = ids.mint()
+	module.appendOp(opened, op: StdOp.stackRecordAddr(written, slot: CoverageScratchSlot))
+	module.appendOp(opened, op: StdOp.osWriteFile(ids.mint(), handleId: handle, bufId: buffer, lenId: length, bytesOutPtrId: written))
+	module.appendOp(opened, op: StdOp.osFileClose(handle))
+	module.setTerminator(opened, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCoverageWriteFile'

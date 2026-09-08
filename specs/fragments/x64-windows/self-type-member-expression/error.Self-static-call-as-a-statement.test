@@ -1,0 +1,22 @@
+// Test: error.Self-static-call-as-a-statement
+typealias Num = int(0 to 1000)
+
+type Gate
+	export var n as Num
+
+	export static function make(v Num) returns Gate
+		return Self{n: v}
+	end 'make'
+
+	export function bad() returns Num
+		Self.make(1)
+		return 1
+	end 'bad'
+end 'Gate'
+
+function main() returns ExitCode
+	return Gate.make(0).n
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:3: Unsupported: Self statement

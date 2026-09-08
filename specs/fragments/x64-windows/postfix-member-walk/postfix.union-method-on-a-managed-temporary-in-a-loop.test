@@ -1,0 +1,96 @@
+// Test: postfix.union-method-on-a-managed-temporary-in-a-loop
+union Outcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+end 'Outcome'
+
+function main() returns ExitCode
+	var i = 0
+
+	while i < 200 'loop'
+		if Outcome.fail("a rather long failure reason to force a heap allocation").isPass() 'y'
+			return 1
+		end 'y'
+		i = i + 1
+	end 'loop'
+
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+  whilehdr:
+    x64.cmpRegImm32 rbx, 200
+    x64.jcc greaterEqual, whileexit
+  loop:
+    x64.leaRegRdata r12, [rip + __str_rec_1]  ; "a rather long failure reason to force a heap allocation"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#8:
+    x64.movRegImm32 r12, 1
+    x64.jmp __il_cont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#9:
+    x64.movRegImm32 r12, 0
+  __il_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Outcome
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont
+  y:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp whilehdr
+  matchdead:
+  whileexit:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

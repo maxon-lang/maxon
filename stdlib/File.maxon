@@ -1,0 +1,193 @@
+/// File reading, writing, and manipulation operations.
+/// @category System
+/// Error for file read operations
+public enum FileReadError implements Error
+	notFound
+end 'FileReadError'
+
+/// Error for file write operations
+public enum FileWriteError implements Error
+	failed
+end 'FileWriteError'
+
+/// Error for file delete operations
+public enum FileDeleteError implements Error
+	notFound
+end 'FileDeleteError'
+
+/// Error for file rename operations
+public enum FileRenameError implements Error
+	failed
+end 'FileRenameError'
+
+/// A size in bytes, and a moment in whole Unix seconds. Both come out of `__ManagedFile.statField`,
+/// which answers an i64 on every platform: a size is `off_t`/`GetFileSizeEx` and a timestamp has
+/// already been converted from FILETIME's 100 ns ticks to seconds since 1970 by the runtime. Neither
+/// can present a value above `i64.max`, so the upper bound costs nothing and buys the doors a check.
+public typealias FileSize = int(0 to u64.max)
+public typealias Timestamp = int(0 to u64.max)
+
+/// Error for file info operations
+public enum FileInfoError implements Error
+	notFound
+end 'FileInfoError'
+
+/// Metadata about a file
+public type FileInfo
+	public let size as FileSize
+	public let modifiedTime as Timestamp
+	public let createdTime as Timestamp
+	public let accessedTime as Timestamp
+	public let isDirectory as bool
+	public let isReadOnly as bool
+
+	public static function create(size FileSize, modifiedTime Timestamp, createdTime Timestamp, accessedTime Timestamp, isDirectory bool, isReadOnly bool) returns FileInfo
+		return FileInfo{size: size, modifiedTime: modifiedTime, createdTime: createdTime, accessedTime: accessedTime, isDirectory: isDirectory, isReadOnly: isReadOnly}
+	end 'create'
+end 'FileInfo'
+
+public typealias Byte = int(0 to u8.max)
+public typealias ByteArray = Array with Byte
+
+/// File permission mode for write operations
+public enum FilePermission
+	normal  // 0666 - standard file permissions
+	executable  // 0755 - executable permissions (Unix)
+end 'FilePermission'
+
+/// A file handle opened for reading.
+type FileReader
+	let file as __ManagedFile
+
+	/// Open file for reading, throwing if not found
+	static function open(path String) returns FileReader throws FileReadError
+		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise 'notFound'
+			throw FileReadError.notFound
+		end 'notFound'
+		return FileReader{file: result}
+	end 'open'
+
+	/// Read entire file into managed memory with extra bytes for null terminator etc.
+	function readAll(extraBytes FileSize) returns __ManagedMemory throws FileReadError
+		let size = try file.size() otherwise 'sizeErr'
+			throw FileReadError.notFound
+		end 'sizeErr'
+		var managed = try __ManagedMemory.create(size + extraBytes, 1) otherwise 'createErr'
+			panic("File.readAll: create — size+extraBytes >= 0 guaranteed")
+		end 'createErr'
+		let bytesRead = try file.read(managed, size) otherwise 'readErr'
+			throw FileReadError.notFound
+		end 'readErr'
+		file.close()
+		try managed.setLength(bytesRead) otherwise 'lenErr'
+			panic("File.readAll: setLength — bytesRead from file.read, always <= size allocated")
+		end 'lenErr'
+		return managed
+	end 'readAll'
+end 'FileReader'
+
+/// A file handle opened for writing.
+type FileWriter
+	let file as __ManagedFile
+
+	/// Open a file for writing with the given permission mode, throwing on failure
+	static function open(path __ManagedMemory, mode FilePermission) returns FileWriter throws FileWriteError
+		let fileHandle = match mode 'perm'
+			executable gives try __ManagedFile.openWriteExecutable(path) otherwise throw FileWriteError.failed
+			normal gives try __ManagedFile.openWrite(path) otherwise throw FileWriteError.failed
+		end 'perm'
+		return FileWriter{file: fileHandle}
+	end 'open'
+
+	/// Write managed memory content and close the file. Closes the file on both
+	/// success and error paths; callers propagate write failures as FileWriteError.failed.
+	function writeAll(managed __ManagedMemory) throws FileWriteError
+		try file.write(managed) otherwise 'err'
+			file.close()
+			throw FileWriteError.failed
+		end 'err'
+		file.close()
+	end 'writeAll'
+end 'FileWriter'
+
+/// Static file operations.
+public type File
+
+	/// Read text file content as a UTF-8 string
+	public static function readText(path FilePath) returns String throws FileReadError
+		var reader = try FileReader.open(path.path)
+		var managed = try reader.readAll(1)
+		let len = managed.length()
+		// Write null terminator: len is within capacity (extraBytes=1) but at the
+		// length boundary, so temporarily extend length to allow setByte at that index
+		try managed.setLength(len + 1) otherwise 'lenErr1'
+			panic("File.readText: setLength(len+1) — extraBytes=1 guarantees capacity")
+		end 'lenErr1'
+		try managed.setByte(len, 0) otherwise 'setErr'
+			panic("File.readText: setByte at null terminator — length just extended to len+1")
+		end 'setErr'
+		try managed.setLength(len) otherwise 'lenErr2'
+			panic("File.readText: setLength(len) — restoring original length always valid")
+		end 'lenErr2'
+		return String.init(managed)
+	end 'readText'
+
+	/// Read file content as raw bytes
+	public static function readBinary(path FilePath) returns ByteArray throws FileReadError
+		var reader = try FileReader.open(path.path)
+		let managed = try reader.readAll(0)
+		return ByteArray.init(managed)
+	end 'readBinary'
+
+	/// Write string content to a text file
+	public static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
+		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
+		try writer.writeAll(content.addressableBytes())
+	end 'writeText'
+
+	/// Write binary content to a file
+	public static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
+		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
+		try writer.writeAll(content.managed)
+	end 'writeBinary'
+
+	/// Check if a file exists at the given path
+	public static function exists(path FilePath) returns bool
+		let result = __ManagedFile.exists(path.path.addressableBytes())
+		return result != 0
+	end 'exists'
+
+	/// Delete a file at the given path
+	public static function delete(path FilePath) throws FileDeleteError
+		try __ManagedFile.delete(path.path.addressableBytes()) otherwise 'failed'
+			throw FileDeleteError.notFound
+		end 'failed'
+	end 'delete'
+
+	/// Atomically rename (move) a file from one path to another. If the
+	/// destination exists it is replaced in a single step, so a reader of the
+	/// destination never observes a partially written file. Used to publish
+	/// freshly written files (e.g. cache entries) without a torn-read window.
+	public static function rename(from FilePath, to FilePath) throws FileRenameError
+		try __ManagedFile.rename(from.path.addressableBytes(), to.path.addressableBytes()) otherwise 'failed'
+			throw FileRenameError.failed
+		end 'failed'
+	end 'rename'
+
+	/// Get file metadata
+	public static function info(path FilePath) returns FileInfo throws FileInfoError
+		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise 'notFound'
+			throw FileInfoError.notFound
+		end 'notFound'
+		let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
+		let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
+		let ctime = __ManagedFile.statField(statResult, 2) as Timestamp
+		let atime = __ManagedFile.statField(statResult, 3) as Timestamp
+		let attrs = __ManagedFile.statField(statResult, 4)
+		let isDir = attrs == 1
+		let roAttrs = __ManagedFile.statField(statResult, 5)
+		let isRo = roAttrs == 1
+		__ManagedFile.statFree(statResult)
+		return FileInfo.create(fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo)
+	end 'info'
+end 'File'

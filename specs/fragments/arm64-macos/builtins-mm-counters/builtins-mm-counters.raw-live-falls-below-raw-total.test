@@ -1,0 +1,169 @@
+// Test: builtins-mm-counters.raw-live-falls-below-raw-total
+function work(n ExitCode) returns ExitCode
+	__Builtins.parallelBoundary()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let a = await p
+	let total = __Builtins.mmRawAllocTotal()
+	let live = __Builtins.mmRawAllocLive()
+	var score = a
+	if total > 0 'somethingToCompare'
+		score = score + 1
+	end 'somethingToCompare'
+	if live < total 'theAwaitedStructWentBackToItsSpan'
+		score = score + 4
+	end 'theAwaitedStructWentBackToItsSpan'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_timer_seq@96 = i64 0
+  __gt_trace_counter@104 = i64 0
+  __gt_proc_count@112 = i64 0
+  __gt_proc_handles_base@120 = i64 0
+  __gt_proc_gts_base@128 = i64 0
+  __gt_proc_wait_snapshot@136 = i64 0
+  __gt_proc_poller@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __sched_progress@160 = i64 0
+  __sched_active_workers@168 = i64 1
+  __sched_max_active_workers@176 = i64 1
+  __sched_tls_index@184 = i64 0
+  __sched_tls_teb_offset@192 = i64 0
+  __sched_procs@200 = i64 0
+  __sched_allm@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __sched_num_procs@232 = i64 0
+  __sched_shutdown_flag@240 = i64 0
+  __sched_lock@248 = i64 0
+  __sched_nmspinning@256 = i64 0
+  __sched_parked_drivers@264 = i64 0
+  __sched_sysmon_started@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
+}
+
+func @work {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-mm-counters.raw-live-falls-below-raw-total.test:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.bl __parallel_boundary
+    arm64.add x0, x19, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.raw-live-falls-below-raw-total.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#4:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_raw_alloc_total
+    arm64.movRegReg x20, x0
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.cmp x20, 0
+    arm64.b.le critsplit#11
+  somethingToCompare:
+    arm64.add x1, x19, 1
+    arm64.b ifcont#2
+  critsplit#11:
+    arm64.movRegReg x1, x19
+  ifcont#2:
+    arm64.cmp x0, x20
+    arm64.b.ge critsplit#12
+  theAwaitedStructWentBackToItsSpan:
+    arm64.add x0, x1, 4
+    arm64.b ifcont#4
+  critsplit#12:
+    arm64.movRegReg x0, x1
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.b.lt __rc_panic#6
+  __rc_chk#7:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.b.le __rc_ok#5
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.raw-live-falls-below-raw-total.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#5:
+    arm64.cbnz x1, __rc_panic#9
+  __rc_chk#10:
+    arm64.cbz x2, __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.raw-live-falls-below-raw-total.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#8:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

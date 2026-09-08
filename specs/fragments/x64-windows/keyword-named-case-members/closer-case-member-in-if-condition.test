@@ -1,0 +1,43 @@
+// Test: closer-case-member-in-if-condition
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 2 'ok'
+		return 20
+	end 'ok'
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 20
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  matcharm:
+    x64.movRegImm32 rax, 2
+  __il_cont:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 20
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

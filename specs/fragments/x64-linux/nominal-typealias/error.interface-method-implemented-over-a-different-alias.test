@@ -1,0 +1,30 @@
+// Test: error.interface-method-implemented-over-a-different-alias
+typealias Integer = int(i64.min to i64.max)
+typealias Int = int(i64.min to i64.max)
+
+interface Sink
+	function process(v Integer) returns Integer
+end 'Sink'
+
+type Adder implements Sink
+	let base as Integer
+
+	function process(v Int) returns Integer
+		print("{v}")
+		return base
+	end 'process'
+
+	static function create() returns Self
+		return Self{base: 40}
+	end 'create'
+end 'Adder'
+
+function main() returns ExitCode
+	let a = Adder.create()
+	print("{a.process(2)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Adder' has 1 method(s) with wrong signature:
+  - process(v Int) returns Integer (expected process(v Integer) returns Integer)

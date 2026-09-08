@@ -1,0 +1,55 @@
+// Test: ranges.break-in-range
+function main() returns ExitCode
+		var last = 0
+		for i in 1 to 100 'loop'
+				last = i
+				if i == 5 'done'
+						break
+				end 'done'
+		end 'loop'
+		return last
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
+  forhdr:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, critsplit
+  loop:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc notEqual, forstep
+  done:
+    x64.movRegReg r8, rcx
+    x64.jmp forexit
+  forstep:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.xchgRegReg rcx, rax
+    x64.jmp forhdr
+  critsplit:
+    x64.movRegReg r8, rax
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ranges.break-in-range.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

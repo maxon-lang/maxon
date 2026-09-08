@@ -1,0 +1,17 @@
+// Test: async-await.error.double-await-in-loop
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello"
+end 'makeText'
+
+function main() returns ExitCode
+		let p = async makeText()
+		for i in 0 upto 3 'each'
+				let s = await p
+				print("{i}={s} ")
+		end 'each'
+		return 0
+end 'main'
+---
+CompilerError:
+error E3100: <fragment>:10:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice

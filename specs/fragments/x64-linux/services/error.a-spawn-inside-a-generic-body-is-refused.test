@@ -1,0 +1,34 @@
+// Test: error.a-spawn-inside-a-generic-body-is-refused
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+type Outer uses U
+	var seed as U
+
+	static function create(seed U) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function go() returns Whole
+		let h = spawn Box.create(self.seed)
+		return 0
+	end 'go'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(1 as Whole)
+	return 0
+end 'main'
+typealias Whole = int(i64.min to i64.max)
+---
+CompilerError:
+error E2015: <fragment>:22:21: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__loop` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type

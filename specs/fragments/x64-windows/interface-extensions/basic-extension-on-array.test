@@ -1,0 +1,69 @@
+// Test: basic-extension-on-array
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Countable
+	function value() returns Integer
+end 'Countable'
+
+extension Countable
+	function count() returns Integer
+		return 42
+	end 'count'
+end 'Countable'
+
+type IntList implements Countable
+	let data as Integer
+
+	function value() returns Integer
+		return data
+	end 'value'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'IntList'
+
+function main() returns ExitCode
+	let list = IntList.create(5)
+	return list.count()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 5
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  __il_body:
+    x64.movRegImm32 r8, 42
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegImm32 rax, 42
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at basic-extension-on-array.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
