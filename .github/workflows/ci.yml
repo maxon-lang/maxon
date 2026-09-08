@@ -1,0 +1,90 @@
+# Every push and pull request: build the compiler and run the whole suite, on all four targets.
+#
+# ⭐⭐ EACH TARGET IS BUILT AND TESTED ON ITS OWN ARCHITECTURE, for the release workflow's reason: a
+# green matrix that cross-compiled three of its lanes reports coverage it never had.
+#
+# ⚠ THIS IS INERT UNTIL v0.1.0 EXISTS, AND SAYS SO RATHER THAN FAILING. Maxon compiles Maxon, so a
+# runner needs a compiler before it can build one and takes the last published release. Until there is
+# one, every job would fail on a condition no contributor can fix — so the seed step SKIPS the run and
+# writes a notice instead. It becomes real the moment a release is published, with no edit here.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x64-windows
+            runner: windows-latest
+          - target: x64-linux
+            runner: ubuntu-latest
+          - target: arm64-macos
+            runner: macos-15
+          - target: arm64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⛔ THE SEED IS THE BINARY ALONE. A release archive ships its own `stdlib/`, and the compiler
+      # resolves `stdlib/` by walking UP from its own executable — so an archive unpacked whole would
+      # leave a RELEASED stdlib one directory above the seed, and this checkout's own would never be
+      # read. The build would succeed and compile the wrong library, silently.
+      - name: Seed from the last release
+        id: seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev="$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            echo "::notice::no published release to seed from yet — CI is inert until v0.1.0"
+            echo "seeded=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          work="$(mktemp -d)"
+          gh release download "$prev" --pattern "*${{ matrix.target }}*" --dir "$work"
+          archive="$(find "$work" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | head -n1)"
+          [ -n "$archive" ] || { echo "::error::$prev publishes no archive for ${{ matrix.target }}"; exit 1; }
+          case "$archive" in
+            *.zip)    unzip -q "$archive" -d "$work/x" ;;
+            *.tar.gz) mkdir -p "$work/x" && tar -xzf "$archive" -C "$work/x" ;;
+          esac
+          found="$(find "$work/x" -type f \( -name 'maxon' -o -name 'maxon.exe' \) | head -n1)"
+          [ -n "$found" ] || { echo "::error::no maxon binary in $prev's ${{ matrix.target }} archive"; exit 1; }
+          mkdir -p .bootstrap
+          cp "$found" ".bootstrap/$(basename "$found")"
+          chmod +x .bootstrap/*
+          echo "seeded=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/build.sh
+
+      # The formatter's own gate and the duplicate-error-code check both ride inside `spec-test`, so
+      # this one command is the whole battery.
+      - name: Suite
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon spec-test
+
+      # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
+      # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the
+      # BYTES of two successive self-compiles say whether the emitted code is stable, and a difference
+      # is a miscompile.
+      - name: Fixpoint
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/fixpoint.sh
