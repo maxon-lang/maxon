@@ -81,6 +81,15 @@ package_one() {
 	fi
 	chmod +x "$stage/maxon$exe_ext"
 
+	# ⛔ THE DEBUG SIDECAR IS NOT A RELEASE ASSET, AND ONLY THE CROSS PATH EVER CREATES ONE. A native
+	# package COPIES an already-built compiler, so nothing lands beside it; a cross-build compiles INTO
+	# the stage and `maxon.mxdbg` — 7.8 MB, more than the compiler compresses to — arrives with it. That
+	# asymmetry is why this looked done: the one target packaged natively here was clean.
+	#
+	# The sweep is over the stage rather than over the one name, so a second sidecar cannot reappear by
+	# being spelled differently.
+	find "$stage" -maxdepth 1 -type f -name '*.mxdbg' -delete
+
 	# ⚠ `stdlib/` SHIPS AS SOURCE, WITHOUT ITS BUILD CACHE. The compiler reads the stdlib from source
 	# and finds it by walking up from its own executable, so the layout here IS the contract: `maxon`
 	# and `stdlib/` as siblings. `.maxon/` is this machine's cache and means nothing anywhere else.
