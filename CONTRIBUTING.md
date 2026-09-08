@@ -51,7 +51,6 @@ in this repo to fall back on — the published release is what seeds a build.
 ### Prerequisites
 
 - Git (on Windows, **Git for Windows**, which includes Git Bash)
-- `curl`, to fetch the release that seeds the build
 - Node.js 20+, only if you are building the VS Code extension
 
 > The build scripts are bash. Run them in **Git Bash** on Windows, or bash on Linux and macOS — not
@@ -59,14 +58,19 @@ in this repo to fall back on — the published release is what seeds a build.
 
 ### Build and test
 
+Download the release for your platform from
+[the latest release](https://github.com/maxon-lang/maxon/releases/latest) and put its `maxon` binary
+at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows) — the **binary alone**, not the unpacked
+archive, because the compiler resolves `stdlib/` by walking up from its own executable and a released
+one left beside it would be compiled in place of this tree's.
+
 ```bash
-scripts/bootstrap.sh          # fetch the last release into .bootstrap/
-scripts/build.sh              # build the compiler with it, into maxon-bin/.maxon/
+scripts/build.sh              # build the compiler with the seed, into maxon-bin/.maxon/
 maxon-bin/.maxon/maxon spec-test
 ```
 
-`scripts/build.sh` prefers the compiler already in `maxon-bin/.maxon/`, so once you have one the
-ordinary edit-build loop is `scripts/build.sh` alone. `scripts/fixpoint.sh` builds the compiler with
+`scripts/build.sh` prefers the compiler already in `maxon-bin/.maxon/`, so once you have one the seed
+is no longer consulted and the ordinary edit-build loop is `scripts/build.sh` alone. `scripts/fixpoint.sh` builds the compiler with
 itself twice and checks that the two binaries are byte-identical.
 
 Compile and run a program with the freshly built compiler:

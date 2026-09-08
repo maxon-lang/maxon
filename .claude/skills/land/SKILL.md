@@ -180,8 +180,8 @@ cheapest moment to ask.
   yours from the leftovers.
 - **BUILD.** The compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both*
   directions. `build` compiles `maxon-bin/` with the compiler already in the slot and renames the
-  result into place; `scripts/bootstrap.sh` seeds that slot from the last published release when it is
-  empty. This is not a baseline — it is making the binary current, and every red you read in §1 is read
+  result into place, falling back to a released binary at `.bootstrap/maxon` when the slot is empty.
+  This is not a baseline — it is making the binary current, and every red you read in §1 is read
   off it.
 - **No baseline suite run.** The §7 gate is `failed: 0`, not a delta from a remembered total, so there is
   nothing to measure yet. (When §7 comes back red you therefore may not assume the red is yours — §7 says

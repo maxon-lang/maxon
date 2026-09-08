@@ -1025,7 +1025,7 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 
 One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, binary
 `maxon-bin/.maxon/maxon.exe` (`maxon` on macOS and Linux). `scripts/build.sh` builds it;
-`scripts/bootstrap.sh` downloads the last published release into `.bootstrap/` to build it with.
+Put a released `maxon` binary at `.bootstrap/maxon` to build it with.
 
 ### Compiling
 

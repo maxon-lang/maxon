@@ -11,9 +11,9 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 the Windows form.
 
 - **Build it:** `scripts/build.sh`.
-- **Get a compiler to build it WITH:** `scripts/bootstrap.sh` downloads the last published release
-  into `.bootstrap/`. Maxon compiles Maxon, so there is no second implementation to fall back on —
-  the published release is the only thing you can build with.
+- **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
+  `build.sh` falls back to when the slot is empty. Maxon compiles Maxon, so there is no second
+  implementation here — a previous build of this compiler is the only thing that can build it.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
 - There is **no `maxon clean`**. To force a from-source stdlib rebuild, delete

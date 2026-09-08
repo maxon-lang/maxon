@@ -82,17 +82,26 @@ to fall back on — the published release is what seeds a build.
 **Prerequisites**
 
 - Git
-- `curl`, to fetch the release that seeds the build
 - Node.js 20+ (only needed to build the VS Code extension)
+
+**Seed the build.** Download the release for your platform from
+[the latest release](https://github.com/maxon-lang/maxon/releases/latest) and put its `maxon` binary
+at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows).
+
+> ⚠ The **binary alone**, not the unpacked archive. The compiler finds `stdlib/` by walking up from
+> its own executable, so a released `stdlib/` left beside it would be compiled instead of this
+> tree's — silently, and the build would succeed.
 
 **Build and run**
 
 ```bash
-scripts/bootstrap.sh                          # fetch the last release into .bootstrap/
-scripts/build.sh                              # build the compiler with it
+scripts/build.sh                              # build the compiler with the seed
 maxon-bin/.maxon/maxon build examples/basic.maxon
 maxon-bin/.maxon/maxon spec-test              # run the spec-test suite
 ```
+
+`scripts/build.sh` prefers the compiler already in `maxon-bin/.maxon/`, so once you have one the
+seed is no longer consulted and the ordinary loop is `scripts/build.sh` alone.
 
 `scripts/fixpoint.sh` builds the compiler with itself twice and checks the two binaries are
 byte-identical.

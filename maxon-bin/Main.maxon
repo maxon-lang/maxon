@@ -260,6 +260,15 @@ let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 // rule written down twice.
 module let OptionPrefix = "-"
 
+// ⭐ `--version` AND `--help` ARE THE TWO FLAGS THAT ANSWER WITHOUT A COMMAND, and the only ones a
+// caller types before knowing anything else about this binary. Both carry the one-letter spelling every
+// other CLI has taught people to try. `-V` is capital because `-v` is what a reader expects to mean
+// "verbose" — answering the version to it would be a small lie told at the worst moment.
+let VersionFlag = "--version"
+let VersionFlagShort = "-V"
+let HelpFlag = "--help"
+let HelpFlagShort = "-h"
+
 module let MetricsFlagPrefix = "--metrics="
 
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
@@ -269,6 +278,22 @@ let RuntimeNameSeparator = ","
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
+
+	// ⭐⭐ **BOTH ANSWER BEFORE EVERY REFUSAL BELOW, AND BEFORE THE COMMAND MATCH.** `maxon --version`
+	// carries no command, so a version asked for after the option gates would fall through to
+	// `unknownCommand()` and exit 1 — the one question every packaging tool asks first, answered with a
+	// usage dump and a failure. Asked WITH a command (`maxon build --version`) it still answers the
+	// version and runs nothing, which is what every other compiler does and what a caller who typed it
+	// meant. `--version` outranks `--help` because it is the narrower question.
+	if args.showVersion 'versionAsked'
+		printVersion()
+		return 0
+	end 'versionAsked'
+
+	if args.showHelp 'helpAsked'
+		printUsage()
+		return 0
+	end 'helpAsked'
 
 	// ⭐ A WITHDRAWN OPTION IS REPORTED BEFORE AN UNKNOWN ONE, and the order is the point: this driver
 	// once accepted it, so its author needs to be told WHAT REPLACED IT rather than sent looking for a
@@ -1200,6 +1225,14 @@ function unknownCommand() returns ExitCode
 	return 1
 end 'unknownCommand'
 
+// ⭐ **ONE LINE, TO STDOUT, EXIT 0.** A version is read by scripts far more often than by people —
+// the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
+// where a pipe can reach it, and carries the host triple because "which maxon is this" is not fully
+// answered by a number when four targets ship under one name.
+function printVersion()
+	print("maxon {CompilerVersion} ({targetToString(detectHostTarget())})\n")
+end 'printVersion'
+
 function printUsage()
 	print("Usage: maxon <command> [options]\n")
 	print("\n")
@@ -1321,6 +1354,8 @@ function printUsage()
 	print("                                {DefaultTestTimeoutMs}). A whole file shares one process, so --isolate is what\n")
 	print("                                gives each test the full budget to itself.\n")
 	print("  --no-timing                   (test) Omit durations, making stdout byte-reproducible\n")
+	print("  --version, -V                 Print the version and the host target, and run nothing\n")
+	print("  --help, -h                    Print this text and run nothing\n")
 	// ⚠ THE ONLY LINE IN THIS BLOCK WHOSE LEFT COLUMN IS DERIVED RATHER THAN TYPED, because its width
 	// depends on `reportColorChoices()` — hand-padded, it would go ragged the day a colour mode is added
 	// and nothing would say so.
@@ -1502,6 +1537,11 @@ module type MaxonArgs
 	// prints them in different words: an unknown option was never understood, a withdrawn one was and
 	// is now structurally impossible. See `withdrawnOptionMessage`.
 	export var withdrawnOption as String
+	// ⭐ `--version` / `-V` and `--help` / `-h`. FIELDS rather than locals, for the reason this whole
+	// record exists: `parse`'s loop already carries more live values than x64 has general-purpose
+	// registers, and one more `var` in it is an E5001 away. See `parse`.
+	export var showVersion as bool
+	export var showHelp as bool
 
 	// ⭐ **THE COMMAND LINE WITH NOTHING ON IT** — every field at the value an absent flag leaves it.
 	// The defaults live here, in ONE place, rather than in `parse`'s locals: `parse` accumulates into a
@@ -1512,7 +1552,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showVersion: false, showHelp: false}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1780,7 +1820,11 @@ module type MaxonArgs
 					// `TestCommand.quietTheBuildChatter`.
 					parsed.logOverridden = true
 				end 'goodSpec'
-			end 'logFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
+			end 'logFlag' else if arg == VersionFlag or arg == VersionFlagShort 'versionFlag'
+				parsed.showVersion = true
+			end 'versionFlag' else if arg == HelpFlag or arg == HelpFlagShort 'helpFlag'
+				parsed.showHelp = true
+			end 'helpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
 				// KEPT, never dropped. WHICH of them a command uses is the COMMAND's question — `build`

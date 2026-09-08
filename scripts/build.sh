@@ -5,7 +5,7 @@
 # Maxon compiles Maxon, so this needs a working compiler to start from. It takes the first of:
 #
 #   1. the tree binary already in the slot — the ordinary case, a self-rebuild
-#   2. `.bootstrap/maxon` — `scripts/bootstrap.sh` downloads the last published release there
+#   2. `.bootstrap/maxon` — a released compiler you put there yourself (see the message below)
 #
 # ⛔ THE COMPILE WRITES TO `.next` AND IS RENAMED INTO PLACE, because a compiler cannot overwrite its
 # own running image (E6002) and because a half-written slot is a compiler that answers as though it
@@ -49,8 +49,19 @@ if [ -z "$from" ]; then
 		cat >&2 <<EOF
 build.sh: no compiler to build with.
 
-  The slot $tree_bin is empty and there is no .bootstrap/maxon$MAXON_EXE_EXT.
-  Run scripts/bootstrap.sh to fetch the last published release, or pass --from=<compiler>.
+  Maxon is written in Maxon, so building it needs a Maxon compiler, and this repo contains no second
+  implementation to fall back on. The slot $tree_bin is empty and there is
+  no .bootstrap/maxon$MAXON_EXE_EXT.
+
+  Download the release for your platform from
+
+    https://github.com/maxon-lang/maxon/releases/latest
+
+  and put its \`maxon\` binary at .bootstrap/maxon$MAXON_EXE_EXT — the BINARY ALONE, not the unpacked
+  archive: the compiler finds \`stdlib/\` by walking UP from its own executable, so a released stdlib
+  left beside it would be compiled instead of this tree's, silently. Then re-run this script.
+
+  Or point it at a compiler you already have: scripts/build.sh --from=<path>
 EOF
 		exit 1
 	fi
