@@ -1,3 +1,4 @@
+import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -147,9 +148,14 @@ function sleep(ms: number): Promise<void> {
  * doesn't lock the main compiler executable during builds.
  * Retries a few times since the old LSP process may not have fully exited yet.
  */
-async function copyToLsp(maxonPath: string): Promise<string> {
-	const dir = path.dirname(maxonPath);
-	const lspPath = path.join(dir, lspBinaryName);
+async function copyToLsp(maxonPath: string, storageDir: string): Promise<string> {
+	// ⛔ THE COPY GOES TO THE EXTENSION'S OWN STORAGE, NEVER BESIDE THE COMPILER. An installed Maxon
+	// lives somewhere the user cannot write — the per-machine MSI puts it under Program Files — so
+	// copying next to it fails five times and gives up, and the language server never starts. Global
+	// storage is writable by definition, and it preserves the reason the copy exists at all: not
+	// holding the compiler binary open while a build wants to replace it.
+	await fs.promises.mkdir(storageDir, { recursive: true });
+	const lspPath = path.join(storageDir, lspBinaryName);
 	for (let attempt = 0; attempt < 5; attempt++) {
 		try {
 			await fs.promises.copyFile(maxonPath, lspPath);
@@ -168,6 +174,126 @@ async function copyToLsp(maxonPath: string): Promise<string> {
 		}
 	}
 	return lspPath;
+}
+
+/**
+ * Where the compiler is, in the order a reader would look.
+ *
+ * ⭐⭐ THE SETTING, THEN `PATH`, THEN THIS WORKSPACE'S OWN BUILD. That order is the whole fix: the
+ * previous one knew only two paths inside this repository, so a user who installed the extension from
+ * the marketplace and the compiler from winget matched neither — the compiler sat in
+ * `C:\Program Files\Maxon` and the extension reported it could not find `bin/`.
+ *
+ * ⚠ The dev fallback is `maxon-bin/.maxon/`, which is where `maxon build` writes. A contributor with a
+ * built tree is found with nothing configured, which is what keeps them out of the install flow.
+ */
+async function findCompiler(ctx: vscode.ExtensionContext): Promise<string> {
+	const configured = vscode.workspace.getConfiguration('maxon').get<string>('serverPath')?.trim();
+	if (configured) {
+		if (await isExecutable(configured)) {
+			log(`Using maxon.serverPath: ${configured}`);
+			return configured;
+		}
+		// ⚠ A SETTING THAT POINTS AT NOTHING IS SAID OUT LOUD rather than skipped. Someone who set it
+		// meant it, and silently searching elsewhere hides a typo behind a working editor.
+		vscode.window.showWarningMessage(`maxon.serverPath points at nothing: ${configured}`);
+	}
+
+	const onPath = await findOnPath();
+	if (onPath) {
+		log(`Using compiler from PATH: ${onPath}`);
+		return onPath;
+	}
+
+	const candidates: string[] = [];
+	if (vscode.workspace.workspaceFolders?.length) {
+		const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+		candidates.push(path.join(root, 'maxon-bin', '.maxon', binaryName));
+	}
+	candidates.push(path.join(ctx.extensionPath, '..', 'maxon-bin', '.maxon', binaryName));
+
+	for (const candidate of candidates) {
+		if (await isExecutable(candidate)) {
+			log(`Using compiler from this workspace: ${candidate}`);
+			return candidate;
+		}
+	}
+
+	return '';
+}
+
+async function isExecutable(candidate: string): Promise<boolean> {
+	try {
+		await fs.promises.access(candidate, fs.constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** `maxon` on PATH, or '' — asked of the OS rather than by walking PATH ourselves. */
+async function findOnPath(): Promise<string> {
+	const probe = isWindows ? 'where' : 'which';
+	return new Promise(resolve => {
+		cp.execFile(probe, ['maxon'], (err, stdout) => {
+			if (err) {
+				resolve('');
+				return;
+			}
+			const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0] ?? '';
+			resolve(first);
+		});
+	});
+}
+
+/**
+ * No compiler anywhere: offer to get one, rather than reporting a dead end.
+ *
+ * ⚠ THE WINGET RUN GOES IN A VISIBLE TERMINAL, DELIBERATELY. The MSI is per-machine, so Windows
+ * raises a UAC prompt — behind a hidden process that is an install which appears to hang, and in
+ * front of the user it is a prompt they were expecting.
+ */
+async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
+	const Install = 'Install';
+	const Locate = 'Locate…';
+	const choice = await vscode.window.showErrorMessage(
+		'Maxon compiler not found. The extension needs it for diagnostics, completion and formatting.',
+		{ modal: true },
+		...(isWindows ? [Install, Locate] : [Locate])
+	);
+
+	if (choice === Install) {
+		const term = vscode.window.createTerminal('Install Maxon');
+		term.show();
+		term.sendText('winget install --id MaxonLang.Maxon -e');
+		await vscode.window.showInformationMessage(
+			'Installing Maxon in the terminal. Accept the Windows prompt, then choose Continue.',
+			{ modal: true },
+			'Continue'
+		);
+		const found = await findCompiler(ctx);
+		if (found) {
+			return found;
+		}
+		vscode.window.showWarningMessage('Still no compiler found. If the install succeeded, open a new window so PATH is re-read.');
+		return '';
+	}
+
+	if (choice === Locate) {
+		const picked = await vscode.window.showOpenDialog({
+			canSelectFiles: true,
+			canSelectMany: false,
+			openLabel: 'Use this compiler',
+			title: 'Select the maxon executable'
+		});
+		const chosen = picked?.[0]?.fsPath;
+		if (chosen) {
+			await vscode.workspace.getConfiguration('maxon').update('serverPath', chosen, vscode.ConfigurationTarget.Global);
+			return chosen;
+		}
+	}
+
+	return '';
 }
 
 /**
@@ -190,7 +316,7 @@ export async function restartClient(): Promise<void> {
 	}
 
 	// Copy fresh binary to LSP copy
-	state.serverExecutable = await copyToLsp(state.sourceExecutable);
+	state.serverExecutable = await copyToLsp(state.sourceExecutable, state.context.globalStorageUri.fsPath);
 
 	// Create new client
 	const serverOptions: ServerOptions = {
@@ -231,45 +357,24 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		log(`Failed to register test controller: ${error}`);
 	}
 
-	// Find the maxon binary — this is the source we watch for changes
-	let sourceExecutable = '';
+	let sourceExecutable = await findCompiler(ctx);
 
-	// First, try the workspace bin directory
-	if (vscode.workspace.workspaceFolders?.length) {
-		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-		const workspaceBin = path.join(workspaceRoot, 'bin', binaryName);
-		try {
-			await fs.promises.access(workspaceBin);
-			sourceExecutable = workspaceBin;
-			log(`Using Maxon compiler from workspace: ${sourceExecutable}`);
-		} catch {
-			// Not found in workspace bin, will try fallback
-		}
-	}
-
-	// Fall back to extension-relative path (development mode: ../bin relative to extension folder)
+	// ⭐ NOT FOUND IS AN OFFER, NOT A DEAD END. Someone who installs this extension from the
+	// marketplace has, very often, no compiler at all — and an error message naming directories they
+	// have never heard of leaves them with nothing to do. See `offerToInstall`.
 	if (!sourceExecutable) {
-		const extensionRelative = path.join(ctx.extensionPath, '..', 'bin', binaryName);
-		try {
-			await fs.promises.access(extensionRelative);
-			sourceExecutable = extensionRelative;
-			log(`Using Maxon compiler relative to extension: ${sourceExecutable}`);
-		} catch {
-			// Not found relative to extension either
-		}
+		sourceExecutable = await offerToInstall(ctx);
 	}
 
 	if (!sourceExecutable) {
-		const msg = `Could not find ${binaryName} in workspace bin/ or extension directory`;
-		log(msg);
-		vscode.window.showErrorMessage(msg);
+		log('No Maxon compiler found and none installed');
 		return;
 	}
 
 	log(`Maxon compiler path: ${sourceExecutable}`);
 
 	// Copy maxon -> maxon-lsp so the LSP doesn't lock the main binary
-	const serverExecutable = await copyToLsp(sourceExecutable);
+	const serverExecutable = await copyToLsp(sourceExecutable, ctx.globalStorageUri.fsPath);
 
 	// Server options - use the copied LSP binary
 	const serverOptions: ServerOptions = {
