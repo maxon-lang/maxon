@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer for Maxon: one MSI, per-machine, modelled on Go's.
+
+  ⛔ PER-MACHINE, NOT PER-USER, AND THAT IS A DECISION RATHER THAN A DEFAULT. A compiler is a tool a
+  machine has, not a tool a user has: build agents, scheduled jobs and other accounts all need to find
+  it, and a per-user install puts it on exactly one account's PATH. The cost is a UAC prompt on
+  install, which is also what winget's `Scope: machine` expects.
+
+  ⛔ THE INSTALL DIRECTORY PROPERTY IS NAMED `INSTALLDIR`, AND THE NAME IS LOAD-BEARING. winget passes
+  `INSTALLDIR="<path>"` through `InstallerSwitches.InstallLocation`, so `winget install --location`
+  works only if the property is spelled exactly this. Rename it and the flag is silently ignored —
+  accepted, reported as success, and the install lands somewhere else.
+
+  ⚠ THE `UpgradeCode` GUID IS FIXED FOREVER. It is the identity every future version upgrades FROM;
+  changing it turns an upgrade into a second, parallel installation of Maxon. It is committed here
+  rather than generated so that no build can invent one.
+
+  The version comes in as `-d Version=` from `build.sh`, which reads it off the compiler binary.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Maxon"
+      Manufacturer="Maxon Language"
+      Version="$(Version)"
+      UpgradeCode="C5A7D00A-2A15-4766-A772-4526B96EE3F7"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <SummaryInformation Description="The Maxon compiler" Manufacturer="Maxon Language" />
+
+    <!-- Refuses to install over a NEWER Maxon rather than silently downgrading one. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Maxon is already installed. Uninstall it first if you mean to go back." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ⚠ x64 ONLY. There is no arm64-windows target, so unlike Go there is one architecture to ship
+         and no second MSI to keep in step. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="Maxon" />
+    </StandardDirectory>
+
+    <!-- ⭐ HARVESTED, NOT ENUMERATED. `stdlib/` is hundreds of files and every one of them must ship;
+         a hand-written component list is a list that goes stale the first time a module is added, and
+         nothing would say so — the install would simply be missing a file the compiler needs. -->
+    <ComponentGroup Id="Payload" Directory="INSTALLDIR">
+      <Files Include="payload\**" />
+    </ComponentGroup>
+
+    <!-- ⛔ HKLM, `Part="last"`, AND NOT PERMANENT. System PATH because the install is per-machine;
+         appended rather than prepended so an existing toolchain keeps precedence over a new arrival;
+         removed on uninstall, because a PATH entry pointing at a deleted directory is litter every
+         later shell pays for. -->
+    <Component Id="PathEntry" Directory="INSTALLDIR" Guid="11B495BD-69E1-46FC-912F-5D8F6C90F294">
+      <Environment Id="MaxonPath" Name="PATH" Value="[INSTALLDIR]" Part="last" Action="set" System="yes" Permanent="no" />
+    </Component>
+
+    <Feature Id="Main" Title="Maxon compiler" Level="1">
+      <ComponentGroupRef Id="Payload" />
+      <ComponentRef Id="PathEntry" />
+    </Feature>
+
+    <!-- No Start Menu shortcut: this is a command-line tool and a shortcut to it opens a window that
+         prints usage and closes. Add/Remove Programs comes free from the package identity above. -->
+  </Package>
+</Wix>

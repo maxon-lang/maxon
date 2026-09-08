@@ -1,0 +1,26 @@
+// How this repository builds: run `maxon build` at the root.
+//
+// ⭐ THIS IS A PROGRAM, NOT A CONFIG FILE. `maxon build` with no path compiles it, runs it, and reads
+// the build it describes off stdout — so a build can COMPUTE what it compiles, with the whole standard
+// library available, rather than only spell it out. This one has nothing to compute and says so
+// plainly; a project that needs to read a directory or stamp a version has somewhere to do it.
+//
+// ⛔ THE OUTPUT PATH IS THE COMPILER'S OWN SLOT, which means `maxon build` here REPLACES THE BINARY
+// THAT IS RUNNING IT. That works: the compiler renames its running image to `maxon.previous.exe`
+// first, because an OS will not let a running executable be deleted but will let one be renamed. A
+// failed build therefore leaves the slot EMPTY and the last good compiler at `.previous`, rather than
+// leaving a stale binary to answer as though it were current.
+
+typealias ExitCode = int(0 to 255)
+typealias SourceList = Array with String
+
+function main() returns ExitCode
+	var sources = SourceList.create()
+	sources.push("maxon-bin")
+
+	// `debug_info` on: the `.mxdbg` sidecar is what `maxon debug` and the profiler read, and the
+	// executable is byte-identical either way.
+	let config = BuildConfig.create("maxon", output: "maxon-bin/.maxon/maxon", sources: sources, optimize: false, debug_info: true)
+	Build.buildWithConfig(config)
+	return 0
+end 'main'

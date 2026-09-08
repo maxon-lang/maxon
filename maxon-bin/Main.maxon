@@ -394,11 +394,154 @@ end 'reportUnknownTarget'
 // roots the project at their common ancestor. Before A3m the parser kept the FIRST positional and
 // dropped the rest in silence — MEASURED, `build alias.maxon main.maxon` reported `E3001: No 'main'
 // function found` and `build main.maxon alias.maxon` reported `E3011: Unknown type 'Int'`, each a
+// The build script a directory may carry. See `runBuildManifest`.
+let BuildManifestFileName = "build.maxon"
+
+// Where the manifest's own executable is staged: inside `.maxon/`, which is already where this
+// project's build products live and already ignored everywhere.
+let ManifestOutputStem = ".maxon/build-manifest"
+
+// The two fields `stdlib/Build.maxon` writes that this reads back.
+let ManifestOutputKey = "output"
+let ManifestSourcesKey = "sources"
+
+// ⭐⭐ **`maxon build` WITH NO PATH RUNS `build.maxon`, WHICH IS A MAXON PROGRAM AND NOT A CONFIG
+// FILE.** That distinction is the whole design: a project's build is described by CODE, with the
+// standard library available to it, so the paths it compiles can be COMPUTED — read out of a
+// directory, chosen from the host, stamped from a version file — rather than only spelled out.
+// Nothing here parses the manifest. The compiler COMPILES it, RUNS it, and reads what it prints.
+//
+// ⭐ **THE PROTOCOL IS `stdlib/Build.maxon`'s JSON, ON STDOUT.** `Build.build(name)` and
+// `Build.buildWithConfig(config)` write it; this reads it back. Both ends therefore share ONE
+// description of what a build is, held in the stdlib where each can see it, and a field added there
+// is a field both ends already agree on.
+//
+// ⚠ A directory with no `build.maxon` gets the usage line, because "build what?" is then a question
+// nobody has answered.
+function runBuildManifest(args MaxonArgs) returns ExitCode
+	let manifest = Directory.currentPath().join(BuildManifestFileName)
+	if not File.exists(manifest) 'noManifest'
+		printError("Usage: maxon build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
+		printError("\n")
+		printError("With no path, `maxon build` runs the {BuildManifestFileName} in the current directory. There is none here.\n")
+		return 1
+	end 'noManifest'
+
+	// ⛔ THE MANIFEST IS BUILT FOR THIS HOST, WHATEVER `--target` SAYS. It is a program this machine
+	// has to RUN in a moment, so a `--target=arm64-macos` build of it would produce something this host
+	// cannot execute. The flag describes the program the manifest ASKS FOR, never the manifest.
+	var manifestPaths = MaxonSourcePathArray.create()
+	manifestPaths.push(manifest)
+
+	let manifestExe = try compile(manifestPaths, target: detectHostTarget(), outputOverride: ManifestOutputStem, runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: false) otherwise (e) 'manifestCompileErr'
+		printError("error: {BuildManifestFileName} did not compile — the diagnostics above are its own\n")
+		reportCompileError(e)
+		return 1
+	end 'manifestCompileErr'
+
+	let run = try Subprocess.run(Executable.path(manifestExe), arguments: StringArray.create()) otherwise 'manifestRunErr'
+		printError("error: {BuildManifestFileName} compiled but could not be run\n")
+		return 1
+	end 'manifestRunErr'
+
+	if run.exitCode() != 0 'manifestFailed'
+		printError("error: {BuildManifestFileName} exited {run.exitCode()} and described no build\n")
+		if not run.stderr.isEmpty() 'hasStderr'
+			printError("{run.stderr}\n")
+		end 'hasStderr'
+		return 1
+	end 'manifestFailed'
+
+	return buildFromManifestOutput(run.stdout, args: args)
+end 'runBuildManifest'
+
+// `-o` on the command line, or the manifest's `output` when none was typed. A function rather than a
+// reassignment because a `String` binding is immutable and copying one to choose between two would be
+// a clone of a value neither branch changes.
+function chosenOutput(fromManifest String, fromFlag String) returns String
+	if fromFlag.isEmpty() 'manifestDecides'
+		return fromManifest
+	end 'manifestDecides'
+
+	return fromFlag
+end 'chosenOutput'
+
+// Read one `BuildConfig` off the manifest's stdout and compile what it names.
+//
+// ⚠ EVERY FIELD IS REQUIRED, AND A MISSING ONE IS AN ERROR RATHER THAN A DEFAULT QUIETLY SUPPLIED
+// HERE. The writer is `Build.emitBuildConfig`, which always emits all of them; a document missing one
+// did not come from it, and guessing what its author meant is how a build compiles the wrong thing
+// while reporting success.
+function buildFromManifestOutput(stdout String, args MaxonArgs) returns ExitCode
+	let doc = try Json.parse(stdout) otherwise 'badJson'
+		printError("error: {BuildManifestFileName} printed something that is not a build description.\n")
+		printError("It must print what `Build.build(name)` or `Build.buildWithConfig(config)` writes. It printed:\n")
+		printError("{stdout}\n")
+		return 1
+	end 'badJson'
+
+	let output = try doc.getString(doc.root, key: ManifestOutputKey) otherwise 'noOutput'
+		printError("error: {BuildManifestFileName}'s build description has no `{ManifestOutputKey}`\n")
+		return 1
+	end 'noOutput'
+
+	let sourcesId = try doc.getChild(doc.root, key: ManifestSourcesKey) otherwise 'noSources'
+		printError("error: {BuildManifestFileName}'s build description has no `{ManifestSourcesKey}`\n")
+		return 1
+	end 'noSources'
+
+	let count = try doc.arrayLength(sourcesId) otherwise 'sourcesNotArray'
+		printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` is not a list of paths\n")
+		return 1
+	end 'sourcesNotArray'
+
+	// ⛔ AN EMPTY `sources` IS REFUSED, NOT READ AS "THIS DIRECTORY". `Build.build(name)` leaves it
+	// empty, so accepting it would compile the whole tree the manifest sits in — every spec, every
+	// test — under a command that named nothing at all.
+	if count == 0 'noPaths'
+		printError("error: {BuildManifestFileName} named no sources to compile.\n")
+		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
+		return 1
+	end 'noPaths'
+
+	var inputPaths = MaxonSourcePathArray.create()
+	for i in 0 upto count 'eachSource'
+		let elemId = try doc.arrayAt(sourcesId, index: i) otherwise 'badElem'
+			printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` entry {i} could not be read\n")
+			return 1
+		end 'badElem'
+
+		let spelling = doc.get(elemId).stringValue
+		let path = try FilePath.from(spelling) otherwise 'badSourcePath'
+			printError("error: {BuildManifestFileName} named an invalid source path: {spelling}\n")
+			return 1
+		end 'badSourcePath'
+		inputPaths.push(path)
+	end 'eachSource'
+
+	// ⚠ `-o` ON THE COMMAND LINE OUTRANKS THE MANIFEST, for the reason every flag outranks a file: the
+	// person typing the command is answering a narrower question than the file was.
+	let outputOverride = chosenOutput(output, fromFlag: args.outputOverride)
+
+	var target = detectHostTarget()
+	match resolveTargetFlag(args.targetSpec) 'manifestTarget'
+		resolved(t) then target = t
+		unrecognized(spec) then return reportUnknownTarget(spec)
+	end 'manifestTarget'
+
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage) otherwise (e) 'buildErr'
+		reportCompileError(e)
+		return 1
+	end 'buildErr'
+
+	print("Compiled -> {outputPath}\n")
+	return 0
+end 'buildFromManifestOutput'
+
 // diagnostic about a program the caller never asked for.
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.paths.count() == 0 'noPath'
-		printError("Usage: maxon build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
-		return 1
+		return runBuildManifest(args)
 	end 'noPath'
 
 	var inputPaths = MaxonSourcePathArray.create()

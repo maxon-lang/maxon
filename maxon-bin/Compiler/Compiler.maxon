@@ -176,6 +176,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
+	vacateRunningImage(outputPath)
 	try discardPreviousOutput(project, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
@@ -279,6 +280,83 @@ end 'compileMeasured'
 // and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
 // LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
 // binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
+// ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
+// `maxon build` at the root of this repo names an output that IS the running binary; without this the
+// build reaches `discardPreviousOutput`, cannot delete the file, and answers **E6002** — correctly, and
+// uselessly, since rebuilding the compiler is the single most ordinary thing anyone does here.
+//
+// ⭐ **THE RUNNING IMAGE IS RENAMED OUT OF THE WAY, NOT WRITTEN AROUND.** Windows refuses to DELETE a
+// running executable and permits RENAMING one, which is the whole opening this uses: move it to
+// `<output>.previous` and the slot is empty, so every step after this — the `discardPreviousOutput`
+// check, the writer, the "did anything actually appear" verification — runs exactly as it does for any
+// other program, over a path nothing holds open.
+//
+// ⛔ **THAT ORDER IS ALSO WHAT KEEPS "A FAILED BUILD LEAVES NOTHING AT THE OUTPUT PATH" TRUE HERE.**
+// The alternative — compile to `<output>.next` and rename it in afterwards — leaves the OLD binary in
+// the slot when the compile fails, which is a stale compiler answering as though it were current: the
+// exact failure every staleness refusal in this tree exists to prevent. Renaming first means a failed
+// build leaves the slot EMPTY and the last good binary at `.previous`, where a reader can put it back
+// deliberately rather than run it by accident.
+//
+// ⚠ Silent when the output is anything else, which is every other build: this asks one question about
+// `maxon.exe` -> `maxon.previous.exe`; `maxon` -> `maxon.previous`. See `vacateRunningImage`.
+function previousImageName(outputPath FilePath) returns String
+	let ext = outputPath.fileExtension()
+	if ext.isEmpty() 'noExtension'
+		return "{outputPath.toString()}{PreviousImageSuffix}"
+	end 'noExtension'
+
+	// ⚠ REBUILT FROM `parent()` + `stem()` rather than through `changeExtension`, whose separator
+	// handling is its own business and not this function's: asked for `""` it answered `maxon.`, and
+	// asked for `previous.exe` it answered `maxonprevious..exe`. Both measured. The two halves are
+	// exactly what is wanted here. ⚠ `fileExtension()` INCLUDES the leading dot, so nothing adds one —
+	// measured: writing `.{ext}` produced `maxon.previous..exe`.
+	let dir = try outputPath.parent() otherwise 'noParent'
+		return "{outputPath.stem()}{PreviousImageSuffix}{ext}"
+	end 'noParent'
+
+	return dir.join("{outputPath.stem()}{PreviousImageSuffix}{ext}").toString()
+end 'previousImageName'
+
+// one path and says nothing when the answer is no.
+function vacateRunningImage(outputPath FilePath)
+	let running = try Process.executablePath() otherwise 'noIntrospection'
+		// A host that will not say what it is running cannot be asked this question. Every other build
+		// is unaffected, and a self-rebuild on such a host still reports E6002 below — the honest
+		// answer, one step later.
+		return
+	end 'noIntrospection'
+
+	let here = Directory.currentPath()
+	if not outputPath.resolve(here).normalize().equals(running.normalize()) 'notOurOwnImage'
+		return
+	end 'notOurOwnImage'
+
+	// ⚠ `.previous` GOES BEFORE THE EXTENSION, not after it. On Windows what makes a file runnable is
+	// its `.exe` suffix, and the recovery this backup exists for is "move it back and use it" — a
+	// `maxon.exe.previous` has to be renamed before it can answer anything, which is a step to get wrong
+	// at the moment the tree has no working compiler.
+	let previous = try FilePath.from("{previousImageName(outputPath)}") otherwise 'unnameable'
+		return
+	end 'unnameable'
+
+	// An older `.previous` is this build's to replace. It is not deleted when the rename below fails,
+	// because then nothing has moved and the old one is still the last good binary.
+	if File.exists(previous) 'staleBackup'
+		try File.delete(previous) otherwise 'undeletableBackup'
+			return
+		end 'undeletableBackup'
+	end 'staleBackup'
+
+	try File.rename(outputPath, to: previous) otherwise 'unmovable'
+		// Nothing moved, so the slot still holds the running image and `discardPreviousOutput` will
+		// report E6002 against it — which is the right diagnostic for "this file cannot be replaced".
+		return
+	end 'unmovable'
+
+	logInfo(LogCategory.compiler, message: function() gives "rebuilding this compiler: moved the running image to {previous.toString()}")
+end 'vacateRunningImage'
+
 // afterwards is proof the writer put it there, and its absence is proof the writer did not.
 function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError
 	// Absence is the ordinary case (a first build), and `File.delete` signals it by throwing — so the
@@ -1794,6 +1872,9 @@ end 'loadOneSourceFile'
 // which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
 // two names. `module` visibility is what lets it, and a second spelling of either name would be a
 // file-discovery contract written down twice.
+// Where a self-rebuild parks the image it is running from. See `vacateRunningImage`.
+let PreviousImageSuffix = ".previous"
+
 module let BuildManifestName = "build.maxon"
 
 module let MaxonSourceExtension = ".maxon"
