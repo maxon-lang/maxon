@@ -1,0 +1,71 @@
+# Publish the VS Code extension when a release is published.
+#
+# ⭐ TWO REGISTRIES, ONE ARTIFACT. The same `.vsix` goes to the VS Code Marketplace and to Open VSX,
+# which is what VSCodium, Cursor and Windsurf install from. Building it twice would risk publishing two
+# different files under one version.
+#
+# ⚠ IT RUNS ON `release: published`, NOT ON A TAG. The extension's not-found flow tells a user to run
+# `winget install MaxonLang.Maxon` and, on other platforms, downloads a release asset — so publishing
+# it before the release exists ships an extension whose install path 404s.
+#
+# ⛔ NEITHER SECRET IS CREATED BY THIS FILE, AND IT FAILS CLEANLY WITHOUT THEM. `VSCE_PAT` is being
+# deprecated in favour of Entra federated credentials (Microsoft removes global PATs on 2026-12-01), so
+# the marketplace step prefers `--azure-credential` when the repo is configured for it.
+
+name: vscode-extension
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      # ⚠ PACKAGED ONCE, PUBLISHED TWICE. Both registries get the identical file.
+      - name: Package
+        run: npx @vscode/vsce package --no-dependencies --out extension.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: vscode-extension/extension.vsix
+
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::warning::no VSCE_PAT secret — skipping the Marketplace. Set one, or publish by hand with: npx @vscode/vsce publish --azure-credential --packagePath extension.vsix"
+            exit 0
+          fi
+          npx @vscode/vsce publish --packagePath extension.vsix
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::warning::no OVSX_PAT secret — skipping Open VSX (VSCodium, Cursor and Windsurf install from there)"
+            exit 0
+          fi
+          npx ovsx publish extension.vsix -p "$OVSX_PAT"
