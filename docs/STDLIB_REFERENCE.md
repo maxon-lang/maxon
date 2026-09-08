@@ -20,6 +20,7 @@
 16. [ArrayIterator](#arrayiterator)
 17. [Builtin Managed Types](#builtin-managed-types)
 18. [Testing (Expect)](#testing-expect)
+19. [Build](#build)
 
 ---
 
@@ -1321,3 +1322,49 @@ try Expect.isTrue(a == b, message: "expected {b}, got {a}")
 ```
 
 That works for any `Equatable` + `Stringable` type. See `specs/testing-assertions.md`.
+
+---
+
+## Build
+
+`Build` describes what `maxon build` should compile. It is read by the **build manifest** — the
+`build.maxon` a project may carry — and by nothing else: `maxon build` with no path compiles that
+manifest, runs its `build` function, and reads the description off stdout.
+
+⭐ **A manifest is a program, not a configuration file.** These calls are how it says what it decided,
+so the description can be *computed* — a source list read from a directory, an output chosen by host
+— rather than only written down. See `maxon build` in [CLI_REFERENCE.md](CLI_REFERENCE.md) for the
+manifest's own contract.
+
+```maxon
+export function build() returns ExitCode
+	Build.buildOne("maxon-bin", output: "maxon-bin/.maxon/maxon")
+	return 0
+end 'build'
+```
+
+| Function | Returns | Throws | Description |
+|---|---|---|---|
+| `Build.buildOne(source, output:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
+| `Build.buildWithConfig(config)` | -- | -- | Full control: several sources, compiled as ONE program in the order given. |
+| `Build.build(name)` | -- | -- | Names the executable only, leaving `sources` empty. ⛔ An empty `sources` is **refused** by the compiler — see below. |
+| `Build.emitBuildConfig(config)` | -- | -- | Writes the description as JSON on stdout. The three calls above end here; a manifest rarely calls it directly. |
+
+**`BuildConfig`** carries the whole description:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `String` | What this build is called. Reported, not used to locate anything. |
+| `output` | `String` | Where the executable goes, **extension omitted** — the compiler appends `.exe` on Windows and nothing elsewhere. |
+| `sources` | `Array with String` | The files and directories to compile, as ONE program, in this order. |
+| `optimize` | `bool` | Reserved; the compiler's optimization is not currently switchable here. |
+| `debug_info` | `bool` | Write the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read. The executable is byte-identical either way. |
+
+`BuildConfig.create(name, output:, sources:, optimize:, debug_info:)` builds one.
+
+⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
+every file beneath the manifest — every spec, every test — under a command that named nothing at all.
+`Build.build(name)` leaves it empty, so use `buildOne` or `buildWithConfig` to say what to compile.
+
+⚠ **`-o` and `--target` on the command line outrank the manifest.** The person typing the command is
+answering a narrower question than the file was.

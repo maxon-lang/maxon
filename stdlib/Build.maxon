@@ -33,6 +33,18 @@ public type Build
 		Build.emitBuildConfig(config)
 	end 'build'
 
+	/// Build ONE source path to ONE output. The common shape, and the one that keeps a manifest to a
+	/// single call: a caller naming a single directory should not have to build an array to say so,
+	/// which in a manifest means declaring an `Array with String` typealias to hold it.
+	/// source: the file or directory to compile. output: where the executable goes, extension omitted
+	/// (the compiler appends `.exe` on Windows and nothing elsewhere).
+	public static function buildOne(source String, output String)
+		var sources = StringArray.create()
+		sources.push(source)
+		let config = BuildConfig.create(source, output: output, sources: sources, optimize: false, debug_info: true)
+		Build.emitBuildConfig(config)
+	end 'buildOne'
+
 	/// Custom build - full control via BuildConfig
 	public static function buildWithConfig(config BuildConfig)
 		Build.emitBuildConfig(config)

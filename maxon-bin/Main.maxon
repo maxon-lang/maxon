@@ -401,6 +401,13 @@ let BuildManifestFileName = "build.maxon"
 // project's build products live and already ignored everywhere.
 let ManifestOutputStem = ".maxon/build-manifest"
 
+// ⭐ **THE MANIFEST'S ENTRY POINT IS `build`, NOT `main`.** A manifest is a set of TASKS a project can
+// be asked to perform, not a program with one way in — `build` is simply the task this command asks
+// for, and the name it is asked for by. `compileToProduct` takes the entry function as an argument
+// precisely so a caller can name one, so nothing here is special-cased: the manifest is compiled the
+// way any program is, beginning somewhere else.
+let ManifestEntryFunction = b"build"
+
 // The two fields `stdlib/Build.maxon` writes that this reads back.
 let ManifestOutputKey = "output"
 let ManifestSourcesKey = "sources"
@@ -433,13 +440,13 @@ function runBuildManifest(args MaxonArgs) returns ExitCode
 	var manifestPaths = MaxonSourcePathArray.create()
 	manifestPaths.push(manifest)
 
-	let manifestExe = try compile(manifestPaths, target: detectHostTarget(), outputOverride: ManifestOutputStem, runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: false) otherwise (e) 'manifestCompileErr'
+	let manifestProduct = try compileToProduct(manifestPaths, target: detectHostTarget(), outputOverride: ManifestOutputStem, runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: false, entryFunction: ManifestEntryFunction) otherwise (e) 'manifestCompileErr'
 		printError("error: {BuildManifestFileName} did not compile — the diagnostics above are its own\n")
 		reportCompileError(e)
 		return 1
 	end 'manifestCompileErr'
 
-	let run = try Subprocess.run(Executable.path(manifestExe), arguments: StringArray.create()) otherwise 'manifestRunErr'
+	let run = try Subprocess.run(Executable.path(manifestProduct.outputPath), arguments: StringArray.create()) otherwise 'manifestRunErr'
 		printError("error: {BuildManifestFileName} compiled but could not be run\n")
 		return 1
 	end 'manifestRunErr'

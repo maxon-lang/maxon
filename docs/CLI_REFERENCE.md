@@ -49,7 +49,9 @@ maxon build <file|directory>... [options]
   `.maxonignore` excludes. A path named explicitly is compiled whatever a `.maxonignore` above it says
   — the marker governs the *walk*, never an explicit name.
 
-Naming no path prints the usage line and exits 1.
+Naming no path runs the **build manifest** in the current directory — see
+[The build manifest](#the-build-manifest) below. A directory with no `build.maxon` prints the usage
+line and exits 1.
 
 **Options:**
 
@@ -619,12 +621,68 @@ myproject/
 
 All `.maxon` files in subdirectories are included when compiling a directory, with three exclusions:
 
-1. **`build.maxon`** — the build manifest is not swept into a program. Naming it explicitly still
-   compiles it.
+1. **`build.maxon`** — the build manifest is a program in its own right, not part of the one being
+   built, so it is never swept in. Naming it explicitly still compiles it, and `maxon build` with no
+   path runs it — see [The build manifest](#the-build-manifest).
 2. **`*.test.maxon`** — a `test` declaration's file is a source *category*, not a flag inside the file,
    so test sources are not part of an ordinary build. `maxon test` names them explicitly. The match is
    case-insensitive, so `Suite.TEST.maxon` is a test file too.
 3. **Anything under a `.maxonignore`** — see below.
+
+### The build manifest
+
+`maxon build` with no path looks for **`build.maxon`** in the current directory, compiles it, runs it,
+and performs the build it describes.
+
+⭐ **A manifest is a PROGRAM, not a configuration file.** It is ordinary Maxon with the whole standard
+library available, so a build can *compute* what it compiles — read a directory, choose by host,
+stamp a version — rather than only spell it out. The compiler does not parse the manifest; it runs it
+and reads what it prints.
+
+**Its entry point is `build`, not `main`.** A manifest holds tasks, and `build` is the one this
+command asks for by name. It returns `ExitCode`; a non-zero return, or a crash, fails the build and
+nothing is compiled.
+
+```maxon
+export function build() returns ExitCode
+	Build.buildOne("maxon-bin", output: "maxon-bin/.maxon/maxon")
+	return 0
+end 'build'
+```
+
+**What it prints is the contract.** `stdlib/Build.maxon` writes the build description as JSON on
+stdout, and the compiler reads it back — so both ends share one description of what a build is:
+
+| Call | Meaning |
+|---|---|
+| `Build.buildOne(source, output:)` | Compile one file or directory to one output. The common shape. |
+| `Build.buildWithConfig(config)` | Full control via a `BuildConfig`: several sources, in order. |
+| `Build.build(name)` | The executable name only; leaves `sources` empty, which is **refused** — see below. |
+
+The output path omits the extension: the compiler appends `.exe` on Windows and nothing elsewhere.
+
+⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
+every file beneath the manifest — every spec, every test — under a command that named nothing at all.
+
+⚠ **`-o` and `--target` on the command line outrank the manifest**, for the reason every flag outranks
+a file: the person typing the command is answering a narrower question than the file was. The manifest
+itself is always built for the host, whatever `--target` says, because it is a program this machine has
+to run in a moment.
+
+#### Rebuilding the compiler that is running
+
+The manifest at the root of the Maxon repository builds the compiler into the slot the running
+compiler occupies, so `maxon build` there replaces the binary executing the command.
+
+That works. No operating system permits *deleting* a running executable, but they permit *renaming*
+one, so the compiler moves its running image to `maxon.previous.exe` first and the slot is then empty
+for the ordinary write path.
+
+⛔ A **failed** build therefore leaves the slot **empty** and the last good compiler at
+`maxon.previous.exe`. That is deliberate: the alternative — compiling to a temporary name and swapping
+it in afterwards — leaves the old binary in place when the build fails, and a stale compiler answering
+as though it were current is the failure every staleness check here exists to prevent. If a build
+fails, move `maxon.previous.exe` back deliberately.
 
 ### Ignoring Directories
 
