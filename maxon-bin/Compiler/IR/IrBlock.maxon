@@ -181,9 +181,25 @@ export union CondBranch
 	opIndex(index OpIndex)
 end 'CondBranch'
 
+// How often a block is expected to run, as far as the pass that minted it can say. `cold` is a block
+// reached only when a guard refuses — an inlined access's slow arm, a range check's panic, a
+// `try … otherwise panic` handler — and it changes one thing: a call in a cold block does not confine
+// the values live across it to the callee-saved registers; the allocator brackets the call with a save
+// and a reload of each caller-saved register instead, so the hot path keeps its registers
+// (`ColdCallBracketPlan`). A block is `normal` unless a pass knows otherwise.
+//
+// A separate field rather than a label spelling, because a label is a debug aid and must not carry a
+// semantic fact. Distinct from the splitter's `SpillPlacement.cold`, which names a spill placed at loop
+// depth 0.
+export enum BlockHeat
+	normal
+	cold
+end 'BlockHeat'
+
 export type IrBlock
 	export var id as BlockId
 	export var label as ByteArray
+	export var heat as BlockHeat
 	export var opRefs as OpIndexArray
 	export var terminator as Terminator
 
@@ -208,6 +224,7 @@ export type IrBlock
 		return Self{
 			id: id,
 			label: label,
+			heat: BlockHeat.normal,
 			opRefs: OpIndexArray.create(),
 			terminator: Terminator.unset,
 			condBranch: CondBranch.none,

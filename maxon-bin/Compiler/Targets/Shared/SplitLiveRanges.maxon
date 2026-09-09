@@ -1291,11 +1291,10 @@ export type PressureIndex
 	// its side effect — so the seat is O(operands) and the two facts are read from one extraction.
 	//
 	// The caller publishes the leaf's population numbers and the change with `promote`.
-	function seatOp(slot PressureSlot, op TargetOp, opIdx OpIndex, opFacts OpVariantFacts, buf OperandList)
+	function seatOp(slot PressureSlot, op TargetOp, opIdx OpIndex, heat BlockHeat, opFacts OpVariantFacts, buf OperandList)
 		try self.holdsOp.set(slot, value: true) otherwise panic("PressureIndex.seatOp: holdsOp.set OOB at slot {slot}")
 		try self.opAt.set(slot, value: opIdx) otherwise panic("PressureIndex.seatOp: opAt.set OOB at slot {slot}")
-		try self.nodeClobber.set(self.leafNodeOf(slot), value: opClobberMask(op, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
-
+		try self.nodeClobber.set(self.leafNodeOf(slot), value: opClobberMask(op, heat: heat, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
 				try self.defSlot.set(operandValueId(o), value: slot) otherwise panic("PressureIndex.seatOp: value {operandValueId(o)} is defined at slot {slot} but is outside the index's value space")
@@ -1709,7 +1708,7 @@ export type PressureIndex
 			end 'stillUsedUp'
 		end 'gapUsedUp'
 
-		self.seatOp(slot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.insertOp: spliced op {opIdx} is not in module.ops"), opIdx: opIdx, opFacts: opFacts, buf: buf)
+		self.seatOp(slot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.insertOp: spliced op {opIdx} is not in module.ops"), opIdx: opIdx, heat: blockAt(module, topo: topo, local: blockLocal).heat, opFacts: opFacts, buf: buf)
 		self.promote(blockLocal, slot: slot)
 		return slot
 	end 'insertOp'
@@ -1822,8 +1821,7 @@ export type PressureIndex
 				stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 
 				let slot = self.evenSlot(b, pos: forwardPos)
-				self.seatOp(slot, op: op, opIdx: opIdx, opFacts: liveness.opFacts, buf: buf)
-
+				self.seatOp(slot, op: op, opIdx: opIdx, heat: block.heat, opFacts: liveness.opFacts, buf: buf)
 				for classOrdinal in 0 upto RegClassCount 'eachClass'
 					let class = regClassAt(classOrdinal)
 					self.setDelta(slot, class: class, value: (classRowGet(liveByClass, class: class) as PressureDelta) - (classRowGet(before, class: class) as PressureDelta))
@@ -1871,7 +1869,7 @@ export type PressureIndex
 			if stride >= MinRespaceStride 'thisSubtreeAbsorbsIt'
 				// A node covering `len` leaves from `first` IS leaf `slotCount + first` divided by `len`, so
 				// the node index and its width state the range without a second column to keep current.
-				self.respaceRange(module, node: node, first: self.slotOfLeafNode(node * (len as ColumnLength)), len: len, count: count, stride: stride, blockLocal: blockLocal, opFacts: opFacts, scratch: scratch, pending: pending)
+				self.respaceRange(module, node: node, first: self.slotOfLeafNode(node * (len as ColumnLength)), len: len, count: count, stride: stride, blockLocal: blockLocal, heat: blockAt(module, topo: topo, local: blockLocal).heat, opFacts: opFacts, scratch: scratch, pending: pending)
 				return
 			end 'thisSubtreeAbsorbsIt'
 
@@ -1887,7 +1885,7 @@ export type PressureIndex
 	//
 	// It reads the LEAVES, so every op's population numbers travel with it: a COPY of the index, never a
 	// re-derivation from the IR.
-	function respaceRange(module TargetModule, node ColumnLength, first PressureSlot, len PressureSlot, count BlockOpPos, stride PressureSlot, blockLocal CfgIndex, opFacts OpVariantFacts, scratch PressureRelayoutScratch, pending DenseColumn)
+	function respaceRange(module TargetModule, node ColumnLength, first PressureSlot, len PressureSlot, count BlockOpPos, stride PressureSlot, blockLocal CfgIndex, heat BlockHeat, opFacts OpVariantFacts, scratch PressureRelayoutScratch, pending DenseColumn)
 		scratch.captureWindow(self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient, from: first, count: len)
 
 		// VACATE EVERY OLD SEAT BEFORE TAKING ANY NEW ONE. The two sets of slots overlap — a re-space that
@@ -1907,8 +1905,7 @@ export type PressureIndex
 			if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 				continue
 			end 'notAnOp'
-
-			self.reseat(module, oldSlot: oldSlot, newSlot: first + ((j + 1) as PressureSlot) * stride, opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
+			self.reseat(module, oldSlot: oldSlot, newSlot: first + ((j + 1) as PressureSlot) * stride, opIdx: scratch.opAtSlot(oldSlot), heat: heat, opFacts: opFacts, scratch: scratch)
 			j = j + 1
 		end 'eachMove'
 
@@ -1942,6 +1939,7 @@ export type PressureIndex
 		self.placeRuns(topo, opCounts: scratch.opCounts)
 
 		for b in 0 upto topo.numBlocks 'eachBlock'
+			let heat = blockAt(module, topo: topo, local: b).heat
 			var pos = 0 as BlockOpPos
 
 			for k in 0 upto scratch.runLengthOf(b) - 1 'eachOldSlot'
@@ -1950,8 +1948,7 @@ export type PressureIndex
 				if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 					continue
 				end 'notAnOp'
-
-				self.reseat(module, oldSlot: oldSlot, newSlot: self.evenSlot(b, pos: pos), opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
+				self.reseat(module, oldSlot: oldSlot, newSlot: self.evenSlot(b, pos: pos), opIdx: scratch.opAtSlot(oldSlot), heat: heat, opFacts: opFacts, scratch: scratch)
 				pos = pos + 1
 			end 'eachOldSlot'
 
@@ -1972,8 +1969,8 @@ export type PressureIndex
 	// own, and the fresh id's def slot then points at whatever the layout put in slot 0. (Measured, with
 	// the gap tightened to force a re-space on every insertion: `opAtSlot: slot 0 holds no op` on four
 	// spill tests.)
-	function reseat(module TargetModule, oldSlot PressureSlot, newSlot PressureSlot, opIdx OpIndex, opFacts OpVariantFacts, scratch PressureRelayoutScratch)
-		self.seatOp(newSlot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.reseat: op {opIdx} not in module.ops"), opIdx: opIdx, opFacts: opFacts, buf: scratch.operands)
+	function reseat(module TargetModule, oldSlot PressureSlot, newSlot PressureSlot, opIdx OpIndex, heat BlockHeat, opFacts OpVariantFacts, scratch PressureRelayoutScratch)
+		self.seatOp(newSlot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.reseat: op {opIdx} not in module.ops"), opIdx: opIdx, heat: heat, opFacts: opFacts, buf: scratch.operands)
 		self.copyLeafNumbers(scratch, oldSlot: oldSlot, newSlot: newSlot)
 		scratch.recordMove(oldSlot, newSlot: newSlot)
 	end 'reseat'
@@ -3388,6 +3385,23 @@ export type SplitDriver
 	export function fixFrameSize(func IrFunction)
 		func.stackSize = (self.nextSlot as StackSize) * SpillSlotBytes
 	end 'fixFrameSize'
+
+	// The slots the frame holds so far — the floor a colouring pass mints its cold-call save slots above
+	// (`ColdCallBracketPlan.beginPass`). Read at the start of every pass, because a repair between two
+	// passes consumes slots of its own.
+	export function frameSlotCount() returns SpillSlot
+		return self.nextSlot
+	end 'frameSlotCount'
+
+	// Raise the high-water mark over the slots a colouring pass minted above `frameSlotCount()`, so
+	// `fixFrameSize` sizes the frame for them.
+	export function extendFrameTo(slotCount SpillSlot)
+		if slotCount < self.nextSlot 'belowTheMark'
+			panic("SplitDriver.extendFrameTo: {slotCount} slot(s) is below the {self.nextSlot} the frame already holds — a pass mints above `frameSlotCount()`, never below it")
+		end 'belowTheMark'
+
+		self.nextSlot = slotCount
+	end 'extendFrameTo'
 end 'SplitDriver'
 
 // THE RUNAWAY BOUND every split loop in the allocator counts against — the splitter's own Φ→0 loop and
@@ -4322,7 +4336,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// FIRST. That ordering is what makes `storeFitsPool` sound at a confined peak: by the time
 		// one is reached, no program point exceeds the full pool, so every value's def-point
 		// pressure fits and a store anchor is always available.
-		let atFixedRegisterOp = opIsFixedRegisterPoint(op, opFacts: liveness.opFacts)
+		let atFixedRegisterOp = opIsFixedRegisterPoint(op, heat: block.heat, opFacts: liveness.opFacts)
 
 		// THE FULL-POOL PIGEONHOLE, PER FILE. Each file is checked against ITS OWN pool, and its
 		// witness is ITS OWN pool — every value of that class is confined to it, so the overflow is
@@ -4597,7 +4611,8 @@ function offerIndexedFullPoolPeak(module TargetModule, liveness LivenessResult, 
 
 	let forwardPos = pressure.positionOfSlot(blockLocal, slot: winSlot)
 	let op = try module.ops.get(pressure.opAtSlot(winSlot)) otherwise panic("offerIndexedFullPoolPeak: the op at slot {winSlot} is not in module.ops")
-	betterPeak(best, pressure: winDemand as RegCount, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: seqAt(blockLocal, pos: forwardPos), clobberOnly: false, witness: poolOfClass(pool, class: winClass, file: liveness.registerFile), witnessClass: winClass, atFixedRegisterOp: opIsFixedRegisterPoint(op, opFacts: liveness.opFacts))
+	let heat = blockAt(module, topo: liveness.cfg.topo, local: blockLocal).heat
+	betterPeak(best, pressure: winDemand as RegCount, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: seqAt(blockLocal, pos: forwardPos), clobberOnly: false, witness: poolOfClass(pool, class: winClass, file: liveness.registerFile), witnessClass: winClass, atFixedRegisterOp: opIsFixedRegisterPoint(op, heat: heat, opFacts: liveness.opFacts))
 end 'offerIndexedFullPoolPeak'
 
 // `best` OVERWRITTEN by the candidate peak iff the candidate outranks it. The ONE place a candidate
@@ -4617,8 +4632,8 @@ end 'betterPeak'
 // caller-saved, an `idiv`'s RAX/RDX)? Read off the operand model's metadata, so a new fixed-register
 // op needs no edit here — through the per-variant memo, because this is asked at EVERY op of every
 // re-swept block and the metadata read is a select chain over the whole union (`OpVariantFacts`).
-function opIsFixedRegisterPoint(op TargetOp, opFacts OpVariantFacts) returns bool
-	return opFacts.implicitDefsOf(op) != 0
+function opIsFixedRegisterPoint(op TargetOp, heat BlockHeat, opFacts OpVariantFacts) returns bool
+	return confiningImplicitDefsOf(op, heat: heat, opFacts: opFacts) != 0
 end 'opIsFixedRegisterPoint'
 
 // Does a candidate overflow outrank the best peak so far?
@@ -6012,8 +6027,7 @@ function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, v
 
 			for scan in firstBetween upto pos 'between'
 				let scanned = try block.opRefs.get(scan) otherwise panic("markRunStarts: opRefs.get OOB at {scan} of block {blockLocal}, scanning between uses {k - 1} and {k} of value {valueId}")
-
-				if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
+				if opStrandsClass(module, opIdx: scanned, heat: block.heat, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
 					try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
 					break
 				end 'noRegisterLeft'
@@ -6032,9 +6046,9 @@ end 'markRunStarts'
 // drift: written twice, this would decide a run boundary from one notion of "clobber" while the
 // sweep forbade registers by another, and a reload the splitter believed was free would come back
 // as the next victim for ever.
-function opStrandsClass(module TargetModule, opIdx OpIndex, classPool RegMask, buf OperandList, opFacts OpVariantFacts) returns bool
+function opStrandsClass(module TargetModule, opIdx OpIndex, heat BlockHeat, classPool RegMask, buf OperandList, opFacts OpVariantFacts) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("opStrandsClass: opIdx not in module.ops")
-	return (classPool and not opClobberMask(op, buf: buf, opFacts: opFacts)) == 0
+	return (classPool and not opClobberMask(op, heat: heat, buf: buf, opFacts: opFacts)) == 0
 end 'opStrandsClass'
 
 // Does the use at ordinal `useOrdinal` CONTINUE the run that opened at `runStart`? The run's first use

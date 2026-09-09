@@ -88,7 +88,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
+    x64.jcc equal, tryok#5
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at set-byte-through-a-viewed-owner-detaches-first.test:12: get: index 0 of a length-2 view\x0a"
     x64.callDirect mrt_panic
@@ -99,12 +99,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit:
-    x64.movRegReg r13, r8
-    x64.jmp tryok#5
   __im_load#14:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
   tryok#5:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -112,7 +110,10 @@ func @main {
     x64.jcc above, __im_load#17
   __im_slow#16:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#7
   tryerr#8:
@@ -128,9 +129,8 @@ func @main {
   __im_load#17:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
   tryok#7:
-    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegReg r13, r8, rax
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:

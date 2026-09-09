@@ -479,6 +479,16 @@ export function regMaskPopcount(mask RegMask) returns RegCount
 	return popcountWord(mask as MachineWord) as RegCount
 end 'regMaskPopcount'
 
+// The lowest register number in `mask`, which must be non-empty (`trailingZeroCount` is undefined for
+// zero). With `regMaskRemove` this walks a mask's registers in as many steps as it has bits set.
+export function regMaskLowest(mask RegMask) returns RegNum
+	if mask == 0 'empty'
+		panic("regMaskLowest: the mask is empty — it has no lowest register")
+	end 'empty'
+
+	return trailingZeroCount(mask as MachineWord) as RegNum
+end 'regMaskLowest'
+
 // The LOWEST register number (0..31) whose bit is CLEAR in `blocked`, or
 // `RegisterFileSize` (32) if every register is blocked. Picking a register is this
 // single call — no set iteration, no interference-graph neighbour walk.

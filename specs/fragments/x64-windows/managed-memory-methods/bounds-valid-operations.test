@@ -33,9 +33,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 64
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -49,9 +47,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at bounds-valid-operations.test:7: grow OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -66,9 +62,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at bounds-valid-operations.test:8: setLength OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -101,9 +95,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at bounds-valid-operations.test:9: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -138,9 +130,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at bounds-valid-operations.test:10: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -176,9 +166,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at bounds-valid-operations.test:11: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -214,9 +202,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at bounds-valid-operations.test:12: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -233,24 +219,20 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#64
+    x64.jcc equal, tryok#13
   tryerr#14:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at bounds-valid-operations.test:13: get OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#64:
-    x64.movRegReg r12, r8
-    x64.jmp tryok#13
   __im_load#50:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
   tryok#13:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -258,85 +240,87 @@ func @main {
     x64.jcc above, __im_load#53
   __im_slow#52:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#65
+    x64.jcc equal, tryok#15
   tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at bounds-valid-operations.test:14: get OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#65:
-    x64.movRegReg r13, r8
-    x64.jmp tryok#15
   __im_load#53:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
   tryok#15:
     x64.movRegImm32 rdx, 2
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 2
     x64.jcc above, __im_load#56
   __im_slow#55:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rsi, r8
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#66
+    x64.jcc equal, tryok#17
   tryerr#18:
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at bounds-valid-operations.test:15: get OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#66:
-    x64.movRegReg r14, r8
-    x64.jmp tryok#17
   __im_load#56:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
   tryok#17:
     x64.movRegImm32 rdx, 3
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 3
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 3
     x64.jcc above, __im_load#59
   __im_slow#58:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#19
   tryerr#20:
     x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at bounds-valid-operations.test:16: get OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __im_load#59:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 24
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   tryok#19:
-    x64.leaRegRegReg rax, r12, r13
-    x64.leaRegRegReg rax, rax, r14
-    x64.leaRegRegReg r12, rax, r8
+    x64.leaRegRegReg rax, r8, rax
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg r12, rax, rcx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -347,9 +331,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at bounds-valid-operations.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -358,9 +340,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

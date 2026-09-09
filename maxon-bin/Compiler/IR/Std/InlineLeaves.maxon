@@ -1415,7 +1415,8 @@ type LeafInliner
 			// The label marks the block the splice ENTERS, which is the callee's entry only while no cascade
 			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
 			// it follows the entry rather than position 0.
-			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label)
+			var fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label)
+			fresh.heat = calleeBlock.heat
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
@@ -1471,6 +1472,8 @@ type LeafInliner
 		// The slow arm re-runs the call this site inlined, so it belongs to the CALLER's statement — which
 		// is where `spliceCallAtTailOf` left the cursor, the body clone not having started.
 		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
+		// Reached only where the inlined body would have panicked.
+		slow.heat = BlockHeat.cold
 		let slowResult = self.valueIds().mint()
 		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
 		self.module.setTerminator(slow, op: StdOp.branch(contId))

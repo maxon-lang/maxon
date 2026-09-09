@@ -1,0 +1,142 @@
+// Test: a-float-survives-a-cold-call
+typealias Word = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+typealias WordArray = Array with Word
+
+function halves(a WordArray, n Word) returns Real
+	var f = 0.5
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise 8
+		f = f + (v as Real) * 0.5
+	end 'each'
+	return f
+end 'halves'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 4 'seed'
+		a.push(i)
+	end 'seed'
+	if halves(a, n: 8) != 19.5 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @halves {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 80
+    x64.movRegReg rax, rcx
+    x64.movRegReg rsi, rdx
+    x64.movsdRegRip xmm0, [rip + __fconst_0.5]
+    x64.movRegImm32 rdi, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+    x64.loadRegBaseDisp.word64 r9, [rax + 0]
+  forhdr:
+    x64.cmpRegReg rdi, rsi
+    x64.jcc greaterEqual, forexit
+  __rc_ok:
+    x64.cmpRegReg rdi, r8
+    x64.jcc below, __im_load
+  __im_slow:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rdi
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot2, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot4, r9
+    x64.storeSlotReg slot5, xmm0
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot4
+    x64.loadRegSlot xmm0, slot5
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 rcx, 8
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 rcx, [r9 + rdi*8 + 0]
+  trycont:
+    x64.cvtsi2sdRegReg xmm1, rcx
+    x64.movsdRegRip xmm2, [rip + __fconst_0.5]
+    x64.mulsdRegReg xmm1, xmm1, xmm2
+    x64.addsdRegReg xmm0, xmm0, xmm1
+  forstep:
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.jmp forhdr
+  forexit:
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect halves
+    x64.movsdRegRip xmm1, [rip + __fconst_19.5]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, sum
+  fordered:
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

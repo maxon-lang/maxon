@@ -45,49 +45,44 @@ func @overwrite {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 r13, 0
+    x64.prologue 80
+    x64.movRegReg rsi, rcx
+    x64.movRegReg rdi, rdx
+    x64.movRegImm32 r8, 0
   __us_test#26:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rax, [rsi + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, forhdr#1
   __us_test#27:
-    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
-    x64.cmpRegImm32 r15, 0
+    x64.loadRegBaseDisp.word64 r9, [rsi + 8]
+    x64.loadRegBaseDisp.word64 r10, [rsi + 0]
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, forhdr#1
   __us_test#28:
-    x64.leaRegRegImm32 rax, r15, -24
+    x64.leaRegRegImm32 rax, r10, -24
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, forhdr#1
   __us_test#29:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.loadRegBaseDisp.word64 rax, [rsi + 40]
     x64.movRegImm32 rcx, 0
     x64.cmpRegReg rax, rcx
     x64.jcc equal, forhdr#15
   forhdr#1:
-    x64.cmpRegReg r13, r12
+    x64.cmpRegReg r8, rdi
     x64.jcc greaterEqual, forexit
   each#2:
-    x64.leaRegRegImm32 rax, r13, 100
+    x64.leaRegRegImm32 rax, r8, 100
   __rc_ok:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#10
   __im_bounds#11:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg r13, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
+    x64.cmpRegReg r8, rcx
     x64.jcc aboveEqual, __im_slow#10
   __im_buffer:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#10
   __im_viewed:
@@ -96,54 +91,63 @@ func @overwrite {
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_store#14
   __im_slow#10:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rcx, rsi
+    x64.movRegReg rdx, r8
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
     x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp forstep#3
   __im_store#14:
-    x64.storeBaseIndexScaleReg.word64 [rcx + r13*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + r8*8 + 0], rax
   forstep#3:
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegImm32 r8, r8, 1
     x64.jmp forhdr#1
   forhdr#15:
-    x64.cmpRegReg r13, r12
+    x64.cmpRegReg r8, rdi
     x64.jcc greaterEqual, forexit
   each#25:
-    x64.leaRegRegImm32 rax, r13, 100
+    x64.leaRegRegImm32 rax, r8, 100
   __im_bounds#23:
-    x64.cmpRegReg r13, r14
+    x64.cmpRegReg r8, r9
     x64.jcc below, __im_store#20
   __im_slow#19:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rcx, rsi
+    x64.movRegReg rdx, r8
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
     x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
+    x64.movRegReg rax, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, forstep#16
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-view-detaches-on-its-first-write.test:7: overwrite: i < n = b.count()\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 80
     x64.popReg rbp
     x64.ret
   __im_store#20:
-    x64.storeBaseIndexScaleReg.word64 [r15 + r13*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [r10 + r8*8 + 0], rax
   forstep#16:
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.leaRegRegImm32 r8, r8, 1
     x64.jmp forhdr#15
   forexit:
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+    x64.epilogue 80
     x64.popReg rbp
     x64.ret
 }

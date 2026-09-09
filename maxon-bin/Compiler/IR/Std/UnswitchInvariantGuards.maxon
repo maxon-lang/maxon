@@ -1295,7 +1295,8 @@ function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
 		let original = module.blockAtPosition(func, position: position)
-		let copy = module.addBlock(func, label: original.label)
+		var copy = module.addBlock(func, label: original.label)
+		copy.heat = original.heat
 		columns.mapBlock(original.id, fresh: copy.id)
 		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
 	end 'eachMember'

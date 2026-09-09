@@ -1160,6 +1160,8 @@ type RangeCheckEmitter
 	// calls `mrt_panic`.
 	function emitPanicBlock(message ByteArray) returns IrBlock
 		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic")
+		// Reached only when the range check refuses.
+		panicBlock.heat = BlockHeat.cold
 		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
 		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
 		self.emitDeadReturn(panicBlock)
@@ -1659,6 +1661,8 @@ function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label B
 	var ok = module.addBlock(func, label: label)
 	var headBlock = head
 
+	// The tail runs exactly when the head does.
+	ok.heat = headBlock.heat
 	ok.terminator = headBlock.terminator
 	ok.condBranch = headBlock.condBranch
 	ok.branchEdges = headBlock.branchEdges

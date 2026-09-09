@@ -43,8 +43,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 48
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 4
     x64.movRegImm32 rdx, 8
@@ -54,8 +53,7 @@ func @main {
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -63,8 +61,7 @@ func @main {
   tryok#1:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_capacity
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 rdx, r13, -1
+    x64.leaRegRegImm32 rdx, r8, -1
     x64.movRegImm32 rax, 7
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
@@ -84,7 +81,10 @@ func @main {
     x64.jcc equal, __im_store#30
   __im_slow#26:
     x64.movRegReg rcx, r12
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_mem_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#3
   tryerr#4:
@@ -92,8 +92,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -107,7 +106,7 @@ func @main {
     x64.jcc less, __im_slow#32
   __im_bounds#33:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
-    x64.cmpRegReg r13, rcx
+    x64.cmpRegReg r8, rcx
     x64.jcc aboveEqual, __im_slow#32
   __im_buffer#34:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
@@ -120,35 +119,39 @@ func @main {
     x64.jcc equal, __im_store#36
   __im_slow#32:
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
+    x64.movRegReg rdx, r8
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_mem_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.jmp __im_cont#31
   __im_store#36:
-    x64.storeBaseIndexScaleReg.word64 [rcx + r13*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + r8*8 + 0], rax
     x64.movRegImm32 rax, 0
     x64.movRegReg r10, rax
   __im_cont#31:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#10
+    x64.jcc equal, tryok#5
   tryerr#6:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchdefault#8
   matcharm#7:
-    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rsi, 1
     x64.jmp trycont#10
   matchdefault#8:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:10: set at the capacity must report indexOutOfBounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryok#5:
+    x64.movRegReg rsi, rbx
   trycont#10:
-    x64.leaRegRegImm32 rdx, r13, 1
+    x64.leaRegRegImm32 rdx, r8, 1
     x64.movRegImm32 rax, 7
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
@@ -162,13 +165,15 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#38
   __im_viewed#41:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
+    x64.leaRegRegImm32 rdi, rcx, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_store#42
   __im_slow#38:
     x64.movRegReg rcx, r12
+    x64.storeSlotReg slot1, rsi
     x64.callDirect __managed_mem_set
+    x64.loadRegSlot rsi, slot1
     x64.jmp __im_cont#37
   __im_store#42:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
@@ -182,14 +187,13 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchdefault#14
   matcharm#13:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp trycont#16
   matchdefault#14:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:16: set past the capacity must report indexOutOfBounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -209,13 +213,15 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#44
   __im_viewed#47:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
+    x64.leaRegRegImm32 rdi, rcx, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_store#48
   __im_slow#44:
     x64.movRegReg rcx, r12
+    x64.storeSlotReg slot1, rsi
     x64.callDirect __managed_mem_set
+    x64.loadRegSlot rsi, slot1
     x64.jmp __im_cont#43
   __im_store#48:
     x64.leaRegRegImm32 rcx, rcx, -8
@@ -230,20 +236,19 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchdefault#20
   matcharm#19:
-    x64.leaRegRegImm32 rax, rbx, 1
+    x64.leaRegRegImm32 rax, rsi, 1
     x64.jmp trycont#22
   matchdefault#20:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:22: set at a negative index must report indexOutOfBounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok#17:
-    x64.movRegReg rax, rbx
+    x64.movRegReg rax, rsi
   trycont#22:
     x64.cmpRegImm32 rax, 3
     x64.jcc notEqual, ifcont
@@ -252,8 +257,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -263,8 +267,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

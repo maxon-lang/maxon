@@ -924,6 +924,7 @@ type StdToX64Lowering
 	function prepareSkeleton()
 		for srcBlock in self.stdModule.blocks 'relocateBlocks'
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
+			dstBlock.heat = srcBlock.heat
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			for srcEdge in srcBlock.branchEdges 'eachEdge'
@@ -5048,7 +5049,9 @@ type StdToX64Lowering
 		// original down to its one surviving edge later, and `ordered` needs both.
 		let inheritedEdges = self.cloneBranchEdgesOf(blockRef)
 
-		let newRef = self.addOrderedBlock(funcIdx)
+		// The `ordered` block is the second half of the original's branch, so it runs exactly when the
+		// original does.
+		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockHeatOf(blockRef))
 		let newId = self.blockIdOf(newRef)
 		self.emitOrderedBlockBody(newRef, cond: floatCondCodeForPred(pred), thenBlockId: thenBlockId, elseBlockId: elseBlockId, edges: inheritedEdges)
 		return newId
@@ -5060,15 +5063,22 @@ type StdToX64Lowering
 	// `blockSourceInfo`, which the Target module does not carry (`prepareSkeleton` never fills it).
 	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
 	// caller that could still be holding one. Same shape as `addSplitBlock`.
-	function addOrderedBlock(funcIdx FuncIndex) returns BlockRef
+	function addOrderedBlock(funcIdx FuncIndex, heat BlockHeat) returns BlockRef
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel))
+		var ordered = IrBlock.create(newId, label: FloatOrderedLabel)
+		ordered.heat = heat
+		self.targetModule.blocks.push(ordered)
 		let newRef = self.targetModule.blocks.count() - 1
 		srcFunc.blockRefs.push(newRef)
 		return newRef
 	end 'addOrderedBlock'
+
+	function blockHeatOf(blockRef BlockRef) returns BlockHeat
+		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("blockHeatOf: blockRef {blockRef} not in targetModule.blocks")
+		return block.heat
+	end 'blockHeatOf'
 
 	// Emit the `ordered` block's whole body: the ordered equality test to `then`, the `jmp` to
 	// `else`, and the phi edges it inherited. Uniform for both `==` and `!=` — only `cond`

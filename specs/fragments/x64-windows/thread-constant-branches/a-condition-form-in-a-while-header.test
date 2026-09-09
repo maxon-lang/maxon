@@ -35,10 +35,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 64
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -55,69 +52,68 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rsi, 0
   __us_test:
-    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
   whilehdr:
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-condition-form-in-a-while-header.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegReg r12, r14
+    x64.cmpRegReg rax, rdi
     x64.jcc below, __im_load
   __im_slow:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rax
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot2, rdi
+    x64.storeSlotReg slot3, r8
     x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-condition-form-in-a-while-header.test:13: main: i stays below count()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __im_load:
-    x64.loadRegBaseIndexScale.word64 rax, [r15 + r12*8 + 0]
-    x64.movRegReg r8, rax
+    x64.loadRegBaseIndexScale.word64 rcx, [r8 + rax*8 + 0]
   tryok:
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc lessEqual, whileexit
   walk:
-    x64.leaRegRegImm32 r13, r13, 1
-    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp whilehdr
   whileexit:
-    x64.cmpRegImm32 r13, 3
+    x64.cmpRegImm32 rsi, 3
     x64.jcc equal, ifcont
   count:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -127,10 +123,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

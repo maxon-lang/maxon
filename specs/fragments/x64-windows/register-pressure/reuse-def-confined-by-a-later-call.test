@@ -2,11 +2,18 @@
 typealias Limb = int(i64.min to i64.max)
 typealias Limbs = Array with Limb
 
+function keep(x Limb) returns Limb
+	if x < 0 'never'
+		print("")
+	end 'never'
+	return x
+end 'keep'
+
 function shift(limbs Limbs, s Limb, n Limb)
 	var carry = 0
 	var i = 0
 	while i < limbs.count() 'shiftEach'
-		let widened = ((try limbs.get(i) otherwise panic("get")) shl s) or carry
+		let widened = (keep(try limbs.get(i) otherwise panic("get")) shl s) or carry
 		try limbs.set(i, value: widened and 0xFFFFFFFF) otherwise panic("set")
 		carry = widened shr 32
 		i = i + 1
@@ -36,6 +43,26 @@ data {
   __slab_state@24 = i64 0
 }
 
+func @keep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, ifcont
+  never:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
+    x64.callDirect print
+  ifcont:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @shift {
   entry:
     x64.pushReg rbp
@@ -48,20 +75,25 @@ func @shift {
     x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.storeSlotReg slot0, rax
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rdx, 0
+    x64.movRegReg r13, rax
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 r15, 0
   whilehdr#1:
-    x64.storeSlotReg slot1, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rdx, rax
+    x64.cmpRegReg r15, rax
     x64.jcc greaterEqual, whileexit#3
-  shiftEach:
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, r14
-    x64.jcc greaterEqual, __rc_ok#13
-  __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at reuse-def-confined-by-a-later-call.test:9: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_ok#15:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r15, rax
+    x64.jcc below, __im_load
+  __im_slow#22:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -71,36 +103,18 @@ func @shift {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#13:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#20
+  critsplit:
+    x64.movRegReg rcx, r8
+    x64.jmp tryok#4
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#37
-  __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#38
-  __im_slow#20:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont#19
-  critsplit#38:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-    x64.jmp __im_cont#19
-  critsplit#37:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-  __im_cont#19:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
-  tryerr#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at reuse-def-confined-by-a-later-call.test:9: get\x0a"
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r15*8 + 0]
+  tryok#4:
+    x64.callDirect keep
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, shiftok
+  shiftneg:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at reuse-def-confined-by-a-later-call.test:16: negative shift count\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -110,7 +124,7 @@ func @shift {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#4:
+  shiftok:
     x64.movRegReg rax, r12
     x64.andRegImm32 rax, r12, -64
     x64.movRegReg rcx, rax
@@ -122,62 +136,39 @@ func @shift {
     x64.shlRegCl r8, r8
     x64.notReg rax, rax
     x64.andRegReg r8, r8, rax
-    x64.movRegReg r15, r8
-    x64.orRegReg r15, r8, r13
+    x64.orRegReg r8, r8, r14
     x64.movRegImm32 rax, 4294967295
-    x64.movRegReg rsi, r15
-    x64.andRegReg rsi, r15, rax
-    x64.cmpRegImm32 r14, 0
-    x64.jcc equal, __rc_ok#15
-  __rc_panic#16:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:10: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#15:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#24
-  __im_owned#25:
+    x64.movRegReg rsi, r8
+    x64.andRegReg rsi, r8, rax
+  __rc_ok#17:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#24
+    x64.jcc less, __im_slow#25
   __im_bounds#26:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.loadRegSlot rcx, slot1
-    x64.cmpRegReg rcx, rax
-    x64.jcc aboveEqual, __im_slow#24
+    x64.cmpRegReg r15, rax
+    x64.jcc aboveEqual, __im_slow#25
   __im_buffer#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#24
+    x64.jcc equal, __im_slow#25
   __im_viewed#28:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_store#29
-  __im_slow#24:
+  __im_slow#25:
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot1
+    x64.movRegReg rdx, r15
     x64.movRegReg rax, rsi
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_set
-    x64.jmp __im_cont#23
-  __im_store#29:
-    x64.loadRegSlot rcx, slot1
-    x64.storeBaseIndexScaleReg.word64 [rax + rcx*8 + 0], rsi
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont#23:
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at reuse-def-confined-by-a-later-call.test:10: set\x0a"
+    x64.jcc equal, tryok#8
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -187,68 +178,93 @@ func @shift {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#6:
-    x64.sarRegImm8 r15, r15, 32
-    x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rdx, rax, 1
-    x64.movRegReg r13, r15
+  __im_store#29:
+    x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], rsi
+  tryok#8:
+    x64.sarRegImm8 r8, r8, 32
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.movRegReg r14, r8
     x64.jmp whilehdr#1
   whileexit#3:
-    x64.movRegImm32 r12, 0
-  whilehdr#8:
-    x64.loadRegSlot rax, slot0
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, whileexit#10
-  clear:
+    x64.movRegImm32 rsi, 0
+  __us_test#46:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, whilehdr#10
+  __us_test#47:
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, whilehdr#10
+  __us_test#48:
+    x64.leaRegRegImm32 rax, r8, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, whilehdr#10
+  __us_test#49:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, whilehdr#36
+  whilehdr#10:
+    x64.cmpRegReg rsi, r13
+    x64.jcc greaterEqual, whileexit#12
+  clear#11:
     x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 r12, 0
-    x64.jcc greaterEqual, __rc_ok#17
-  __rc_panic#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#17:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#31
-  __im_owned#32:
+  __rc_ok#19:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#31
-  __im_bounds#33:
+  __im_bounds#32:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg r12, rcx
+    x64.cmpRegReg rsi, rcx
     x64.jcc aboveEqual, __im_slow#31
-  __im_buffer#34:
+  __im_buffer#33:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#31
-  __im_viewed#35:
+  __im_viewed#34:
     x64.leaRegRegImm32 rdx, rcx, -24
     x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_store#36
+    x64.jcc equal, __im_store#35
   __im_slow#31:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rsi
+    x64.storeSlotReg slot1, rsi
     x64.callDirect __managed_set
-    x64.jmp __im_cont#30
-  __im_store#36:
-    x64.storeBaseIndexScaleReg.word64 [rcx + r12*8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont#30:
+    x64.loadRegSlot rsi, slot1
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#11
-  tryerr#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:17: clear\x0a"
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  __im_store#35:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rsi*8 + 0], rax
+  tryok#13:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp whilehdr#10
+  whilehdr#36:
+    x64.cmpRegReg rsi, r13
+    x64.jcc greaterEqual, whileexit#12
+  clear#45:
+    x64.movRegImm32 rax, 0
+  __im_bounds#43:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc below, __im_store#40
+  __im_slow#39:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, rsi
+    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot2, rdi
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#37
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -258,10 +274,12 @@ func @shift {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#11:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr#8
-  whileexit#10:
+  __im_store#40:
+    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rax
+  tryok#37:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp whilehdr#36
+  whileexit#12:
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -296,40 +314,23 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#11
-  __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#12
+    x64.jcc above, __im_load
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.jmp __im_cont
-  critsplit#12:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-    x64.jmp __im_cont
-  critsplit#11:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-  __im_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r12, 99
     x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
   tryok:
     x64.movRegReg r12, r8
   trycont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -337,7 +338,7 @@ func @main {
     x64.cmpRegReg r12, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at reuse-def-confined-by-a-later-call.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -346,6 +347,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

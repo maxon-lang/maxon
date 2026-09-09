@@ -31,9 +31,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 64
     x64.movRegImm32 rcx, 4
     x64.movRegImm32 rdx, 8
     x64.callDirect __managed_mem_create
@@ -42,9 +40,7 @@ func @main {
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -58,9 +54,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -94,9 +88,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -132,9 +124,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -171,9 +161,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -210,9 +198,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -231,9 +217,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -247,25 +231,21 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#66
+    x64.jcc equal, tryok#15
   tryerr#16:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#66:
-    x64.movRegReg r12, r8
-    x64.jmp tryok#15
   __im_load#52:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
   tryok#15:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -273,65 +253,70 @@ func @main {
     x64.jcc above, __im_load#55
   __im_slow#54:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#67
+    x64.jcc equal, tryok#17
   tryerr#18:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#67:
-    x64.movRegReg r13, r8
-    x64.jmp tryok#17
   __im_load#55:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
   tryok#17:
     x64.movRegImm32 rdx, 2
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 2
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 2
     x64.jcc above, __im_load#58
   __im_slow#57:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rsi, r8
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#68
+    x64.jcc equal, tryok#19
   tryerr#20:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#68:
-    x64.movRegReg r14, r8
-    x64.jmp tryok#19
   __im_load#58:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 16
-    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
   tryok#19:
     x64.movRegImm32 rdx, 3
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 3
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 3
     x64.jcc above, __im_load#61
   __im_slow#60:
     x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#21
   tryerr#22:
@@ -339,22 +324,19 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __im_load#61:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 24
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   tryok#21:
-    x64.leaRegRegReg rax, r12, r13
-    x64.leaRegRegReg rax, rax, r14
-    x64.leaRegRegReg r12, rax, r8
+    x64.leaRegRegReg rax, r8, rax
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg r12, rax, rcx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -365,9 +347,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at set-stages-into-capacity-then-set-length-publishes.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -376,9 +356,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

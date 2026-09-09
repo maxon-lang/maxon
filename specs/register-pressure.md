@@ -1361,10 +1361,12 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: reuse-def-confined-by-a-later-call -->
 A REUSE DEF is confined by its OWN admissible set, and the pressure analysis has to see it.
 
-Two sequential loops over an `Array`, the first carrying a `carry` across its back edge. Five values
-are live across the calls in the first loop — confined to the five callee-saved GPRs — and
-`carry = widened shr 32` is a two-address reuse def that becomes a SIXTH. It holds a register at an
-op where it is in no live set, so no popcount over a live row can see it; the full-pool figure
+Two sequential loops over an `Array`, the first carrying a `carry` across its back edge. `keep` is a
+real call on every iteration of the first loop — an impure helper, so it is never inlined, in a
+`normal` block, so it confines (the managed accesses' own slow arms are cold and confine nothing;
+see `cold-call-spilling`). Five values are live across it — confined to the five callee-saved GPRs —
+and `carry = widened shr 32` is a two-address reuse def that becomes a SIXTH. It holds a register at
+an op where it is in no live set, so no popcount over a live row can see it; the full-pool figure
 counted it (14 registers, no overflow) and the CONFINED census did not, on the premise that
 *"a transient is not a value, so it is not confined by anything"*. It is a value: it crosses the next
 iteration's call and may live in exactly those five registers. The splitter relieved nothing and
@@ -1374,15 +1376,25 @@ register the input may hold is one the def may hold too.
 
 `0xFFFFFFFF << 4` is `0xFFFFFFFF0`, so limb 0 keeps `0xFFFFFFF0` and carries `0xF` into limb 1,
 which holds `1 << 4 | 0xF` = **31**. The clear loop then zeroes limb 0 only.
+
+Note: the arm64-macos and arm64-linux goldens of this case were minted before `keep` was added and
+cannot be re-minted from an x64-windows host (no runner); they are owed a re-mint on a host that runs them.
 ```maxon
 typealias Limb = int(i64.min to i64.max)
 typealias Limbs = Array with Limb
+
+function keep(x Limb) returns Limb
+	if x < 0 'never'
+		print("")
+	end 'never'
+	return x
+end 'keep'
 
 function shift(limbs Limbs, s Limb, n Limb)
 	var carry = 0
 	var i = 0
 	while i < limbs.count() 'shiftEach'
-		let widened = ((try limbs.get(i) otherwise panic("get")) shl s) or carry
+		let widened = (keep(try limbs.get(i) otherwise panic("get")) shl s) or carry
 		try limbs.set(i, value: widened and 0xFFFFFFFF) otherwise panic("set")
 		carry = widened shr 32
 		i = i + 1

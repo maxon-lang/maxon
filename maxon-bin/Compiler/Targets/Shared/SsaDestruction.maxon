@@ -272,8 +272,8 @@ end 'rewriteSourcesThroughSwap'
 // Commit: rewrite ops to physical, drop self-moves, splice edge moves, clear phis
 // ==========================================================================
 
-export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan)
-	colorAndDropSelfMoves(module, func: func, alloc: alloc, reuseCopies: reuseCopies)
+export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
+	colorAndDropSelfMoves(module, func: func, alloc: alloc, reuseCopies: reuseCopies, brackets: brackets)
 
 	for plan in plans 'eachPlan'
 		spliceEdgeMoves(module, plan: plan)
@@ -288,13 +288,24 @@ end 'applyAllocation'
 // two-address input that outlived, so the destination is a different register).
 // `seq` re-derives the op's LAYOUT SEQUENCE — blocks in `func.blockRefs` order, each block's body
 // ops then its terminator. That is the `collectBlockOps` numbering the colorer recorded its reuse
-// copies under, so a copy is spliced before exactly the op that could not coalesce into its input.
-function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan)
+// copies and cold-call brackets under, so a copy is spliced before exactly the op that could not
+// coalesce into its input, and a bracket around exactly the call it was planned for.
+//
+// ⭐ **A BRACKET'S SAVES GO IMMEDIATELY BEFORE THE CALL; ITS RELOADS GO AFTER THE CALL'S RESULT
+// CAPTURES** — the moves that read the registers the call answers through (`isCaptureMove`), which
+// follow the call directly. A value live across a cold call may hold one of those registers, and a
+// reload placed before the capture would overwrite the answer; placed after it, every caller-saved
+// register is the hot path's to use. The captures read a register no bracketed value holds only
+// because the colorer keeps the bracketed registers in use across them.
+function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
 	var seq = 0 as OpSeq
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 		let bodyCount = block.opRefs.count()
+
+		// Whether the plan's open bracket has had its call emitted and its reloads not yet spliced.
+		var owesReloads = false
 
 		var newRefs = OpIndexArray.create()
 
@@ -315,6 +326,8 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				skipNext = false
 				continue
 			end 'flagCaptureHandled'
+
+			owesReloads = spliceBracketReloadsUnlessCapturing(module, block: block, pos: pos, brackets: brackets, owesReloads: owesReloads, newRefs: newRefs)
 
 			// ⚠⚠ **THE PAIR IS SETTLED AND EMITTED BEFORE THE OP IS BOUND, AND THE ORDER IS THE WHOLE POINT.**
 			// An op read out of `module.ops` is a BORROW of `module` (E3070), the sequencer PUSHES its moves
@@ -342,9 +355,14 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			end 'selfMove'
 
 			spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: seq + pos, newRefs: newRefs)
+			owesReloads = spliceBracketSavesBefore(module, brackets: brackets, seq: seq + pos, owesReloads: owesReloads, newRefs: newRefs)
 			newRefs.push(opIdx)
 		end 'eachOp'
 
+		// A call last in the body owes its reloads before the terminator.
+		if owesReloads 'callLastInBody'
+			appendBracketReloads(module, brackets: brackets, newRefs: newRefs)
+		end 'callLastInBody'
 		block.opRefs = newRefs
 		seq = seq + bodyCount
 
@@ -354,7 +372,46 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			seq = seq + 1
 		end 'hasTerm'
 	end 'eachBlock'
+
+	brackets.requireAllTaken()
 end 'colorAndDropSelfMoves'
+
+// Splice the saves of the bracket planned at `seq`, if any, before the op about to be emitted; that
+// bracket then owes its reloads. A bracket still owed here is a contradiction: a call is never a capture
+// move, so the walk flushed the previous bracket's reloads before reaching this call.
+function spliceBracketSavesBefore(module TargetModule, brackets ColdCallBracketPlan, seq OpSeq, owesReloads bool, newRefs OpIndexArray) returns bool
+	if not brackets.takeAt(seq) 'noBracketHere'
+		return owesReloads
+	end 'noBracketHere'
+
+	if owesReloads 'stillOwed'
+		panic("spliceBracketSavesBefore: the bracket at sequence {seq} begins while the previous one still owes its reloads — a call is never a capture move, so the previous bracket must have been flushed before it")
+	end 'stillOwed'
+
+	for entry in 0 upto brackets.openEntryCount() 'eachRegister'
+		appendAllocatorOp(module, op: TargetOp.storeSlotReg(brackets.openSlotAt(entry), srcReg: TargetVReg.physical(brackets.openRegAt(entry))), newRefs: newRefs)
+	end 'eachRegister'
+
+	return true
+end 'spliceBracketSavesBefore'
+
+// The reloads owed by the open bracket, spliced before the op at `pos` unless that op is still one of
+// its call's result captures; whether they are still owed afterwards. The op is read only while
+// something is owed, so the common op costs one flag test.
+function spliceBracketReloadsUnlessCapturing(module TargetModule, block IrBlock, pos ElementIndex, brackets ColdCallBracketPlan, owesReloads bool, newRefs OpIndexArray) returns bool
+	if not owesReloads or isCaptureMoveAt(module, block: block, pos: pos) 'nothingToSpliceHere'
+		return owesReloads
+	end 'nothingToSpliceHere'
+
+	appendBracketReloads(module, brackets: brackets, newRefs: newRefs)
+	return false
+end 'spliceBracketReloadsUnlessCapturing'
+
+function appendBracketReloads(module TargetModule, brackets ColdCallBracketPlan, newRefs OpIndexArray)
+	for entry in 0 upto brackets.openEntryCount() 'eachRegister'
+		appendAllocatorOp(module, op: TargetOp.loadRegSlot(TargetVReg.physical(brackets.openRegAt(entry)), slot: brackets.openSlotAt(entry)), newRefs: newRefs)
+	end 'eachRegister'
+end 'appendBracketReloads'
 
 // True for a `movRegReg` whose DEST is still virtual and whose SRC is a physical register — the shape of
 // a call-result capture (`virtual(result) ← physical(returnReg)`). Read on the UNCOLORED op, before its
@@ -557,17 +614,16 @@ end 'vregIsPhysical'
 // the previous op was a call and that `pos + 1` is in range; this reads the two ops and answers, holding
 // neither — see the caller for why that matters.
 function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
-	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos}")
-	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMovePairAt: opIdx {opIdx} not in module.ops")
-
-	if not isCaptureMove(op) 'notTheFirstHalf'
-		return false
-	end 'notTheFirstHalf'
-
-	let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos + 1}")
-	let nextOp = try module.ops.get(nextIdx) otherwise panic("isCaptureMovePairAt: opIdx {nextIdx} not in module.ops")
-	return isCaptureMove(nextOp)
+	return isCaptureMoveAt(module, block: block, pos: pos) and isCaptureMoveAt(module, block: block, pos: pos + 1)
 end 'isCaptureMovePairAt'
+
+// Read on the op's UNCOLORED form; the op's borrow is released on return, and the callers push onto
+// `module.ops` next.
+function isCaptureMoveAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
+	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMoveAt: opRefs.get OOB at {pos}")
+	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMoveAt: opIdx {opIdx} not in module.ops")
+	return isCaptureMove(op)
+end 'isCaptureMoveAt'
 
 // The pair at `pos`, resequenced. The FOUR NUMBERS are read out first and the ops released, because the
 // sequencer below pushes onto the very array they were borrowed from — and four numbers is all a capture
@@ -644,19 +700,19 @@ end 'physicalRegOf'
 // so at run time the destination register holds the reuse input when the two-address
 // op executes. A new op index is minted at the end of `module.ops`.
 function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, seq OpSeq, newRefs OpIndexArray)
-	match reuseCopies.at(seq) 'rc'
-		none then break 'rc'
-		copy(destReg, srcReg) then appendReuseCopyOp(module, destReg: destReg, srcReg: srcReg, newRefs: newRefs)
-	end 'rc'
+	if reuseCopies.hasCopyAt(seq) 'copyPlanned'
+		appendAllocatorOp(module, op: TargetOp.movRegReg(TargetVReg.physical(reuseCopies.destRegAt(seq)), srcReg: TargetVReg.physical(reuseCopies.srcRegAt(seq))), newRefs: newRefs)
+	end 'copyPlanned'
 end 'spliceReuseCopyBefore'
 
-function appendReuseCopyOp(module TargetModule, destReg RegNum, srcReg RegNum, newRefs OpIndexArray)
-	let copyOp = TargetOp.movRegReg(TargetVReg.physical(destReg), srcReg: TargetVReg.physical(srcReg))
-	let copyIdx = module.ops.count()
-	module.ops.push(copyOp)
-	module.spans.pushNone(copyIdx)
-	newRefs.push(copyIdx)
-end 'appendReuseCopyOp'
+// Mint a PHYSICAL op the allocator decided on — a reuse copy, a cold-call save or reload — at the end
+// of `module.ops` and place it next in the block. It belongs to no statement, so it carries no span.
+function appendAllocatorOp(module TargetModule, op TargetOp, newRefs OpIndexArray)
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	module.spans.pushNone(opIdx)
+	newRefs.push(opIdx)
+end 'appendAllocatorOp'
 
 // True for a `mov r, r` — a no-op the biased coloring produced (a coalesced seed
 // copy, or the R8 return move when the return value landed in R8).

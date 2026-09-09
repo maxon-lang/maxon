@@ -573,8 +573,7 @@ type PrimitiveInliner
 			noFastArm then return blockRef
 		end 'plan'
 
-		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
-
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
 		end 'eachArm'
@@ -637,7 +636,8 @@ type PrimitiveInliner
 		end 'noSingleOpArmSurvives'
 
 		let trivialElement = self.trivialElements.contains(site)
-		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+		// The fast arm reads every element; the slow arm is an index out of range or an empty managed slot.
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
 
 		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE (EC15).**
@@ -760,8 +760,8 @@ type PrimitiveInliner
 		end 'noSingleOpArmSurvives'
 
 		let trivialElement = self.trivialElements.contains(site)
-		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-
+		// A managed element's every `set` takes the slow arm (`emitStoreArm`), which is then the common path.
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement))
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame, trivialElement: trivialElement)
 		end 'eachArm'
@@ -957,8 +957,8 @@ type PrimitiveInliner
 	// ⚠ The original op is left behind as an ORPHAN in `module.ops`. That is the tier's own model
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
 	// reader asks `liveOpIndices` rather than scanning the array.
-	function openPlain(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns InlineFrame
-		var frame = self.carveFrame(blockRef, pos: pos)
+	function openPlain(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, slowHeat BlockHeat) returns InlineFrame
+		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		let slowResult = self.valueIds().mint()
 		self.module.appendOp(frame.slow, op: StdOp.call(slowResult, callee: callee, args: args))
 		self.closeFrame(frame, carried: argsOf(resultId), slowCarried: argsOf(slowResult))
@@ -969,8 +969,8 @@ type PrimitiveInliner
 	// `openPlain`'s dual-register twin: a `tryCall` defines a VALUE and an ERROR FLAG, so both are minted
 	// fresh on the slow arm and both become continuation block args. It differs from its twin in exactly
 	// that — the op and the arity — which is why the carve and the wiring either side of it are shared.
-	function openThrowing(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns InlineFrame
-		var frame = self.carveFrame(blockRef, pos: pos)
+	function openThrowing(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, slowHeat BlockHeat) returns InlineFrame
+		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		let slowResult = self.valueIds().mint()
 		let slowFlag = self.valueIds().mint()
 		self.module.appendOp(frame.slow, op: StdOp.tryCall(slowResult, errorFlagId: slowFlag, callee: callee, args: args))
@@ -987,10 +987,26 @@ type PrimitiveInliner
 	// ⚠ **THE TWO STEPS ARE SEQUENCED AND NOT WRITTEN AS ONE EXPRESSION.** `carveContinuation`'s ref read is
 	// valid only while the continuation is the function's LAST-registered block, and the `addBlock` below is
 	// precisely what ends that — so the order between them may not be left to argument evaluation.
-	function carveFrame(blockRef BlockRef, pos BlockOpPos) returns InlineFrame
+	function carveFrame(blockRef BlockRef, pos BlockOpPos, slowHeat BlockHeat) returns InlineFrame
 		let carve = self.carveContinuation(blockRef, pos: pos)
-		return InlineFrame.create(carve, slow: self.module.addBlock(self.func, label: ManagedSlowLabel))
+		var slow = self.module.addBlock(self.func, label: ManagedSlowLabel)
+		slow.heat = slowHeat
+		return InlineFrame.create(carve, slow: slow)
 	end 'carveFrame'
+
+	// The heat of a site's slow arm: `cold` only when the fast arm is known to serve the common case —
+	// the stride is known (a `runtimeFork` sends every 2- and 4-byte element to the slow arm, on every
+	// access) and the fast arm admits every element of that stride. A cold arm's call is bracketed rather
+	// than confined (`BlockHeat`), so an arm that is in fact the common path must stay `normal`.
+	function slowArmHeat(plan StrideDispatchPlan, fastArmServesEveryElement bool) returns BlockHeat
+		let strideKnown = match plan 'plan'
+			runtimeFork gives false
+			singleArm gives true
+			noFastArm panic("slowArmHeat: a `noFastArm` plan mints no slow arm — every expander answers it and returns before its carve")
+		end 'plan'
+
+		return BlockHeat.cold if strideKnown and fastArmServesEveryElement else BlockHeat.normal
+	end 'slowArmHeat'
 
 	// `carveFrame` without the slow arm — the whole carve for an expansion that has no precondition left to
 	// fail (`expandUncheckedGetUnguarded`), and the first half of it for every other.

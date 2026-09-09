@@ -1,0 +1,180 @@
+// Test: a-hot-call-in-a-loop-confines-as-before
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function weigh(a WordArray, i Word) returns Word
+	let v = try a.get(i) otherwise 0
+	if v > 2 'heavy'
+		print("")
+	end 'heavy'
+	return v * 2
+end 'weigh'
+
+function total(a WordArray, n Word) returns Word
+	var t = 0
+	var w = 5
+	for i in 0 upto n 'each'
+		w = w + i
+		t = t + weigh(a, i: i) + w
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i)
+	end 'seed'
+	if total(a, n: 5) != 65 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @weigh {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-hot-call-in-a-loop-confines-as-before.test:6: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc below, __im_load
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.cmpRegImm32 rbx, 2
+    x64.jcc lessEqual, ifcont
+  heavy:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
+    x64.callDirect print
+  ifcont:
+    x64.imulRegRegImm32 r8, rbx, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 r14, 0
+  forhdr:
+    x64.cmpRegReg r14, r12
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.leaRegRegReg r15, rax, r14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect weigh
+    x64.leaRegRegReg rax, r13, r8
+    x64.leaRegRegReg rax, rax, r15
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg r13, rax
+    x64.movRegReg rax, r15
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect total
+    x64.cmpRegImm32 r8, 65
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

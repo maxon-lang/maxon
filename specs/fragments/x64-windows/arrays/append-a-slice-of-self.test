@@ -68,53 +68,55 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_append
-    x64.movRegImm32 r13, 0
     x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
   __us_test:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
   whilehdr:
-    x64.cmpRegReg rax, rcx
+    x64.cmpRegReg rcx, rdx
     x64.jcc greaterEqual, whileexit
   __im_load#25:
-    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
   trycont#8:
-    x64.leaRegRegReg r13, r13, rsi
-    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp whilehdr
   whileexit:
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc above, __im_load#22
   __im_slow:
     x64.movRegReg rcx, r12
+    x64.storeSlotReg slot0, rax
     x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#9
   tryerr#10:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#11
   __im_load#22:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegReg r8, rcx
   tryok#9:
-    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r8
   trycont#11:
-    x64.cmpRegImm32 r13, 9
-    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 9
+    x64.movRegImm32 rax, 0
     x64.jcc notEqual, scmerge#13
   andrhs#12:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegImm32 rcx, 5
-    x64.setccReg equal, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 5
+    x64.setccReg equal, rax
   scmerge#13:
     x64.movRegImm32 rdx, 0
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, critsplit
   andrhs#14:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 rcx, 1
     x64.setccReg equal, rax
     x64.jmp scmerge#15
   critsplit:

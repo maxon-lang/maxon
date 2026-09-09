@@ -1,0 +1,145 @@
+// Test: a-cold-arm-that-runs-reloads-what-it-saved
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function walk(a WordArray, n Word) returns Word
+	var t = 0
+	var w = 1
+	for i in 0 upto n 'each'
+		w = w * 3 + i
+		t = t + (try a.get(i) otherwise 99) + w
+	end 'each'
+	return t
+end 'walk'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i)
+	end 'seed'
+	if walk(a, n: 9) != 37285 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 96
+    x64.movRegReg rax, rcx
+    x64.movRegReg rsi, rdx
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdi, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r9, [rax + 8]
+    x64.loadRegBaseDisp.word64 r10, [rax + 0]
+  forhdr:
+    x64.cmpRegReg rdi, rsi
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.imulRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegReg r11, rcx, rdi
+  __rc_ok:
+    x64.cmpRegReg rdi, r9
+    x64.jcc below, __im_load
+  __im_slow:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rdx, rdi
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot2, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot4, r9
+    x64.storeSlotReg slot5, r10
+    x64.storeSlotReg slot6, r11
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r10
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot4
+    x64.loadRegSlot r10, slot5
+    x64.loadRegSlot r11, slot6
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 rcx, 99
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 rcx, [r10 + rdi*8 + 0]
+  trycont:
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.leaRegRegReg r8, rcx, r11
+  forstep:
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.movRegReg rcx, r11
+    x64.jmp forhdr
+  forexit:
+    x64.epilogue 96
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect walk
+    x64.cmpRegImm32 r8, 37285
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

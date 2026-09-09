@@ -58,7 +58,7 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 320
+    x64.prologue 288
     x64.storeSlotReg slot25, xmm6
     x64.storeSlotReg slot26, xmm7
     x64.storeSlotReg slot27, xmm8
@@ -291,33 +291,9 @@ func @main {
     x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
-    x64.jmp matchcont
+    x64.jmp __rc_ok
   ternaryfalse:
     x64.movRegImm32 r8, 99
-  matchcont:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at confined-reuse-defs-past-the-callee-saved-half-float.test:51: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.loadRegSlot xmm6, slot25
-    x64.loadRegSlot xmm7, slot26
-    x64.loadRegSlot xmm8, slot27
-    x64.loadRegSlot xmm9, slot28
-    x64.loadRegSlot xmm10, slot29
-    x64.loadRegSlot xmm11, slot30
-    x64.loadRegSlot xmm12, slot31
-    x64.loadRegSlot xmm13, slot32
-    x64.loadRegSlot xmm14, slot33
-    x64.loadRegSlot xmm15, slot34
-    x64.epilogue 320
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
     x64.loadRegSlot xmm6, slot25
     x64.loadRegSlot xmm7, slot26
@@ -329,7 +305,7 @@ func @main {
     x64.loadRegSlot xmm13, slot32
     x64.loadRegSlot xmm14, slot33
     x64.loadRegSlot xmm15, slot34
-    x64.epilogue 320
+    x64.epilogue 288
     x64.popReg rbp
     x64.ret
 }

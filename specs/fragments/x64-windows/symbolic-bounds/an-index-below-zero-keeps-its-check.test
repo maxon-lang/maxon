@@ -34,9 +34,8 @@ func @lastOr {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
+    x64.prologue 48
+    x64.movRegReg r8, rdx
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.leaRegRegImm32 rdx, rax, -1
     x64.cmpRegImm32 rdx, 0
@@ -45,8 +44,7 @@ func @lastOr {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-index-below-zero-keeps-its-check.test:7: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
   __rc_ok:
@@ -54,19 +52,20 @@ func @lastOr {
     x64.cmpRegReg rdx, rax
     x64.jcc below, __im_load
   __im_slow:
+    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegReg r8, rbx
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
+    x64.jmp tryok
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+  tryok:
     x64.movRegReg r8, rax
   trycont:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }

@@ -1,0 +1,525 @@
+// Test: a-versioned-loop-keeps-its-registers
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function rotateAll(current WordArray, count WordArray, n Word) returns Word
+	var t = 0
+	for i in 1 upto n 'each'
+		let c = try count.get(i) otherwise panic("rotateAll: i < n <= count.count()")
+		try count.set(i, value: c + 1) otherwise panic("rotateAll: i < n <= count.count()")
+		let v = try current.get(i - 1) otherwise panic("rotateAll: i - 1 < n <= current.count()")
+		try current.set(i, value: v) otherwise panic("rotateAll: i < n <= current.count()")
+		t = t + v + c
+	end 'each'
+	return t
+end 'rotateAll'
+
+function main() returns ExitCode
+	var current = WordArray.create()
+	var count = WordArray.create()
+	for i in 0 upto 6 'seed'
+		current.push(i + 10)
+		count.push(i)
+	end 'seed'
+	if rotateAll(current, count: count, n: 6) != 65 'sum'
+		return 1
+	end 'sum'
+	if (try current.get(5) otherwise -1) != 10 'rotated'
+		return 2
+	end 'rotated'
+	if (try count.get(5) otherwise -1) != 6 'counted'
+		return 3
+	end 'counted'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @rotateAll {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rsi, rcx
+    x64.movRegReg rdi, rdx
+    x64.movRegReg r8, rax
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 r10, 1
+  __us_test#68:
+    x64.loadRegBaseDisp.word64 r11, [rdi + 8]
+    x64.loadRegBaseDisp.word64 rax, [rdi + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#1
+  __us_test#69:
+    x64.loadRegBaseDisp.word64 rbx, [rsi + 8]
+    x64.loadRegBaseDisp.word64 rax, [rsi + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#1
+  __us_test#70:
+    x64.loadRegBaseDisp.word64 r12, [rsi + 0]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, forhdr#1
+  __us_test#71:
+    x64.leaRegRegImm32 rax, r12, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#1
+  __us_test#72:
+    x64.loadRegBaseDisp.word64 r13, [rdi + 0]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, forhdr#1
+  __us_test#73:
+    x64.leaRegRegImm32 rax, r13, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#1
+  __us_test#74:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 40]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, forhdr#1
+  __us_test#75:
+    x64.loadRegBaseDisp.word64 rax, [rdi + 40]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, forhdr#39
+  forhdr#1:
+    x64.cmpRegReg r10, r8
+    x64.jcc greaterEqual, critsplit#77
+  __rc_ok#13:
+    x64.loadRegBaseDisp.word64 rax, [rdi + 8]
+    x64.cmpRegReg r10, rax
+    x64.jcc below, __im_load#23
+  __im_slow#22:
+    x64.movRegReg rcx, rdi
+    x64.movRegReg rdx, r10
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.callDirect __managed_get
+    x64.movRegReg r11, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  __im_load#23:
+    x64.loadRegBaseDisp.word64 rax, [rdi + 0]
+    x64.loadRegBaseIndexScale.word64 r11, [rax + r10*8 + 0]
+  tryok#5:
+    x64.leaRegRegImm32 rax, r11, 1
+  __rc_ok#15:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#25
+  __im_bounds#26:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.cmpRegReg r10, rcx
+    x64.jcc aboveEqual, __im_slow#25
+  __im_buffer#27:
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#25
+  __im_viewed#28:
+    x64.leaRegRegImm32 rdx, rcx, -24
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, __im_store#29
+  __im_slow#25:
+    x64.movRegReg rcx, rdi
+    x64.movRegReg rdx, r10
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-versioned-loop-keeps-its-registers.test:9: rotateAll: i < n <= count.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_store#29:
+    x64.storeBaseIndexScaleReg.word64 [rcx + r10*8 + 0], rax
+  tryok#7:
+    x64.leaRegRegImm32 rdx, r10, -1
+  __rc_ok#17:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc below, __im_load#32
+  __im_slow#31:
+    x64.movRegReg rcx, rsi
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#10
+    x64.jmp __rc_ok#19
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
+    x64.loadRegBaseIndexScale.word64 rbx, [rax + rdx*8 + 0]
+  __rc_ok#19:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow#34
+  __im_bounds#35:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
+    x64.cmpRegReg r10, rax
+    x64.jcc aboveEqual, __im_slow#34
+  __im_buffer#36:
+    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#34
+  __im_viewed#37:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store#38
+  __im_slow#34:
+    x64.movRegReg rcx, rsi
+    x64.movRegReg rdx, r10
+    x64.movRegReg rax, rbx
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr#12
+    x64.jmp tryok#11
+  __im_store#38:
+    x64.storeBaseIndexScaleReg.word64 [rax + r10*8 + 0], rbx
+  tryok#11:
+    x64.leaRegRegReg rax, r9, rbx
+    x64.leaRegRegReg r9, rax, r11
+  forstep#3:
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp forhdr#1
+  critsplit#77:
+    x64.movRegReg r8, r9
+    x64.jmp forexit
+  forhdr#39:
+    x64.cmpRegReg r10, r8
+    x64.jcc greaterEqual, critsplit#82
+  __rc_ok#66:
+    x64.cmpRegReg r10, r11
+    x64.jcc below, __im_load#65
+  __im_slow#64:
+    x64.movRegReg rcx, rdi
+    x64.movRegReg rdx, r10
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_get
+    x64.movRegReg r14, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#62
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-versioned-loop-keeps-its-registers.test:8: rotateAll: i < n <= count.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_load#65:
+    x64.loadRegBaseIndexScale.word64 r14, [r13 + r10*8 + 0]
+  tryok#62:
+    x64.leaRegRegImm32 rax, r14, 1
+  __im_store#57:
+    x64.storeBaseIndexScaleReg.word64 [r13 + r10*8 + 0], rax
+  tryok#54:
+    x64.leaRegRegImm32 rdx, r10, -1
+  __rc_ok#53:
+    x64.cmpRegReg rdx, rbx
+    x64.jcc below, __im_load#52
+  __im_slow#51:
+    x64.movRegReg rcx, rsi
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_get
+    x64.movRegReg r15, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_bounds#47
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-versioned-loop-keeps-its-registers.test:10: rotateAll: i - 1 < n <= current.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_load#52:
+    x64.loadRegBaseIndexScale.word64 r15, [r12 + rdx*8 + 0]
+  __im_bounds#47:
+    x64.cmpRegReg r10, rbx
+    x64.jcc below, __im_store#44
+  __im_slow#43:
+    x64.movRegReg rcx, rsi
+    x64.movRegReg rdx, r10
+    x64.movRegReg rax, r15
+    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot1, rdi
+    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot4, r10
+    x64.storeSlotReg slot5, r11
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdi, slot1
+    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot r10, slot4
+    x64.loadRegSlot r11, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, tryok#41
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-versioned-loop-keeps-its-registers.test:11: rotateAll: i < n <= current.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_store#44:
+    x64.storeBaseIndexScaleReg.word64 [r12 + r10*8 + 0], r15
+  tryok#41:
+    x64.leaRegRegReg rax, r9, r15
+    x64.leaRegRegReg r9, rax, r14
+  forstep#40:
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp forhdr#39
+  critsplit#82:
+    x64.movRegReg r8, r9
+  forexit:
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+  forhdr:
+    x64.cmpRegImm32 r13, 6
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.leaRegRegImm32 rdx, r13, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rax, 6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect rotateAll
+    x64.cmpRegImm32 r8, 65
+    x64.jcc equal, ifcont#6
+  sum:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 rdx, 5
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 5
+    x64.jcc above, __im_load#19
+  __im_slow#18:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, rotated
+    x64.jmp tryok#7
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 40
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
+  tryok#7:
+    x64.cmpRegImm32 r8, 10
+    x64.jcc equal, ifcont#11
+  rotated:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#11:
+    x64.movRegImm32 rdx, 5
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 5
+    x64.jcc above, __im_load#22
+  __im_slow#21:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, counted
+    x64.jmp tryok#12
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 40
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
+  tryok#12:
+    x64.cmpRegImm32 r8, 6
+    x64.jcc equal, ifcont#16
+  counted:
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

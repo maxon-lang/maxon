@@ -3563,8 +3563,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
-
+		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxRegCount(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -3943,11 +3942,11 @@ end 'nonSweptForbidOf'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS this op's transient
 // register (see `addOpTransientPressure`).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 
 	// This also fills `buf` with the op's operands, which everything below reads.
-	let clobberMask = opClobberMask(op, buf: buf, opFacts: opFacts)
+	let clobberMask = opClobberMask(op, heat: heat, buf: buf, opFacts: opFacts)
 
 	// Read the op's transient BEFORE the backward step mutates `liveRow` — it still holds the
 	// live-AFTER set here, which is where both "does the reuse input outlive the op?" and "is this
@@ -3985,10 +3984,10 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	end 'eachClass'
 end 'stepBackwardOverOp'
 
-// Every register `op` WRITES without being a virtual def: its implicit-def mask (a call's 9
-// caller-saved plus all 16 XMMs, an `idiv`'s RAX/RDX) plus each PHYSICAL def operand (an argument
-// pre-move's `mov argReg, v`). A value live ACROSS the op must avoid every one of them, which is
-// exactly what `forbidden` accumulates.
+// Every register `op` WRITES without being a virtual def that a value live ACROSS the op must avoid:
+// its CONFINING implicit-def mask (a call's 9 caller-saved plus all 16 XMMs, an `idiv`'s RAX/RDX —
+// nothing for a call in a cold block, see `confiningImplicitDefsOf`) plus each PHYSICAL def operand
+// (an argument pre-move's `mov argReg, v`). This is exactly what `forbidden` accumulates.
 //
 // ⚠ IT IS ONE FUNCTION BECAUSE IT IS ONE FACT. The liveness sweep folds this mask into `forbidden`;
 // the splitter asks the same question in the other direction — "would a reload spanning this op be
@@ -3997,10 +3996,26 @@ end 'stepBackwardOverOp'
 // them — which is a value the driver re-picks for ever, not a wrong answer any test would notice.
 //
 // `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
-export function opClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
+export function opClobberMask(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
-	return opFacts.implicitDefsOf(op) or physicalDefMask(buf)
+	return confiningImplicitDefsOf(op, heat: heat, opFacts: opFacts) or physicalDefMask(buf)
 end 'opClobberMask'
+
+// The implicit defs of `op` that CONFINE a value live across it — its `implicitDefs`, except that a
+// call in a cold block confines nothing: the colorer brackets every caller-saved register it finds live
+// across such a call with a save before it and a reload after it (`ColdCallBracketPlan`), so the
+// clobber is paid where the call is rather than by the colouring of the hot path around it.
+//
+// ⚠ ONE HOME, read by the liveness sweep, the pressure index's per-op clobber, the splitter's run
+// boundaries and its fixed-register tie-break. The op's `implicitDefs` metadata is unchanged and every
+// consistency assert over it still holds; only its effect on confinement is gated, and gated here.
+export function confiningImplicitDefsOf(op TargetOp, heat BlockHeat, opFacts OpVariantFacts) returns RegMask
+	if heat == BlockHeat.cold and opFacts.isCallOf(op) 'bracketedNotConfined'
+		return 0
+	end 'bracketedNotConfined'
+
+	return opFacts.implicitDefsOf(op)
+end 'confiningImplicitDefsOf'
 
 // The registers `buf`'s operands write BY NAME rather than by allocation — every PHYSICAL def (a
 // call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`). It is the
@@ -4430,18 +4445,19 @@ export type OpVariantFacts
 	var implicitDefs as RegMaskColumn
 	var implicitUses as RegMaskColumn
 	var slotRole as OpSlotRoleColumn
-
+	var isCall as BoolArray
 	// Has this variant been seen? A parallel flag rather than an out-of-band value in the columns
 	// above: 0 is a legitimate implicit mask (every op but a call and `idiv` has one), so no mask can
 	// mean "not derived yet".
 	var known as BoolArray
 
 	export static function create() returns OpVariantFacts
-		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), known: BoolArray.create()}
+		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), isCall: BoolArray.create(), known: BoolArray.create()}
 		let variantCount = TargetOp.unionCases.allCases.count() as ElementIndex
 		facts.implicitDefs.growFilled(variantCount, value: 0)
 		facts.implicitUses.growFilled(variantCount, value: 0)
 		facts.slotRole.growFilled(variantCount, value: OpSlotRole.touchesNoSlot)
+		facts.isCall.growFilled(variantCount, value: false)
 		facts.known.growFilled(variantCount, value: false)
 		return facts
 	end 'create'
@@ -4451,6 +4467,12 @@ export type OpVariantFacts
 	export function implicitDefsOf(op TargetOp) returns RegMask
 		return try self.implicitDefs.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitDefsOf: implicitDefs.get OOB — `create` sizes every column to the whole union")
 	end 'implicitDefsOf'
+
+	// Is `op` a call, in the dialect's own sense (`TargetOpMeta.isCall`) — the ops whose implicit defs
+	// are the calling convention's rather than the instruction's.
+	export function isCallOf(op TargetOp) returns bool
+		return try self.isCall.get(self.learn(op)) otherwise panic("OpVariantFacts.isCallOf: isCall.get OOB — `create` sizes every column to the whole union")
+	end 'isCallOf'
 
 	// Registers `op` READS without naming them as an explicit operand — `ret`'s R8, an `idiv`'s
 	// RAX/RDX; 0 for every other op.
@@ -4469,7 +4491,6 @@ export type OpVariantFacts
 		let variant = op.ordinal as TargetOpVariant
 
 		let derived = try self.known.get(variant) otherwise panic("OpVariantFacts.learn: known.get OOB at variant {variant} — `create` sizes every column to the whole union")
-
 		if derived 'alreadyDerived'
 			if VerifyOpVariantFacts 'checkAgainstTheOpItself'
 				self.verifyAgainst(op, variant: variant)
@@ -4481,15 +4502,21 @@ export type OpVariantFacts
 		try self.implicitDefs.set(variant, value: op.rawValue.implicitDefs) otherwise panic("OpVariantFacts.learn: implicitDefs.set OOB at variant {variant}")
 		try self.implicitUses.set(variant, value: op.rawValue.implicitUses) otherwise panic("OpVariantFacts.learn: implicitUses.set OOB at variant {variant}")
 		try self.slotRole.set(variant, value: deriveSlotRole(op)) otherwise panic("OpVariantFacts.learn: slotRole.set OOB at variant {variant}")
+		try self.isCall.set(variant, value: op.rawValue.isCall) otherwise panic("OpVariantFacts.learn: isCall.set OOB at variant {variant}")
 		try self.known.set(variant, value: true) otherwise panic("OpVariantFacts.learn: known.set OOB at variant {variant}")
 		return variant
 	end 'learn'
 
-	// VERIFY MODE's whole body: re-derive all three facts from the op in hand and compare them against
+	// VERIFY MODE's whole body: re-derive all four facts from the op in hand and compare them against
 	// what this variant's entry holds. See `VerifyOpVariantFacts`.
 	function verifyAgainst(op TargetOp, variant TargetOpVariant)
 		requireMaskUnchanged(try self.implicitDefs.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitDefs.get OOB at variant {variant}"), reread: op.rawValue.implicitDefs, field: "implicitDefs", variant: variant)
 		requireMaskUnchanged(try self.implicitUses.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitUses.get OOB at variant {variant}"), reread: op.rawValue.implicitUses, field: "implicitUses", variant: variant)
+
+		let memoCall = try self.isCall.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: isCall.get OOB at variant {variant}")
+		if memoCall != op.rawValue.isCall 'callDiverged'
+			panic("OpVariantFacts: variant {variant} memoized isCall {memoCall} but this op reads {op.rawValue.isCall} — the memo's premise is that a variant's metadata is a property of the CASE, and it is not")
+		end 'callDiverged'
 
 		let memoRole = try self.slotRole.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: slotRole.get OOB at variant {variant}")
 		let rederivedRole = deriveSlotRole(op)
@@ -4513,7 +4540,7 @@ end 'requireMaskUnchanged'
 // from the op it was asked about and compared, on every lookup; a divergence PANICS at the op that
 // caused it.
 //
-// It exists because the memo rests on ONE premise — that these three facts depend on an op's CASE and
+// It exists because the memo rests on ONE premise — that these four facts depend on an op's CASE and
 // on nothing else — and a premise that fails does not fail a test. A variant whose real clobber mask
 // differed from the first instance's would hand a value a caller-saved register across a call, and the
 // program would miscompile silently, in a way no spec test is obliged to notice. The premise is
