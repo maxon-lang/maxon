@@ -12,10 +12,10 @@
 # notes and the marketplace tab are then four renderings of one source, and cannot come to disagree
 # about what shipped.
 #
-# ⚠ **IT WRITES TWO FILES IN ONE COMMIT.** The blog post announces THIS release and is never touched
-# again; the changelog page carries EVERY release and is rewritten each time. One is a dated feed
-# entry, the other is a reference — a reader wanting "what changed in 0.1.1" and a reader wanting "has
-# the thing I need landed yet" are asking different questions.
+# ⚠ **IT WRITES THREE FILES IN ONE COMMIT, AND THEY ARE THREE DIFFERENT JOBS.** The blog post
+# announces THIS release and is never touched again; the changelog page carries EVERY release and is
+# rewritten each time; `src/version.ts` is what the download links are built from, so a release that
+# skipped it would leave every download button pointing at the previous release's filenames.
 #
 # Usage:
 #   scripts/announce.sh <version> [--web-dir=<path>] [--dry-run]
@@ -32,6 +32,7 @@ cd "$repo_root"
 ReleasesUrl="https://github.com/maxon-lang/maxon/releases"
 BlogSubdir="src/content/docs/blog"
 ChangelogPagePath="src/content/docs/docs/changelog.md"
+VersionModulePath="src/version.ts"
 ChangelogFile="CHANGELOG.md"
 WebDefaultBranch="main"
 
@@ -161,6 +162,17 @@ post="$blog_dir/maxon-${version//./-}.md"
 page="$web_dir/$ChangelogPagePath"
 [ -d "$(dirname "$page")" ] || { warn "'$(dirname "$page")' does not exist; nothing announced"; exit 1; }
 
+# ⛔ **THE SITE NAMES THE RELEASED VERSION IN ITS DOWNLOAD LINKS, and a stale one is a 404 rather
+# than a cosmetic slip.** The asset filenames carry the version, so a release that updated the blog
+# and not this leaves every download button pointing at the PREVIOUS release's files. The site keeps
+# it in one module for exactly this reason; the docs pages name no version at all.
+version_module="$web_dir/$VersionModulePath"
+[ -f "$version_module" ] || { warn "'$version_module' does not exist; nothing announced"; exit 1; }
+grep -q "RELEASE_VERSION = '" "$version_module" || {
+	warn "'$version_module' does not declare RELEASE_VERSION in the expected shape; nothing announced"
+	exit 1
+}
+
 post_markdown > "$post"
 echo "announce.sh: wrote $post"
 
@@ -169,10 +181,13 @@ echo "announce.sh: wrote $post"
 changelog_page > "$page"
 echo "announce.sh: wrote $page"
 
+sed -i "s/RELEASE_VERSION = '[^']*'/RELEASE_VERSION = '$version'/" "$version_module"
+echo "announce.sh: set RELEASE_VERSION to $version in $version_module"
+
 # ⚠ ONLY THESE TWO FILES ARE STAGED, so an unrelated change sitting in that repository's working tree
 # is never swept into this commit.
-git -C "$web_dir" add "$post" "$page" || { warn "could not stage the post and the changelog page"; exit 1; }
-git -C "$web_dir" commit -q -m "blog: announce Maxon $version, and update the changelog" || {
+git -C "$web_dir" add "$post" "$page" "$version_module" || { warn "could not stage the release's website changes"; exit 1; }
+git -C "$web_dir" commit -q -m "release: Maxon $version — announcement, changelog and download links" || {
 	warn "could not commit in $web_dir"
 	exit 1
 }
