@@ -533,10 +533,11 @@ scheduled and answering, at the point in the program where the overflow has just
 
 ⚠ **A LOST THREAD IS NOW A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND THE BOUNDED SPIN IS GONE WITH THE
 GLOBAL.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
-green thread in the program is parked and none can become ready — which is `__sched_find_runnable`'s
-`nothingLeft` arm, **exit 92**, in 35 ms at one processor (`services.a-blocking-cycle-through-an-indirect-call-aborts`
-measures both that code and its timing). `<!-- procs: 1 -->` is what keeps that unconditional: the same case
-measures the detector BIMODAL above one M.
+green thread in the program is parked and none can become ready — which is `__gt_drive_until`'s
+`nothingLeft` arm, **exit 92**, within one poll of the last machine declaring itself quiescent
+(`services.a-blocking-cycle-through-an-indirect-call-aborts` measures that code at four processors). The
+case's `<!-- procs: 1 -->` pins the ring arithmetic above, not the detector, which decides under
+`__sched_lock` at every count.
 
 ⭐ **SEEN RED.** With `__sched_runq_put`'s overflow no longer publishing the thread that overflowed it —
 one line, the `emitSchedEnqueueLocked` at `moveDone` — exactly one thread is lost, which is the arithmetic:

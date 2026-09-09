@@ -4037,32 +4037,20 @@ ring is real all the same: `main` awaits `A.kick`, `A.kick` awaits `B.work` thro
 
 ⇒ **the refusal a static check cannot make, the runtime must.** Every green thread in the program is
 parked and none of them can ever become ready, which is exactly the `nothingLeft` arm of
-`__sched_find_runnable` — `RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The
-answer is a diagnosis rather than a hang: a wedged process tells you nothing and costs a 120 s harness
-timeout; a 92 names the condition.
+`__gt_drive_until` — `RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The answer is
+a diagnosis rather than a hang: a wedged process tells you nothing and costs a 120 s harness timeout; a 92
+names the condition.
 
-⭐⭐ **THE EXIT CODE WAS TAKEN EMPIRICALLY, AND THIS CASE WAS THE ACCEPTANCE FOR A DEFECT THAT IS NOW
-CLOSED (A1).** At `MAXON_MAX_PROCS=1` it has always aborted promptly — one M, so the moment it finds both
-queues empty it is provably alone. **Above one processor it was BIMODAL**, measured on one box, one binary:
-
-| | exit 92 | hung |
-|---|---|---|
-| `MAXON_MAX_PROCS=1` | 5 of 5, <320 ms | — |
-| `MAXON_MAX_PROCS=4` | 6 of 11, 87-313 ms | **5 of 11** — still running at a 10 s cap |
-
-⇒ **it was not "slower to notice", it was a coin flip between noticing in 90 ms and never noticing** — the
-flip being purely whether a worker M happened to be spawned at all. The `aloneHere` test that guarded the arm
-read `__sched_active_workers`, a count of Ms that have ENTERED the worker loop and not yet left it, which
-never falls while the program runs. **A deadlock detector that only fires when there is one processor stops
-being a detector on the day the default stops being one processor**, which is the same day this case's
-`procs: 4` starts being honoured.
-
-✅ **CLOSED: the arm now asks whether any M is EXECUTING, not whether any M is ALIVE.** `POffQuiesced` is
-published by every M that has established there is nothing runnable anywhere, `__sched_progress` is bumped by
-every publish so a quiet M that has not yet had its look still counts as live, and the state must be
-confirmed `DeadlockConfirmPolls` times before the abort fires. **MEASURED after the fix: exit 92 on 20 of 20
-direct runs at `procs: 4`, 327-530 ms**, and 92 at 1, 2, 8 and 16 processors. `SchedRuntime.POffQuiesced`,
-`POffQuiescedGen` and `POffQuietPolls` carry the three terms and the false abort each one closes.
+⭐⭐ **THE DETECTOR DECIDES UNDER `__sched_lock`, SO THE ANSWER IS THE SAME AT EVERY PROCESSOR COUNT.** Every
+blocked party in this program is a DRIVER — an await runs `__gt_drive_until` on the calling M — and a driver
+that finds nothing to run and nothing to wait on declares itself quiescent under the scheduler lock, takes a
+final look at every source it consulted in the same hold, and then walks the roster of machines. A machine
+that is executing, or that declared before the latest publish or completion (`__sched_progress`), answers
+*"not yet"* and the driver parks for one poll, still declared; a roster with nobody executing is exit 92 at
+once. At one processor the roster is the driver alone; at four it is `main` and the two workers hosting
+`A.kick` and `B.work`, all three declared. `SchedRuntime.MOffQuiesced` and `MOffQuiescedGen` carry the two
+words and the interleavings each one closes; `procs: 4` is what makes this case exercise the roster rather
+than the solitary machine.
 
 ⚠ The closure clones the handle it forwards (`m.clone()`): a message parameter arrives BORROWED and a
 send MOVES, so the handle crossing into `B.work` has to be one this frame owns — E3138 otherwise, which

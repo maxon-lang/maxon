@@ -206,12 +206,13 @@ export enum MultiMSharing
 	// `__sched_find_runnable`'s 61-schedule fairness peek (`frfairpeek`); and its global-batch peek
 	// (`frglobalpeek`).
 	//
-	// ⭐⭐ **AND TWO MORE READ `__sched_allm`, ADDED BY W213-C2, WHOSE ARGUMENT IS A DIFFERENT ONE AND IS
-	// THEREFORE WRITTEN DOWN SEPARATELY**: `__sched_any_executing`'s census and `__sched_stop_workers`'s join
-	// walk. They are not arm-picks — they are WALKS, and a stale answer is not what makes them safe. What
-	// makes them safe is that the list is APPEND-ONLY over never-freed structs and that
+	// ⭐⭐ **AND THREE WALK `__sched_allm` UNLOCKED, WHOSE ARGUMENT IS A DIFFERENT ONE AND IS THEREFORE WRITTEN
+	// DOWN SEPARATELY**: `__sched_stop_workers`'s join walk, `__sched_wake_parked_drivers` and
+	// `__sched_retake`. They are not arm-picks — they are WALKS, and a stale answer is not what makes them
+	// safe. What makes them safe is that the list is APPEND-ONLY over never-freed structs and that
 	// `emitSchedListPushLocked` publishes a node's link BEFORE the head, so a walker can never reach a node
-	// whose link is unwritten. `SchedAllMLabel` carries it in full.
+	// whose link is unwritten. `SchedAllMLabel` carries it in full. The census (`__sched_any_executing`)
+	// walks the same list under the lock.
 	//
 	// A further site is not covered by any of this: it needs its own argument at its own line, or the lock.
 	underSchedLock
@@ -486,115 +487,52 @@ let MOffSpinning = MOffNextP + (PointerSlotBytes as ByteOffset)
 let MSpinningFree = 0 as ParsedInt
 let MSpinningHeld = 1 as ParsedInt
 
-// ⭐⭐⭐ **"THIS M HAS NOTHING TO RUN AND IS WAITING FOR SOMEBODY ELSE TO PRODUCE SOMETHING" — the word that
-// turns the deadlock detector from a single-M one into a real one (A1), on the party it was always about.**
+// ⭐⭐⭐ **"THIS M HAS LOOKED EVERYWHERE AND FOUND NOTHING TO RUN" — the deadlock detector's per-machine
+// word.** `MQuiescedRunning` is the resting state. `MQuiescedWaiting` is published only by
+// `emitSchedDeclareQuiescent`, under `__sched_lock`, by a machine that then takes its final look at every
+// shared source in the same hold; `__sched_any_executing` walks the roster under that lock. So a machine read
+// as WAITING is one that really concluded nothing was runnable against a world that could not move, and the
+// generation beside it says whether anything has been published since.
 //
-// ⛔⛔ **AND MOVING IT OFF THE P IS NOT A TIDYING: THERE IT WOULD HAVE BECOME A WRONG ANSWER THIS RUNG.** A P
-// released into `__sched_pidle` carries whatever its last M published. The next M to take that P inherits the
-// flag — which the old worker exit had to scrub by hand, and which it could only scrub on the paths it knew
-// about. Worse in the other direction: an M parked with no P has no P to publish through at all, so the
-// census would have counted it as absent rather than as quiescent. The two states a deadlock detector must
-// tell apart are exactly those.
+// ⛔ **IT IS NOT THE IDLE STATE.** Idle means *"any publish may wake me"* and is membership of `__sched_midle`
+// plus a processor delivered through `MOffNextP`. A driver in `awaitOtherM` holds its processor and waits on
+// ONE named condition that no published work satisfies, so it is never on that list; `MOffParkedDriverOwner`
+// answers *"waiting for whose answer?"*. Three questions about the same instant, three words.
 //
-// ⛔⛔ **THE DETECTOR IT REPLACES ASKED WHETHER AN M WAS *ALIVE*, AND A PARKED M IS ALIVE.** The
-// `nothingLeft` arm of `__gt_drive_until` used to abort only when `__sched_active_workers <= 1`, which is a
-// count of Ms that have ENTERED the worker loop and not yet left it — a number that never falls while the
-// program runs. **MEASURED on `services/a-blocking-cycle-through-an-indirect-call-aborts`, one binary:** at
-// `MAXON_MAX_PROCS=1` it aborts 92 in under 320 ms every time, and at `MAXON_MAX_PROCS=4` it aborts on some
-// runs and **HANGS FOR EVER on others** (5 of 11 still running at a 10 s cap) — the coin flip being purely
-// whether a worker M happened to be spawned at all. *A deadlock detector that only fires at one processor
-// stops being a detector on the day the default stops being one processor.*
+// ⭐ **IT LIVES ON THE M, NOT THE P.** A processor on `__sched_pidle` carries whatever its last machine
+// published, and a machine parked with no processor could not publish through one at all — and *"parked
+// with nothing to do"* is exactly the state the census exists to count.
 //
-// ⭐⭐ **THE DISTINCTION IT DRAWS IS *EXECUTING*, NOT *ALIVE*, AND THAT IS NOT THE SAME AS "RUNNING A GREEN
-// THREAD".** The obvious cure — count the Ms that have context-switched into a green thread — does not work
-// here, and the reason is `__gt_drive_until`'s own shape: an **awaiting green thread does not park**. Its
-// await calls the driver ON ITS OWN STACK, so its M is still inside `emitGtRunOne`'s context switch with
-// `M->currentGt` naming it, for as long as the await lasts. In the cycle above all three Ms are "running a
-// green thread" and none of them can ever finish. The property that actually separates the two states is the
-// one this word carries: **has this M concluded, this pass, that there is nothing runnable anywhere?**
-//
-// ⛔ **IT IS NOT THE IDLE STATE AND MUST NOT BE FOLDED INTO IT.** Being idle means *"I have no work and any
-// PUBLISH may wake me"*, and it is answered by membership of `__sched_midle` plus a processor delivered
-// through `MOffNextP`. A driver in `awaitOtherM` holds its processor and is waiting on ONE named condition
-// that no published work satisfies, so joining that list would send it a wakeup it cannot act on and a
-// processor it cannot take. `MOffParkedDriverOwner` is the third word, for the third question — *"is this
-// machine a driver waiting for a named answer, and for whose?"* — and the three are separate because *"is
-// this machine wakeable"*, *"is it waiting for one answer"* and *"has it concluded there is nothing runnable
-// anywhere"* are three different questions about the same instant.
-//
-// ⚠ **IT IS STICKY ACROSS THE POLL, WHICH IS WHAT MAKES THE READ DETERMINISTIC RATHER THAN A COIN FLIP.**
-// It is set when a driver reaches `otherMs` (or a worker reaches its park) and cleared ONLY where that M
-// finds something to do — `run`/`haveWork` — or leaves the loop — `done`/`exitBlock`. A cleared-and-reset
-// flag around the 1 ms poll alone would leave every reader racing the microseconds each M spends polling,
-// and three Ms polling in a cycle could in principle never observe each other quiescent at once. Sticky, a
-// deadlocked M's flag goes to 1 and STAYS 1, because the only two things that clear it are the two things a
-// deadlocked M can never reach.
-//
-// ⚠ **A STALE 1 CANNOT CAUSE A SPURIOUS ABORT, AND THAT IS THE DIRECTION THAT MATTERS.** An M blocked in
-// `procInfinite`/`sleepwait`/`ioBounded` may still carry a 1 from an earlier pass — but the three conditions
-// that put it there (`__gt_proc_count`, `__gt_timer_earliest`, `__io_pending`) are GLOBAL words, read fresh
-// at the top of every netpoll, so no other M can reach `otherMs` at all while one of them is non-zero. A
-// stale 0, conversely, only DELAYS an abort by one poll.
+// ⚠ **THE SPAN OF WAITING IS EXACTLY [the locked declare, the return of the wait declared for].** Every road
+// out of a park clears the word before the machine searches again, so a machine that steals a green thread
+// is counted as executing from the moment it looks; a stale WAITING on a machine holding work is the one
+// reading that would accuse a live program.
 //
 // A per-M word rather than a `.data` counter, for `POffStealCount`'s reason (a `.data` slot shows up in the
-// `data {` section of every green-thread golden) and for a better one: a global count needs a per-party bit
-// to stay idempotent anyway, and the bit alone answers the question with nothing to drift against.
-// ⚠ **NOT EXPORTED, AND NEITHER ARE ITS TWO STATES — the writers go through `emitSchedSetQuiesced`.** This
-// is the opposite call from `MOffCurrentGt`'s, and the reason is the number of sites: `currentGt` has ONE
-// writer, while this word is written at THIRTEEN (six in this file's worker loop, seven in `GtRuntime`'s
-// driver), and thirteen copies of `emitStoreField(…, MOffQuiesced, emitConst(…))` is one fact written
-// thirteen times. The door takes the state as a named constant so a site says WHICH it means.
+// `data {` section of every green-thread golden) and because a global count would need a per-party bit to
+// stay idempotent anyway. ⚠ Not exported, nor its two states: the writers are the two doors below
+// `buildSchedWorkerLoop`.
 let MOffQuiesced = MOffSpinning + (PointerSlotBytes as ByteOffset)
 let MQuiescedRunning = 0 as ParsedInt
 let MQuiescedWaiting = 1 as ParsedInt
 
-// ⭐⭐⭐ **THE VALUE OF `__sched_progress` THIS M SAW WHEN IT WENT QUIET — the second half of the detector,
-// and the half whose absence produced a MEASURED FALSE ABORT (A1).**
-//
-// ⛔⛔ **"NO M IS EXECUTING" IS NOT "NOTHING CAN RUN", AND THE COUNTEREXAMPLE IS A COROUTINE.** A coroutine
-// is published to its OWNER's queue and can be driven by exactly one party: a driver running on that owner.
-// So when a timer fires on M-a and wakes a coroutine belonging to green thread S, the work becomes runnable
-// **and no walk of the roster can see it** — S's M will find it on its very next poll, but until then S's M
-// is still carrying the `MQuiescedWaiting` it published one pass ago. Every machine reads quiescent, nothing
-// reads executing, and the program is accused of a deadlock it is one millisecond from leaving.
-//
-// **MEASURED, one service, forty `kick`s whose handler awaits a 50 ms coroutine:** exit **92 on 4 of 4 runs
-// at `MAXON_MAX_PROCS=4`**, 42 at 1, and **42 in ~2.6 s on 3 of 3 with the abort disabled** — a program that
-// was making perfectly ordinary progress.
-//
-// ⇒ **THE CURE IS A GENERATION, NOT A LONGER TIMEOUT.** `__sched_progress` counts publishes. An M records it
-// at the instant it goes quiet, and `__sched_any_executing` counts a quiescent machine as EXECUTING while its
-// recorded generation is behind the current one — *"this M went quiet before that work appeared and has not
-// had its look yet"*. A deadlocked system publishes nothing, so every M converges on the same generation
-// and the abort fires; a live one keeps bumping it, and every bump buys every quiet M another look.
+// ⭐⭐⭐ **THE VALUE OF `__sched_progress` THIS M RECORDED WHEN IT DECLARED — the half of the detector that
+// sees what a roster walk cannot.** *"No M is executing"* is not *"nothing can run"*: a coroutine is
+// published to its OWNER's queue and driven by that owner's chain of drivers alone, and a completed promise
+// is visible only to the driver it answers. Both bump `__sched_progress`, and `__sched_any_executing` counts
+// a quiescent machine as EXECUTING while its recorded generation is behind the current one — it went quiet
+// before that work appeared and has not had its look. A deadlocked program publishes nothing, so every
+// machine converges on one generation and the census answers 0.
 let MOffQuiescedGen = MOffQuiesced + (PointerSlotBytes as ByteOffset)
 
-// ⭐⭐⭐ **HOW MANY CONSECUTIVE POLLS THIS M HAS CONFIRMED THE SAME DEAD STATE — the detector's CORROBORATION
-// term (A1).** Reset to 0 whenever this M stops being quiescent; bumped once per `otherMs` poll that finds
-// nobody executing AND the progress generation unmoved. The abort fires only at `DeadlockConfirmPolls`.
-//
-// ⛔⛔ **A SAMPLED CENSUS NEEDS CORROBORATION, AND GO'S DOES NOT — that difference is the whole reason this
-// word exists.** Go's `checkdead` holds `sched.lock` across its entire census, so its answer is a snapshot of
-// a world that cannot move underneath it. the compiler's netpoll cannot: it may not hold `__sched_lock` across a
-// blocking wait (`MailboxRuntime.maxon:17-23` — the lock is recursive on the wrong identity), so every M
-// reads the other Ms' published state while they are free to change it. A single such reading is evidence,
-// not proof. Requiring the same reading `DeadlockConfirmPolls` times, with a poll between them and with ANY
-// publish anywhere resetting the count, is what turns evidence into proof — and it fails in the SAFE
-// direction: an unattributed transient makes the abort late, never wrong.
-//
-// Both follow their flag onto the M for the flag's reason: a generation and a confirmation count are facts
-// about a thread's own run of looking, and a processor sitting on `__sched_pidle` has looked at nothing.
-let MOffQuietPolls = MOffQuiescedGen + (PointerSlotBytes as ByteOffset)
-
-// ⭐⭐⭐ **THE ROSTER'S LINK — Go's `allm`, and the structure the paragraph at the head of this section says
-// C1 did without.** Every M pushes itself here at birth, under `__sched_lock`, and is never removed: an M is
-// never freed, so the roster is append-only and a walker needs no snapshot.
+// ⭐⭐⭐ **THE ROSTER'S LINK — Go's `allm`.** Every M pushes itself here at birth, under `__sched_lock`, and
+// is never removed: an M is never freed, so the roster is append-only and a walker needs no snapshot.
 //
 // ⚠ **IT IS A SEPARATE LINK FROM `MOffIdleNext` AND THE TWO MAY NOT SHARE ONE WORD.** An M on the idle list
 // is also on the roster — the teardown must signal and join a PARKED worker, which is the common case at
 // exit — so a single link would splice one list into the other the first time an M parked. Two lists, two
 // links, and each door names the one it threads.
-let MOffAllNext = MOffQuietPolls + (PointerSlotBytes as ByteOffset)
+let MOffAllNext = MOffQuiescedGen + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐ **`__sched_midle`'s LINK — Go's `m.schedlink` as `mput`/`mget` use it.** Threaded and unthreaded only
 // under `__sched_lock`, by `emitSchedListPushLocked` at `wjoin` and `emitSchedListPopLocked` inside
@@ -1277,12 +1215,12 @@ let SchedProcsLabel = b"__sched_procs"
 // (`emitSchedAllocM`, under the lock, by whoever creates it) and nothing ever removes one, because an M is
 // never freed.
 //
-// ⭐ **ITS THREE READERS ARE THE THREE WALKS THAT USED TO ASK `__sched_procs` AND CAN NO LONGER.** The
-// teardown's signal and its join (`__sched_stop_workers`) and the deadlock census
-// (`__sched_any_executing`). All three ask a question about MACHINES — *"wake every thread"*, *"wait for
-// every thread"*, *"is any thread still doing something"* — which the P array answered only for as long as
-// a P and an M were the same thing. A worker parked with no processor is on no P at all, so each of those
-// walks would have silently stopped seeing it.
+// ⭐ **ITS READERS ARE THE WALKS THAT ASK A QUESTION ABOUT MACHINES**: the teardown's signal and its join
+// (`__sched_stop_workers`), the deadlock census (`__sched_any_executing`), the completer's wake
+// (`__sched_wake_parked_drivers`) and sysmon's retake (`__sched_retake`) — *"wake every thread"*, *"wait for
+// every thread"*, *"is any thread still doing something"*, *"whose driver is parked here"*, *"who is blocked
+// in a kernel call"*. The P array cannot answer any of them: a worker parked with no processor is on no P
+// at all.
 //
 // ⭐ **A LIST AND NOT AN ARRAY, AND THAT IS THE POINT OF THE RUNG.** `SchedRuntime.maxon`'s two scans used
 // to start at index 1 bounded by `numProcs`, which capped the M count at the P count — measured as
@@ -1290,20 +1228,19 @@ let SchedProcsLabel = b"__sched_procs"
 // start an M **while the blocked M still exists**, which is more Ms than Ps, and an array sized by the
 // processor count is precisely the shape that cannot express it.
 //
-// ⭐⭐ **`underSchedLock` NAMES THE WRITES, AND THE TWO WALKS ARE THE CLASS'S ENUMERATED EXCEPTION — see
-// `MultiMSharing.underSchedLock`, which requires exactly that of any unlocked reader.** Every push is under
-// the lock. `__sched_any_executing` walks the list with no lock at all, and `__sched_stop_workers`'s JOIN
-// walk deliberately releases first (it may not block on a thread while holding a lock that thread needs).
+// ⭐⭐ **`underSchedLock` NAMES THE WRITES; THREE WALKS READ IT UNLOCKED AND ARE THE CLASS'S ENUMERATED
+// EXCEPTION — see `MultiMSharing.underSchedLock`.** Every push is under the lock. `__sched_stop_workers`'s
+// JOIN walk deliberately releases first (it may not block on a thread while holding a lock that thread
+// needs), `__sched_wake_parked_drivers` walks from a completer that holds no lock, and `__sched_retake`
+// walks from sysmon, which holds none. The census, `__sched_any_executing`, walks it under the lock.
 //
-// ⛔ **BOTH ARE SOUND, AND THE PROPERTY THEY REST ON IS A PROPERTY OF THE PUSH RATHER THAN OF THE WALK.**
-// `emitSchedListPushLocked` stores the joining machine's `MOffAllNext` BEFORE it stores the head, so a
-// walker that reads the head can only ever reach a machine whose own link word is already published; and
-// the list is APPEND-ONLY over structs that are never freed, so a cursor cannot be led off it by a
-// concurrent mutation. The only thing a racing `__sched_startm` can do is prepend a machine the walk does
-// not see — safe in both directions: the census then fails to count a machine as EXECUTING (and the publish
-// that created it has already bumped `__sched_progress`, which answers 1 on its own), and the teardown
-// cannot race a machine into existence at all, because `__sched_startm` reads the shutdown flag under the
-// same lock that sets it.
+// ⛔ **THE UNLOCKED WALKS ARE SOUND BY A PROPERTY OF THE PUSH, NOT OF THE WALK.** `emitSchedListPushLocked`
+// stores the joining machine's `MOffAllNext` BEFORE it stores the head, so a walker that reads the head can
+// only ever reach a machine whose own link word is already published; and the list is APPEND-ONLY over
+// structs that are never freed, so a cursor cannot be led off it by a concurrent mutation. The only thing a
+// racing `__sched_startm` can do is prepend a machine the walk does not see, and the teardown cannot race a
+// machine into existence at all, because `__sched_startm` reads the shutdown flag under the same lock that
+// sets it.
 let SchedAllMLabel = b"__sched_allm"
 
 // ⭐⭐⭐ **THE IDLE-M LIST — Go's `sched.midle`, threaded through `MOffIdleNext` (W213-C2).** An M with
@@ -1367,47 +1304,12 @@ export let SchedNumProcsLabel = b"__sched_num_procs"
 // that **LIVE is not the question** — a parked M is live. That arm now asks `__sched_any_executing`, and
 // this word is back to answering only the high-water mark's own question. The self-compile's E3092 is what
 // noticed; see `MOffQuiesced`.
-// ⭐⭐ **HOW MANY TIMES ANYTHING HAS BEEN MADE RUNNABLE — the deadlock detector's liveness term (A1).**
-// Monotone, bumped once per publish by `emitSchedNoteProgress`. It is never read for its VALUE, only for
-// whether it has CHANGED since a given M went quiet, which is why it may wrap without meaning anything:
-// two readings taken 2^64 publishes apart comparing equal is not a state this process can reach.
-// `MOffQuiescedGen` carries what it is for and the false abort that its absence produced.
+// ⭐⭐ **HOW MANY TIMES ANYTHING HAS BEEN MADE RUNNABLE — the deadlock detector's liveness term.** Monotone,
+// bumped by `emitSchedNoteProgress` at every publish and at every completion. It is never read for its
+// VALUE, only for whether it has CHANGED since a given M declared, which is why it may wrap without meaning
+// anything: two readings taken 2^64 publishes apart comparing equal is not a state this process can reach.
+// `MOffQuiescedGen` carries what it is for.
 let SchedProgressLabel = b"__sched_progress"
-
-// ⭐⭐ **HOW MANY CONSECUTIVE POLLS MUST AGREE BEFORE A DEADLOCK IS DECLARED — MEASURED, NOT CHOSEN (A1).**
-// `MOffQuietPolls` argues why one reading cannot be trusted; this is the number that makes the argument a
-// gate, and it was bisected against a program that goes quiet TRANSIENTLY and one that is genuinely dead.
-//
-// **THE LADDER, same box, same binary, `MAXON_MAX_PROCS=4`** — the live program is one service taking forty
-// `kick`s whose handler awaits a 50 ms coroutine (it reads 92 on 4 of 4 with NO confirmation term at all);
-// the dead one is `services/a-blocking-cycle-through-an-indirect-call-aborts`:
-//
-// | polls | the live program | the real deadlock |
-// |-------|------------------|-------------------|
-// | 1     | **92, 4 of 4** — accused while working | 92, prompt |
-// | 4     | 42, 6 of 6 | 92 in 133-141 ms |
-// | 8     | 42, 6 of 6 | 92 in 200-207 ms |
-// | 16    | 42, 6 of 6 | 92 in 327-530 ms |
-// | 1000  | 42, 8 of 8 | 92 in ~15.7 s |
-//
-// ⇒ **the transient is under FOUR polls, and 16 is that with a 4x margin.** The cost of the margin is the
-// only thing it buys against — how long a genuinely wedged program takes to say so — and ~330 ms is the same
-// order as the 35 ms this arm took at one processor before the term existed, against a harness timeout of
-// 120 s. The margin is deliberately generous because the two errors are not symmetric: a late abort costs a
-// third of a second, and an early one kills a correct program.
-//
-// ⚠ **A POLL IS NOT A MILLISECOND, AND THE TABLE IS THE ONLY HONEST UNIT.** `OtherWorkerPollMs` is 1, but
-// Windows' `Sleep(1)` returns on the scheduler's tick — the readings above work out at ~35 ms per poll — so
-// this constant may not be reasoned about as a duration. Re-bisect it if the poll changes.
-//
-// ✅ **THAT INSTRUCTION WAS TRIGGERED AT W219 AND DISCHARGED WITHOUT A RE-BISECT, BY KEEPING THE POLL.**
-// W219 made the driver's blind waits interruptible, which would have let any `osSetEvent` for this machine
-// return the corroboration's wait in microseconds — sixteen consecutive quiet polls in no time at all, i.e.
-// exit 92 on live programs, the direction the table above calls unacceptable. So the not-proved edge does NOT
-// take the park: `GtRuntime`'s `confirmWait` keeps the plain `osSleepMs` and states why nothing could signal
-// it there anyway (no machine executing, no timer, no child, no read in flight — no party exists that could).
-// ⇒ **the poll this number was bisected against is unchanged, and the 16 still means what the table says.**
-let DeadlockConfirmPolls = 16 as ParsedInt
 
 let SchedActiveWorkersLabel = b"__sched_active_workers"
 export let SchedMaxActiveWorkersLabel = b"__sched_max_active_workers"
@@ -1531,9 +1433,8 @@ let SysmonRetakeAfterNs = 10 * 1000 * 1000 as ParsedInt
 // geometrically to a 10 ms cap. The compiler starts at **1 ms** because a millisecond is the finest interval
 // `osSleepMs` can EXPRESS — the op takes its argument in milliseconds on every lane it lowers on — so a
 // sub-millisecond ladder here would be three constants describing a resolution the op does not carry. What a
-// lane then rounds that up to is its own: Windows returns on the scheduler tick, which `DeadlockConfirmPolls`'
-// own note measures at ~35 ms in practice, while the POSIX lanes' `nanosleep`/`clock_nanosleep` honour it.
-// The back-off and the cap are Go's.
+// lane then rounds that up to is its own: Windows returns on the scheduler tick, ~15.6 ms, while the POSIX
+// lanes' `nanosleep`/`clock_nanosleep` honour it. The back-off and the cap are Go's.
 let SysmonMinPollMs = 1 as ParsedInt
 let SysmonMaxPollMs = 10 as ParsedInt
 
@@ -1858,24 +1759,18 @@ export let SchedEnterSyscallName = b"__sched_enter_syscall"
 export let SchedExitSyscallName = b"__sched_exit_syscall"
 
 // ⭐⭐ **`__sched_any_executing() -> 0|1` — "IS ANY M STILL DOING SOMETHING?", THE DEADLOCK DETECTOR'S ONE
-// QUESTION (A1).** It answers 1 as soon as it finds a P that is CLAIMED by an M (`PStatusActive`) whose M is
-// not quiesced — walking `__sched_allm`, not `__sched_procs`. See `MOffQuiesced` for what the flag means,
-// why it is not an idle flag, and why it is sticky.
+// QUESTION.** It answers 1 at the first machine on `__sched_allm` that is not `MQuiescedWaiting`, or whose
+// recorded generation is behind `__sched_progress`. See `MOffQuiesced` for what the flag means and
+// `MOffQuiescedGen` for the generation.
 //
-// ⛔⛔ **THE P ARRAY WAS THE ROSTER OF LIVE Ms UNTIL W213-C2 AND IS NOT ONE ANY MORE.** That sentence
-// rested on *"a worker claims P[i] and holds it for life, so `PStatusActive` and 'an M is on this P' are the
-// same fact"*. A parked machine now holds NO processor, so a walk of `__sched_procs` cannot see it at all —
-// it would read as ABSENT where the honest answer is QUIESCENT, which is the one distinction this function
-// exists to draw. It walks `__sched_allm` instead. What has NOT changed is why no COUNTER is consulted:
-// `__sched_active_workers` counts a parked machine as live and so cannot answer the question.
+// ⚠ **CALLED UNDER `__sched_lock`, BY A DRIVER THAT HAS JUST DECLARED ITSELF AND TAKEN ITS FINAL LOOK IN THE
+// SAME HOLD.** So the walk needs no "except me" arm — a solitary machine asks with itself declared and gets
+// 0, which is the single-processor abort derived rather than special-cased — and one reading is a snapshot:
+// every declare, every recorded generation and every non-M publisher's bump is written under the same lock.
 //
-// ⚠ **THE CALLER COUNTS ITSELF IN, DELIBERATELY.** `otherMs` sets its own P's flag BEFORE calling, so this
-// walk needs no "except me" arm: a solitary M asks the question with every active P quiesced and gets 0,
-// which is the abort, and that is exactly the single-M behaviour the arm had before.
-//
-// ⚠ It no longer walks the same array `__sched_steal_count` does, so the two share no addressing either: a
-// steal count is a per-PROCESSOR sum and this is a per-MACHINE any. The loop carries no accumulator and
-// leaves early on the first hit.
+// ⛔ **NO COUNTER CAN ANSWER IT.** `__sched_active_workers` counts a parked machine as live, and a walk of
+// `__sched_procs` cannot see a machine parked with no processor at all — it would read as ABSENT where the
+// honest answer is QUIESCENT, which is the one distinction this function exists to draw.
 export let SchedAnyExecutingName = b"__sched_any_executing"
 
 // ==========================================================================
@@ -3307,7 +3202,7 @@ end 'emitCasLost'
 // takes a thread, and that answers 0 to a racer exactly as it would to an empty queue. `MultiMSharing`'s
 // `underSchedLock` note enumerates the unlocked readers of this word by name.
 function emitSchedGlobalQueueIs(module StdModule, block IrBlock, pred StdCmpPred, ids ValueMinter) returns ValueId
-	let globalHead = emitLoadGlobalWord(module, block: block, label: GtRunQueueHeadLabel, ids: ids)
+	let globalHead = emitQueueLoadHead(module, block: block, ends: GtQueueEnds.globalLabels, ids: ids)
 	let noGlobalHead = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: globalHead, b: noGlobalHead, pred: pred, ids: ids)
 end 'emitSchedGlobalQueueIs'
@@ -4054,28 +3949,14 @@ end 'buildSchedPerProcSum'
 // ==========================================================================
 
 // The walk `SchedAnyExecutingName` describes: answer 1 at the first machine on `__sched_allm` that is not
-// quiesced; 0 if the walk completes without finding one.
+// quiesced, or that is quiesced behind the current generation; 0 if the walk completes without finding one.
 //
-// ⛔⛔ **IT WALKED `__sched_procs` UNTIL W213-C2, AND THAT WALK ANSWERS A DIFFERENT QUESTION NOW.** *"Is any
-// machine still doing something?"* was askable of the processor array only while `PStatusActive` and *"a
-// machine is here"* were the same fact. This rung breaks that in both directions: a machine parked with no
-// processor is on no P, so the old walk could not see it AT ALL — it would read as absent rather than as
-// quiescent, which is the one distinction a deadlock detector exists to draw — and a processor sitting on
-// `__sched_pidle` carries whatever opinion its last machine left on it. The census asks the machines now,
-// which is what it was always about; `MOffQuiesced` carries why the flag itself had to move.
-//
-// ⚠ **NEITHER LOAD IS ATOMIC AND NEITHER NEEDS TO BE.** Each is one aligned machine word written whole by
-// the machine it belongs to, so every value read is a value some machine really wrote; what a concurrent
-// transition costs is FRESHNESS. Freshness in the safe direction is all this needs — a stale "executing" only
-// delays the abort by one poll, and a stale "quiesced" cannot be produced by a machine that is about to make
-// progress, because the only things that clear the flag are the things such a machine is on its way to.
-//
-// ⚠ **THE WALK IS UNLOCKED OVER AN APPEND-ONLY LIST, WHICH IS THE ONE STRUCTURE THAT ALLOWS IT.** A machine
-// is never removed from `__sched_allm` and never freed, so a cursor cannot be led off the list by a
-// concurrent mutation; the only thing a racing `__sched_startm` can do is prepend a machine this walk does
-// not see. That is the safe direction twice over: an unseen machine is one this walk fails to count as
-// EXECUTING, and the publish that caused it to be created has already bumped `__sched_progress`, which makes
-// every quiet machine's recorded generation stale and answers 1 below on its own.
+// ⚠ **IT RUNS UNDER `__sched_lock`, WHICH IS WHAT MAKES ONE READING A SNAPSHOT.** Every declare and every
+// recorded generation is written under that lock (`emitSchedDeclareQuiescent`), and so is the bump made by
+// the one publisher that is not a machine (the IOCP completion thread, through `__gt_coro_enqueue`). A
+// machine's clear is a plain store, and a stale RUNNING only delays the abort by one poll — the safe
+// direction. `SchedAllMLabel` carries why the list itself needs no snapshot: it is append-only over structs
+// that are never freed.
 function buildSchedAnyExecuting(module StdModule)
 	var func = IrFunction.createFromStd(SchedAnyExecutingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -4108,10 +3989,8 @@ function buildSchedAnyExecuting(module StdModule)
 	let isRunning = emitCmp(module, block: loopBody, a: emitLoadField(module, block: loopBody, record: cursor, offset: MOffQuiesced, ids: ids), b: running, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(loopBody, op: StdOp.condBranch(isRunning, thenBlockId: foundBlock.id, elseBlockId: testGeneration.id))
 
-	// ⭐⭐ **A QUIET MACHINE THAT WENT QUIET BEFORE THE LATEST PUBLISH COUNTS AS EXECUTING (A1).** It has work
-	// it cannot yet know about — a coroutine on the queue of the green thread it drives is reachable by no
-	// other party and by no scan — so the honest answer is *"not finished looking"*, and it will clear its own
-	// flag on its next poll. `MOffQuiescedGen` carries the measured false abort this closes.
+	// A quiet machine whose recorded generation is behind counts as EXECUTING: it has work it cannot yet know
+	// about, and it will clear its own flag on its next look. `MOffQuiescedGen`.
 	let caughtUp = emitCmp(module, block: testGeneration, a: emitLoadField(module, block: testGeneration, record: cursor, offset: MOffQuiescedGen, ids: ids), b: currentGen, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(testGeneration, op: StdOp.condBranch(caughtUp, thenBlockId: nextMachine.id, elseBlockId: foundBlock.id))
 
@@ -4556,11 +4435,6 @@ function buildSchedWorkerLoop(module StdModule)
 
 	// Run it, on this M's own scheduler context. The GT's waiter is this M's inline scheduler GT, so when it
 	// completes or parks the trampoline switches straight back to the block below the switch.
-	//
-	// ⭐ **THIS M IS DEMONSTRABLY NOT QUIESCENT — it is holding a green thread — so the deadlock detector's
-	// flag is cleared here (A1).** Both roads into this block are "found work", which is exactly the event
-	// the flag's stickiness is defined against.
-	emitSchedSetQuiesced(module, block: haveWork, m: m, waiting: false, ids: ids)
 	let mainThread = emitFieldAddr(module, block: haveWork, record: m, offset: MOffMainThread, ids: ids)
 	emitGtRunOne(module, run: haveWork, handOff: handOff, g: runGt, selfGt: mainThread, m: m, continuation: loopTop, ids: ids)
 
@@ -4590,13 +4464,14 @@ function buildSchedWorkerLoop(module StdModule)
 	// IS WHAT COVERS IT** — a signal that lands there leaves the event signalled and the wait returns at
 	// once. `MOffParkEvent` states it; that is the same property Go's `note` has and the reason neither
 	// runtime needs a flag.
-	emitSchedSetQuiesced(module, block: park, m: m, waiting: true, ids: ids)
+	//
 	// ⭐⭐ **THE SPINNING CREDIT COMES BACK BEFORE THE LOCK IS TAKEN.** The decrement must precede the final
 	// look below, with a StoreLoad barrier between — the CAS inside the transition is one, and
 	// `EnterCriticalSection` is a second. The other order loses work submitted between the search and the
 	// decrement; `SchedSpinningLabel` carries the full dance.
 	emitSchedSpinningTransition(module, block: park, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	emitSchedLockEnter(module, block: park, ids: ids)
+	emitSchedDeclareQuiescent(module, block: park, m: m, ids: ids)
 	let releasing = emitLoadField(module, block: park, record: m, offset: MOffCurrentP, ids: ids)
 	module.setTerminator(park, op: StdOp.branch(drainHdr.id))
 
@@ -4707,8 +4582,8 @@ function buildSchedWorkerLoop(module StdModule)
 	// ⛔ It belongs in THIS block and not in `wregained`, which branches on whether the pop found anything —
 	// a store there would run on the empty arm too, through a null processor.
 	emitSchedPidleClaimLocked(module, block: parkResume, p: regained, ids: ids)
+	emitSchedClearQuiescent(module, block: parkResume, m: m, ids: ids)
 	emitSchedLockLeave(module, block: parkResume, ids: ids)
-	emitSchedSetQuiesced(module, block: parkResume, m: m, waiting: false, ids: ids)
 	emitSchedAdoptProc(module, block: parkResume, m: m, p: regained)
 	module.setTerminator(parkResume, op: StdOp.branch(loopTop.id))
 
@@ -4767,25 +4642,21 @@ function buildSchedWorkerLoop(module StdModule)
 	emitStoreField(module, block: afterWait, record: m, offset: MOffNextP, value: emitConst(module, block: afterWait, value: 0, ids: ids))
 	emitSchedMidleRemoveLocked(module, func: func, cur: afterWait, m: m, cont: poll, ids: ids)
 
-	// ⭐ **THE DEADLOCK FLAG COMES DOWN BEFORE THE POLLS, NOT AFTER (A1).** Both of them can PUBLISH — a
-	// fired timer and a reaped child each wake a thread — and a publisher that is still flagged
-	// `MQuiescedWaiting` is a machine doing work while advertising that it has none.
+	// ⭐ **THE DEADLOCK FLAG COMES DOWN INSIDE THE HOLD, BEFORE THE POLLS.** Both polls can PUBLISH — a fired
+	// timer and a reaped child each wake a thread — and a publisher still flagged `MQuiescedWaiting` is a
+	// machine doing work while advertising that it has none. Clearing before the release is what publishes
+	// the store to every later census.
 	//
-	// ⭐⭐ **A WORKER FIRES THE TIMERS AND REAPS THE CHILDREN TOO (SV1), AND IT DOES SO HOLDING NO PROCESSOR
-	// (W213-C2).** The two checks are polls, not blocks — the blocking waits belong to the netpoll in
-	// `__gt_drive_until`, which only a DRIVER reaches — but somebody has to run them, and before SV1 the only
-	// somebodies were P0's netpoll and `__gt_resched`'s poll arm. MEASURED at SV1: a green thread whose
-	// `sleep(1)` runs on a worker while `main` burns 400 ms in ORDINARY USER CODE measures its own wait as
-	// **6-11 ms** with these two calls and **400 ms** without them, 3 runs at each of `MAXON_MAX_PROCS` 2, 7
-	// and 12. `ParkTimeoutWithTimersMs` is what bounds that latency.
+	// ⭐⭐ **A WORKER FIRES THE TIMERS AND REAPS THE CHILDREN TOO, HOLDING NO PROCESSOR.** The two checks are
+	// polls, not blocks — the blocking waits belong to the netpoll in `__gt_drive_until`, which only a DRIVER
+	// reaches — but somebody has to run them while every driver is busy in ordinary user code, and
+	// `ParkTimeoutWithTimersMs` bounds that latency.
 	//
-	// ⚠⚠ **AND THIS IS THE PRODUCER FOR `emitSlabCurrentP`'s P-LESS-M ARM, WHICH W213-C1 COULD ONLY ARGUE
-	// ABOUT.** Anything these two allocate is allocated by a machine whose `M->currentP` is 0, so
-	// `SlabRuntime.emitSlabShardRow`'s `<= MspanOwningPNone` predicate routes it to the raw row under the
-	// slab's own lock. That arm was written for a handoff that did not exist yet; a timed park with no
-	// processor reaches it on every idle worker's 100 ms tick.
+	// ⚠⚠ **THIS IS THE PRODUCER FOR `emitSlabCurrentP`'s P-LESS-M ARM.** Anything these two allocate is
+	// allocated by a machine whose `M->currentP` is 0, so `SlabRuntime.emitSlabShardRow`'s
+	// `<= MspanOwningPNone` predicate routes it to the raw row under the slab's own lock.
+	emitSchedClearQuiescent(module, block: poll, m: m, ids: ids)
 	emitSchedLockLeave(module, block: poll, ids: ids)
-	emitSchedSetQuiesced(module, block: poll, m: m, waiting: false, ids: ids)
 	let workerNow = ids.mint()
 	module.appendOp(poll, op: StdOp.call(workerNow, callee: GtNowNsName, args: ValueIdArray.create()))
 	module.appendOp(poll, op: StdOp.call(ids.mint(), callee: GtTimerCheckName, args: argsOf(workerNow)))
@@ -4810,8 +4681,8 @@ function buildSchedWorkerLoop(module StdModule)
 	// the 100 ms safety net `ParkTimeoutIdleMs` exists for is the same code as the park itself rather than a
 	// second path that could drift from it. It re-enters holding the lock and holding no processor, which is
 	// `wparkcheck`'s precondition.
-	emitSchedSetQuiesced(module, block: parkAgain, m: m, waiting: true, ids: ids)
 	emitSchedLockEnter(module, block: parkAgain, ids: ids)
+	emitSchedDeclareQuiescent(module, block: parkAgain, m: m, ids: ids)
 	module.setTerminator(parkAgain, op: StdOp.branch(parkCheck.id))
 
 	// ⭐⭐⭐ **EXIT PUTS EVERY WORD THIS MACHINE PUBLISHED BACK DOWN, AND RELEASES THE PROCESSOR ONLY IF IT
@@ -4834,7 +4705,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// a bare `lock add` with no destination register.
 	let negOne = emitConst(module, block: exitBlock, value: -1, ids: ids)
 	_ = emitGlobalAccumulate(module, block: exitBlock, label: SchedActiveWorkersLabel, delta: negOne, multiM: true, ids: ids)
-	emitSchedSetQuiesced(module, block: exitBlock, m: m, waiting: false, ids: ids)
+	emitSchedClearQuiescent(module, block: exitBlock, m: m, ids: ids)
 	emitSchedSpinningTransition(module, block: exitBlock, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let exitProc = emitLoadField(module, block: exitBlock, record: m, offset: MOffCurrentP, ids: ids)
 	let exitZero = emitConst(module, block: exitBlock, value: 0, ids: ids)
@@ -4868,68 +4739,40 @@ function buildSchedWorkerLoop(module StdModule)
 	module.functions.push(func)
 end 'buildSchedWorkerLoop'
 
-// ⭐⭐⭐ **PUBLISH WHETHER THIS MACHINE HAS ANYTHING LEFT TO DO — the ONE door to `MOffQuiesced` (A1).**
-// See that field for what the word means, why it is not an idle flag, and why W213-C2 moved it off the P.
+// ⭐⭐⭐ **DECLARE THAT THIS MACHINE HAS LOOKED EVERYWHERE AND FOUND NOTHING — the one door to
+// `MQuiescedWaiting`.** See that field for what the word means and why it is not the idle state.
 //
-// ⛔⛔ **THE RULE, AND IT IS A RULE ABOUT *WHERE*, NOT ABOUT *WHAT*.** `MQuiescedWaiting` is published at
-// exactly the three points a machine has established there is nothing runnable anywhere, no timer, no parked
-// child and no read in flight — the driver's `otherMs`, the worker's `wpark`, and `wparkagain`, which is a
-// park that timed out and is going round again. `MQuiescedRunning` is published at **every** point either
-// loop finds work, leaves, or discovers a real wakeup source to wait on. Those are `run`/`haveWork` (found a
-// thread), `wresume` (took a processor back), `wpoll` (about to fire timers and reap children, both of which
-// PUBLISH), `done`/`exitBlock` (left the loop), and the netpoll's three non-`otherMs` dominators —
-// `timerDecide` (a timer exists, so this machine is about to fire it or sleep on it), `haveProcs` (a child is
-// parked) and `ioPending` (an overlapped read is in flight).
+// ⛔⛔ **THE CALLER HOLDS `__sched_lock` AND TAKES ITS FINAL LOOK IN THE SAME HOLD.** The census reads this
+// word under that lock, so a WAITING it sees is a conclusion reached against a world that could not move —
+// Go's `checkdead` decides at `mput` under `sched.lock` for the same reason. A machine that declared and then
+// looked without the lock could be counted quiescent while holding work it found in between. The callers are
+// `wpark`, `wparkagain` and `otherMs`; their final looks are `wparkcheck` and `finallook`, and each re-reads
+// every shared source the search before it consulted.
 //
-// ⛔ **THE NETPOLL ARMS ARE THE HALF THAT WAS MISSING, AND OMITTING THEM IS A *SPURIOUS ABORT* — MEASURED,
-// NOT PREDICTED.** The first cut of A1 cleared the flag only at `run` and `done`, reasoning that no other M
-// could reach `otherMs` while a timer or child was pending because those stores are global. That argument is
-// false in one direction: an M sitting in `sleepwait`, or one passing through `firenow` HAVING JUST
-// PUBLISHED a woken coroutine, still carried `MQuiescedWaiting` from an earlier pass — so a second machine
-// could see every machine quiesced while the first was making progress. **A twenty-round service program whose handlers
-// `await` a sleeping coroutine exited 92 on 3 of 3 runs at `MAXON_MAX_PROCS=4` and 42 at 1, and completes in
-// ~1.1 s with the abort disabled.** ⇒ a stale `MQuiescedWaiting` is the ONE direction that accuses an
-// innocent program, and every arm that is not `otherMs` must therefore take it down.
-//
-// ⚠ **WHAT SURVIVES IS THE STICKINESS THAT MATTERS.** In a REAL deadlock none of the clearing sites is
-// reachable — there is no timer, no child, no read, nothing runnable and the exit condition is unmet — so a
-// deadlocked M's flag goes to 1 and stays 1 across every poll, which is what makes the detector
-// deterministic rather than a race between three Ms' polling windows.
-export function emitSchedSetQuiesced(module StdModule, block IrBlock, m ValueId, waiting bool, ids ValueMinter)
-	// ⭐ **THE GENERATION IS RECORDED BEFORE THE FLAG GOES UP, AND THE ORDER IS THE POINT.** A scanner that
-	// sees `MQuiescedWaiting` must see a generation this machine really observed; recorded after, it could read
-	// flag beside a stale zero and count an M as caught-up that had not looked at all. On the clearing road
-	// the generation is left where it lies — nothing reads it while the flag is down.
-	if waiting 'recordWhatThisMHasSeen'
-		emitStoreField(module, block: block, record: m, offset: MOffQuiescedGen, value: emitLoadGlobalWord(module, block: block, label: SchedProgressLabel, ids: ids))
-	end 'recordWhatThisMHasSeen'
+// ⭐ **THE GENERATION IS RECORDED BESIDE THE FLAG.** A scanner that sees WAITING must see the generation this
+// machine really observed, so a publish after the declare leaves the machine STALE — counted as executing —
+// until it declares again. `MOffQuiescedGen`.
+export function emitSchedDeclareQuiescent(module StdModule, block IrBlock, m ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: m, offset: MOffQuiescedGen, value: emitLoadGlobalWord(module, block: block, label: SchedProgressLabel, ids: ids))
+	emitStoreField(module, block: block, record: m, offset: MOffQuiesced, value: emitConst(module, block: block, value: MQuiescedWaiting, ids: ids))
+end 'emitSchedDeclareQuiescent'
 
-	if not waiting 'aRunningMHasConfirmedNothing'
-		emitStoreField(module, block: block, record: m, offset: MOffQuietPolls, value: emitConst(module, block: block, value: 0, ids: ids))
-	end 'aRunningMHasConfirmedNothing'
+// ⭐⭐ **THIS MACHINE IS ABOUT TO LOOK FOR WORK, OR TO LEAVE — the one door to `MQuiescedRunning`.** A plain
+// store by the word's owner: a clear only ever moves the census toward *"somebody is executing"*, which is the
+// direction that delays an abort and never causes one. Its sites are every road out of a park, before the
+// search that follows (`driverParkDisarm`, `wpoll`, `wresume`); the driver's two roads out of its locked
+// look that do not park (`lookfound`, `nothingleft`), still under the lock so the release publishes the
+// store; and the worker's exit.
+export function emitSchedClearQuiescent(module StdModule, block IrBlock, m ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: m, offset: MOffQuiesced, value: emitConst(module, block: block, value: MQuiescedRunning, ids: ids))
+end 'emitSchedClearQuiescent'
 
-	let state = MQuiescedWaiting if waiting else MQuiescedRunning
-	emitStoreField(module, block: block, record: m, offset: MOffQuiesced, value: emitConst(module, block: block, value: state, ids: ids))
-end 'emitSchedSetQuiesced'
-
-// ⭐⭐ **COUNT ONE MORE CONFIRMATION OF THE DEAD STATE AND ANSWER "IS IT PROVED YET?" (A1).** Called from
-// `GtRuntime`'s `otherMs` only after `__sched_any_executing` has answered 0. See `MOffQuietPolls` for why a
-// single reading is not enough and why this errs late rather than wrongly.
-//
-// ⚠ **THE COUNTER IS PER-M AND PLAIN, WHICH IS THE HONEST CLASS FOR IT** — and W213-C2 is where *per-M*
-// stopped being a synonym for *per-P*. It is written only by the machine whose confirmation run it counts and
-// read only by that same machine, so there is nothing here for an atomic to serialise. What makes the count
-// MEAN something across machines is `__sched_progress`, which is atomic, and `MOffQuiesced`, which every
-// machine publishes for the others.
-export function emitSchedConfirmQuiet(module StdModule, cur IrBlock, m ValueId, ids ValueMinter) returns ValueId
-	let confirmed = emitBin(module, block: cur, a: emitLoadField(module, block: cur, record: m, offset: MOffQuietPolls, ids: ids), b: emitConst(module, block: cur, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: cur, record: m, offset: MOffQuietPolls, value: confirmed)
-	return emitCmp(module, block: cur, a: confirmed, b: emitConst(module, block: cur, value: DeadlockConfirmPolls, ids: ids), pred: StdCmpPred.ge, ids: ids)
-end 'emitSchedConfirmQuiet'
-
-// ⭐⭐ **"SOMETHING BECAME RUNNABLE" — the one bump of `__sched_progress` (A1).** Called at the entry of
-// every door that publishes a green thread or a coroutine, so that a quiet M's recorded generation goes
-// stale and `__sched_any_executing` gives it another look. See `MOffQuiescedGen`.
+// ⭐⭐ **"SOMETHING BECAME RUNNABLE" — the one bump of `__sched_progress`.** Called by every door that
+// publishes a green thread or a coroutine (`__sched_publish`, `__sched_publish_yield`,
+// `__sched_publish_locked`, `__gt_coro_enqueue`) and by the one door that completes a promise
+// (`__gt_runner_done`), so that a quiet M's recorded generation goes stale and `__sched_any_executing` counts
+// it as executing until it looks again. See `MOffQuiescedGen`. ⛔ A publish door that forgets this call is a
+// false abort waiting for the interleaving that reaches it; the detector has no second chance.
 //
 // ⚠ **A COROUTINE PUBLISHED THROUGH `__sched_publish_locked` BUMPS IT TWICE — once here and once inside
 // `__gt_coro_enqueue` — AND THAT IS DELIBERATELY NOT DEDUPLICATED.** The counter is never read for its value,
@@ -4938,20 +4781,11 @@ end 'emitSchedConfirmQuiet'
 // bump would mean reasoning about which of the two doors a given publish came through, and the green arm of
 // `__sched_publish_locked` reaches `__sched_runq_put`, which bumps nothing at all.
 //
-// ⚠ **IT IS AN ATOMIC ADD AND NOT A PLAIN ONE, and that is not over-caution.** Two Ms publish concurrently
-// on any program with a worker; a lost increment leaves two Ms' recorded generations agreeing with a
-// current value that a publish should have moved past, which is exactly the false abort this whole term
-// exists to prevent. It is one `lock xadd` on a path that has just taken a lock or done a CAS.
-//
-// ⚠ **AND IT GOES THROUGH `MmRuntime.emitGlobalAccumulate` NOW, WHERE IT USED TO SPELL THE TWO OPS BY HAND
-// (MC1).** The file header's audit item 2 claims every `.data` counter goes through that one door;
-// `__sched_nmspinning` arriving would have made this function's hand-spelled copy a second exception.
-//
-// ⛔ **AND IT WAS NOT THE ONLY ONE — MC1's FIRST CUT SAID IT WAS, WHICH IS THE MISTAKE WORTH RECORDING.**
-// `buildSchedWorkerLoop` spelled the SAME two ops by hand TWICE more, at its entry and its exit, both
-// stepping `__sched_active_workers`; this comment asserted item 2 was true one function away from two live
-// counterexamples. All three go through the door now, and the claim can be read as written. `multiM: true`
-// at every one of them, because every word involved is laid out only under `usesGt`.
+// ⚠ **IT IS AN ATOMIC ADD AND NOT A PLAIN ONE.** Two Ms publish concurrently on any program with a worker; a
+// lost increment leaves two Ms' recorded generations agreeing with a current value that a publish should
+// have moved past, which is exactly the false abort this term exists to prevent. It goes through
+// `MmRuntime.emitGlobalAccumulate`, the one door for every `.data` counter, with `multiM: true` because every
+// word involved is laid out only under `usesGt`.
 export function emitSchedNoteProgress(module StdModule, block IrBlock, ids ValueMinter)
 	_ = emitGlobalAccumulate(module, block: block, label: SchedProgressLabel, delta: emitConst(module, block: block, value: 1, ids: ids), multiM: true, ids: ids)
 end 'emitSchedNoteProgress'
@@ -5303,30 +5137,30 @@ end 'buildSchedHandoffP'
 // construction; there is no `preemptone` to port and no signal to deliver. `POffRunnext` carries what the
 // absence still costs — it is why a `runnext` slot cannot be taken on the throughput case alone.
 //
-// ⚠ **THE WALK IS UNLOCKED OVER AN APPEND-ONLY LIST, WHICH IS `__sched_any_executing`'s ARGUMENT EXACTLY.**
-// A machine is never removed from `__sched_allm` and never freed, so a cursor cannot be led off it;
-// `emitSchedListPushLocked` publishes a joining machine's link before the head, so no walker reaches a node
-// whose link is unwritten; and the only thing a racing `__sched_startm` can do is prepend a machine this pass
-// does not see — which is a machine that has not entered a kernel call yet and has nothing to retake.
+// ⚠ **THE WALK IS UNLOCKED, FOR `SchedAllMLabel`'s REASON.** A machine is never removed from `__sched_allm`
+// and never freed, so a cursor cannot be led off it; `emitSchedListPushLocked` publishes a joining
+// machine's link before the head, so no walker reaches a node whose link is unwritten; and the only thing a
+// racing `__sched_startm` can do is prepend a machine this pass does not see — which is a machine that has
+// not entered a kernel call yet and has nothing to retake.
 //
 // ⚠ **THERE IS NO DEADLOCK-CENSUS BRACKET HERE, WHERE GO BRACKETS THIS BODY IN `incidlelocked(±1)`.** Go's
 // `checkdead` counts IDLE LOCKED Ms, so a victim leaving its syscall and parking mid-handoff makes the count
-// reach the deadlock threshold. the compiler's census (`__sched_any_executing`) asks a different question — *"has this
-// MACHINE concluded there is nothing runnable anywhere?"* — and the victim of a retake answers NO throughout:
-// it is executing a green thread the whole time (`MQuiescedRunning`, cleared at the driver's `run` arm and at
-// `wrun`), and `__sched_syscall_regain` never publishes `MQuiescedWaiting` either. ⇒ **the state Go's bracket
-// exists to hide cannot be produced here**, and a bracket would be a guard over a case with no subject.
+// reach the deadlock threshold. The compiler's census (`__sched_any_executing`) asks a different question —
+// *"has this MACHINE concluded there is nothing runnable anywhere?"* — and the victim of a retake answers NO
+// throughout: `MQuiescedWaiting` is raised only by a locked declare at a park, a machine executing a green
+// thread cleared it on its road out of its last park, and `__sched_syscall_regain` never declares either.
+// ⇒ **the state Go's bracket exists to hide cannot be produced here**, and a bracket would be a guard over a
+// case with no subject.
 //
 // ⛔⛔ **BUT THAT ARGUMENT RESTS ON A FACT KEPT IN ANOTHER FILE, AND THIS IS WHERE IT IS WRITTEN DOWN: A
 // MACHINE WHOSE `MOffSyscallState` CARRIES `MSyscallInCall` IS NEVER `MQuiescedWaiting`.** It holds only because
-// the three imports a machine publishes `MQuiescedWaiting` in front of — `WaitForSingleObject`,
-// `WaitForMultipleObjects` and `Sleep`, the worker park and the driver park — are all `schedulerBound` in
-// `X64GtRuntime.gtShimSyscallClassOf` and therefore carry no bracket. **Reclassify any one of them
-// `blocking` and Go's trap arrives here for real**: sysmon would take a parked machine's processor, and that
-// machine already advertises `MQuiescedWaiting`, so the census would see nothing executing mid-handoff and
-// abort a live program with exit 92. That is a wrong answer with no compile error anywhere between the two
-// files, which is why the classification arm carries a pointer back to this paragraph rather than a second
-// copy of it.
+// the one import a machine declares `MQuiescedWaiting` in front of — `WaitForSingleObject`, the worker park
+// and the driver park — is `schedulerBound` in `X64GtRuntime.gtShimSyscallClassOf` and therefore carries no
+// bracket. **Reclassify it `blocking` and Go's trap arrives here for real**: sysmon would take a parked
+// machine's processor, and that machine already advertises `MQuiescedWaiting`, so the census would see
+// nothing executing mid-handoff and abort a live program with exit 92. That is a wrong answer with no compile
+// error anywhere between the two files, which is why the classification arm carries a pointer back to this
+// paragraph rather than a second copy of it.
 function buildSchedRetake(module StdModule)
 	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -5812,11 +5646,11 @@ end 'buildSchedSyscallRegain'
 // the P in any case** — a processor is released at every park and handed on, so a P-keyed slot would name
 // whichever machine happened to hold that processor rather than the one that armed it.
 //
-// ⚠ **THE WALK IS UNLOCKED, FOR `__sched_any_executing`'s REASON EXACTLY.** `__sched_allm` is append-only
-// over structs that are never freed, and `emitSchedListPushLocked` publishes a joining machine's link before
-// the head, so a cursor cannot be led off the list and cannot reach a node whose link is unwritten. The only
-// thing a racing `__sched_startm` can do is prepend a machine this walk does not see — and a brand-new
-// machine has an empty `MOffParkedDriverOwner`, so it is not a machine this walk was looking for.
+// ⚠ **THE WALK IS UNLOCKED, FOR `SchedAllMLabel`'s REASON.** `__sched_allm` is append-only over structs that
+// are never freed, and `emitSchedListPushLocked` publishes a joining machine's link before the head, so a
+// cursor cannot be led off the list and cannot reach a node whose link is unwritten. The only thing a racing
+// `__sched_startm` can do is prepend a machine this walk does not see — and a brand-new machine has an empty
+// `MOffParkedDriverOwner`, so it is not a machine this walk was looking for.
 //
 // ⚠ **IT DOES NOT STOP AT THE FIRST MATCH.** At most one machine can carry a given owner (a green thread runs
 // on one machine at a time, and its drivers are nested), so an early exit would save one comparison per

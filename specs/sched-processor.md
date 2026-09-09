@@ -36,7 +36,7 @@ blocked in a kernel call, would this field still be true of it?***
 | `systemStackSP` — its own 64 KB syscall stack | the deferred re-enqueue slots and the remote-free queue |
 | its inline scheduler green thread (Go's `g0`) | `status`, and its link on the idle-P list |
 | **its park event, and its place on the idle-M list** | |
-| **the spinning bit and the three deadlock words** | |
+| **the spinning bit and the two deadlock words** | |
 | **its OS thread handle, and its link on the roster** | |
 
 ⚠ **`M->currentP` IS THE FIELD THE SPLIT EXISTS TO CREATE.** *"This thread holds no processor"* is one load

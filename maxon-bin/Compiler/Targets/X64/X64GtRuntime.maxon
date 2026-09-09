@@ -753,9 +753,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// `__gt_timer_earliest` and by the park timeouts.
 		//
 		// ⛔⛔ **AND A SECOND, INDEPENDENT REASON THAT LIVES IN ANOTHER FILE: THE DEADLOCK CENSUS'S ARGUMENT FOR
-		// HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND THESE
-		// THREE ARMS ARE THE WHOLE OF WHY THAT IS TRUE.** A machine publishes `MQuiescedWaiting` immediately
-		// before parking, and it parks by calling one of these three. Move any of them to `blocking` and
+		// HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND THE
+		// `WaitForSingleObject` ARM IS THE WHOLE OF WHY THAT IS TRUE.** A machine declares `MQuiescedWaiting`
+		// immediately before parking, and both parks wait through this import. Move it to `blocking` and
 		// `__sysmon` can take a processor from a machine that already advertises quiescence, at which point
 		// `__sched_any_executing` sees nothing executing mid-handoff and aborts a live program with exit 92 —
 		// with no compile error between the two files. The argument itself is stated once, at
