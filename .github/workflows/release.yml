@@ -56,21 +56,19 @@ jobs:
             exit 1
           fi
 
-      # ⭐⭐ **THIS IS WHAT KEEPS `CHANGELOG.md` GENERATED.** "Do not edit by hand" enforces nothing on
-      # its own and would be violated within two releases; `--check` regenerates from history and
-      # byte-compares, so a hand-edit or a stale file fails here — before four runners spend twenty
-      # minutes each, which is the same reason the ref check above runs in this job.
-      #
-      # ⚠ `fetch-depth: 0` IS LOAD-BEARING. The default checkout is depth-1 and fetches no tags, and
-      # every question this asks is about tag topology.
       - uses: actions/checkout@v4
         if: steps.ref.outputs.publish == 'yes'
         with:
           fetch-depth: 0
 
-      - name: The committed changelog matches history
+      # ⭐⭐ **A RELEASE NOBODY WROTE AN ENTRY FOR MUST NOT SHIP.** `CHANGELOG.md` is written by hand,
+      # so its failure mode is not rot but absence — and the release notes, the maxon.dev post and the
+      # site's changelog page are all read out of it. Asking here means the answer arrives before four
+      # runners spend twenty minutes each, which is the same reason the ref check above is in this job.
+      # `release.sh --publish` asks again at the last moment.
+      - name: The changelog has an entry for this release
         if: steps.ref.outputs.publish == 'yes'
-        run: ./scripts/changelog.sh --check
+        run: ./scripts/changelog.sh --section="${GITHUB_REF_NAME#v}" >/dev/null
 
       # ⛔ **AN EXTENSION THAT CHANGED WITHOUT ITS VERSION BEING BUMPED FAILS AT THE LAST STEP OF A
       # RELEASE** — `vsce` refuses to republish a version, and by then the compiler is published and the

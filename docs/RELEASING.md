@@ -261,38 +261,38 @@ asset URL is live. Expect validation plus human review — days, and *after* the
 
 ## The changelog
 
-**`CHANGELOG.md` is generated from git history by `scripts/changelog.sh` and is never edited by
-hand.** A correction goes in `docs/changelog-overrides.txt`, which is committed beside it.
+**`CHANGELOG.md` is written by hand**, for people installing a compiler rather than changing one.
 
-⭐ **Inclusion is opt-out: every commit in the range appears.** That is deliberate — a change cannot
-be missed because nobody remembered to mention it, and the cost is that internal churn shows up until
-an override drops it. Reading the whole list once per release is the editorial pass, and it is the
-only one.
+⭐ **A commit subject is not a changelog entry.** MEASURED on `v0.1.0..HEAD`: 21 commits, of which
+about six mean anything to a reader — the rest are CI, spec goldens, docs and the release tooling
+itself. Generating the entry and then correcting it means rewriting seventeen lines of twenty-one,
+which is hand-writing with extra ceremony.
 
-There is **no `Changelog:` commit trailer**, on purpose. A trailer is only ever as right as the commit
-carrying it and cannot be fixed after a push — which is exactly the case the overrides file exists to
-serve.
+Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Added` / `### Changed` / `### Fixed` /
+`### Removed` beneath it. Write it at the cut, with the whole release in view, so related changes are
+described together rather than as one bullet each.
 
-| Override | Means |
-|---|---|
-| `commit: <exact subject>` | which commit this record is about. The key is the **subject**, because a rebase preserves messages and shas it does not. |
-| `text: <line>` | what the entry should say instead. The commit link is still appended. |
-| `drop: <reason>` | why this entry does not belong. The reason is required, never a bare flag. |
+```bash
+scripts/changelog.sh --commits-since
+```
 
-⛔ **An override naming no commit, or more than one, is refused.** A key that has gone stale would
-otherwise be an inert line whose failure mode is re-publishing the wording somebody corrected.
+lists what has landed since the last release. ⚠ **It is reference material, not a draft** — read it to
+write the entry; do not paste it into one.
 
-Between releases the committed file holds only versions that **have a tag** — regenerate it that way
-with `scripts/changelog.sh --released-only --write`. A `## 0.1.1` heading in a tree where v0.1.1 does
-not exist advertises a release nobody can download.
+**One file, four renderings.** `release.sh` puts the matching section at the top of the GitHub release
+notes; `announce.sh` puts it in the maxon.dev post and in the site's `/docs/changelog/` page. The
+words therefore exist once and cannot come to disagree about what shipped.
 
-**One source, three renderings.** `release.sh` puts the matching section at the top of the GitHub
-release notes (reading the committed file, not history, so what ships is byte-for-byte what was
-reviewed); `announce.sh` puts it in the maxon.dev post; and `--scope=extension` writes the extension's
-own `CHANGELOG.md`, which the marketplace renders as a tab.
+⛔ **A release with no entry does not ship.** `scripts/changelog.sh --section=<version>` refuses a
+version the file has no heading for. `release.yml`'s `guard` asks before any runner starts, and
+`release.sh --publish` asks again at the last moment — an authored file's failure mode is that nobody
+wrote it.
 
 ⚠ **A hand-written `dist/NOTES.md` replaces the whole body**, "What's new" included — that rule is
-unchanged. To alter only the wording of one entry, use the overrides file.
+unchanged.
+
+⚠ **The VS Code extension keeps its own `vscode-extension/CHANGELOG.md`**, also hand-written, on its
+own version line. The marketplace renders it as a tab.
 
 ---
 
@@ -320,25 +320,25 @@ which is why the tap needs its own.
 
 ## Cutting a release
 
-**From v0.1.1 onward**, regenerate the changelog, commit it, and tag THAT commit:
+**From v0.1.1 onward**, write the changelog entry, commit it, and tag THAT commit:
 
 ```bash
-scripts/changelog.sh --release=0.1.1 --write
+scripts/changelog.sh --commits-since
 ```
 
-Read the diff. Anything that reads wrong, or that has no business in release notes, gets a record in
-`docs/changelog-overrides.txt`; regenerate and read it again. Then:
+Read what landed, write the `## 0.1.1` section by hand — what a user would want to know, not what
+each commit did. Then:
 
 ```bash
-git add CHANGELOG.md docs/changelog-overrides.txt
+git add CHANGELOG.md
 git commit -m 'changelog: 0.1.1'
 git tag -a v0.1.1 -m 'Maxon v0.1.1'
 git push origin v0.1.1
 ```
 
-⛔ **The tag goes on the changelog commit, not before it.** The tag then contains the changelog, and
-`guard`'s `--check` — which is what keeps that file generated rather than hand-edited — can
-regenerate at the tag and get the same bytes back.
+⛔ **The tag goes on the changelog commit, not before it.** The release notes, the maxon.dev post and
+the site's changelog page are all read out of the file AT THAT TAG, so an entry written after it is
+an entry nothing ships.
 
 `release.yml` fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and `ubuntu-24.04-arm`,
 builds and **natively suite-tests** each target, builds the MSI from the x64-windows job's own
