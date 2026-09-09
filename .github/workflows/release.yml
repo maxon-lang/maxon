@@ -23,7 +23,41 @@ permissions:
   contents: write
 
 jobs:
+  # ⛔ A RELEASE IS IDENTIFIED BY THE REF, AND THIS IS WHERE THAT IS ENFORCED. `build.maxon` derives
+  # the version from git — a `vX.Y.Z` tag or a `release/X.Y.Z` branch, anything else `dev` — and
+  # `release.sh --publish` refuses a tag that disagrees with what the binary reports. Both checks are
+  # right and both are LATE: they fire after four runners have spent twenty minutes each building and
+  # suite-testing a compiler that was never going to be publishable, and the second one fires after
+  # the packaging it invalidates.
+  #
+  # ⚠ THE HOLE IT CLOSES IS `workflow_dispatch`, which can be aimed at ANY ref — `main` included.
+  # The tag trigger is only `v*`, which `vfoo` also matches, so a push is not self-validating either.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.ref.outputs.publish }}
+    steps:
+      # ⭐ A RELEASE BRANCH BUILDS BUT DOES NOT PUBLISH. It is where a release is rehearsed — four
+      # targets built and their suites run — and there is no tag to name the result, so publishing from
+      # one could only invent a version. The tag is what turns a rehearsal into a release.
+      - name: Refuse a ref that is not a release
+        id: ref
+        run: |
+          set -euo pipefail
+          ref='${{ github.ref }}'
+          if printf '%s' "$ref" | grep -Eq '^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "publish=yes" >> "$GITHUB_OUTPUT"
+            echo "$ref is a release tag: building and publishing."
+          elif printf '%s' "$ref" | grep -Eq '^refs/heads/release/[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "publish=no" >> "$GITHUB_OUTPUT"
+            echo "$ref is a release branch: building and testing, publishing nothing."
+          else
+            echo "::error title=Not a release ref::$ref is neither a vX.Y.Z tag nor a release/X.Y.Z branch. A compiler built here reports its version as 'dev', so there is nothing to release. Cut a release/X.Y.Z branch or push a vX.Y.Z tag."
+            exit 1
+          fi
+
   package:
+    needs: guard
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +168,7 @@ jobs:
   # the zip beside it — two builds of the same commit would be two different files and nothing would
   # say which one a user had.
   msi:
-    needs: package
+    needs: [guard, package]
     if: needs.package.outputs.seeded == 'yes'
     runs-on: windows-latest
     # ⛔ OIDC, SO THERE IS NO SIGNING CREDENTIAL TO LEAK. GitHub mints a token for this one run and
@@ -242,8 +276,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [package, msi]
-    if: needs.package.outputs.seeded == 'yes'
+    needs: [guard, package, msi]
+    # ⛔ THE TAG IS THE ONLY THING THAT PUBLISHES. A release-branch run has reached this point having
+    # built and tested everything, which is the whole point of rehearsing one — and stops here.
+    if: needs.package.outputs.seeded == 'yes' && needs.guard.outputs.publish == 'yes'
     runs-on: ubuntu-latest
     defaults:
       run:

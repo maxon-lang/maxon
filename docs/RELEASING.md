@@ -44,6 +44,12 @@ version bump reports the old one, and asking the artifact is the only way to not
 the ref, so there is no file to forget to edit — but packaging without the rebuild still publishes
 whatever the binary already said.
 
+`release.yml`'s **`guard` job refuses any other ref before a runner starts**, because the two checks
+that would otherwise catch it are both late: a compiler built on `main` reports `dev` and is refused
+by `--publish` only after four runners have each built and suite-tested it. A `release/X.Y.Z` branch
+**builds and tests but publishes nothing** — that is what rehearsing a release is — and only a
+`vX.Y.Z` tag publishes, since a branch has no tag and could only invent a version.
+
 ---
 
 ## ⛔ A runtime change takes two self-compiles
