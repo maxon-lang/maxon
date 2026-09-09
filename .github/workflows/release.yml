@@ -72,8 +72,18 @@ jobs:
           cp "$found" ".bootstrap/$(basename "$found")"
           chmod +x .bootstrap/*
 
+      # ⛔ THE SEED IS RUN DIRECTLY, because the slot is empty on a fresh checkout and `maxon build`
+      # needs a compiler before it can make one. `build.maxon` at the root says what gets built.
       - name: Build
-        run: ./scripts/build.sh
+        run: |
+          set -euo pipefail
+          # ⚠ AN `if`, NOT `[ … ] && …`. Under `set -e` a trailing test that answers FALSE is the
+          # step's exit status, so the non-Windows lanes would fail here having done nothing wrong.
+          seed=".bootstrap/maxon"
+          if [ -f "$seed.exe" ]; then
+            seed="$seed.exe"
+          fi
+          "./$seed" build
 
       # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
       # a claim, and this is the step that makes it a fact.

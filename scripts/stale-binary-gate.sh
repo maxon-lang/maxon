@@ -86,7 +86,7 @@ cd "$REPO_ROOT" || exit 2
 . "$REPO_ROOT/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 2; }
 EXE_EXT="$MAXON_EXE_EXT"
 
-THE COMPILER="$(maxon_compiler_path .)"
+MAXON="$(maxon_compiler_path .)"
 WORK="temp/stale-binary-gate"
 
 # The exit code the harness returns when it refuses. Distinct from 1 (a suite that RAN and had
@@ -133,15 +133,15 @@ FAILED=0
 pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n         saw: %s\n' "$1" "$2"; FAILED=1; }
 
-if [ ! -x "$THE COMPILER" ]; then
-	printf 'stale-binary-gate: %s is missing — build it first (`scripts/build.sh`)\n' "$THE COMPILER" >&2
+if [ ! -x "$MAXON" ]; then
+	printf 'stale-binary-gate: %s is missing — build it first (see CONTRIBUTING.md)\n' "$MAXON" >&2
 	exit 2
 fi
 
 # `find -newer` rather than `stat`, for the same reason `cross-target-gate.sh` uses it: GNU and BSD
 # `stat` take opposite flags for the one field wanted here, and `-newer` is one portable spelling of
 # the only question ever asked of it.
-is_newer_than_binary() { [ -n "$(find "$1" -newer "$THE COMPILER" -print -quit 2>/dev/null)" ]; }
+is_newer_than_binary() { [ -n "$(find "$1" -newer "$MAXON" -print -quit 2>/dev/null)" ]; }
 
 # `cp -p` keeps the mtime, so the backup is a timestamp reference as well as a content one — and
 # `touch -r` puts BOTH halves back. Nothing here edits the file's bytes.
@@ -237,7 +237,7 @@ run_suite() {
 summary() { grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/out.log" | tail -1; }
 
 printf '=== stale-binary gate ===\n'
-printf '  binary:   %s\n' "$THE COMPILER"
+printf '  binary:   %s\n' "$MAXON"
 printf '  victim:   %s (mtime only)\n' "$VICTIM"
 printf '  excluded: %s (mtime only)\n' "$EXCLUDED"
 printf '\n'
@@ -246,7 +246,7 @@ printf '\n'
 #
 # The negative control for everything below. A harness that refused unconditionally would score a
 # perfect green on the refusal checks alone, and this is what makes that impossible.
-code="$(run_suite "$THE COMPILER")"
+code="$(run_suite "$MAXON")"
 got="$(summary)"
 # The control DEFINES the expected summary for every later check (see FILTER). It can only assert what
 # is true of a clean run whatever the corpus holds: it exited 0, it printed a summary, and nothing in
@@ -264,11 +264,11 @@ fi
 
 # ---- CHECK 2: THIS IS THE GATE --------------------------------------------------------------------
 if ! age_forward "$VICTIM"; then
-	printf 'stale-binary-gate: could not make %s newer than %s\n' "$VICTIM" "$THE COMPILER" >&2
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$VICTIM" "$MAXON" >&2
 	exit 2
 fi
 
-code="$(run_suite "$THE COMPILER")"
+code="$(run_suite "$MAXON")"
 got="$(summary)"
 
 if [ "$code" = "$STALE_EXIT" ]; then
@@ -313,7 +313,7 @@ fi
 # walking UP from the executable's own path, so a runnable copy has to be inside the checkout.
 mkdir -p "$WORK/released" || exit 2
 RELEASED="$WORK/released/maxon-bin${EXE_EXT}"
-cp -p "$THE COMPILER" "$RELEASED" || exit 2
+cp -p "$MAXON" "$RELEASED" || exit 2
 
 code="$(run_suite "$RELEASED")"
 got="$(summary)"
@@ -331,7 +331,7 @@ fi
 # decides it — whether the project's sources are there to compare against.
 mkdir -p "$WORK/released-cache/.maxon" || exit 2
 RELEASED_CACHE="$WORK/released-cache/.maxon/maxon-bin${EXE_EXT}"
-cp -p "$THE COMPILER" "$RELEASED_CACHE" || exit 2
+cp -p "$MAXON" "$RELEASED_CACHE" || exit 2
 
 code="$(run_suite "$RELEASED_CACHE")"
 got="$(summary)"
@@ -351,11 +351,11 @@ fi
 restore_mtimes
 
 if ! age_forward "$EXCLUDED"; then
-	printf 'stale-binary-gate: could not make %s newer than %s\n' "$EXCLUDED" "$THE COMPILER" >&2
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$EXCLUDED" "$MAXON" >&2
 	exit 2
 fi
 
-code="$(run_suite "$THE COMPILER")"
+code="$(run_suite "$MAXON")"
 got="$(summary)"
 if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
 	pass "CHECK 5a: a newer source under a .maxonignore'd directory does not refuse ($got)"
@@ -374,11 +374,11 @@ restore_mtimes
 # a tree nobody had edited.
 : > "$SCRATCH" || exit 2
 if ! age_forward "$SCRATCH"; then
-	printf 'stale-binary-gate: could not make %s newer than %s\n' "$SCRATCH" "$THE COMPILER" >&2
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$SCRATCH" "$MAXON" >&2
 	exit 2
 fi
 
-code="$(run_suite "$THE COMPILER")"
+code="$(run_suite "$MAXON")"
 got="$(summary)"
 rm -f "$SCRATCH"
 
@@ -398,11 +398,11 @@ fi
 # sweep — because the exclusion under test is the SUFFIX and nothing else.
 : > "$TEST_SCRATCH" || exit 2
 if ! age_forward "$TEST_SCRATCH"; then
-	printf 'stale-binary-gate: could not make %s newer than %s\n' "$TEST_SCRATCH" "$THE COMPILER" >&2
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$TEST_SCRATCH" "$MAXON" >&2
 	exit 2
 fi
 
-code="$(run_suite "$THE COMPILER")"
+code="$(run_suite "$MAXON")"
 got="$(summary)"
 rm -f "$TEST_SCRATCH"
 
@@ -422,7 +422,7 @@ restore_mtimes
 if is_newer_than_binary "$VICTIM" || is_newer_than_binary "$EXCLUDED"; then
 	fail "CHECK 6: the restored tree runs again" "a touched file's mtime did not come back — 'touch -r' left it newer than the binary"
 else
-	code="$(run_suite "$THE COMPILER")"
+	code="$(run_suite "$MAXON")"
 	got="$(summary)"
 	if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
 		pass "CHECK 6: the restored tree runs again ($got)"
@@ -438,11 +438,11 @@ fi
 # with the ladder's smallest possible shape because the refusal happens before a single rung is
 # generated; if it ever stops refusing, this check turns into a real (slow) scale run and says so.
 if ! age_forward "$VICTIM"; then
-	printf 'stale-binary-gate: could not make %s newer than %s\n' "$VICTIM" "$THE COMPILER" >&2
+	printf 'stale-binary-gate: could not make %s newer than %s\n' "$VICTIM" "$MAXON" >&2
 	exit 2
 fi
 
-"$THE COMPILER" scale-test --rungs=1 > "$WORK/scale.log" 2>&1
+"$MAXON" scale-test --rungs=1 > "$WORK/scale.log" 2>&1
 code=$?
 restore_mtimes
 

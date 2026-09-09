@@ -10,9 +10,9 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 `maxon-bin/.maxon/maxon`, suite `specs/`. On Windows the binary is `maxon.exe`; commands below show
 the Windows form.
 
-- **Build it:** `scripts/build.sh`.
+- **Build it:** `./maxon-bin/.maxon/maxon build` at the repo root, which runs `build.maxon`.
 - **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
-  `build.sh` falls back to when the slot is empty. Maxon compiles Maxon, so there is no second
+  you run directly when the slot is empty. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
@@ -22,11 +22,16 @@ the Windows form.
 > ### ⭐ THE BUILD WRITES TO `.next` AND RENAMES INTO PLACE
 >
 > A compiler cannot overwrite its own running image (**E6002**), and a half-written slot is a
-> compiler that answers as though it were whole. So `scripts/build.sh` compiles to
-> `maxon-bin/.maxon/maxon.next` and renames it in, keeping the previous binary at
-> `maxon-bin/.maxon/maxon.previous`. A FAILED build leaves the slot **EMPTY** rather than reinstating
-> anything, because a stale compiler reporting as current is the failure every staleness refusal in
-> this repo exists to prevent.
+> compiler that answers as though it were whole. So a compiler rebuilding its own slot RENAMES its
+> running image to `maxon-bin/.maxon/maxon.previous` first — an OS will not let a running executable be
+> deleted, but will let one be renamed — and its `.mxdbg` travels with it. A FAILED build leaves the
+> slot **EMPTY** rather than reinstating anything, because a stale compiler reporting as current is the
+> failure every staleness refusal in this repo exists to prevent.
+>
+> ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` is found by walking up from
+> the EXECUTABLE, so an installed `maxon` on PATH compiles this repository against the RELEASE's
+> standard library — MEASURED: it succeeds and exits 0, having built a compiler from a library that is
+> not this tree's. Run `.bootstrap/maxon` or the slot binary, never a PATH one.
 >
 > ⛔ **`.bootstrap/` HOLDS THE BINARY AND NOTHING ELSE.** A release archive ships its own
 > `stdlib/`, and the compiler resolves `stdlib/` by walking UP from its own executable — so an archive
@@ -64,7 +69,7 @@ startup), structured results. Use Bash only where no tool covers the case.
 
 | Task | Tool |
 |------|------|
-| Build the compiler | `build` — runs `scripts/build.sh`; `from:` names the compiler to build WITH |
+| Build the compiler | `build` — runs `build.maxon` at the root; `from:` names the compiler to build WITH |
 | Run the spec suite | `run_spec_test` |
 | Per-test PASS/FAIL detail | `spec_test_outcome` (requires `filter`) |
 | MEASURE per-phase memory + CPU scaling — an instrument, **no verdict** | `run_scale_test` |

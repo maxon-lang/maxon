@@ -781,7 +781,7 @@ maxon fmt myproject
 ### Working on the compiler
 
 ```bash
-scripts/build.sh                                # rebuild it with itself
+./maxon-bin/.maxon/maxon build                  # rebuild it with itself
 maxon-bin/.maxon/maxon spec-test                # the whole suite
 maxon-bin/.maxon/maxon spec-test --filter=arrays
 scripts/fixpoint.sh                             # does it reproduce itself byte for byte?

@@ -67,7 +67,7 @@ cd "$REPO_ROOT" || exit 2
 . "$REPO_ROOT/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 2; }
 EXE_EXT="$MAXON_EXE_EXT"; HOST_IS_WINDOWS="$MAXON_HOST_IS_WINDOWS"
 
-THE COMPILER="$(maxon_compiler_path .)"
+MAXON="$(maxon_compiler_path .)"
 WORK="temp/output-lock-gate"
 
 # ⚠ THE LOCKED DIRECTORY HOLDS THE BUILD OUTPUT AND NOTHING ELSE, and that separation is what makes
@@ -113,8 +113,8 @@ unlock_output() {
 cleanup() { unlock_output; }
 trap cleanup EXIT INT TERM
 
-if [ ! -x "$THE COMPILER" ]; then
-	printf 'output-lock-gate: %s is missing — build it first (`scripts/build.sh`)\n' "$THE COMPILER" >&2
+if [ ! -x "$MAXON" ]; then
+	printf 'output-lock-gate: %s is missing — build it first (see CONTRIBUTING.md)\n' "$MAXON" >&2
 	exit 2
 fi
 
@@ -141,7 +141,7 @@ MAXON
 printf '=== output-lock gate ===\n'
 
 # ---- CHECK 1: the baseline build succeeds and produces the output -------------------------------
-"$THE COMPILER" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-baseline.log" 2>&1
+"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-baseline.log" 2>&1
 BASELINE_STATUS=$?
 
 if [ "$BASELINE_STATUS" -eq 0 ] && [ -f "$OUT" ]; then
@@ -160,7 +160,7 @@ if ! lock_output; then
 fi
 
 # ---- CHECK 2: the locked rebuild fails, with E6002 ----------------------------------------------
-"$THE COMPILER" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-locked.log" 2>&1
+"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-locked.log" 2>&1
 LOCKED_STATUS=$?
 
 if [ "$LOCKED_STATUS" -ne 0 ]; then
@@ -212,7 +212,7 @@ fi
 # ---- CHECK 7: negative control -------------------------------------------------------------------
 unlock_output
 
-"$THE COMPILER" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-unlocked.log" 2>&1
+"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-unlocked.log" 2>&1
 UNLOCKED_STATUS=$?
 
 if [ "$UNLOCKED_STATUS" -eq 0 ] && ! grep -q 'error E6002' "$WORK/build-unlocked.log"; then

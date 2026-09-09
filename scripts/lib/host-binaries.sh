@@ -13,7 +13,7 @@ case "$(uname -s)" in
 	*)                               MAXON_EXE_EXT="";     MAXON_HOST_IS_WINDOWS=0 ;;
 esac
 
-# The compiler in <tree> — the one everything here runs. Gitignored; `scripts/build.sh` produces it.
+# The compiler in <tree> — the one everything here runs. Gitignored; `maxon build` at the root makes it.
 maxon_compiler_path() { printf '%s/maxon-bin/.maxon/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
 
 # A released compiler, placed here by hand, used to build the tree when the slot above is empty. It is

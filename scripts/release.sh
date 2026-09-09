@@ -52,7 +52,7 @@ done
 [ -n "$mode" ] || { echo "release.sh: pass --package or --publish (see --help)" >&2; exit 2; }
 
 maxon="$(maxon_compiler_path .)"
-[ -x "$maxon" ] || { echo "release.sh: no compiler at $maxon — run scripts/build.sh" >&2; exit 1; }
+[ -x "$maxon" ] || { echo "release.sh: no compiler at $maxon — build one first (see CONTRIBUTING.md)" >&2; exit 1; }
 
 # ⛔ THE VERSION IS READ OFF THE BINARY, NOT OFF THE SOURCE. `Compiler/Version.maxon` is where it is
 # written, but what ships is whatever the BINARY says — and a binary built before a version bump

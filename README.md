@@ -95,13 +95,21 @@ at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows).
 **Build and run**
 
 ```bash
-scripts/build.sh                              # build the compiler with the seed
+./.bootstrap/maxon build                      # first build, with the seed
+./maxon-bin/.maxon/maxon build                # afterwards, it rebuilds itself
 maxon-bin/.maxon/maxon build examples/basic.maxon
 maxon-bin/.maxon/maxon spec-test              # run the spec-test suite
 ```
 
-`scripts/build.sh` prefers the compiler already in `maxon-bin/.maxon/`, so once you have one the
-seed is no longer consulted and the ordinary loop is `scripts/build.sh` alone.
+⛔ **Run a compiler that lives INSIDE this checkout — never one installed on your PATH.** The
+compiler finds `stdlib/` by walking up from its own executable, so an installed `maxon` compiles this
+repository's sources against the RELEASE's standard library. Measured: it succeeds and exits 0, having
+built a compiler from a library that is not this tree's.
+
+`build` with no path compiles [`build.maxon`](build.maxon) at the root and does what it says. The
+compiler in the slot can rebuild itself: it renames its own running image to `maxon.previous` first,
+so a failed build leaves the slot empty rather than a stale compiler answering as though it were
+current.
 
 `scripts/fixpoint.sh` builds the compiler with itself twice and checks the two binaries are
 byte-identical.

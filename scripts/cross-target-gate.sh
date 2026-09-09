@@ -181,7 +181,22 @@ if [ "$SKIP_BUILD" = 1 ]; then
 else
 	banner "Building the compiler"
 
-	if ! scripts/build.sh; then
+	# ⛔ THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT — `stdlib/` is found by walking up from
+	# the EXECUTABLE, so a `maxon` on PATH would compile this checkout against the RELEASE's library and
+	# succeed. The slot binary first, then the seed; never a PATH lookup.
+	builder="$(maxon_compiler_path .)"
+	if [ ! -x "$builder" ]; then
+		builder=".bootstrap/maxon$MAXON_EXE_EXT"
+	fi
+	if [ ! -x "$builder" ]; then
+		echo "cross-target-gate: no compiler to build with — see CONTRIBUTING.md." >&2
+		row "ALL" "FAIL" "no seed"
+		printf '%s
+' "${ROWS[@]}"
+		exit 1
+	fi
+
+	if ! "$builder" build; then
 		echo "cross-target-gate: the compiler failed to build — nothing downstream can be trusted." >&2
 		row "ALL" "FAIL" "build failed"
 		printf '%s\n' "${ROWS[@]}"

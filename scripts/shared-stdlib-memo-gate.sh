@@ -163,10 +163,10 @@ for arg in "$@"; do
 	esac
 done
 
-THE COMPILER="./maxon-bin/.maxon/maxon.exe"
-[ -x "$THE COMPILER" ] || THE COMPILER="./maxon-bin/.maxon/maxon"
-if [ ! -x "$THE COMPILER" ]; then
-	echo "gate: no the compiler binary — run \`scripts/build.sh\` first" >&2
+MAXON="./maxon-bin/.maxon/maxon.exe"
+[ -x "$MAXON" ] || MAXON="./maxon-bin/.maxon/maxon"
+if [ ! -x "$MAXON" ]; then
+	echo "gate: no compiler binary — build one first (see CONTRIBUTING.md)" >&2
 	exit 2
 fi
 
@@ -188,7 +188,7 @@ end 'main'
 EOF
 
 # ---------------------------------------------------------------------------- CHECKS 1, 2 and 3
-"$THE COMPILER" verify-warm-rebuild "$WORK/one.maxon" --log=compiler:debug > "$WORK/vwr.log" 2>&1
+"$MAXON" verify-warm-rebuild "$WORK/one.maxon" --log=compiler:debug > "$WORK/vwr.log" 2>&1
 vwr_rc=$?
 
 if [ "$vwr_rc" -eq 0 ]; then
@@ -240,7 +240,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------------- CHECK 4
-"$THE COMPILER" spec-test --filter="$FILTER" > "$WORK/suite.log" 2>&1
+"$MAXON" spec-test --filter="$FILTER" > "$WORK/suite.log" 2>&1
 suite_rc=$?
 summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/suite.log" | tail -1)
 
@@ -401,14 +401,14 @@ AB_CASES=$(echo $AB_PROGRAMS | wc -w)
 ab_cold_failed=0
 for program in $AB_PROGRAMS; do
 	# One program per PROCESS, so its reference is minted by a compile the store could not have served.
-	if ! "$THE COMPILER" spec-test "$AB_SPEC" --filter="shared-scan-ab/$program" > "$WORK/ab-cold-$program.log" 2>&1; then
+	if ! "$MAXON" spec-test "$AB_SPEC" --filter="shared-scan-ab/$program" > "$WORK/ab-cold-$program.log" 2>&1; then
 		ab_cold_failed=$((ab_cold_failed + 1))
 		echo "       cold mint of '$program' exited non-zero:"
 		grep -E '^FAIL|^error' "$WORK/ab-cold-$program.log" | head -5 | sed 's/^/       /'
 	fi
 done
 
-"$THE COMPILER" spec-test "$AB_SPEC" --workers=1 > "$WORK/ab-warm.log" 2>&1
+"$MAXON" spec-test "$AB_SPEC" --workers=1 > "$WORK/ab-warm.log" 2>&1
 ab_warm_rc=$?
 ab_summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/ab-warm.log" | tail -1)
 ab_note=$(grep -o '[0-9]* COMPARED against a committed reference ([0-9]* of them differ' "$WORK/ab-warm.log" | tail -1)

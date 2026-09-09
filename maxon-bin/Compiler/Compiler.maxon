@@ -355,8 +355,45 @@ function vacateRunningImage(outputPath FilePath)
 		return
 	end 'unmovable'
 
+	moveDebugSidecar(outputPath, to: previous)
+
 	logInfo(LogCategory.compiler, message: function() gives "rebuilding this compiler: moved the running image to {previous.toString()}")
 end 'vacateRunningImage'
+
+// ⛔ THE SIDECAR IS NAMED AFTER THE BINARY, SO IT HAS TO TRAVEL WITH IT. Leaving it behind pairs the
+// backup with whatever `.previous.mxdbg` an EARLIER build left — a mismatched pair that reads as a
+// matched one, because the only thing linking a `.mxdbg` to an executable is the name. MEASURED: a
+// self-rebuild left a 16:29 `maxon.previous.exe` beside a 14:52 `maxon.previous.exe.mxdbg`.
+//
+// Every step is best-effort and silent. Debug info is an aid, not an output: a build that produced a
+// correct compiler must not be failed because a sidecar could not be moved, and the recovery this
+// backup exists for is running the binary, which needs no `.mxdbg` at all.
+function moveDebugSidecar(binary FilePath, to FilePath)
+	let fromSidecar = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise 'unnameable'
+		return
+	end 'unnameable'
+
+	let toSidecar = try FilePath.from("{to.toString()}{MxdbgSidecarExtension}") otherwise 'unnameableTo'
+		return
+	end 'unnameableTo'
+
+	// A stale sidecar at the destination is this move's to replace — and if it cannot be removed,
+	// leaving it would be the very mispairing this function exists to prevent, so the old one goes
+	// even when the new one cannot arrive.
+	if File.exists(toSidecar) 'staleSidecar'
+		try File.delete(toSidecar) otherwise 'undeletable'
+			return
+		end 'undeletable'
+	end 'staleSidecar'
+
+	if not File.exists(fromSidecar) 'noSidecar'
+		return
+	end 'noSidecar'
+
+	try File.rename(fromSidecar, to: toSidecar) otherwise 'unmovable'
+		return
+	end 'unmovable'
+end 'moveDebugSidecar'
 
 // afterwards is proof the writer put it there, and its absence is proof the writer did not.
 function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError

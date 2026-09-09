@@ -65,13 +65,22 @@ archive, because the compiler resolves `stdlib/` by walking up from its own exec
 one left beside it would be compiled in place of this tree's.
 
 ```bash
-scripts/build.sh              # build the compiler with the seed, into maxon-bin/.maxon/
-maxon-bin/.maxon/maxon spec-test
+./.bootstrap/maxon build            # first build, with the seed
+./maxon-bin/.maxon/maxon build      # afterwards, the compiler rebuilds itself
+./maxon-bin/.maxon/maxon spec-test
 ```
 
-`scripts/build.sh` prefers the compiler already in `maxon-bin/.maxon/`, so once you have one the seed
-is no longer consulted and the ordinary edit-build loop is `scripts/build.sh` alone. `scripts/fixpoint.sh` builds the compiler with
-itself twice and checks that the two binaries are byte-identical.
+⛔ **Run a compiler that lives INSIDE this checkout — never one installed on your PATH.** The
+compiler finds `stdlib/` by walking up from its own executable, so an installed `maxon` compiles this
+repository's sources against the RELEASE's standard library. Measured: it succeeds and exits 0, having
+built a compiler from a library that is not this tree's.
+
+`build` with no path compiles [`build.maxon`](build.maxon) at the root and runs the build it
+describes — it is a program, not a config file, so a build can compute what it compiles. Rebuilding
+with the compiler in the slot works because it renames its own running image to `maxon.previous`
+first; a FAILED build then leaves the slot EMPTY rather than a stale compiler answering as though it
+were current. `scripts/fixpoint.sh` builds the compiler with itself twice and checks that the two
+binaries are byte-identical.
 
 Compile and run a program with the freshly built compiler:
 
@@ -98,7 +107,7 @@ change behavior:
 
 - Open an issue first for anything beyond a small fix, so the design can be agreed on.
 - Keep each pull request focused on one logical change.
-- Make sure `scripts/build.sh` builds cleanly and the spec suite passes.
+- Make sure the compiler builds cleanly and the spec suite passes.
 - Format Maxon source with `maxon fmt` and match the style of the surrounding code. Maxon favors
   explicit, readable code — no implicit coercions, no silent failures, meaningful error
   messages.

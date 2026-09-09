@@ -59,7 +59,7 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-THE COMPILER = os.path.join(REPO, "maxon-bin", ".maxon",
+MAXON = os.path.join(REPO, "maxon-bin", ".maxon",
                     "maxon.exe" if os.name == "nt" else "maxon-bin")
 
 JMP = re.compile(r"x64\.jmp\s+(\S+)$")
@@ -140,7 +140,7 @@ def emit_ir(src, workdir):
             data = fh.read()
         with open(dst, "wb") as fh:
             fh.write(data)
-    r = subprocess.run([THE COMPILER, "build", os.path.basename(src), "--emit-ir"],
+    r = subprocess.run([MAXON, "build", os.path.basename(src), "--emit-ir"],
                        cwd=workdir, capture_output=True, text=True)
     ir = os.path.join(workdir, base + ".ir")
     if r.returncode != 0 or not os.path.exists(ir):
@@ -168,8 +168,8 @@ def main():
         os.path.join(REPO, "temp", "codegen-probe", "guard.maxon"),
     ) if os.path.exists(p)]
 
-    if not os.path.exists(THE COMPILER):
-        raise SystemExit("no the compiler binary at {} - build it first".format(THE COMPILER))
+    if not os.path.exists(MAXON):
+        raise SystemExit("no compiler binary at {} - build it first".format(MAXON))
 
     workdir = os.path.join(REPO, "temp", "emitted-code-count")
     os.makedirs(workdir, exist_ok=True)

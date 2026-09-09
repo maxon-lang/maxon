@@ -35,7 +35,7 @@ for arg in "$@"; do
 done
 
 start_bin="$(maxon_compiler_path .)"
-[ -x "$start_bin" ] || { echo "fixpoint.sh: no compiler at $start_bin — run scripts/build.sh" >&2; exit 1; }
+[ -x "$start_bin" ] || { echo "fixpoint.sh: no compiler at $start_bin — run \`maxon build\` at the repo root" >&2; exit 1; }
 
 out="temp/fixpoint"
 rm -rf "$out"
