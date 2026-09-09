@@ -1,0 +1,30 @@
+// hidden-command-still-parses.test.maxon — a command the short list does not advertise is still typed,
+// parsed and run.
+//
+// ⭐⭐ **HIDING IS A LISTING CONCERN AND MUST STAY ONE.** The commands for working on the compiler are
+// left out of what `maxon` prints; if the same change ever left one out of what the PARSER accepts, the
+// symptom would be `error: unknown command: spec-test` — a feature withdrawn by a change that meant to
+// tidy a listing. So this asks the driver to answer AS that command: its own usage line, naming itself.
+//
+// ⚠ **THE COMMAND NAMED HERE IS THE ONE THAT REFUSES INSTANTLY.** `spec-test` — the corpus's anchor for
+// "hidden" everywhere else — would RUN THE WHOLE SUITE if spawned with no arguments, so the cheap
+// refuser stands in for it here. Both are hidden, which is the property under test.
+
+test 'a command the short list hides is still accepted by the parser'
+	let run = runOneArgument(HiddenCheapCommand)
+
+	// It refused for want of an argument, which is the point: it got as far as the COMMAND.
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {HiddenCheapCommand}` with no argument should refuse, naming what it wanted. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: HiddenCheapCommand, message: "`maxon {HiddenCheapCommand}` did not answer as itself. It said: {run.stderr}")
+
+	// ⛔ The failure this case exists to catch, spelled out: the word reaching the parser as a stranger.
+	let refusedAsUnknown = run.stderr.contains(UnknownCommandPhrase)
+	try Expect.isFalse(refusedAsUnknown, message: "`maxon {HiddenCheapCommand}` was refused as an unknown command. It is left out of the short LIST on purpose; leaving it out of the PARSER withdraws it. It said: {run.stderr}")
+
+	// And the short list really does leave it out — otherwise this case is about an ordinary command.
+	let advertised = labelledWordsIn(runWithNoArguments().stdout)
+	let advertisedAfterAll = advertised.contains(HiddenCheapCommand)
+	try Expect.isFalse(advertisedAfterAll, message: "`{HiddenCheapCommand}` is advertised by the short list, so this case is no longer about a hidden command. Name a hidden one that refuses instantly, or drop the case.")
+end 'a command the short list hides is still accepted by the parser'

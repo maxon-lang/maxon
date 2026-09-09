@@ -5541,7 +5541,7 @@ clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while
 ### Native Backend
 - Maxon has its own code generator: no LLVM, and no assembler or linker step
 - It writes each target's object format itself, so a build produces a standalone executable directly
-- ⚠ The set of targets grows. `maxon --help` and
+- ⚠ The set of targets grows. `maxon help build` and
   [CLI_REFERENCE.md](CLI_REFERENCE.md)'s `--target` table are the current list; naming them here
   would be a second copy free to go stale.
 

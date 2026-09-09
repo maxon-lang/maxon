@@ -1,0 +1,20 @@
+// help-takes-no-options.test.maxon — `help` refuses ANY option, including the ones other commands read.
+//
+// ⭐⭐ **THE FLAGS THIS DRIVER IMPLEMENTS ARE THE ONES THAT NEED THE GATE.** An unknown flag is already
+// refused before any command runs; a flag some OTHER command reads is consumed silently, and `maxon
+// --emit-ir help` would print the reference as though the flag had meant something. That is the same
+// door `fmt` refuses through, and the same reason.
+
+test 'help refuses an option, including one another command implements'
+	for flag in ["--emit-ir", "--list"] 'eachFlag'
+		var arguments = ListedWordArray.create()
+		arguments.push(flag)
+		arguments.push(HelpCommandWord)
+		let run = runDriver(arguments)
+
+		let observedExit = run.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 1, message: "`maxon {flag} {HelpCommandWord}` was answered. `{HelpCommandWord}` takes no options, and a flag consumed on its way past is a command line only partly understood. It said: {run.stdout}{run.stderr}")
+
+		try Expect.contains(run.stderr, needle: flag, message: "`maxon {flag} {HelpCommandWord}`'s refusal does not name the option that was typed")
+	end 'eachFlag'
+end 'help refuses an option, including one another command implements'

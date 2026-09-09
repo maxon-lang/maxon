@@ -14,10 +14,15 @@
 //   maxon verify-warm-rebuild <file>
 //   maxon lsp-server
 //   maxon spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]
+//   maxon help [<command>]
 
-// How wide the flag column of the usage listing below is. Every other line pads to it by hand; the one
-// line that CANNOT (its flag names a derived list of values) reads it. See `printUsage`.
-let UsageFlagColumnWidth = 32 as ColumnWidth
+// The column a reference entry's prose starts in, and how wide the whole line may be. Nothing in the
+// reference is padded or broken by hand: `printWrappedProse` lays every row out from these two numbers
+// and the indent it is given, so a label that outgrows its column moves its own prose down a line
+// instead of going ragged, and a paragraph at the left margin gets the full width rather than an
+// entry's narrower measure.
+let UsageEntryColumnWidth = 32 as ColumnWidth
+let UsageLineWidth = 100
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
@@ -47,7 +52,17 @@ module let SpecTestCommandName = "spec-test"
 // (`SpecTestRunner.buildGuestCompiler`) and the scale-test ladder (`ScaleTestRunner.compileRung`).
 module let BuildSubcommandName = "build"
 
+// The remaining command words. Every one is a constant rather than a literal because TWO readers spell
+// each: `MaxonArgs.parse` matches it, and the reference `maxon help` prints it. A word written down twice
+// is a word that can be renamed in one place and go on being documented under the other.
+let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
+let VerifyRecheckCommandName = "verify-recheck"
+let LspServerCommandName = "lsp-server"
+let ScaleTestCommandName = "scale-test"
+
 module let OutputFlagName = "-o"
+
+let OutputFlagPrefix = "--output="
 
 // ⭐ **`fmt` TAKES NO OPTIONS AT ALL, AND THAT IS ENFORCED IN THE PARSER**, not left to the command:
 // silently DROPPING an unrecognized flag is the most destructive thing this command could do -
@@ -260,11 +275,18 @@ let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 // rule written down twice.
 module let OptionPrefix = "-"
 
-// ⭐ `--help` IS THE ONE FLAG THAT ANSWERS WITHOUT A COMMAND — the only question a caller can ask
-// before knowing anything else about this binary, so it cannot be spelled as a command word without
-// requiring them to know one. It carries the one-letter form every other CLI has taught people to try.
-let HelpFlag = "--help"
-let HelpFlagShort = "-h"
+// ⭐ `maxon help [<command>]` — the whole reference, or one command's part of it. A COMMAND, because a
+// caller with nothing to go on does not have to know it: `maxon` with no arguments lists every command
+// there is, and this word is one of them.
+let HelpCommandName = "help"
+
+// ⛔⛔ **`--help` / `-h` ARE WITHDRAWN, AND THE SPELLINGS ARE KEPT SO THE REFUSAL CAN NAME THEM** — for
+// the reason `--version` is withdrawn next door, and a reader owed the same sentence. These are the two
+// spellings every other CLI has taught people to try first, so a caller typing one is following a
+// convention rather than making a typo; "unknown option: --help" would tell them this driver has no help
+// at all. See `withdrawnOptionMessage`.
+let WithdrawnHelpFlag = "--help"
+let WithdrawnHelpFlagShort = "-h"
 
 // `maxon version` — which binary is this. A COMMAND, so the driver has one door onto the answer and a
 // reader learns it from the same list every other thing this binary does is listed in.
@@ -290,6 +312,14 @@ module let MetricsFlagPrefix = "--metrics="
 // be found only by reading the emitted binary.
 let DefineFlagPrefix = "--define="
 let DefineNameValueSeparator = "="
+
+// `scale-test`'s own flags. Constants for the reason the command words above are: the parser reads each
+// one and the reference prints it, and two spellings of one flag drift the day either is renamed.
+let RungsFlagPrefix = "--rungs="
+let RepeatFlagPrefix = "--repeat="
+let NoteFlagPrefix = "--note="
+let ResultJsonFlagPrefix = "--result-json="
+let EmitCorpusFlagPrefix = "--emit-corpus="
 
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
 // `<!-- unsupported-targets: … -->` marker, the reference's own `UnsupportedTargetsDirectiveRegex`). One separator, so a
@@ -317,24 +347,14 @@ end 'defineValueAfterName'
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
 
-	// ⭐⭐ **IT ANSWERS BEFORE EVERY REFUSAL BELOW, AND BEFORE THE COMMAND MATCH.** `maxon --help`
-	// carries no command, so a help asked for after the option gates would fall through to
-	// `unknownCommand()` and exit 1 — the one question a caller with nothing else to go on can ask,
-	// answered with a usage dump and a failure. Asked WITH a command (`maxon build --help`) it prints
-	// the usage and runs nothing, which is what a caller who typed it meant.
-	if args.showHelp 'helpAsked'
-		printUsage()
-		return 0
-	end 'helpAsked'
-
 	// ⭐ A WITHDRAWN OPTION IS REPORTED BEFORE AN UNKNOWN ONE, and the order is the point: this driver
 	// once accepted it, so its author needs to be told WHAT REPLACED IT rather than sent looking for a
 	// typo. `firstBadOption`'s "the first one typed wins" rule decides between two equally anonymous
 	// flags and does not reach across that difference.
 	if not args.withdrawnOption.isEmpty() 'withdrawnOption'
 		printError("{withdrawnOptionMessage(args.withdrawnOption)}\n")
-		printUsage()
-		return 1
+		printCommandList()
+		return refusedCommandLineExit(args.command)
 	end 'withdrawnOption'
 
 	// An option the driver does not implement aborts BEFORE any command runs. Every
@@ -344,25 +364,26 @@ function main() returns ExitCode
 	// than this driver's. See `FmtUsageLine`.
 	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
-		printUsage()
+		printCommandList()
 		return refusedCommandLineExit(args.command)
 	end 'badOption'
 
 	return match args.command 'cmd'
 		build gives runBuild(args)
-		verifyWarmRebuild gives runVerifyWarmRebuild(args)
-		verifyRecheck gives runVerifyRecheck(args)
-		lspServer gives runLspServer()
-		specTest gives runSpecTest(args)
-		scaleTest gives runScaleTest(args)
-		test gives runTest(args)
-		fmt gives runFmt(args)
-		monitor gives runMonitor(args)
-		debug gives runDebugCommand(args)
 		coverage gives runCoverage(args)
+		debug gives runDebugCommand(args)
+		fmt gives runFmt(args)
+		help gives runHelp(args)
+		lspServer gives runLspServer()
+		monitor gives runMonitor(args)
 		profile gives runProfile(args)
+		scaleTest gives runScaleTest(args)
+		specTest gives runSpecTest(args)
+		test gives runTest(args)
+		verifyRecheck gives runVerifyRecheck(args)
+		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		version gives runVersion(args)
-		unknown gives unknownCommand()
+		unknown gives noCommandGiven(args)
 	end 'cmd'
 end 'main'
 
@@ -1399,7 +1420,9 @@ function withdrawnOptionMessage(option String) returns String
 		return "error: {WithdrawnCompilerFlagPrefix}= was REMOVED. spec-test compiles every selected test IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one. Run the suite with the binary you mean to test: `<compiler> {SpecTestCommandName}`."
 	end 'theCompilerFlag' else if option == WithdrawnVersionFlag or option == WithdrawnVersionFlagShort 'theVersionFlag'
 		return "error: {option} was REMOVED. The version is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {VersionCommandName}`."
-	end 'theVersionFlag'
+	end 'theVersionFlag' else if option == WithdrawnHelpFlag or option == WithdrawnHelpFlagShort 'theHelpFlag'
+		return "error: {option} was REMOVED. Help is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {HelpCommandName}` for the whole reference, `maxon {HelpCommandName} <command>` for one command."
+	end 'theHelpFlag'
 
 	panic("withdrawnOptionMessage: '{option}' was recorded as a withdrawn option by `MaxonArgs.parse`, and this is the one place that says what replaced one — a flag recorded there and unnamed here would be refused with an empty sentence")
 end 'withdrawnOptionMessage'
@@ -1543,30 +1566,33 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 	return match command 'whichCommand'
 		test gives NothingRanExitCode
 		build gives 1
-		verifyWarmRebuild gives 1
-		verifyRecheck gives 1
-		lspServer gives 1
-		specTest gives 1
-		scaleTest gives 1
-		fmt gives 1
-		monitor gives 1
-		debug gives 1
 		coverage gives 1
+		debug gives 1
+		fmt gives 1
+		help gives 1
+		lspServer gives 1
+		monitor gives 1
 		profile gives 1
+		scaleTest gives 1
+		specTest gives 1
+		verifyRecheck gives 1
+		verifyWarmRebuild gives 1
 		version gives 1
 		unknown gives 1
 	end 'whichCommand'
 end 'refusedCommandLineExit'
 
-function unknownCommand() returns ExitCode
-	printUsage()
-	return 1
-end 'unknownCommand'
+// ⭐⭐ **THE ONE LINE THAT SAYS WHICH BINARY THIS IS.** `version` prints it and the no-argument overview
+// leads with it, so a caller comparing what the two told them cannot find two answers. It carries the
+// host triple because "which maxon is this" is not fully answered by a number when four targets ship
+// under one name.
+function versionLine() returns String
+	return "maxon {CompilerVersion} ({CompilerCommit} {CompilerCommitDate}) ({targetToString(detectHostTarget())})"
+end 'versionLine'
 
 // ⭐ **ONE LINE, TO STDOUT, EXIT 0.** A version is read by scripts far more often than by people —
 // the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
-// where a pipe can reach it, and carries the host triple because "which maxon is this" is not fully
-// answered by a number when four targets ship under one name.
+// where a pipe can reach it.
 //
 // ⚠ It reads NO positional, so the FIRST one is already the typo `refusedPositionalBeyond` exists to
 // name — `maxon version 1.2.3` must not print an answer that ignores half of what was typed.
@@ -1575,176 +1601,447 @@ function runVersion(args MaxonArgs) returns ExitCode
 		return 1
 	end 'unexpectedArgument'
 
-	print("maxon {CompilerVersion} ({CompilerCommit} {CompilerCommitDate}) ({targetToString(detectHostTarget())})\n")
+	print("{versionLine()}\n")
 	return 0
 end 'runVersion'
 
-function printUsage()
+// ⛔ Asking a `MaxonCommand` for a fact only a real command has, when the value is `unknown` — which is
+// the ABSENCE of a command and carries no word, no arguments and no description. Every walk over the
+// roster goes through `namedCommands`, which leaves it out, so reaching this is a caller that did not.
+enum HelpReferenceError implements Error
+	notACommand
+end 'HelpReferenceError'
+
+typealias MaxonCommandArray = Array with MaxonCommand
+
+// ⚠ **IT ENDS IN A COLON, AND A COMMAND LABEL NEVER DOES.** That is what tells a heading apart from a
+// section in `maxon help`, where both sit at the left margin — `tests/cli` reads the roster off exactly
+// that difference.
+let CompilerWorkHeading = "Commands for working on the compiler itself:"
+
+// How the reference's prose is written: paragraphs separated by a newline, words by a space. Named
+// because `printHelpEntry` splits on both and its wrap arithmetic counts one of them.
+let ParagraphSeparator = "\n"
+let WordSeparator = " "
+
+// ⭐⭐ **WHO A COMMAND IS FOR, AND THEREFORE WHERE IT IS LISTED.** Fourteen commands is more than a
+// reader wanting to compile a program should have to read past, and four of them are about THIS
+// COMPILER rather than about any program it builds — a suite over `specs/`, a scaling ladder, and the
+// two spine gates. They are listed by `maxon help` and left out of what `maxon` prints.
+//
+// ⛔ **HIDDEN FROM A LISTING IS NOT HIDDEN FROM THE PARSER.** `commandFromWord` walks every named
+// command, so a command left off the short list is typed, parsed and run exactly as before, and
+// `maxon help <it>` documents it. A door that a listing does not mention is still a door; a door that
+// is not there is a feature withdrawn, and this is not that.
+enum CommandAudience
+	// Someone USING this compiler on a program of their own. What `maxon` with no arguments lists.
+	usingTheCompiler
+	// Someone WORKING ON this compiler.
+	workingOnTheCompiler
+end 'CommandAudience'
+
+// One command's whole entry in the reference. The five facts are held together because they are read
+// together, and a second table of any one of them would be a roster that rots: `commandFromWord` decides
+// what the PARSER accepts by reading `word` back out of here.
+type CommandReference
+	// The word that selects the command.
+	export var word as String
+	// Its argument sketch, or empty for a command that takes none.
+	export var arguments as String
+	// ONE line, and the whole of what `maxon` with no arguments says about this command.
+	export var summary as String
+	// The rest of the prose, or empty when the summary says everything. Paragraphs are separated by
+	// `ParagraphSeparator`; nothing here is wrapped or padded by hand.
+	export var detail as String
+	// Who it is for, which decides which listings show it. See `CommandAudience`.
+	export var audience as CommandAudience
+
+	export static function create(word String, arguments String, summary String, detail String, audience CommandAudience) returns CommandReference
+		return Self{word: word, arguments: arguments, summary: summary, detail: detail, audience: audience}
+	end 'create'
+
+	// What the reader types, which is the label every listing shows.
+	export function label() returns String
+		return self.word if self.arguments.isEmpty() else "{self.word} {self.arguments}"
+	end 'label'
+
+	// Everything the long forms print, as one piece of prose.
+	export function description() returns String
+		return self.summary if self.detail.isEmpty() else "{self.summary} {self.detail}"
+	end 'description'
+end 'CommandReference'
+
+// ⭐⭐ **THE COMMAND ROSTER, AND THE ONLY ONE.** Every printer below walks it, and `MaxonArgs.parse`
+// selects the command through `commandFromWord`, which reads it backwards. So a command added to
+// `MaxonCommand` does not compile until it says what it is — the match is exhaustive with no default
+// arm — and cannot be documented under a word the parser does not accept, nor accepted under a word the
+// reference never prints.
+function commandReference(command MaxonCommand) returns CommandReference throws HelpReferenceError
+	return match command 'whichCommand'
+		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.", audience: CommandAudience.usingTheCompiler)
+		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
+		debug gives CommandReference.create(DebugCommandName, arguments: "<subcommand> <exe>", summary: "Read back the `.mxdbg` debug-info sidecar beside a binary.", detail: "`--dump-info <exe>` prints the sidecar; `--symbolize <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
+		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `.maxon` files, skipping `build.maxon`, anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
+		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
+		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
+		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
+		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
+		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
+		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
+		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
+		verifyRecheck gives CommandReference.create(VerifyRecheckCommandName, arguments: "<file|dir>", summary: "Assert ONE Project can be re-checked.", detail: "Two checks over unchanged input agree, and a diagnostic introduced by an edit CLEARS when the edit is undone. `{VerifyWarmRebuildCommandName}` gates the query spine without ever running the pipeline; this gates the pipeline over it, which is what an editor holding one project open for hours actually does.", audience: CommandAudience.workingOnTheCompiler)
+		verifyWarmRebuild gives CommandReference.create(VerifyWarmRebuildCommandName, arguments: "<file>", summary: "Assert the query spine is deterministic + incremental.", detail: "It exits 0 iff both properties hold, and never runs the pipeline over the spine it gates: `{VerifyRecheckCommandName}` is the command that does.", audience: CommandAudience.workingOnTheCompiler)
+		version gives CommandReference.create(VersionCommandName, arguments: "", summary: "Print the version, the commit it was built from and the host target.", detail: "It runs nothing, and goes to stdout, where a pipe can reach it.", audience: CommandAudience.usingTheCompiler)
+		unknown throws HelpReferenceError.notACommand
+	end 'whichCommand'
+end 'commandReference'
+
+// The options this reference lists, in the order it lists them.
+//
+// ⚠ **NOT EVERY FLAG THE PARSER ACCEPTS.** `--worker-persistent` is how a pool worker is told that it is
+// one — set by the parent on the command line it spawns, never typed by a person — and a flag nobody can
+// usefully type is not part of the surface this describes. It is PARSED all the same, because an
+// unrecognized flag aborts the run and a worker that could not read its own would fail to start.
+enum HelpOption
+	output
+	emitIr
+	emitIrRuntime
+	target
+	noDebugInfo
+	coverageInstrumentation
+	define
+	metrics
+	specFilter
+	updateRequired
+	network
+	workers
+	rungs
+	repeat
+	note
+	emitCorpus
+	resultJson
+	testFilter
+	testList
+	testJson
+	testIsolate
+	testBail
+	testTimeout
+	testNoTiming
+	testColor
+end 'HelpOption'
+
+// One option's entry. ⭐ **THE COMMANDS ARE A FIELD, NOT A `(build, test)` PREFIX ON THE SENTENCE**,
+// because they decide where the option is PRINTED: it is listed under each command that reads it, so
+// `maxon help <command>` is that command's whole surface and a reader never filters a global list.
+type OptionReference
+	export var spelling as String
+	export var description as String
+	export var commands as MaxonCommandArray
+
+	export static function create(spelling String, description String, commands MaxonCommandArray) returns OptionReference
+		return Self{spelling: spelling, description: description, commands: commands}
+	end 'create'
+end 'OptionReference'
+
+// ⭐ **EVERY SPELLING IS THE CONSTANT THE PARSER MATCHES**, never a copy of it typed here: a flag renamed
+// at its declaration is renamed in the reference by the same edit, and cannot go on being documented
+// under a name nothing accepts.
+function optionReference(option HelpOption) returns OptionReference
+	return match option 'whichOption'
+		output gives OptionReference.create("{OutputFlagName}, {OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build])
+		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build])
+		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build])
+		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.specTest, MaxonCommand.test])
+		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build])
+		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
+		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build])
+		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
+		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern>. A bare spec name selects that whole spec.", commands: [MaxonCommand.specTest])
+		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest])
+		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest])
+		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest])
+		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest])
+		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest])
+		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest])
+		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Dump the generated corpus to <dir> for inspection (it is otherwise built into a temp dir and thrown away).", commands: [MaxonCommand.scaleTest])
+		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest])
+		testFilter gives OptionReference.create("{TestFilterShortFlag} P, {TestFilterShortPrefix}P, {FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive; comma-separated patterns are a union).", commands: [MaxonCommand.test])
+		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run and compile nothing.", commands: [MaxonCommand.test])
+		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test])
+		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test])
+		testBail gives OptionReference.create("{TestBailFlag}, {TestBailFlagPrefix}N", description: "Stop claiming new work after N failures (default {DefaultBailAfter}); the shard already running finishes, so the total may exceed N.", commands: [MaxonCommand.test])
+		testTimeout gives OptionReference.create("{TestTimeoutFlagPrefix}<ms>", description: "Kill a test process after <ms> milliseconds (default {DefaultTestTimeoutMs}). A whole file shares one process, so {TestIsolateFlag} is what gives each test the full budget to itself.", commands: [MaxonCommand.test])
+		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test])
+		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test])
+	end 'whichOption'
+end 'optionReference'
+
+// The commands in declaration order, with `unknown` — which names none — left out. Every walk over the
+// roster comes through here, so the skip is stated ONCE and a printer cannot forget it.
+function namedCommands() returns MaxonCommandArray
+	var named = MaxonCommandArray.create()
+	for command in MaxonCommand.allCases 'eachCase'
+		if command != MaxonCommand.unknown 'itNamesACommand'
+			named.push(command)
+		end 'itNamesACommand'
+	end 'eachCase'
+
+	return named
+end 'namedCommands'
+
+// The commands written for one audience, still in declaration order — which is alphabetical, so a
+// filtered run is sorted for free and no listing has to sort anything.
+function commandsFor(audience CommandAudience) returns MaxonCommandArray
+	var selected = MaxonCommandArray.create()
+
+	for command in namedCommands() 'eachCommand'
+		let reference = try commandReference(command) otherwise panic("commandsFor: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
+		if reference.audience == audience 'thisAudience'
+			selected.push(command)
+		end 'thisAudience'
+	end 'eachCommand'
+
+	return selected
+end 'commandsFor'
+
+// The command a word selects — the roster read backwards, and the whole of how `MaxonArgs.parse` decides
+// that an argument is a command rather than a path.
+//
+// ⭐ `unknown` is this enum's own name for "no command", so returning it is the ANSWER and not a
+// sentinel: it is exactly the value the parser leaves the field at when no command word was typed.
+function commandFromWord(word String) returns MaxonCommand
+	for command in namedCommands() 'eachCommand'
+		let reference = try commandReference(command) otherwise panic("commandFromWord: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
+		if reference.word == word 'thisOne'
+			return command
+		end 'thisOne'
+	end 'eachCommand'
+
+	return MaxonCommand.unknown
+end 'commandFromWord'
+
+// ⭐⭐ **NOTHING IN THIS REFERENCE IS LAID OUT BY HAND.** One label column and one prose width, and every
+// row — command or option — is wrapped from them. A hand-padded table goes ragged the day a label
+// outgrows the column and nothing says so, and the labels here are DERIVED: one names the colour modes,
+// another the supported targets, and both grow. An overlong label takes its own line and its prose
+// starts square underneath.
+function printHelpEntry(label String, text String)
+	if text.trim().isEmpty() 'noProse'
+		panic("printHelpEntry: '{label}' has no description, and every command and option in the reference owes the reader one")
+	end 'noProse'
+
+	let indent = padRight("", width: UsageEntryColumnWidth)
+	var firstPrefix = padRight(label, width: UsageEntryColumnWidth)
+
+	// ⚠ BYTES here and GRAPHEMES in the wrap, and the difference is not an oversight: this asks the same
+	// question `padRight` answered on the line above, and that one counts bytes. The prose asks a
+	// different question — how wide the line LOOKS — where an em-dash is one column and three bytes.
+	if label.byteLength() >= UsageEntryColumnWidth 'theLabelFillsItsColumn'
+		print("{label}\n")
+		firstPrefix = indent
+	end 'theLabelFillsItsColumn'
+
+	printWrappedProse(text, firstPrefix: firstPrefix, indent: indent)
+end 'printHelpEntry'
+
+// Prose broken to `UsageLineWidth` columns, every line after the first opened with `indent` — which is
+// also what sets the measure, since an indented line has that much less room. Paragraphs are separated
+// by `ParagraphSeparator` and each starts a line of its own.
+function printWrappedProse(text String, firstPrefix String, indent String)
+	let width = UsageLineWidth - indent.count()
+	var prefix = firstPrefix
+
+	for paragraph in text.split(ParagraphSeparator) 'eachParagraph'
+		var line = ""
+
+		for word in paragraph.split(WordSeparator) 'eachWord'
+			if word.isEmpty() 'aRunOfSpaces'
+				continue
+			end 'aRunOfSpaces'
+
+			if line.isEmpty() 'theFirstWordOfALine'
+				line = word
+			end 'theFirstWordOfALine' else if line.count() + word.count() + WordSeparator.count() <= width 'itFits'
+				line = "{line}{WordSeparator}{word}"
+			end 'itFits' else 'itWrapsHere'
+				print("{prefix}{line}\n")
+				prefix = indent
+				line = word
+			end 'itWrapsHere'
+		end 'eachWord'
+
+		if not line.isEmpty() 'theLastLineOfTheParagraph'
+			print("{prefix}{line}\n")
+			prefix = indent
+		end 'theLastLineOfTheParagraph'
+	end 'eachParagraph'
+end 'printWrappedProse'
+
+// ⭐ **WHAT `maxon` WITH NO ARGUMENTS SAYS**: which binary this is, and one line per command. It is the
+// answer to the only question a caller with nothing to go on can ask, so it is SHORT — the reference
+// itself is one of the commands listed, and the footer names it.
+function printOverview()
+	print("{versionLine()}\n")
+	print("\n")
+	printCommandList()
+end 'printOverview'
+
+// The list alone — what the overview prints under the version line, and what every refusal in `main`
+// prints under its error. A refusal owes the reader the way back, and the way back is what this binary
+// does plus the word that opens the rest of it.
+function printCommandList()
 	print("Usage: maxon <command> [options]\n")
 	print("\n")
 	print("Commands:\n")
-	print("  build <file|directory>...     Compile a Maxon program to an executable. Several paths\n")
-	print("                                are compiled as ONE program, in the order given\n")
-	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
-	print("  verify-recheck <file|dir>     Assert ONE Project can be re-checked: two checks over\n")
-	print("                                unchanged input agree, and a diagnostic introduced by an\n")
-	print("                                edit CLEARS when the edit is undone. verify-warm-rebuild\n")
-	print("                                gates the query spine without ever running the pipeline;\n")
-	print("                                this gates the pipeline over it, which is what an editor\n")
-	print("                                holding one project open for hours actually does.\n")
-	print("  lsp-server                    Speak the Language Server Protocol over stdio: JSON-RPC\n")
-	print("                                bodies under Content-Length framing, the initialize /\n")
-	print("                                shutdown / exit lifecycle, and full text-document\n")
-	print("  spec-test [dir]               Run the specs suite (default dir: specs)\n")
-	print("  test [dir]                    Run a PROJECT's own `test` declarations (default dir: the\n")
-	print("                                working directory). Every test found is compiled into ONE\n")
-	print("                                binary with a generated entry point and run; which of them\n")
-	print("                                RUN is a runtime argument, so a --filter change costs no\n")
-	print("                                recompile. NOT specs — that is `spec-test`.\n")
-	print("                                Exit 0 every test passed; 1 a test failed, crashed, timed\n")
-	print("                                out, leaked, did not run — or NO TESTS WERE FOUND, which is\n")
-	print("                                never reported as success; 2 the run could not happen.\n")
-	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
-	print("                                last, and report the per-phase MEMORY — allocations, frees and\n")
-	print("                                bytes — plus the CPU TICKS the compiling thread spent. It does\n")
-	print("                                NOT collect WALL time: wall time counts every other process on\n")
-	print("                                the box, so a dated table of it would compare a loaded machine\n")
-	print("                                in July against an idle one in August. The ladder doubles, so\n")
-	print("                                the ratio between rungs IS the growth (x2.00 linear, x4.00\n")
-	print("                                quadratic) and nothing is fitted. An INSTRUMENT, not a gate: it\n")
-	print("                                renders no verdict, and it exits non-zero only when the RUN\n")
-	print("                                broke. The trend it feeds is {OptimizationLogRelativePath}.\n")
-	print("  fmt [<file|directory>]        Re-print Maxon sources in canonical layout, IN PLACE (default:\n")
-	print("                                the working directory). A named FILE is formatted whatever it\n")
-	print("                                is called; a DIRECTORY is walked for `.maxon` files, skipping\n")
-	print("                                `build.maxon`, anything under a `.maxonignore`, and any\n")
-	print("                                subdirectory that is its own checkout. Takes no options.\n")
-	print("  monitor <exe> [args...]       Launch executable with shared-memory debug stream monitor\n")
-	print("  debug --dump-info <exe>       Print the `.mxdbg` debug-info sidecar beside a binary\n")
-	print("  debug --symbolize <exe> <off> Resolve `.text` code offsets to file:line:col\n")
-	print("  coverage <run|report> <exe>   Run a {CoverageFlag} binary and report line + branch coverage\n")
-	print("  profile run <exe>             Launch a program and sample where its CPU time goes. Needs no\n")
-	print("                                instrumentation and no rebuild: only the `.mxdbg` sidecar is read\n")
-	print("  version                       Print the version, the commit it was built from and the\n")
-	print("                                host target, and run nothing\n")
+
+	for command in commandsFor(CommandAudience.usingTheCompiler) 'eachCommand'
+		let reference = try commandReference(command) otherwise panic("printCommandList: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
+		printHelpEntry("  {reference.label()}", text: reference.summary)
+	end 'eachCommand'
+
 	print("\n")
-	print("Options:\n")
-	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
-	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
-	print("  --emit-ir-runtime=<a>,<b>     Render these compiler-emitted functions in that IR too (implies --emit-ir)\n")
-	print("  --target=<cpu>-<os>           (build, spec-test, test) Use this target instead of the host,\n")
-	print("                                one of: {supportedTargetList()} (default:\n")
-	print("                                the host target). For spec-test a cross target cross-compiles each\n")
-	print("                                selected test and runs it under the vendored runtime. For test it\n")
-	print("                                builds the test binary for that target and then SPAWNS it, so a\n")
-	print("                                target this host cannot execute reports every test as not run.\n")
-	print("  --no-debug-info               (build) Do NOT write the <output>.mxdbg debug-info sidecar.\n")
-	print("                                It is written BY DEFAULT, and the executable is byte-identical\n")
-	print("                                either way — the sidecar never decides which instructions are\n")
-	print("                                emitted, so the binary you debug is the binary you shipped.\n")
-	print("  {CoverageFlag}                    (build) Instrument for code coverage: the binary counts each\n")
-	print("                                statement and branch arm it executes and writes them to\n")
-	print("                                <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a\n")
-	print("                                separate build; read it back with `coverage`. It requires the\n")
-	print("                                debug-info sidecar, which carries what each counter counts.\n")
-	print("  --define=<name>=<value>        (build) Replace a top-level String constant's default\n")
-	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
-	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
-	print("                                the same numbers as a human-readable table.\n")
-	print("  --filter=<pattern>            (spec-test) Run only tests whose `<spec>/<test>` label contains\n")
-	print("                                <pattern>. A bare spec name selects that whole spec.\n")
-	print("  --update-required             (spec-test) Rewrite the committed .test goldens instead of\n")
-	print("                                checking against them. Running a test proves its allocation\n")
-	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
-	print("                                WORSE. REVIEW THE RESULTING DIFF. Pair it with --filter: an\n")
-	print("                                unfiltered run rewrites EVERY golden in the suite.\n")
-	print("  --network                     (spec-test) Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`,\n")
-	print("                                which open a socket to a REAL EXTERNAL HOST (tcpbin.com,\n")
-	print("                                httpbin.org). They are OUT of a default run because their\n")
-	print("                                verdict measures somebody else's uptime rather than this\n")
-	print("                                compiler; a default run NAMES every one it left out.\n")
-	print("  --workers=<n>                 (spec-test) Run the suite on <n> persistent worker\n")
-	print("                                subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one\n")
-	print("                                worker in it, NOT a serial path — every worker count must\n")
-	print("                                print BYTE-IDENTICAL output, and that invariance is the\n")
-	print("                                pool's sharpest gate.\n")
-	print("  --rungs=<n>                   (scale-test) Climb <n> rungs (default {DefaultRungCount},\n")
-	print("                                range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the\n")
-	print("                                program, so this is exponential in cost.\n")
-	print("  --repeat=<n>                  (scale-test) Compile every rung <n> times (default\n")
-	print("                                {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks\n")
-	print("                                any of them spent in each phase — the least-disturbed sample,\n")
-	print("                                since noise can only ADD to a CPU reading and a mean would be\n")
-	print("                                dragged by one stall. The MEMORY columns take nothing from a\n")
-	print("                                repeat: they are exact, so they come from the first compile and\n")
-	print("                                are CROSS-CHECKED for equality against the rest. A memory number\n")
-	print("                                that differs between two compiles of one rung is a BROKEN RUN.\n")
-	print("  --note=<text>                 (scale-test) Record this run in {OptimizationLogRelativePath}\n")
-	print("                                — one dated row of the per-rung allocations and bytes, with\n")
-	print("                                <text> as the reason. Without it a run reports and records\n")
-	print("                                nothing; WITH it the row is written, moved or not, because it is\n")
-	print("                                an INSTRUCTION. The instrument can see exactly WHAT moved and can\n")
-	print("                                never see why; you are the only one who knows, and only now.\n")
-	print("  --emit-corpus=<dir>           (scale-test) Dump the generated corpus to <dir> for inspection\n")
-	print("                                (it is otherwise built into a temp dir and thrown away).\n")
-	print("  --result-json=<path>          (scale-test) Write the whole run — per-rung and per-phase memory,\n")
-	print("                                and the deltas from the last recorded run — to <path> as JSON, so\n")
-	print("                                a tool never has to scrape the human report.\n")
-	print("  -t P, -t=P, --filter=P        (test) Run only tests whose NAME or FILE contains P\n")
-	print("                                (case-insensitive; comma-separated patterns are a union)\n")
-	print("  --list                        (test) Print the tests that would run and compile nothing\n")
-	print("  --json                        (test) Emit the report as JSON instead of text\n")
-	print("  --isolate                     (test) Run every test in its own process, rather than one\n")
-	print("                                process per test FILE\n")
-	print("  --bail[=N]                    (test) Stop claiming new work after N failures (default\n")
-	print("                                {DefaultBailAfter}); the shard already running finishes, so the total may\n")
-	print("                                exceed N\n")
-	print("  --timeout=<ms>                (test) Kill a test process after <ms> milliseconds (default\n")
-	print("                                {DefaultTestTimeoutMs}). A whole file shares one process, so --isolate is what\n")
-	print("                                gives each test the full budget to itself.\n")
-	print("  --no-timing                   (test) Omit durations, making stdout byte-reproducible\n")
-	print("  --help, -h                    Print this text and run nothing\n")
-	// ⚠ THE ONLY LINE IN THIS BLOCK WHOSE LEFT COLUMN IS DERIVED RATHER THAN TYPED, because its width
-	// depends on `reportColorChoices()` — hand-padded, it would go ragged the day a colour mode is added
-	// and nothing would say so.
-	print("{padRight("  --color={reportColorChoices()}", width: UsageFlagColumnWidth)}(test) Colour the report; `auto` means only when stdout is a\n")
-	print("                                terminal: not redirected, NO_COLOR unset, TERM not `dumb`.\n")
-	// ⚠ The last two lines are not decoration: wasm32-wasi cannot ask the host what KIND of object a
-	// handle is, so `auto` is answered "not a terminal" there and prints nothing. `docs/CLI_REFERENCE.md`
-	// carries the same fact at length.
-	print("                                Only wasm32-wasi cannot detect a terminal; there `auto`\n")
-	print("                                degrades to `never` — use `always` to force colour.\n")
-end 'printUsage'
+	// ⚠ **IT SAYS THAT SOMETHING IS NOT SHOWN.** A short list that quietly omitted the commands for
+	// working on the compiler would leave a reader who needs `{SpecTestCommandName}` with no reason to
+	// look further; naming the omission is what makes the list short rather than incomplete.
+	printWrappedProse("Run `maxon {HelpCommandName}` for every command's options (including the ones for working on the compiler itself), or `maxon {HelpCommandName} <command>` for one command's.", firstPrefix: "", indent: "")
+end 'printCommandList'
+
+// One command's whole reference: what it does, and every option it reads, indented under it.
+function printCommandSection(command MaxonCommand)
+	let reference = try commandReference(command) otherwise panic("printCommandSection: `unknown` names no command, and every caller resolves a word to a real one first")
+	printHelpEntry(reference.label(), text: reference.description())
+
+	for option in HelpOption.allCases 'eachOption'
+		let entry = optionReference(option)
+		if entry.commands.contains(command) 'thisCommandReadsIt'
+			printHelpEntry("  {entry.spelling}", text: entry.description)
+		end 'thisCommandReadsIt'
+	end 'eachOption'
+end 'printCommandSection'
+
+// The whole reference: every command, with its options under it, the two audiences in two runs. NOTHING
+// is left out here — this is where a command the short list does not show is found.
+function printFullReference()
+	print("Usage: maxon <command> [options]\n")
+	printReferenceRun(CommandAudience.usingTheCompiler, heading: "")
+	printReferenceRun(CommandAudience.workingOnTheCompiler, heading: CompilerWorkHeading)
+end 'printFullReference'
+
+// One audience's run of sections, under its heading. An EMPTY heading prints none, which is the first
+// run: it is what this binary is for, and a heading over it would be labelling the default.
+function printReferenceRun(audience CommandAudience, heading String)
+	if not heading.isEmpty() 'itIsHeaded'
+		print("\n")
+		print("{heading}\n")
+	end 'itIsHeaded'
+
+	for command in commandsFor(audience) 'eachCommand'
+		print("\n")
+		printCommandSection(command)
+	end 'eachCommand'
+end 'printReferenceRun'
+
+function helpUsageLine() returns String
+	return "maxon {HelpCommandName} [<command>]"
+end 'helpUsageLine'
+
+// ⭐⭐ **`maxon help [<command>]` — THE REFERENCE, AND THE ONLY DOOR ONTO IT.** A command rather than a
+// flag, so that it is listed with everything else this binary does and a caller who has only ever run
+// `maxon` has already been told that it exists.
+//
+// ⚠ **IT TAKES NO OPTIONS, AND REFUSES THROUGH `anyOption` RATHER THAN `badOption`** — the door `fmt`
+// uses, and for one half of its reason: `badOption` never sees a flag this driver DOES implement, so
+// `maxon --emit-ir help` would otherwise print the reference as though the flag had meant something.
+function runHelp(args MaxonArgs) returns ExitCode
+	if not args.anyOption.isEmpty() 'refusedOption'
+		printError("error: {HelpCommandName} takes no options: {args.anyOption}\n")
+		printError("Usage: {helpUsageLine()}\n")
+		return 1
+	end 'refusedOption'
+
+	if refusedPositionalBeyond(args, allowed: 1, usage: helpUsageLine()) 'unexpectedArgument'
+		return 1
+	end 'unexpectedArgument'
+
+	let named = args.solePositional()
+	if named.isEmpty() 'theWholeReference'
+		printFullReference()
+		return 0
+	end 'theWholeReference'
+
+	let command = commandFromWord(named)
+	if command == MaxonCommand.unknown 'noSuchCommand'
+		printError("error: unknown command: {named}\n")
+		printCommandList()
+		return 1
+	end 'noSuchCommand'
+
+	printCommandSection(command)
+	return 0
+end 'runHelp'
+
+// ⭐⭐ **NOTHING TYPED IS A QUESTION, NOT AN ERROR.** `maxon` alone is what a caller runs to find out what
+// this binary is, so it ANSWERS — the version and the command list — and exits 0. A word that names no
+// command, or an option with no command to apply it to, is a mistake and is reported as one: the same
+// list, under an error on stderr, exit 1.
+function noCommandGiven(args MaxonArgs) returns ExitCode
+	if args.paths.isEmpty() and args.anyOption.isEmpty() 'nothingWasTyped'
+		printOverview()
+		return 0
+	end 'nothingWasTyped'
+
+	if args.paths.isEmpty() 'anOptionWithNoCommand'
+		printError("error: no command given, and {args.anyOption} names an option rather than one\n")
+	end 'anOptionWithNoCommand' else 'aWordThatNamesNoCommand'
+		printError("error: unknown command: {args.solePositional()}\n")
+	end 'aWordThatNamesNoCommand'
+
+	printCommandList()
+	return 1
+end 'noCommandGiven'
 
 // The parsed command the driver dispatches on.
+// ⭐⭐ **DECLARATION ORDER IS THE ORDER THE READER SEES, AND IT IS ALPHABETICAL BY COMMAND WORD.**
+// `namedCommands` walks `allCases`, so this list IS the listing `maxon` prints — and the one ordering
+// rule a gate can check is the one that holds: `tests/cli` asserts the advertised list is sorted, off
+// the binary's own output. An order by how often a command is used could not be checked by anything,
+// and is not one fact anyway — a compiler developer runs `spec-test` fifty times a day and `build`
+// twice, and someone using Maxon does the reverse.
+//
+// ⚠ Nothing reads a case's ordinal or raw value, so this order decides the listing and nothing else.
 enum MaxonCommand
 	build
-	verifyWarmRebuild
-	verifyRecheck
-	lspServer
-	specTest
-	scaleTest
-	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
-	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
-	test
+	// `maxon coverage <run|report> <exe>` — read back what a `--coverage` binary counted. Tail-stopping
+	// like `monitor`, and for the sharper form of its reason: the tail is a CHILD's command line.
+	coverage
+	// `maxon debug --dump-info <exe>` / `--symbolize <exe> <offset...>` — the read-only faces of the
+	// `.mxdbg` sidecar. Tail-stopping like `monitor`; see `DebugCommandName`.
+	debug
 	// `maxon fmt` - re-print `.maxon` sources in canonical layout, IN PLACE. See `runFmt`.
 	fmt
+	// `maxon help [<command>]` — the reference this driver prints about itself. See `runHelp`; the
+	// withdrawn flag spellings for the same question are refused by name at `WithdrawnHelpFlag`.
+	help
+	lspServer
 	// `maxon monitor` — run a `--debugstream` binary with a DebugStream ring attached and print the
 	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
 	// driver; see the `monitorTail` arm in `parse`.
 	monitor
-	// `maxon debug --dump-info <exe>` / `--symbolize <exe> <offset...>` — the read-only faces of the
-	// `.mxdbg` sidecar. Tail-stopping like `monitor`; see `DebugCommandName`.
-	debug
-	// `maxon coverage <run|report> <exe>` — read back what a `--coverage` binary counted. Tail-stopping
-	// like `monitor`, and for the sharper form of its reason: the tail is a CHILD's command line.
-	coverage
 	// `maxon profile run <exe>` — sample a running program and report where its CPU time went. Tail-stopping
 	// like `coverage`, and for exactly its reason: the tail is a CHILD's command line.
 	profile
+	scaleTest
+	specTest
+	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
+	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
+	test
+	verifyRecheck
+	verifyWarmRebuild
 	// `maxon version` — which binary is this. See `runVersion`; the withdrawn flag spellings for the same
 	// question are refused by name at `WithdrawnVersionFlag`.
 	version
+	// ⛔ NOT A COMMAND and therefore not in the sorted run above: it is the ABSENCE of one, which is why
+	// `namedCommands` leaves it out of every listing. See `HelpReferenceError`.
 	unknown
 end 'MaxonCommand'
 
@@ -1892,10 +2189,6 @@ module type MaxonArgs
 	// prints them in different words: an unknown option was never understood, a withdrawn one was and
 	// is now structurally impossible. See `withdrawnOptionMessage`.
 	export var withdrawnOption as String
-	// ⭐ `--help` / `-h`. A FIELD rather than a local, for the reason this whole record exists: `parse`'s
-	// loop already carries more live values than x64 has general-purpose registers, and one more `var` in
-	// it is an E5001 away. See `parse`.
-	export var showHelp as bool
 
 	// ⭐ **THE COMMAND LINE WITH NOTHING ON IT** — every field at the value an absent flag leaves it.
 	// The defaults live here, in ONE place, rather than in `parse`'s locals: `parse` accumulates into a
@@ -1906,7 +2199,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showHelp: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -2005,28 +2298,22 @@ module type MaxonArgs
 			let commandBefore = parsed.command
 			parsed.command = MaxonCommand.unknown
 
-			if arg == BuildSubcommandName 'buildCmd'
-				parsed.command = MaxonCommand.build
-			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
-				parsed.command = MaxonCommand.verifyWarmRebuild
-			end 'verifyCmd' else if arg == "verify-recheck" 'recheckCmd'
-				parsed.command = MaxonCommand.verifyRecheck
-			end 'recheckCmd' else if arg == "lsp-server" 'lspServerCmd'
-				parsed.command = MaxonCommand.lspServer
-			end 'lspServerCmd' else if arg == SpecTestCommandName 'specTestCmd'
-				parsed.command = MaxonCommand.specTest
-			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
-				parsed.command = MaxonCommand.scaleTest
-			end 'scaleTestCmd' else if arg == TestCommandName 'testCmd'
-				parsed.command = MaxonCommand.test
-			end 'testCmd' else if arg == FmtCommandName 'fmtCmd'
-				parsed.command = MaxonCommand.fmt
-			end 'fmtCmd' else if arg == VersionCommandName 'versionCmd'
-				parsed.command = MaxonCommand.version
-			end 'versionCmd' else if arg == OutputFlagName 'dashOutput'
+			// ⭐⭐ **ONE TABLE DECIDES WHICH WORDS ARE COMMANDS, AND THE REFERENCE READS THAT SAME TABLE**
+			// (`commandReference`, through `commandFromWord`). A chain of literals here would be a second
+			// roster: a command word could be renamed in one and go on being printed by the other, and a
+			// command added to `MaxonCommand` could be documented without ever being selectable.
+			//
+			// ⚠ The four tail-stopping words never reach this arm with the parse still open — each is
+			// consumed above while the command is still `unknown` — so recognizing them here is what makes
+			// a LATER one an ordinary path through the restore block below, exactly as every other command
+			// word is.
+			let named = commandFromWord(arg)
+			if named != MaxonCommand.unknown 'commandWord'
+				parsed.command = named
+			end 'commandWord' else if arg == OutputFlagName 'dashOutput'
 				i = i + 1
 				parsed.outputOverride = try args.get(i) otherwise ""
-			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
+			end 'dashOutput' else if arg.startsWith(OutputFlagPrefix) 'longOutput'
 				parsed.outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
 				parsed.emitIr = true
@@ -2110,9 +2397,9 @@ module type MaxonArgs
 					let name = try cut.get(0) otherwise ""
 					parsed.defines.push(Define.create(name, value: defineValueAfterName(cut)))
 				end 'nameAndValue'
-			end 'defineFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
+			end 'defineFlag' else if arg.startsWith(EmitCorpusFlagPrefix) 'emitCorpusFlag'
 				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
-			end 'emitCorpusFlag' else if arg.startsWith("--rungs=") 'rungsFlag'
+			end 'emitCorpusFlag' else if arg.startsWith(RungsFlagPrefix) 'rungsFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				// A bad value is recorded as a BAD OPTION, not clamped to the default. `main` refuses
 				// to run on a command line it only partly understood, which is the only honest
@@ -2123,7 +2410,7 @@ module type MaxonArgs
 					valid(count) then parsed.rungs = count
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'rungsArg'
-			end 'rungsFlag' else if arg.startsWith("--repeat=") 'repeatFlag'
+			end 'rungsFlag' else if arg.startsWith(RepeatFlagPrefix) 'repeatFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				// The same door as `--rungs` and `--workers`: a bad value is a BAD OPTION, not a
 				// clamp. `--repeat=0` asks for a rung that is never compiled, and quietly compiling
@@ -2134,9 +2421,9 @@ module type MaxonArgs
 					valid(count) then parsed.repeat = count
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'repeatArg'
-			end 'repeatFlag' else if arg.startsWith("--note=") 'noteFlag'
+			end 'repeatFlag' else if arg.startsWith(NoteFlagPrefix) 'noteFlag'
 				parsed.note = try CommandLine.optionValue(arg) otherwise ""
-			end 'noteFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
+			end 'noteFlag' else if arg.startsWith(ResultJsonFlagPrefix) 'resultJsonFlag'
 				parsed.resultJson = try CommandLine.optionValue(arg) otherwise ""
 			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
 				parsed.targetSpec = try CommandLine.optionValue(arg) otherwise ""
@@ -2195,9 +2482,11 @@ module type MaxonArgs
 				// starts with one of them names no option this driver ever had, and belongs on the anonymous
 				// path with every other typo.
 				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
-			end 'withdrawnVersionFlag' else if arg == HelpFlag or arg == HelpFlagShort 'helpFlag'
-				parsed.showHelp = true
-			end 'helpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
+			end 'withdrawnVersionFlag' else if arg == WithdrawnHelpFlag or arg == WithdrawnHelpFlagShort 'withdrawnHelpFlag'
+				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN, and matched EXACTLY for the reason the version
+				// spellings above are. See `WithdrawnHelpFlag`.
+				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
+			end 'withdrawnHelpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
 				// KEPT, never dropped. WHICH of them a command uses is the COMMAND's question — `build`

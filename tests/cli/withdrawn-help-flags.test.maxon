@@ -1,0 +1,19 @@
+// withdrawn-help-flags.test.maxon — `--help` and `-h` are refused BY NAME, naming the command that
+// replaced them.
+//
+// ⭐⭐ **A REFUSAL THAT SAYS "unknown option" WOULD BE WORSE THAN NO REFUSAL AT ALL.** These are the two
+// spellings every other CLI has taught people to try, so a caller typing one is following a convention;
+// told the driver never heard of it, they go looking for a typo instead of for `maxon help`. What is
+// asserted here is that the sentence NAMES the replacement — the fact a reader actually needs.
+
+test 'the withdrawn help flags are refused by name, naming the command'
+	for flag in [WithdrawnHelpFlag, WithdrawnHelpFlagShort] 'eachSpelling'
+		let run = runOneArgument(flag)
+
+		let observedExit = run.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 1, message: "`maxon {flag}` was ACCEPTED. It is withdrawn, and a flag that still answers is a second door onto the reference. It said: {run.stdout}{run.stderr}")
+
+		try Expect.contains(run.stderr, needle: flag, message: "`maxon {flag}`'s refusal does not name the flag that was typed")
+		try Expect.contains(run.stderr, needle: "maxon {HelpCommandWord}", message: "`maxon {flag}`'s refusal does not name `maxon {HelpCommandWord}`, which is the one thing its reader needs. It said: {run.stderr}")
+	end 'eachSpelling'
+end 'the withdrawn help flags are refused by name, naming the command'

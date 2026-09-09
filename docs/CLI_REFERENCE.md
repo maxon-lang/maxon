@@ -3,29 +3,43 @@
 Everything the `maxon` compiler driver accepts: the commands, their options, and the project layout
 they read.
 
-`maxon --help` prints the same command and option list from the driver itself. Where this document and
-that listing disagree, the listing is the compiler and this is a copy.
+`maxon help` prints the same command and option list from the driver itself, and `maxon help <command>`
+one command's part of it; `maxon` with no arguments prints the version and the command list alone. Where
+this document and that listing disagree, the listing is the compiler and this is a copy.
 
 ---
 
 ## Quick Reference
 
+Alphabetical, which is the order the driver itself prints — see [`maxon help`](#maxon-help) for why that
+one and not another.
+
 | Command | Description |
 |---------|-------------|
 | `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
-| `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
-| `maxon test [directory]` | Run a project's own `test` declarations |
-| `maxon spec-test [directory]` | Run the COMPILER's own spec suite |
-| `maxon scale-test` | Compile a doubling ladder and report per-phase memory and CPU |
-| `maxon lsp-server` | Speak the Language Server Protocol over stdio |
-| `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events |
+| `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line + branch coverage |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary |
 | `maxon debug --symbolize <exe> <off...>` | Resolve `.text` code offsets to `file:line:col` |
-| `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line + branch coverage |
+| `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
+| `maxon help [<command>]` | Print the command and option reference, whole or for one command |
+| `maxon lsp-server` | Speak the Language Server Protocol over stdio |
+| `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went |
-| `maxon verify-warm-rebuild <file>` | Assert the query spine is deterministic and incremental |
-| `maxon verify-recheck <file\|dir>` | Assert one project survives being re-checked |
+| `maxon test [directory]` | Run a project's own `test` declarations |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
+
+### For working on the compiler itself
+
+These four are about THIS COMPILER rather than about any program it builds, so `maxon` with no arguments
+does not list them. They are typed, parsed and run exactly like any other command, and `maxon help` and
+`maxon help <command>` document them.
+
+| Command | Description |
+|---------|-------------|
+| `maxon scale-test` | Compile a doubling ladder and report per-phase memory and CPU |
+| `maxon spec-test [directory]` | Run the COMPILER's own spec suite |
+| `maxon verify-recheck <file\|dir>` | Assert one project survives being re-checked |
+| `maxon verify-warm-rebuild <file>` | Assert the query spine is deterministic and incremental |
 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
 argument, so `maxon fmt fmt` formats the directory `fmt/` rather than selecting `fmt` twice.
@@ -609,6 +623,50 @@ still carrying one is told what to write rather than that the driver never heard
 
 ---
 
+### `maxon help`
+
+```bash
+maxon                  # the version, and one line per command
+maxon help             # every command, with the options each one reads
+maxon help build       # one command's entry and its options
+```
+
+`maxon` with **no arguments** answers the only question a caller with nothing to go on can ask: which
+binary this is, and what it does. One line per command, and exit **0** — nothing was typed wrong.
+
+It lists the commands for **using** the compiler and leaves out the four for **working on** it
+(`spec-test`, `scale-test`, `verify-recheck`, `verify-warm-rebuild`) — and its footer says so, because a
+short list that quietly omitted them would leave a reader who needs one with no reason to look further.
+Hiding is a listing concern only: every one of them is still typed, parsed and run exactly as before.
+
+`maxon help` prints the whole reference — nothing is left out here — as two runs, the second under
+`Commands for working on the compiler itself:`. Each command's entry carries every option it reads,
+indented underneath. An option that several commands accept — `--target=` is read by `build`, `spec-test`
+and `test` — is listed under **each** of them, so one command's entry is that command's whole surface and
+a reader never filters a global list.
+
+`maxon help <command>` prints just that entry. A word that names no command is refused (exit 1) with
+the command list under it, which is the way back.
+
+It takes no options: `maxon --emit-ir help` is refused rather than answered as though the flag had
+meant something.
+
+**`--help` and `-h` were withdrawn.** Help is a command, so there is one door onto it, and a caller does
+not have to know the word to find it — `maxon` alone lists it. Both spellings are refused by name,
+naming the command, rather than reported as options the driver never heard of.
+
+Commands are listed **alphabetically**, and that is a decision rather than an accident: it is the one
+ordering a gate can check, so `tests/cli` asserts it off the binary's own output. An order by how often a
+command is used could be checked by nothing, and is not one fact anyway — a compiler developer runs
+`spec-test` fifty times a day and `build` twice, and someone using Maxon does the reverse.
+
+The listing is **derived**: the roster the parser reads to decide that a word is a command is the same
+roster the reference walks to print one, and each entry declares its own audience. A command cannot be
+documented under a word nothing accepts, nor accepted under a word the reference never prints, nor added
+without saying which listing it belongs in.
+
+---
+
 ## Targets
 
 `--target=<cpu>-<os>` is accepted by `build`, `spec-test` and `test`. Without it, the host target is
@@ -623,7 +681,7 @@ used.
 | `wasm32-wasi` | WASI Preview 2 component |
 
 A spelling that names none of them is refused (`error: unknown --target '<spec>'`) and the command
-exits 1. `maxon --help` prints the authoritative list; this table is a copy of it.
+exits 1. `maxon help build` prints the authoritative list; this table is a copy of it.
 
 Not every target provides every host facility. `--debugstream` and `--coverage` are refused by name on
 a target that cannot serve them, before anything is compiled, rather than compiling to an instrument

@@ -1,0 +1,330 @@
+// CliHarness.maxon — the shared half every case under `tests/cli/` reaches for: the compiler it spawns,
+// one run of it, and the three readings of what it printed that let these cases assert WITHOUT keeping a
+// list of commands of their own.
+//
+// ⭐⭐ **WHAT THIS CORPUS PROVES: THE DRIVER'S OWN FACE — `maxon` with no arguments, and `maxon help`.**
+// Those are driver commands, so they are gated by spawning the compiler and asserting what it reports
+// (`tests/README.md`), and they cannot be gated in `specs/`: a spec case is a Maxon PROGRAM the harness
+// compiles and runs, which can reach `stdlib/` and nothing else.
+//
+// ⛔⛔ **NOT ONE BYTE OF THIS CORPUS IS A GOLDEN, AND THAT IS FORCED.** The reference embeds the commit
+// the binary was built from, the day, the host target, the supported target list and this machine's
+// default worker count — five values that differ between two correct checkouts. So every case here
+// asserts a PROPERTY instead, and the sharpest ones compare the driver's two listings AGAINST EACH OTHER.
+//
+// ⛔⛔ **A CENSUS OF COMMANDS TYPED HERE WOULD ROT, so there is none.** A list of the driver's commands
+// kept in this file would go stale the day one is added, and a gate that walks a stale list reports green
+// about a command nobody wrote down. What is asked instead is the ROUND TRIP the driver's design
+// promises: every command the short list advertises has a section in `maxon help`, and `maxon help <that
+// word>` answers for it. The roster is read off the binary, every time.
+//
+// ⚠ **AND A ROUND TRIP OVER AN EMPTY SET PASSES.** Two parses that both found nothing agree perfectly,
+// which is why `AnchorCommands` exists: three words that must appear, so a reading that silently stopped
+// working cannot report agreement. It is deliberately NOT a census — it is the proof that the census read
+// off the binary is non-empty.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
+// missing compiler, an unspellable path, a spawn that never happened. None of those is the driver
+// answering wrongly.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, which is the working directory a test binary
+// inherits from `maxon test`. A run started anywhere else fails loudly rather than finding nothing.
+
+// The binary under test, relative to the checkout root and without its host suffix. It is the compiler
+// under test AND the driver under test.
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+// The command that prints the reference, and the withdrawn flag spellings that must be refused by name in
+// favour of it.
+export let HelpCommandWord = "help"
+export let WithdrawnHelpFlag = "--help"
+export let WithdrawnHelpFlagShort = "-h"
+
+// ⭐ THREE WORDS THAT PROVE A READING IS NOT VACUOUS — see the header. Not a census: a command added to
+// the driver belongs in neither this list nor any other list in this corpus.
+let AnchorCommands = ["build", "version", "help"]
+
+// ⭐ AND ONE THAT PROVES THE HIDING IS REAL. The short list leaves out the commands for working on the
+// compiler itself; a split that hid NOTHING would satisfy every subset assertion here perfectly, so one
+// word is named as a command that must be documented and must NOT be advertised. Not a census of the
+// hidden set either — it is the proof that the set is not empty.
+export let HiddenAnchorCommand = "spec-test"
+
+// ⚠ A SECOND HIDDEN COMMAND, NAMED FOR ONE REASON: spawned with no argument it refuses INSTANTLY, where
+// the anchor above would run the whole spec suite. `hidden-command-still-parses` needs a hidden command
+// it can actually spawn.
+export let HiddenCheapCommand = "verify-recheck"
+
+// What a refusal says when a word reached the parser as a stranger — the failure hiding a command from a
+// LISTING must never produce.
+export let UnknownCommandPhrase = "unknown command"
+
+// How the reference is laid out, and the whole of what these cases read it by. A COMMAND SECTION sits at
+// the left margin of `maxon help`; a LABEL — a command under `Commands:`, an option under its section — is
+// indented two spaces; wrapped prose starts in the text column, far to the right of either.
+let LabelIndent = "  "
+let DeeperThanALabel = "   "
+
+// The two left-margin lines of a listing that are not command sections: the usage line, and a heading
+// over a run of sections. ⚠ **A HEADING ENDS IN A COLON AND A COMMAND LABEL NEVER DOES** — that is the
+// whole of how the two are told apart, and the driver's `CompilerWorkHeading` says so from its side.
+let UsageLinePrefix = "Usage:"
+let HeadingSuffix = ":"
+
+// What an option's spelling always begins with, and a command word never does.
+let OptionPrefix = "-"
+
+// The last byte that means the same thing under every code page a console might be set to.
+let LastAsciiByte = 127
+
+// A list of the words one listing showed, and how many of them a case is asking for.
+export typealias ListedWordArray = Array with String
+export typealias WordTally = int(0 to u32.max)
+
+// Spawn this checkout's `maxon` with `arguments` and collect everything it said.
+export function runDriver(arguments ListedWordArray) returns CollectedOutput
+	let binary = testedCompilerPath()
+	if not File.exists(binary) 'noBinary'
+		panic("CliHarness: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	var argv = StringArray.create()
+	for argument in arguments 'eachArgument'
+		argv.push(argument)
+	end 'eachArgument'
+
+	return try Subprocess.run(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
+		panic("CliHarness: the gate could not run — could not spawn the driver ({e.displayReason()}). These cases pin what it prints, and a report nothing compares is a claim.")
+	end 'spawnFailed'
+end 'runDriver'
+
+// One run with no arguments at all — the overview.
+export function runWithNoArguments() returns CollectedOutput
+	return runDriver(ListedWordArray.create())
+end 'runWithNoArguments'
+
+// One run of a single word or flag, which is every remaining shape this corpus needs.
+export function runOneArgument(argument String) returns CollectedOutput
+	var arguments = ListedWordArray.create()
+	arguments.push(argument)
+	return runDriver(arguments)
+end 'runOneArgument'
+
+// `maxon help <command>`.
+export function runHelpFor(command String) returns CollectedOutput
+	var arguments = ListedWordArray.create()
+	arguments.push(HelpCommandWord)
+	arguments.push(command)
+	return runDriver(arguments)
+end 'runHelpFor'
+
+// The binary under test, with the suffix this host can actually spawn.
+function testedCompilerPath() returns FilePath
+	#if os(Windows)
+		let spelled = "{TestedCompilerStem}.exe"
+	#else
+		let spelled = "{TestedCompilerStem}"
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run — '{TestedCompilerStem}' is not a spellable path")
+end 'testedCompilerPath'
+
+// ⭐ **THE LABELS A LISTING SHOWS**, read off its layout: a label is indented exactly two spaces, so
+// wrapped prose — which starts far to the right — is never mistaken for one. In the short list these are
+// the COMMANDS; in a reference section they are that command's OPTIONS.
+export function labelledWordsIn(listing String) returns ListedWordArray
+	var words = ListedWordArray.create()
+
+	for line in listing.split("\n") 'eachLine'
+		if not line.startsWith(LabelIndent) 'notALabel'
+			continue
+		end 'notALabel'
+
+		if line.startsWith(DeeperThanALabel) 'wrappedProse'
+			continue
+		end 'wrappedProse'
+
+		words.push(firstWordOf(line))
+	end 'eachLine'
+
+	return words
+end 'labelledWordsIn'
+
+// ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
+// only thing at the left margin apart from the `Usage:` line.
+export function sectionedCommandsIn(reference String) returns ListedWordArray
+	var words = ListedWordArray.create()
+
+	for line in reference.split("\n") 'eachLine'
+		if line.trim().isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		if line.startsWith(LabelIndent) or line.startsWith(UsageLinePrefix) 'notASectionLabel'
+			continue
+		end 'notASectionLabel'
+
+		if line.trim().endsWith(HeadingSuffix) 'aHeadingOverARun'
+			continue
+		end 'aHeadingOverARun'
+
+		words.push(firstWordOf(line))
+	end 'eachLine'
+
+	return words
+end 'sectionedCommandsIn'
+
+// The labels that ARE option spellings, or the ones that are not — which is what tells the short list
+// apart from the reference without either being pinned to the byte. ONE selector taking the answer it
+// wants, because the two questions are one question and its negation.
+export function labelsWhereOptionhoodIs(words ListedWordArray, isOption bool) returns ListedWordArray
+	var selected = ListedWordArray.create()
+
+	for word in words 'eachWord'
+		if word.startsWith(OptionPrefix) == isOption 'wanted'
+			selected.push(word)
+		end 'wanted'
+	end 'eachWord'
+
+	return selected
+end 'labelsWhereOptionhoodIs'
+
+// The anchors a listing did NOT advertise, as one string — named rather than counted, because a reader
+// looking at a red gate needs to know which word went missing. Empty is the pass.
+export function anchorsMissingFrom(words ListedWordArray) returns String
+	var missing = ""
+
+	for anchor in AnchorCommands 'eachAnchor'
+		if not words.contains(anchor) 'absent'
+			missing.append("{anchor} ")
+		end 'absent'
+	end 'eachAnchor'
+
+	return missing.trim()
+end 'anchorsMissingFrom'
+
+// The words in `left` that `right` does not have, IN ORDER. Both a set difference a case asserts is
+// empty and the hidden run one asserts is not, so it returns the words rather than a count or a
+// rendering — `listed` is what turns it into a report.
+export function wordsNotIn(left ListedWordArray, right ListedWordArray) returns ListedWordArray
+	var missing = ListedWordArray.create()
+
+	for word in left 'eachWord'
+		if not right.contains(word) 'absent'
+			missing.push(word)
+		end 'absent'
+	end 'eachWord'
+
+	return missing
+end 'wordsNotIn'
+
+// The first `count` words, which is how a case takes the run a listing prints FIRST.
+export function firstFew(words ListedWordArray, count WordTally) returns ListedWordArray
+	var taken = ListedWordArray.create()
+
+	for word in words 'eachWord'
+		if taken.count() >= count 'enough'
+			break
+		end 'enough'
+
+		taken.push(word)
+	end 'eachWord'
+
+	return taken
+end 'firstFew'
+
+// ⭐ **THE PAIRS THAT BREAK ASCENDING ORDER**, named rather than counted. Empty is the pass, and the
+// listing being sorted is the one ordering rule a gate can check — see this file's header.
+export function outOfOrderIn(words ListedWordArray) returns String
+	var broken = ""
+	var previous = ""
+
+	for word in words 'eachWord'
+		if not previous.isEmpty() and not sortsAhead(previous, after: word) 'notAscending'
+			broken.append("{previous} before {word}; ")
+		end 'notAscending'
+
+		previous = word
+	end 'eachWord'
+
+	return broken.trim()
+end 'outOfOrderIn'
+
+// Whether `before` sorts strictly ahead of `after`, byte by byte. Written out because a String is a byte
+// record with NO ordering in this language (E3005) — `==` and `!=` are its only comparisons — so the
+// order this corpus asserts has to be spelled somewhere, and one place is better than each case's own.
+function sortsAhead(before String, after String) returns bool
+	let left = bytesOf(before)
+	let right = bytesOf(after)
+	// ⚠ NOT the `min` builtin: it promotes to float, and a counted `for` needs an integer bound.
+	let shared = left.count() if left.count() <= right.count() else right.count()
+
+	for position in 0 upto shared 'eachByte'
+		let leftByte = try left.get(position) otherwise panic("CliHarness: index {position} is inside the shorter of the two byte lists by the bound above")
+		let rightByte = try right.get(position) otherwise panic("CliHarness: index {position} is inside the shorter of the two byte lists by the bound above")
+
+		if leftByte != rightByte 'theyDifferHere'
+			return leftByte < rightByte
+		end 'theyDifferHere'
+	end 'eachByte'
+
+	// One is a prefix of the other, so the shorter sorts first; equal words are NOT ahead of each other,
+	// which is what makes a duplicate in a listing an ordering failure rather than a pass.
+	return left.count() < right.count()
+end 'sortsAhead'
+
+function bytesOf(text String) returns ByteArray
+	var collected = ByteArray.create()
+
+	for one in text.bytes() 'eachByte'
+		collected.push(one)
+	end 'eachByte'
+
+	return collected
+end 'bytesOf'
+
+// The words of a list, for a report that has to show them all.
+export function listed(words ListedWordArray) returns String
+	var rendered = ""
+
+	for word in words 'eachWord'
+		rendered.append("{word} ")
+	end 'eachWord'
+
+	return rendered.trim()
+end 'listed'
+
+// The first line carrying a byte outside ASCII, or empty when there is none.
+//
+// ⭐⭐ **THE LISTINGS MUST BE PURE ASCII, AND THE REASON IS MEASURED.** A Maxon program writes UTF-8
+// bytes straight to the handle, and NOTHING tells a Windows console which encoding that is — so a
+// console left on its default code page decodes an em-dash as three Latin-1 letters and the reader gets
+// mojibake in the one text this binary prints to explain itself. The reference is what somebody reads
+// when they do not yet know anything, on whatever terminal they happen to have, so it stays inside the
+// characters every code page agrees about.
+//
+// ⚠ **THIS IS A RULE ABOUT THE LISTING, NOT A FIX FOR THE ENCODING.** Diagnostics and `maxon test`'s
+// report still carry non-ASCII and still land wrong on such a console; that is the driver's own
+// stream-encoding defect and it is not this corpus's to assert.
+export function nonAsciiLineIn(text String) returns String
+	for line in text.split("\n") 'eachLine'
+		for one in line.bytes() 'eachByte'
+			if one > LastAsciiByte 'outsideAscii'
+				return line
+			end 'outsideAscii'
+		end 'eachByte'
+	end 'eachLine'
+
+	return ""
+end 'nonAsciiLineIn'
+
+// The first whitespace-delimited word of a line, which is a label's command word or option spelling.
+function firstWordOf(line String) returns String
+	for part in line.trim().split(" ") 'eachPart'
+		if not part.isEmpty() 'aWord'
+			return part
+		end 'aWord'
+	end 'eachPart'
+
+	panic("CliHarness: '{line}' was taken for a label but holds no word — the layout this corpus reads the roster by has changed, and every census here is now reading nothing.")
+end 'firstWordOf'

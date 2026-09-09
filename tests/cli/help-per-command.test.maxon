@@ -1,0 +1,31 @@
+// help-per-command.test.maxon — every command the reference documents answers `maxon help <command>`,
+// and answers about ITSELF.
+//
+// ⭐⭐ **THE ROSTER IS THE REFERENCE'S, NOT THE SHORT LIST'S, AND THAT IS THE POINT.** The commands the
+// short list hides are the ones with no other way in: a reader reaches them by name or not at all, so a
+// hidden command that could not answer for itself would be a command with no documentation anywhere.
+// Walking the reference covers the advertised ones too, since it documents both.
+
+test 'every documented command answers help for itself'
+	let documented = sectionedCommandsIn(runOneArgument(HelpCommandWord).stdout)
+
+	// ⚠ An empty roster would make every assertion in the loop below vacuous, and a vacuous loop reports
+	// exactly what a loop that checked everything reports.
+	let missing = anchorsMissingFrom(documented)
+	try Expect.isEmpty(missing, message: "the reference has no section for these commands: {missing}. It sectioned: {listed(documented)}")
+
+	let hiddenIsThere = documented.contains(HiddenAnchorCommand)
+	try Expect.isTrue(hiddenIsThere, message: "the reference has no section for `{HiddenAnchorCommand}`, which the short list does not advertise either — so nothing in this binary documents it. It sectioned: {listed(documented)}")
+
+	for command in documented 'eachCommand'
+		let run = runHelpFor(command)
+
+		let observedExit = run.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord} {command}` was refused, for a command the reference itself documents. It said: {run.stdout}{run.stderr}")
+
+		// The entry it printed must be that command's: the section label is the first word of the answer.
+		let sectioned = sectionedCommandsIn(run.stdout)
+		let answered = try sectioned.get(0) otherwise ""
+		try Expect.equal(answered, expected: command, message: "`maxon {HelpCommandWord} {command}` answered with a different command's entry. It printed: {run.stdout}")
+	end 'eachCommand'
+end 'every documented command answers help for itself'

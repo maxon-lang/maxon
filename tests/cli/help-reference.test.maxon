@@ -1,0 +1,52 @@
+// help-reference.test.maxon — `maxon help` documents everything, `maxon` advertises the part of it a
+// reader compiling a program needs, and the two agree about the part they share.
+//
+// ⭐⭐ **THE TWO LISTINGS ARE COMPARED AGAINST EACH OTHER, AND NEITHER IS A LIST KEPT IN THIS FILE** —
+// see `CliHarness.maxon` on why a census here would rot. Three separate things are asked:
+//
+// - **Everything advertised is documented, IN THE SAME ORDER.** The reference prints the short list's
+//   commands first and in their order, so the first N of its sections must BE the short list. A command
+//   advertised and not documented sends a reader to a page that does not exist.
+// - **Something IS hidden.** A split that hid nothing would satisfy every subset assertion above
+//   perfectly and read exactly like a working one.
+// - **Both runs are sorted.** Alphabetical is the ordering this driver chose precisely because it is the
+//   one a gate can check; unchecked, it would be a convention that decays the first time a command is
+//   added by someone who did not know about it.
+
+test 'the reference documents the short list first, in order, then what it hides'
+	let overview = runWithNoArguments()
+	let reference = runOneArgument(HelpCommandWord)
+
+	let observedExit = reference.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
+
+	let advertised = labelledWordsIn(overview.stdout)
+	let documented = sectionedCommandsIn(reference.stdout)
+
+	// ⚠ Every comparison below is vacuous over an empty reading, so this comes first.
+	let missingAnchors = anchorsMissingFrom(advertised)
+	try Expect.isEmpty(missingAnchors, message: "the short list did not advertise these commands: {missingAnchors}. It showed: {listed(advertised)}")
+
+	let undocumented = listed(wordsNotIn(advertised, right: documented))
+	try Expect.isEmpty(undocumented, message: "`maxon` advertises these commands and `maxon {HelpCommandWord}` has no section for them: {undocumented}")
+
+	let leadingRun = listed(firstFew(documented, count: advertised.count() as WordTally))
+	try Expect.equal(leadingRun, expected: listed(advertised), message: "the reference's first sections are not the short list, in the short list's order. A reader who read one and then the other has to find the same commands in the same place.")
+
+	// What the short list leaves out — the commands for working on the compiler itself.
+	let hidden = wordsNotIn(documented, right: advertised)
+	let hiddenIsReal = hidden.contains(HiddenAnchorCommand)
+	try Expect.isTrue(hiddenIsReal, message: "`{HiddenAnchorCommand}` is a command for working on the compiler, so the short list must not advertise it and the reference must document it. The short list showed: {listed(advertised)}")
+
+	let bothSorted = "{outOfOrderIn(advertised)}{outOfOrderIn(hidden)}"
+	try Expect.isEmpty(bothSorted, message: "a run of commands is out of alphabetical order: {bothSorted}. Declaration order in `MaxonCommand` IS the printed order, so the fix is to move the case.")
+
+	// ⛔ ASCII, for `no-arguments`' reason and over the longer text, which is where a stray dash hides.
+	let mojibake = nonAsciiLineIn(reference.stdout)
+	try Expect.isEmpty(mojibake, message: "this line of the reference leaves ASCII: {mojibake}. Nothing tells a Windows console that this program writes UTF-8, so a console on its default code page renders those bytes as Latin-1 letters. Use the punctuation ASCII has.")
+
+	// ⭐ The reference's own reason for existing: the options, which the short list deliberately omits.
+	let options = labelsWhereOptionhoodIs(labelledWordsIn(reference.stdout), isOption: true)
+	let anyOption = options.count() > 0
+	try Expect.isTrue(anyOption, message: "`maxon {HelpCommandWord}` showed no options at all. The reference is what the short list sends a reader to FOR the options; without them the two listings say the same thing.")
+end 'the reference documents the short list first, in order, then what it hides'

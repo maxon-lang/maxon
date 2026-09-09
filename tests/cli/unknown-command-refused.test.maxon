@@ -1,0 +1,21 @@
+// unknown-command-refused.test.maxon — a word that names no command is a MISTAKE, and is reported as one
+// at both doors that can be handed it.
+//
+// ⭐⭐ **THIS IS THE EDGE OF THE ANSWER `maxon` GIVES FOR FREE.** With nothing typed the driver answers
+// and exits 0; one word later it must not. A driver that treated any unrecognized word as "no command
+// given" would exit 0 on `maxon buidl`, printing a list the caller then has to notice they were not
+// looking for — a typo answered as a success.
+
+test 'a word that names no command is refused at both doors'
+	for typed in ["nosuchcommand", "buidl"] 'eachWord'
+		let bare = runOneArgument(typed)
+		let bareExit = bare.exitCode() as AssertedInt
+		try Expect.equal(bareExit, expected: 1, message: "`maxon {typed}` did not fail. A word naming no command is a typo, not a question. It said: {bare.stdout}{bare.stderr}")
+		try Expect.contains(bare.stderr, needle: typed, message: "`maxon {typed}`'s refusal does not name the word that was typed")
+
+		let asked = runHelpFor(typed)
+		let askedExit = asked.exitCode() as AssertedInt
+		try Expect.equal(askedExit, expected: 1, message: "`maxon {HelpCommandWord} {typed}` did not fail, for a word that names no command. It said: {asked.stdout}{asked.stderr}")
+		try Expect.contains(asked.stderr, needle: typed, message: "`maxon {HelpCommandWord} {typed}`'s refusal does not name the word that was typed")
+	end 'eachWord'
+end 'a word that names no command is refused at both doors'

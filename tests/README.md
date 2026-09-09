@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Eleven corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Thirteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -29,6 +29,7 @@ SERVER its tests spawn.
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
+| `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
@@ -79,6 +80,15 @@ tests/
     coverage-branch-arms.test.maxon         the implicit `else` and the `match` case no run reached
     coverage-byte-identical.test.maxon      instrumentation reaches the flagged build and no other
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
+  cli/
+    CliHarness.maxon                        the shared half: the spawn, and reading a roster off a listing
+    no-arguments.test.maxon                 `maxon` alone answers, SHORT, sorted, and exits 0
+    help-reference.test.maxon               the reference leads with the short list, then what it hides
+    help-per-command.test.maxon             every documented command answers `help <command>` for itself
+    hidden-command-still-parses.test.maxon  a command left off the short LIST is still a command
+    withdrawn-help-flags.test.maxon         `--help` / `-h` refused BY NAME, naming the command
+    unknown-command-refused.test.maxon      a word naming no command fails at both doors
+    help-takes-no-options.test.maxon        `help` refuses a flag another command implements
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.test.maxon         the busier function ranks first in every section

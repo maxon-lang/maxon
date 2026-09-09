@@ -1,0 +1,35 @@
+// no-arguments.test.maxon — `maxon` with nothing on the command line ANSWERS, and answers SHORT.
+//
+// ⭐⭐ **EXIT 0 IS THE HALF NOTHING ELSE CAN CATCH.** Nothing was typed wrongly, so nothing failed —
+// and a driver that printed a perfect overview while exiting 1 is a CI step that stops on a caller
+// finding out what the binary is. The text and the code are two questions, and both are asked here.
+
+test 'no arguments prints the version and the short command list, exit 0'
+	let run = runWithNoArguments()
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon` with no arguments is a QUESTION, not a mistake: it is what a caller with nothing to go on runs to find out what this binary is. It printed: {run.stdout}{run.stderr}")
+
+	// The version leads, because "which maxon is this" is the other half of that question.
+	try Expect.contains(run.stdout, needle: "maxon ", message: "the overview does not lead with the version line")
+	try Expect.contains(run.stdout, needle: "Commands:", message: "the overview does not list the commands")
+
+	// ⭐ The whole point of the short form: it names the commands and NOT their options. An overview that
+	// grew back into the full reference is exactly the thing this shape exists to stop.
+	let labels = labelledWordsIn(run.stdout)
+	let options = listed(labelsWhereOptionhoodIs(labels, isOption: true))
+	try Expect.isEmpty(options, message: "`maxon` with no arguments listed OPTIONS. The short list names commands only; the options belong to `maxon {HelpCommandWord}`.")
+
+	// ⚠ Without this, a reading that found no labels at all would satisfy every assertion above.
+	let missing = anchorsMissingFrom(labels)
+	try Expect.isEmpty(missing, message: "the short list did not advertise these commands: {missing}. It showed: {listed(labels)}")
+
+	// ⭐ Alphabetical is the order this driver chose BECAUSE a gate can check it. Unchecked it would be a
+	// convention, and a convention decays the first time a command is added by someone who never read it.
+	let disordered = outOfOrderIn(labels)
+	try Expect.isEmpty(disordered, message: "the short list is out of alphabetical order: {disordered}. Declaration order in `MaxonCommand` IS the printed order, so the fix is to move the case.")
+
+	// ⛔ The one text a reader meets before they know anything, on whatever terminal they have.
+	let mojibake = nonAsciiLineIn(run.stdout)
+	try Expect.isEmpty(mojibake, message: "this line of the overview leaves ASCII: {mojibake}. Nothing tells a Windows console that this program writes UTF-8, so a console on its default code page renders those bytes as Latin-1 letters. Use the punctuation ASCII has.")
+end 'no arguments prints the version and the short command list, exit 0'
