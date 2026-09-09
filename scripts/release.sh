@@ -312,8 +312,6 @@ write_default_notes() {
 			echo "Or download the \`.msi\` below. It installs to \`C:\\Program Files\\Maxon\` and adds it to PATH."
 			echo "The installer is not code-signed, so SmartScreen warns on first run: **More info** then **Run anyway**."
 			echo
-			echo "If it finds Visual Studio Code on the machine, its last page offers to install the Maxon"
-			echo 'extension as well. A silent install (`winget`, `msiexec /quiet`) never asks and never installs it.'
 			echo
 		fi
 		if ls "$DIST"/*arm64-macos.tar.gz >/dev/null 2>&1; then

@@ -18,8 +18,7 @@
 
   The version comes in as `-d Version=` from `build.sh`, which reads it off the compiler binary.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
       Name="Maxon"
       Manufacturer="Maxon Language"
@@ -64,99 +63,12 @@
     <!-- No Start Menu shortcut: this is a command-line tool and a shortcut to it opens a window that
          prints usage and closes. Add/Remove Programs comes free from the package identity above. -->
 
-    <!--
-      ================= Visual Studio Code =================
+    <!-- ⛔ NO UI, AND THEREFORE NO CUSTOM ACTIONS AT ALL. `WixUI_InstallDir` brings its own —
+         `WixUIPrintEula`, `WixUIValidatePath` and an embedded `WixUiCa` DLL — and an installer whose
+         only executable content is its payload is the least a validation sandbox can object to. The UI
+         was added to host an exit-dialog checkbox that no longer exists.
 
-      ⭐ THE OFFER IS MADE ONLY WHEN VS CODE IS ACTUALLY THERE. A checkbox for an editor the machine
-      does not have is an install that fails after the installer said it succeeded, so the whole
-      offer — the checkbox and its label — appears only if one of the searches below found a
-      `code.cmd` to run.
-
-      ⚠ IT LOOKS FOR `bin\code.cmd`, NOT FOR `Code.exe`. The `.exe` is an Electron shell; the CLI is
-      `cli.js` run through it, and `code.cmd` is the launcher that knows how. Handing `Code.exe` an
-      install-extension argument opens a window instead of installing anything.
-
-      Three searches, because VS Code has three plausible locations: the two installers' defaults, and
-      whatever a system install was redirected to.
-    -->
-    <Property Id="VSCODE_USER_CMD">
-      <DirectorySearch Id="VSCodeUserBin" Path="[LocalAppDataFolder]Programs\Microsoft VS Code\bin" Depth="0">
-        <FileSearch Id="VSCodeUserCmd" Name="code.cmd" />
-      </DirectorySearch>
-    </Property>
-
-    <Property Id="VSCODE_MACHINE_CMD">
-      <DirectorySearch Id="VSCodeMachineBin" Path="[ProgramFiles64Folder]Microsoft VS Code\bin" Depth="0">
-        <FileSearch Id="VSCodeMachineCmd" Name="code.cmd" />
-      </DirectorySearch>
-    </Property>
-
-    <!-- A system install put somewhere other than Program Files. The key is the VS Code installer's
-         own Inno Setup AppId, which is stable across versions. -->
-    <Property Id="VSCODE_REG_CMD">
-      <RegistrySearch Id="VSCodeMachineKey"
-                      Root="HKLM"
-                      Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{EA457B21-F73E-494C-ACAB-524FDE069978}_is1"
-                      Name="InstallLocation"
-                      Type="directory"
-                      Bitness="always64">
-        <DirectorySearch Id="VSCodeRegBin" Path="bin" Depth="0">
-          <FileSearch Id="VSCodeRegCmd" Name="code.cmd" />
-        </DirectorySearch>
-      </RegistrySearch>
-    </Property>
-
-    <!-- ⛔ THE USER INSTALL WINS. A machine can carry both, and the per-user copy is the one whose
-         extensions directory belongs to the person clicking Finish. -->
-    <SetProperty Id="VSCODECMD" Action="SetVSCodeCmdFromReg"     Value="[VSCODE_REG_CMD]"     After="AppSearch" Sequence="ui" Condition="VSCODE_REG_CMD" />
-    <SetProperty Id="VSCODECMD" Action="SetVSCodeCmdFromMachine" Value="[VSCODE_MACHINE_CMD]" After="SetVSCodeCmdFromReg" Sequence="ui" Condition="VSCODE_MACHINE_CMD" />
-    <SetProperty Id="VSCODECMD" Action="SetVSCodeCmdFromUser"    Value="[VSCODE_USER_CMD]"    After="SetVSCodeCmdFromMachine" Sequence="ui" Condition="VSCODE_USER_CMD" />
-
-    <!-- WixUI shows the exit-dialog checkbox only when its TEXT property has a value, so setting the
-         text IS the decision to make the offer. -->
-    <SetProperty Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT"
-                 Action="SetVSCodeOfferText"
-                 Value="Install the Maxon extension for Visual Studio Code"
-                 After="SetVSCodeCmdFromUser" Sequence="ui" Condition="VSCODECMD" />
-    <SetProperty Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX"
-                 Action="SetVSCodeOfferDefault"
-                 Value="1"
-                 After="SetVSCodeOfferText" Sequence="ui" Condition="VSCODECMD" />
-
-    <!--
-      ⛔ IT RUNS FROM THE EXIT DIALOG, AND THAT IS WHAT MAKES IT LAND IN THE RIGHT PROFILE. A
-      per-machine MSI's execute sequence is elevated — under `winget`, under SYSTEM — and VS Code
-      installs extensions into the *invoking* account's `~/.vscode/extensions`. An action sequenced
-      there would install the extension for whoever elevated the package, which on a build agent is
-      nobody. The UI sequence runs unelevated as the person at the keyboard, so the extension lands
-      where they will look for it.
-
-      ⇒ It also means a SILENT install never runs this. `msiexec /quiet` and `winget install` have no
-      UI sequence at all, so they install the compiler and nothing else — which is the correct
-      behaviour for an unattended install and needs no separate guard.
-
-      ⚠ `code.cmd` IS A BATCH FILE, so it goes through `cmd.exe`: `CreateProcess` cannot execute a
-      `.cmd` directly. `/s` makes cmd strip exactly the outer pair of quotes, which is what lets a
-      quoted path carry spaces.
-    -->
-    <SetProperty Id="VSCODESHELL" Value="[System64Folder]cmd.exe" After="SetVSCodeOfferDefault" Sequence="ui" Condition="VSCODECMD" />
-
-    <CustomAction Id="InstallVSCodeExtension"
-                  Property="VSCODESHELL"
-                  ExeCommand="/s /c &quot;&quot;[VSCODECMD]&quot; --install-extension maxon-lang.maxon-lsp-client --force&quot;"
-                  Execute="immediate"
-                  Impersonate="yes"
-                  Return="asyncNoWait" />
-
-    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLDIR" />
-
-    <UI>
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="InstallVSCodeExtension"
-               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
-    </UI>
-
-    <!-- Generated by build.sh from LICENSE-MIT and LICENSE-APACHE, so the dialog cannot show a
-         licence the package does not ship. -->
-    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+         The cost is the directory chooser, which winget never used: it passes `INSTALLDIR="<path>"` on
+         the command line, and that still works. -->
   </Package>
 </Wix>

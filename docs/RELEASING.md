@@ -114,19 +114,18 @@ is a floor, not a template to fight.
 
 ```bash
 dotnet tool install --global wix --version 5.0.2
-wix extension add -g WixToolset.UI.wixext/5.0.2
 installer/windows/build.sh              # takes the x64-windows zip from dist/
 ```
 
-⚠ **The UI extension is a separate install from WiX itself, and the installer does not build without
-it** — the directory chooser and the exit-dialog checkbox that offers the VS Code extension both live
-there.
+⛔ **The MSI carries no UI and no custom actions**, so its only executable content is the payload —
+which is the least a validation sandbox can object to. winget never used the directory chooser
+anyway: it passes `INSTALLDIR="<path>"` on the command line.
 
 WiX is the one remaining .NET dependency, and it is asked of whoever cuts a release. Nothing about
 *building* Maxon needs it, and it is not a contributor prerequisite.
 
-The MSI is per-machine, installs to `C:\Program Files\Maxon`, appends to the system PATH, and offers
-the VS Code extension on its last page when it finds VS Code. It is **unsigned**, so SmartScreen warns
+The MSI is per-machine, installs to `C:\Program Files\Maxon` and appends to the system PATH. It is
+**unsigned**, so SmartScreen warns
 on first run — documented in `INSTALL.md`, the release notes and the install page. Signing is a
 follow-up before the release that goes wide.
 

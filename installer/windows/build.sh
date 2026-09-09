@@ -76,44 +76,15 @@ cp -r "$staged"/. "$payload"/
 [ -f "$payload/maxon.exe" ] || { echo "installer: no maxon.exe in $archive" >&2; exit 1; }
 [ -d "$payload/stdlib" ] || { echo "installer: no stdlib/ in $archive" >&2; exit 1; }
 
-# ⭐ THE LICENCE DIALOG IS GENERATED FROM THE LICENCE FILES, so it cannot show terms the package does
-# not ship. WiX wants RTF and the repo holds plain text, which is a mechanical conversion: three
-# characters are special to RTF and every line ends a paragraph.
-write_license_rtf() {
-	local out="$1"
-
-	{
-		printf '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Segoe UI;}}\n'
-		printf '\\viewkind4\\uc1\\pard\\f0\\fs18\n'
-		printf 'Maxon is distributed under EITHER the MIT licence OR the Apache License 2.0, at your option.\\par\n'
-		printf '\\par\n'
-		local f
-		for f in LICENSE-MIT LICENSE-APACHE; do
-			printf '%s\\par\n\\par\n' "$f"
-			# ⚠ THE ORDER OF THE THREE SUBSTITUTIONS MATTERS. Backslash must be escaped FIRST, or the
-			# backslashes introduced by escaping the braces would themselves be escaped again.
-			sed -e 's/\\/\\\\/g' -e 's/{/\\{/g' -e 's/}/\\}/g' -e 's/$/\\par/' "$f"
-			printf '\\par\n\\par\n'
-		done
-		printf '}\n'
-	} > "$out"
-}
-
-license="$here/license.rtf"
-write_license_rtf "$license"
-
 msi="$DIST/maxon-$version-x64.msi"
 rm -f "$msi"
 
 echo "installer: building $msi from $(basename "$archive")"
-# ⚠ `WixToolset.UI.wixext` IS A SEPARATE INSTALL: `wix extension add -g WixToolset.UI.wixext`. The
-# installer needs it for the directory-chooser and for the exit-dialog checkbox that offers the VS
-# Code extension.
-( cd "$here" && wix build maxon.wxs -arch x64 -d "Version=$version" -ext WixToolset.UI.wixext -o "../../$msi" )
+( cd "$here" && wix build maxon.wxs -arch x64 -d "Version=$version" -o "../../$msi" )
 
 # ⚠ THE `.wixpdb` IS NOT A RELEASE ASSET. WiX writes it beside the MSI, and `--publish` uploads
 # everything in `dist/` that matches its patterns — a debugging artifact would ride along into the
 # release without anyone deciding it should.
-rm -f "${msi%.msi}.wixpdb" "$license"
+rm -f "${msi%.msi}.wixpdb"
 rm -rf "$payload" "$work"
 echo "installer: wrote $msi"
