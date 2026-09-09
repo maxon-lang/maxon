@@ -77539,10 +77539,92 @@ export type Parser
 		end 'hasArguments'
 		try self.consumeConstToken(TokenKind.rightParen)
 
+		try self.fillConstFactoryArgDefaults(calls, callee: callee, args: args)
+
 		let node = try self.constFactoryNode(callee, args: args, calls: calls)
 
 		return self.pushConstNode(calls, node: node)
 	end 'evalConstFactoryCallInto'
+
+	// ⭐⭐ **A TOP-LEVEL FACTORY CALL FILLS ITS DECLARATION'S PARAMETER DEFAULTS, EXACTLY AS A CALL IN A
+	// BODY DOES.** `BuildConfig.create(name, output:, sources:, optimize:, debug_info:, version: "")` written at
+	// module scope was E3036 against a call every other position in the language admits — the initializer walk
+	// passes the author's arguments straight to `constFactoryNode` and the resolved signature then counts the
+	// omitted slot.
+	//
+	// ⭐ **THE TWO DOORS DIFFER IN WHAT THEY BUILD AND IN NOTHING ELSE.** A body emits ops
+	// (`fillArgsFromParamDefaults`); this appends arena entries. Both compute the occupied slots through
+	// `argSlotPosition` — the same label→position mapping `slotCallArgs` will validate against, so a call cannot
+	// be filled against one slotting and checked against another — and both spend the same three producers.
+	//
+	// ⚠ **A SLOT WITH NEITHER AN ARGUMENT NOR A DEFAULT IS LEFT EMPTY ON PURPOSE**, and so is a call whose
+	// label resolves to no parameter: E3036 and E3037 own those, from the RESOLVED signature rather than from
+	// this tolerant sweep. Reporting either here would be a second opinion built on the weaker registry.
+	function fillConstFactoryArgDefaults(calls ConstFactoryCallArray, callee ConstInitializerCallee, args ConstFactoryArgumentArray) throws ConstEvalError
+		// ⚡ The allocation-free presence test first, for `fillOmittedArgDefaults`' reason: a payload-free
+		// union case still heap-allocates, so only a callee that genuinely declares a default pays.
+		if not self.signatures.declaresParamDefaults(callee.name) 'everyParameterRequired'
+			return
+		end 'everyParameterRequired'
+
+		match self.signatures.defaultsOf(callee.name) 'defaults'
+			allRequired then return
+			defaults(info) then try self.appendConstFactoryArgDefaults(info, calls: calls, anchor: callee.anchor, args: args)
+		end 'defaults'
+	end 'fillConstFactoryArgDefaults'
+
+	// Each filled slot is appended with the parameter's own NAME as its label, so it lands in the right
+	// position whatever order the written arguments came in — the same device the body fill uses, and the
+	// reason neither needs the defaults to be a trailing run of the declaration.
+	function appendConstFactoryArgDefaults(info ParamDefaultInfo, calls ConstFactoryCallArray, anchor Token, args ConstFactoryArgumentArray) throws ConstEvalError
+		let paramCount = info.paramNames.count()
+		if args.count() >= paramCount 'nothingOmitted'
+			return
+		end 'nothingOmitted'
+
+		var filled = BoolArray.create()
+		for _ in 0 upto paramCount 'initSlots'
+			filled.push(false)
+		end 'initSlots'
+
+		for i in 0 upto args.count() 'markSupplied'
+			let written = try args.get(i) otherwise panic("appendConstFactoryArgDefaults: args.get OOB at {i} below count {args.count()}")
+			let suppliedSlot = argSlotPosition(info.paramNames, argIndex: i, label: written.label)
+			if suppliedSlot >= paramCount 'labelNamesNoParameter'
+				return
+			end 'labelNamesNoParameter'
+			try filled.set(suppliedSlot, value: true) otherwise panic("appendConstFactoryArgDefaults: filled.set OOB at {suppliedSlot} despite suppliedSlot < paramCount")
+		end 'markSupplied'
+
+		for slot in 0 upto paramCount 'fillDefaults'
+			let supplied = try filled.get(slot) otherwise panic("appendConstFactoryArgDefaults: filled.get OOB at {slot} despite slot < paramCount")
+			if supplied 'alreadyGiven'
+				continue
+			end 'alreadyGiven'
+
+			let producer = info.producerFor(slot)
+			if producerIsRequired(producer) 'noDefault'
+				continue
+			end 'noDefault'
+
+			let paramName = try info.paramNames.get(slot) otherwise panic("appendConstFactoryArgDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
+			args.push(ConstFactoryArgument.create(paramName, value: self.constDefaultArgValue(producer, calls: calls, anchor: anchor)))
+		end 'fillDefaults'
+	end 'appendConstFactoryArgDefaults'
+
+	// ⭐ **THE VALUE ONE OMITTED ARGUMENT TAKES AT MODULE SCOPE** — `emitDefaultArgValue`'s three producers,
+	// answered in the arena's currency instead of in ops. `__line__` is the line of the token naming the
+	// callee and `__file__` the same root-relative path a body's fill spells, so a default means one thing
+	// wherever the call is written; a helper becomes an ordinary nullary arena call, which bottoms out at
+	// once because a helper declares no parameters and so has no defaults of its own to fill.
+	function constDefaultArgValue(producer ParamDefaultProducer, calls ConstFactoryCallArray, anchor Token) returns ConstFactoryArgumentValue
+		return match producer 'produces'
+			required panic("constDefaultArgValue: parameter is `required`, which the caller skips before asking — a slot with no default is left empty on purpose (E3036 reports it from the resolved signature)")
+			callerLine gives ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(anchor.line as ParsedInt, tag: ValueTypeTag.integer)))
+			callerFile gives ConstFactoryArgumentValue.folded(ConstFoldedValue.managed(self.sourceFileDisplayPath(), kind: ManagedConstKind.string))
+			helper(name) gives ConstFactoryArgumentValue.call(self.pushConstNode(calls, node: ConstFactoryCall.call(name, args: ConstFactoryArgumentArray.create())))
+		end 'produces'
+	end 'constDefaultArgValue'
 
 	// ⭐⭐⭐ **A FACTORY THAT IS NOTHING BUT ITS OWN `Self{…}` IS FOLDED INTO THAT CONSTRUCTION (W197)** — the
 	// arena entry a top-level `T.create(7)` becomes, which is `T{p: 7}`'s entry and not a call.

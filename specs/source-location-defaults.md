@@ -91,6 +91,36 @@ Both names are reserved words, so no program can declare or shadow them.
 
 ## Tests
 
+<!-- test: caller-location-at-module-scope -->
+⭐ **A GLOBAL'S INITIALIZER IS A CALL SITE, so `__line__` and `__file__` mean there what they mean
+everywhere.** It is the one call written outside a function body, and it is walked rather than emitted —
+so the fill is a second implementation of the same rule, and this is what holds the two to one answer.
+
+```maxon
+// --- file: main.maxon
+type Site
+	export let line as SourceLineNumber
+	export let file as String
+
+	export static function here(at SourceLineNumber = __line__, from String = __file__) returns Site
+		return Self{line: at, file: from}
+	end 'here'
+end 'Site'
+
+var site = Site.here()
+
+function main() returns ExitCode
+	print("{site.file}@{site.line}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+main.maxon@10
+```
+
 <!-- test: caller-line -->
 ```maxon
 // --- file: main.maxon

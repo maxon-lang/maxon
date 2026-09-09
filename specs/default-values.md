@@ -352,6 +352,84 @@ end 'main'
 5
 ```
 
+### A top-level factory call fills its defaults too
+
+⭐ **A DEFAULT IS THE DECLARATION'S, NOT THE CALL POSITION'S.** A global's initializer is the one place
+a call is written outside a function body, and it walks the source itself rather than emitting ops — so
+it has to fill omitted arguments on its own. Left out, a declaration with a defaulted parameter was
+`E3036 expects 6 argument(s) but 5 were provided` at module scope for a call every body admits.
+
+⚠ **BOTH ARENA SHAPES ARE HERE.** `Pair.create` is nothing but its own `Self{…}` over its parameters, so
+it FOLDS into a construction and never runs; `Box.make` multiplies, so it stays an ordinary call
+`__module_init` makes before `main`. The fill precedes that fork, which is what puts the two on one
+footing.
+
+<!-- test: default-values.top-level-factory-fills-defaults -->
+```maxon
+typealias Count = int(0 to 255)
+
+type Box
+	export let n as Count
+	export let tag as String
+
+	export static function make(n Count, scale Count = 3, tag String = "d") returns Box
+		return Self{n: n * scale, tag: tag}
+	end 'make'
+end 'Box'
+
+type Pair
+	export let a as Count
+	export let b as Count
+
+	export static function create(a Count, b Count = 9) returns Pair
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+var boxed = Box.make(2)
+var paired = Pair.create(1)
+
+function main() returns ExitCode
+	print("{boxed.n} {boxed.tag} {paired.a} {paired.b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 d 1 9
+```
+
+### A defaulted container at module scope is materialized, and freed
+
+⚠ **A DEFAULT MAY BE MANAGED, AND THE SLOT THEN OWNS WHAT THE CALL BORROWED.** `tags StringArray =
+StringArray.create()` fills with a call to the parameter's synthesized helper, and `__module_init` is
+sole owner of the array that helper returns — so the exit-101 leak gate is what this case is really
+asserting, over and above the count it prints.
+
+<!-- test: default-values.top-level-factory-fills-a-managed-default -->
+```maxon
+typealias Names = Array with String
+
+type Roster
+	export let names as Names
+
+	export static function of(names Names = Names.create()) returns Roster
+		return Self{names: names}
+	end 'of'
+end 'Roster'
+
+var empty = Roster.of()
+
+function main() returns ExitCode
+	return empty.names.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
 ### Error: A default value must consume everything up to the `,` or `)` that ends it
 
 The capture walks to the delimiter that ends the default, and the expression parsed out of that region

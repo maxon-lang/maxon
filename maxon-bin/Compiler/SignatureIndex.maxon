@@ -16469,8 +16469,13 @@ export type ProgramSignatures
 		return match produced.value 'produced'
 			// A scalar owns nothing, so it needs no cleanup.
 			scalar gives GlobalInitArgument.create(arg.label, value: produced.value, valueType: produced.valueType, cleanup: GlobalInitArgumentCleanup.none)
-			record or
-				call gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: produced.valueType, value: produced.value)
+			record gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: produced.valueType, value: produced.value)
+			// ⛔ **A CALL DOES NOT IMPLY A RECORD, AND ASSUMING IT DID WAS A PANIC.** A nested FACTORY call is
+			// held to `requireFactoryReturnsARecord`, but a PARAMETER DEFAULT is filled here as a call to its
+			// synthesized nullary helper, whose return type is the parameter's — `scale Count = 3` returns an
+			// integer. Asking `managedFieldDropCallee` for that type panics (*"'Count' is a ranged typealias —
+			// a scalar"*), so what decides is the RESULT TYPE and not the shape of the value.
+			call gives self.calledArgument(arg, consume: consume, argIndex: argIndex, valueType: produced.valueType, value: produced.value)
 		end 'produced'
 	end 'globalInitArgument'
 
@@ -16868,6 +16873,16 @@ export type ProgramSignatures
 	// An argument whose value is an owned RECORD — materialized here or returned by a nested call — paired
 	// with the answer to who frees it. ONE assembly point, so the two producers cannot come to ask the
 	// ownership question differently: a record is a record however it came to exist.
+	// A call's result: owned when the callee handed back something managed, and nothing at all when it handed
+	// back a number. Only the first can be dropped, and only the first needs to be.
+	function calledArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, valueType MaxonType, value GlobalInitArgumentValue) returns GlobalInitArgument
+		if not typeIsManaged(valueType, from: self.typeNames) 'ownsNothing'
+			return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: GlobalInitArgumentCleanup.none)
+		end 'ownsNothing'
+
+		return self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: valueType, value: value)
+	end 'calledArgument'
+
 	function ownedRecordArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, valueType MaxonType, value GlobalInitArgumentValue) returns GlobalInitArgument
 		return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: valueType))
 	end 'ownedRecordArgument'
