@@ -592,6 +592,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		GetFileAttributesA gives 0  // 1: lpFileName
 		GetCommandLineA gives 0  // 0
 		GetModuleFileNameA gives 0  // 3: hModule, lpFilename, nSize
+		SetConsoleOutputCP gives 0  // 1: wCodePageID
 		// O3. Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
 		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
 		OpenFileMappingA gives 0  // 3: dwDesiredAccess, bInheritHandle, lpName
@@ -805,6 +806,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		GetCurrentProcessId gives SyscallClass.schedulerBound
 		GetCommandLineA gives SyscallClass.schedulerBound
 		GetModuleFileNameA gives SyscallClass.schedulerBound
+		// ⚠ Reached ONCE, from the entry stub, before any green thread exists — so its class is a formality
+		// rather than a reading. Bounded in any case: it sets a word on the console object and returns.
+		SetConsoleOutputCP gives SyscallClass.schedulerBound
 		GetEnvironmentVariableA gives SyscallClass.schedulerBound
 		GetEnvironmentStringsA gives SyscallClass.schedulerBound
 		FreeEnvironmentStringsA gives SyscallClass.schedulerBound

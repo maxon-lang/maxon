@@ -234,6 +234,18 @@ test body means the same thing it means in the shell you typed the command in.
 anything is staged, so a generated test source can never be swept into the project's next ordinary
 build or into the next run's own discovery.
 
+**On Windows, every emitted program sets the console to UTF-8 as it starts.** A Maxon program writes
+UTF-8 bytes at the handle and has no way to say so per write: `WriteFile` hands a console BYTES, and the
+console decodes them with its own output code page — the machine's OEM page unless somebody changed it,
+which reads an em-dash as three Latin-1 letters. So the entry stub calls `SetConsoleOutputCP(CP_UTF8)`
+once, ahead of every writer in the process including the panic path.
+
+It changes how bytes are READ, never which bytes are written: a redirected stream — a pipe, a file, a
+captured golden — is byte-for-byte what it was, and a process with no console fails the call harmlessly.
+⚠ The code page belongs to the CONSOLE, which is shared with the parent shell, and it is **not restored
+on exit**: restoring is a write to state a sibling process may be relying on, and this compiler puts
+worker processes on its own console. A console therefore keeps UTF-8 after a Maxon program has run.
+
 **`--color=auto` degrades to `never` on wasm32-wasi.** Asking the OS what kind of object a handle is
 needs a host call: **x64-windows** makes it with `GetFileType`, **arm64-macos** with `isatty`, and both
 Linux lanes with the `ioctl(1, TCGETS, ...)` `isatty` is made of — a libc-less static image has no

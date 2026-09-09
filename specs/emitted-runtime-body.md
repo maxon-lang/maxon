@@ -148,6 +148,17 @@ __managed_set
 The `mrt_` band, from the other side of `isRuntimeFunction`'s two prefixes: the entry
 stub every program has and no fragment has ever shown.
 
+⭐⭐ **THE FIRST THING IT DOES IS TELL THE CONSOLE WHAT ENCODING THIS PROGRAM SPEAKS** — `mov ecx, 65001`
+then the `SetConsoleOutputCP` import, ahead of `mrt_runtime_init` and therefore ahead of every writer in
+the process, the fault handler included. A Maxon program emits UTF-8 and a Windows console decodes what
+reaches it with its OWN output code page, so without this line every non-ASCII byte `print`, `printError`
+and the panic path put on a console is read with the wrong table.
+
+⚠ **NOTHING ELSE IN THE SUITE CAN SEE IT, WHICH IS WHY IT IS PINNED HERE.** Every case's output is
+CAPTURED — a pipe, never a console — and this call changes how a console READS bytes, never which bytes
+are written. So a run's stdout is byte-identical whether the call is there or not, and this golden is the
+only thing standing between the language and losing it silently.
+
 ```maxon
 function main() returns ExitCode
 	return 0

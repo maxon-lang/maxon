@@ -32,6 +32,13 @@
 // moment anything below it spills an XMM register (P1.0d.4 floats).
 let EntryStubFrameBytes = 0x20
 
+// ⭐⭐ **`CP_UTF8` — WHAT THE ENTRY STUB TELLS THE CONSOLE BEFORE ANYTHING CAN PRINT.** A Maxon program
+// emits UTF-8 and has no way to say so per write: `WriteFile` hands a console BYTES, and the console
+// decodes them with its own output code page. Setting that page once, at process start, is the whole fix
+// and it is the only one that reaches EVERY writer — `print`, `printError`, the hand-assembled panic
+// chunk, and any added later — without any of them knowing.
+let ConsoleOutputCodePageUtf8 = 65001
+
 // Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
 //
@@ -346,6 +353,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
+	appendConsoleOutputCodePage(module, block: block)
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
@@ -385,6 +393,37 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 
 	prependFunction(module, func: func)
 end 'prependEntryStub'
+
+// ⭐⭐ **TELL THE CONSOLE THAT THIS PROGRAM SPEAKS UTF-8, BEFORE ANYTHING CAN WRITE.**
+// `SetConsoleOutputCP(CP_UTF8)`, one call, no result read.
+//
+// ⭐ **IT IS FIRST IN THE STUB — AHEAD OF `mrt_runtime_init` — BECAUSE THE FAULT HANDLER PRINTS.** Every
+// other writer comes later still, so from here on every byte this process puts on a console is decoded the
+// way it was encoded.
+//
+// ⭐⭐ **WHY HERE AND NOT IN THE WRITE PATH.** The alternative is `WriteConsoleW` with a UTF-16 conversion
+// at each write, which is what a program with no say over the console's state must do. It would have to be
+// implemented TWICE — once in `lowerOsWriteStream`'s isel and once in the hand-assembled
+// `mrt_write_cstr_stderr`, which the panic path calls where there is no allocator and no live virtual to
+// spill — and the two would be free to drift on exactly the buffer arithmetic that is hardest to get
+// right. One call at the door serves both, and serves anything added next to them.
+//
+// ⭐ **IT CHANGES HOW BYTES ARE READ, NEVER WHICH BYTES ARE WRITTEN.** A redirected stream is untouched:
+// the page is the console's, so a pipe, a file and every committed golden see the same bytes as before. A
+// process with NO console fails the call harmlessly and the result is discarded, which is why nothing
+// branches on it.
+//
+// ⛔⛔ **IT IS NOT RESTORED ON EXIT, AND THAT IS A DECISION RATHER THAN AN OMISSION.** The page belongs to
+// the CONSOLE, which is shared with the parent shell and with every sibling process attached to it — so a
+// restore is a WRITE to state a concurrent process may be depending on. This compiler spawns pool workers
+// onto its own console: a worker that started before the parent set the page would read the old one, and
+// restoring it on that worker's exit would put the parent's remaining output back into mojibake, mid-run.
+// Leaving the page at UTF-8 is the state every process in the tree already wants, and the cost is that a
+// console keeps it after the program exits.
+function appendConsoleOutputCodePage(module TargetModule, block IrBlock)
+	module.appendOp(block, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: ConsoleOutputCodePageUtf8))
+	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetConsoleOutputCP)))
+end 'appendConsoleOutputCodePage'
 
 // ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, shared by both entry stubs. `main` has
 // returned its ExitCode in R8; `__mm_leak_check` takes that code (arg 0 in RCX, custom Maxon ABI) and

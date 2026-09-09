@@ -310,6 +310,20 @@ export enum IatSlot
 	// exactly what the rest of this lane will then hand to `CreateFileA`, so the round trip holds. A `W`
 	// entry point here alone would be the lone wide producer feeding narrow consumers.
 	GetModuleFileNameA = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⭐⭐ **THE CONSOLE'S OUTPUT CODE PAGE, AND WHY EVERY BINARY IN THIS LANGUAGE IMPORTS IT.** A Maxon
+	// program writes UTF-8 bytes straight at the handle, and a Windows console decodes whatever bytes
+	// reach it with ITS OWN output code page — which is the machine's OEM page unless somebody changed it.
+	// MEASURED: an em-dash (`E2 80 94`) reaches a reader as three Latin-1 letters, and so does every
+	// non-ASCII byte the compiler's own diagnostics and `maxon test`'s report emit.
+	//
+	// ⛔ **IT IS MANDATORY RATHER THAN OPTIONAL, AND ITS PLACE IN THIS LIST IS THAT CLAIM.** The band below
+	// is for imports whose PRODUCER a build may not have; this one's producer is the entry stub, which every
+	// binary has. A program that never prints still panics, and a panic writes to stderr.
+	//
+	// ⚠ **SO IT SITS ABOVE `GetEnvironmentVariableA`, NOT PAST `Module32NextW`.** The optional band must stay
+	// the TRAILING run of kernel32's slots — that is the property `isOptionalTrailingImport`'s header states
+	// and the one that keeps omitting the band from repointing anything.
+	SetConsoleOutputCP = IatSlotMeta{dll: ImportDll.kernel32}
 	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS (Workstream O3).** APPENDED AFTER `GetModuleFileNameA` for the reason
 	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
 	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so they add no import
@@ -700,7 +714,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetCurrentDirectoryA or
 			GetFileAttributesA or
 			GetCommandLineA or
-			GetModuleFileNameA gives false
+			GetModuleFileNameA or
+			SetConsoleOutputCP gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
 		// whether ws2_32's run exists at all. Answering `true` here would gate them on the DebugStream /
