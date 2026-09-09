@@ -40,6 +40,20 @@ publishes the previous version's number.
 
 ---
 
+## ⛔ A runtime change takes two self-compiles
+
+The compiler emits its runtime into every program it builds, itself included. So a change under
+`maxon-bin/Compiler/Runtime/` reaches the programs the new compiler builds after ONE build, but
+reaches **the compiler's own behaviour** only after a second — the first build's output carries a
+runtime emitted by the compiler that predates the change.
+
+That matters for a release because `release.sh --package` runs the suite with the compiler it is about
+to ship, and the spec-test worker IS that compiler. Build twice whenever the seed you started from
+predates a runtime change; `fixpoint.sh` will not tell you, because it compares two stages that are
+both past the convergence point while the slot still holds the one that is not.
+
+---
+
 ## The pipeline
 
 `scripts/release.sh` is two halves because they run in different places.
@@ -79,10 +93,14 @@ is a floor, not a template to fight.
   output filename into the ad-hoc code-signature identifier. Measured: two otherwise byte-identical
   self-compiles differ in exactly one byte when written as `stage2` and `stage3`, so a post-build
   rename leaves a signature naming a file that no longer exists.
-- ⛔ **The executable bit has to be put into the archive, not read off the file.** `tar` records the
-  mode it finds on disk, and Windows has no POSIX mode to find — `chmod +x` in Git Bash changes
-  nothing a native `tar` can see. `make_tar` adds the binary in its own pass with an explicit
-  `--mode=0755`. Symptom when this lapses: `bash: ./maxon: Permission denied` on Linux and macOS.
+- ⛔ **The executable bit has to be put into the archive where the filesystem cannot carry one.** `tar`
+  records the mode it finds on disk, and Windows has no POSIX mode to find — `chmod +x` in Git Bash
+  changes nothing a native `tar` can see. Symptom when this lapses: `bash: ./maxon: Permission denied`
+  on Linux and macOS, from an archive that looks perfectly normal.
+  ⚠ `--mode` is GNU tar's and **macOS ships bsdtar, which refuses it**, so `make_tar` PROBES for the
+  flag rather than inferring it from the platform, and falls back to a plain tar where `chmod +x` is
+  real. `require_executable_in_tar` then reads the mode back out of the listing and fails the package
+  if it is not executable — this bit has shipped wrong twice and neither build nor upload noticed.
 - ⛔ **PowerShell's `Compress-Archive` writes backslashes as path separators**, which extract as files
   with literal backslashes in their names everywhere but Windows. It is the last fallback and warns
   when used; `zip`, then Windows' own bsdtar, come first.

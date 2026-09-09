@@ -28,6 +28,23 @@ the Windows form.
 > slot **EMPTY** rather than reinstating anything, because a stale compiler reporting as current is the
 > failure every staleness refusal in this repo exists to prevent.
 >
+>
+> ⛔ **A CHANGE UNDER `Compiler/Runtime/` NEEDS *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES
+> THAT WAY.** The compiler EMITS the runtime into every program it builds — including into itself — so
+> with `C0` the old compiler and `S` the fixed sources:
+>
+> - `C0` builds `S` → `C1`. `C1`'s emitter logic is fixed, so **programs C1 builds get the new
+>   runtime** — but `C1`'s OWN embedded runtime was emitted by `C0`, and is old.
+> - `C1` builds `S` → `C2`. Now the compiler's own runtime is new too.
+>
+> ⇒ **It bites hardest where the compiler is the program under test**: `spec-test`'s worker IS the
+> compiler, so a runtime fix to subprocess, the scheduler or memory management does not change what the
+> HARNESS does until the second build. MEASURED: a delayed-stdin fix looked like a Windows-only lane bug
+> for exactly this reason — the case failed 3/3 against `C1` and passed 3/3 against `C2`.
+>
+> ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds `stage2` and `stage3` under `temp/` and compares
+> them — both are past the convergence point, so they agree while the SLOT still holds `C1`. Build
+> twice whenever the seed you built with predates a runtime change.
 > ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` is found by walking up from
 > the EXECUTABLE, so an installed `maxon` on PATH compiles this repository against the RELEASE's
 > standard library — MEASURED: it succeeds and exits 0, having built a compiler from a library that is
