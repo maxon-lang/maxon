@@ -292,6 +292,20 @@ EOF
 	esac
 }
 
+# Does this MSI carry an Authenticode signature?
+#
+# ⭐ ASKED OF THE FILE, NEVER OF THE PIPELINE THAT PRODUCED IT. The notes tell a reader whether to
+# expect a SmartScreen prompt, and a release cut where signing happened to be off would otherwise
+# promise a signature that is not there — a wrong reassurance is worse than the warning it replaced.
+#
+# An MSI is an OLE compound file whose signature lives in a stream named `\5DigitalSignature`, and
+# stream names are stored UTF-16LE in its directory. Dropping the NUL bytes makes that name findable
+# with `grep`, which is the whole reason for the `tr`: `--publish` runs on Linux, where `signtool`
+# does not exist and asking Windows is not an option.
+msi_is_signed() {
+	tr -d '\0' < "$1" | grep -aq 'DigitalSignature'
+}
+
 # Release notes: how to install, and what each asset is for.
 #
 # ⚠ IT NAMES ONLY THE ASSETS THAT EXIST. A release built without WiX has no MSI, and a notes template
@@ -310,7 +324,11 @@ write_default_notes() {
 			echo '```'
 			echo
 			echo "Or download the \`.msi\` below. It installs to \`C:\\Program Files\\Maxon\` and adds it to PATH."
-			echo "The installer is not code-signed, so SmartScreen warns on first run: **More info** then **Run anyway**."
+			if msi_is_signed "$(find "$DIST" -maxdepth 1 -type f -name '*.msi' | sort | head -n1)"; then
+				echo "The installer is code-signed, so Windows runs it without a SmartScreen prompt."
+			else
+				echo "The installer is not code-signed, so SmartScreen warns on first run: **More info** then **Run anyway**."
+			fi
 			echo
 			echo
 		fi
@@ -338,8 +356,8 @@ write_default_notes() {
 		echo
 		echo "## Verify a download"
 		echo
-		echo "\`SHA256SUMS\` is published beside the archives. These builds are not signed, so the checksum is"
-		echo "what tells you a file is the one that was built."
+		echo "\`SHA256SUMS\` is published beside the archives. The archives themselves are not signed, so"
+		echo "the checksum is what tells you a file is the one that was built."
 		echo
 		echo "## Assets"
 		echo

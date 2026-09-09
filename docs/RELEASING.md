@@ -130,10 +130,84 @@ anyway: it passes `INSTALLDIR="<path>"` on the command line.
 WiX is the one remaining .NET dependency, and it is asked of whoever cuts a release. Nothing about
 *building* Maxon needs it, and it is not a contributor prerequisite.
 
-The MSI is per-machine, installs to `C:\Program Files\Maxon` and appends to the system PATH. It is
-**unsigned**, so SmartScreen warns
-on first run — documented in `INSTALL.md`, the release notes and the install page. Signing is a
-follow-up before the release that goes wide.
+The MSI is per-machine, installs to `C:\Program Files\Maxon` and appends to the system PATH.
+
+### Signing
+
+The `msi` job signs the installer with **Azure Artifact Signing** (the service formerly called
+Trusted Signing). It is a signing *service*, not a certificate you hold: a certificate is minted per
+request and lives about three days, so there is no key on a runner, in this repository, or on the
+machine of whoever cuts a release. Authentication is **OIDC** — GitHub mints a token for one workflow
+run and Azure trades it through a federated credential scoped to this repository — so no signing
+credential exists that would keep working for someone who stole it.
+
+⚠ **Only the MSI is signed.** The `maxon.exe` inside the zip and inside the MSI is not, so
+SmartScreen still warns when that binary is run from an extracted archive, and winget's validation
+sandbox still scans an unsigned payload. Signing the payload too means signing it in the `package`
+job, before the archive is built — otherwise the MSI and the zip would carry two different compilers
+for one version, which is exactly what building the MSI from the archive exists to prevent.
+
+⭐ **Configured by repository variables, so a fork is not broken by it.** `AZURE_SIGNING_ENDPOINT`
+is the switch: unset, the job builds an unsigned MSI and says so with a workflow warning; set, the
+rest must be right too.
+
+| Variable | Example |
+|---|---|
+| `AZURE_SIGNING_ENDPOINT` | `https://eus.codesigning.azure.net` — the region the account was created in |
+| `AZURE_SIGNING_ACCOUNT` | the Artifact Signing account name |
+| `AZURE_SIGNING_PROFILE` | the certificate profile name |
+| `AZURE_SIGNING_CLIENT_ID` / `AZURE_SIGNING_TENANT_ID` / `AZURE_SIGNING_SUBSCRIPTION_ID` | the app registration and subscription |
+
+They are `vars` and not `secrets` because a tenant, client and subscription id are identifiers rather
+than credentials — and because `secrets` is not a context a step's `if:` can read, so gating on one
+is not expressible.
+
+⛔ **The signature is read back off the file before the MSI can be uploaded**, and the timestamp is
+checked as well as the signature. A green signing step is not the question: a filter that matched
+nothing leaves an unsigned installer, and an untimestamped signature is verified against a
+certificate that expires within the week — it would look right in CI and fail on a user's machine
+days later.
+
+#### One-time setup, in the Azure portal
+
+1. Register the `Microsoft.CodeSigning` resource provider on the subscription.
+2. Create an **Artifact Signing account** (Basic SKU) in a supported region — its region decides the
+   `endpoint` URI, e.g. East US → `https://eus.codesigning.azure.net`.
+3. Assign yourself **Artifact Signing Identity Verifier** on the account (it also needs Reader at
+   subscription scope), then create an **identity validation**. ⚠ It takes 1–20 business days, and it
+   is the long pole — start it before anything else here matters.
+   ⛔ **Individual validation is limited to the US and Canada, and its fields come from the Azure
+   billing account, read-only.** The certificate subject is then a person's legal name, not
+   "Maxon Language"; an organization subject needs a registered legal entity and its own validation.
+4. Create a **Public Trust** certificate profile against that validation.
+5. Register an Entra app, give it a **federated credential** for this repository, and assign it
+   **Artifact Signing Certificate Profile Signer** — scoped to the certificate profile, not the
+   subscription:
+   ```
+   az role assignment create --assignee <app object id>      --role "Artifact Signing Certificate Profile Signer"      --scope "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CodeSigning/codeSigningAccounts/<account>/certificateProfiles/<profile>"
+   ```
+6. Set the six repository variables above.
+
+Everything except steps 3 and 4 is provisioned: the account is `maxonlang` in `maxon-signing`
+(East US, `https://eus.codesigning.azure.net`), the app registration's federated credential names the
+`release` GitHub environment — which is why the `msi` job carries an `environment:` line, and why
+renaming it revokes signing — and the ids are in repository variables.
+**`AZURE_SIGNING_ENDPOINT` is deliberately unset**, which is what keeps releases building while
+identity validation is outstanding: it is the switch, and the ids beside it are inert without it.
+
+⚠ **Identity Verifier is not implied by Owner.** The role table grants "manage identity validation"
+to that role alone, so a subscription owner finds the portal's **New identity** button dimmed with
+nothing explaining why.
+
+⛔ **Artifact Signing refuses free, trial and sponsored subscriptions**, so a subscription still on
+a free-trial offer must be upgraded to pay-as-you-go before the account can be created at all. The
+error names the cause plainly (`BadResourceOperation`) and comes back from account creation, not from
+signing, so it is found at setup rather than at a release.
+
+⚠ **An MSI built by hand is unsigned.** `installer/windows/build.sh` calls no signing service, so a
+release packaged locally rather than by `release.yml` ships an unsigned installer. `release.sh` reads
+the signature state out of the MSI itself and writes the matching SmartScreen line into the release
+notes, so the notes cannot promise a signature the file does not carry.
 
 ---
 
