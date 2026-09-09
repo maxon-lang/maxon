@@ -298,6 +298,32 @@ jobs:
           find staged -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -exec cp {} dist/ \;
           ls -la dist/
 
+      # ⭐⭐ **THE VERSION IS READ OFF A COMPILER, SO THIS JOB HAS TO HAVE ONE.** `release.sh` asks the
+      # binary what version it is (`maxon version`) and refuses a tag that disagrees — so a publish
+      # that was simply TOLD the version would delete the one check the whole scheme rests on.
+      #
+      # ⛔ **IT MUST BE THIS RELEASE'S OWN COMPILER, NOT THE PREVIOUS RELEASE'S.** `package` seeds from
+      # the last published release because it needs something that can BUILD; this job needs something
+      # that can ANSWER, and last release's binary answers with last release's number — which
+      # `release.sh` would then correctly refuse. The x64-linux archive sitting in `dist/` was built
+      # from this very tag, so the compiler inside it is the one whose word is being taken.
+      #
+      # ⚠ The glob avoids naming a version this step has no business knowing, and the binary lands
+      # under `maxon-bin/` rather than in `dist/`, which the checksum sweep walks.
+      - name: Seed the compiler from this release's own archive
+        run: |
+          set -euo pipefail
+          archive="$(find dist -maxdepth 1 -type f -name 'maxon-*-x64-linux.tar.gz' | head -n1)"
+          [ -n "$archive" ] || { echo "::error::no x64-linux archive in dist/ to read the version from"; exit 1; }
+          work="$(mktemp -d)"
+          tar -xzf "$archive" -C "$work"
+          binary="$(find "$work" -type f -name maxon | head -n1)"
+          [ -n "$binary" ] || { echo "::error::no maxon binary inside $archive"; exit 1; }
+          mkdir -p maxon-bin/.maxon
+          cp "$binary" maxon-bin/.maxon/maxon
+          chmod +x maxon-bin/.maxon/maxon
+          echo "seeded $(./maxon-bin/.maxon/maxon version)"
+
       # ⛔ THE TAG AND THE BINARIES MUST NAME ONE VERSION. `release.sh --publish` refuses when the tag
       # disagrees with what the compiler reports, which is the check that keeps the MSI, the winget
       # manifest and the install page from naming different releases.
