@@ -141,7 +141,7 @@ checked in beside the source is stale the first time anyone rebuilds.
 | | |
 |---|---|
 | **winget** | `installer/winget/generate.sh` → `dist/winget/`. Identifier `MaxonLang.Maxon` — **not** `Maxon.*`, which is Maxon Computer GmbH's namespace and would be rejected on review. |
-| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, committed to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. |
+| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, committed to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**, the same collision as winget. |
 | **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. |
 
 **winget's first submission cannot be automated.** `wingetcreate update` requires the package to
