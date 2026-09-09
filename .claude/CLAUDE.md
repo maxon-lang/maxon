@@ -16,6 +16,15 @@ the Windows form.
 - **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
   you run directly when the slot is empty. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
+  ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
+  ```
+  ./.bootstrap/maxon.exe build maxon-bin -o maxon-bin/.maxon/maxon
+  ```
+  **A SEED OLDER THAN NAMED MANIFEST TARGETS READS `maxon-bin` AS A PATH, NOT A TARGET**, and a path
+  build picks its own output name. MEASURED with the v0.1.0 release as the seed: it wrote
+  `maxon-bin/Compiler/BorrowCheck.exe`, left the slot EMPTY, and **exited 0** — so the next command is
+  a bare `127` about a compiler that was never written. `ci.yml` passes `-o` for this reason;
+  `CONTRIBUTING.md` spells it too.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
 - There is **no `maxon clean`**. To force a from-source stdlib rebuild, delete
