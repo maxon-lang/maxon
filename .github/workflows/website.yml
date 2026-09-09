@@ -11,10 +11,12 @@
 # or a typo should not have to wait weeks for a release — but a scheduled or push-driven deploy would
 # leak documentation for unreleased behaviour, which is the failure this whole shape avoids.
 #
-# ⛔ **CLOUDFLARE'S PAGES GIT INTEGRATION MUST BE DISCONNECTED FOR THIS TO BE THE ONLY DEPLOYER.**
-# While both are live, every push to `main` deploys the site from Cloudflare's own build as well as
-# this — two deployers, one of which nobody can see from this repository. `website/MAINTAINING.md`
-# records which is in force.
+# ⛔ **A PAGES PROJECT CANNOT BE CONVERTED FROM GIT INTEGRATION TO DIRECT UPLOAD** — Cloudflare's own
+# words: *"If you deploy using the Git integration, you cannot switch to Direct Upload later."* The
+# supported shape, which is the one in force, is to leave the connection and DISABLE AUTOMATIC
+# DEPLOYMENTS ON ALL BRANCHES, after which `wrangler` deploys directly. `website/MAINTAINING.md`
+# records it. The connection points at the archived `maxon-lang/maxon.dev`, so nothing fires from it
+# regardless; branch control is what keeps that true if anyone pushes there.
 #
 # ⚠ NODE 22, NOT 20. Astro 7's minimum is 22.12, while `vscode-extension.yml` pins 20 for a
 # TypeScript build that has no reason to move. Per-workflow `setup-node` is what lets both be right.
@@ -56,6 +58,13 @@ jobs:
           cache-dependency-path: website/package-lock.json
 
       - run: npm ci
+
+      # ⛔ **FOUR PAGES ARE COPIES OF `docs/`, AND THEY ROT SILENTLY.** The site taught a syntax the
+      # compiler had stopped accepting because keeping them in step was something a person had to
+      # remember. This fails the build when a source file has moved on, naming the pages to refresh
+      # with `node website/scripts/sync-docs.mjs`.
+      - name: The copied docs still match ../docs/
+        run: node scripts/sync-docs.mjs --check
 
       # `astro check` types the components; `astro build` runs the link validator and Pagefind.
       - run: npx astro check

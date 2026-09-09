@@ -24,6 +24,8 @@ sidebar:
 15. [Range / OpenRange](#range--openrange)
 16. [ArrayIterator](#arrayiterator)
 17. [Builtin Managed Types](#builtin-managed-types)
+18. [Testing (Expect)](#testing-expect)
+19. [Build](#build)
 
 ---
 
@@ -84,6 +86,7 @@ Math.log(x float) float         // Natural logarithm
 Math.log2(x float) float        // Base-2 logarithm
 Math.log10(x float) float       // Base-10 logarithm
 Math.pow(base float, exponent float) float // Power
+Math.hasNegativeSignBit(z float) bool // Sign bit of any double: true for -0.0 and -inf, false for +0.0
 floor(x float) int              // Round down
 ceil(x float) int               // Round up
 round(x float) int              // Round to nearest
@@ -96,6 +99,31 @@ sizeof(TypeName) int            // Size of a type in bytes (compile-time constan
 ```
 
 `sizeof` accepts a type name and returns its storage size in bytes as a compile-time integer constant. No runtime cost. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
+
+**Caller-Location Defaults**
+```maxon
+export typealias SourceLineNumber = int(1 to i32.max)   // type for a __line__ parameter
+```
+
+`__line__` and `__file__` are legal only as a function parameter's default value, and each
+expands at the **call site**, so a helper reports its caller's location rather than its own:
+
+```maxon
+function expectTrue(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool
+	if not ok 'bad'
+		printError("{from}:{at}: expected true\n")
+	end 'bad'
+	return ok
+end 'expectTrue'
+```
+
+`SourceLineNumber` is the type to declare a `__line__` parameter as — lines are 1-based and
+the compiler counts them in a 32-bit counter. A `__file__` parameter is declared `String`
+(Maxon has no typealias over a struct type); its value is the calling file's path relative to
+the compile root, `/`-separated on every host, never absolute. Use both or neither: a line
+number whose file is unknown names a line in no particular file. Anywhere other than a
+parameter default — including a struct field default — is error E2060. See
+`specs/source-location-defaults.md`.
 
 **Concurrency Functions**
 ```maxon
@@ -511,7 +539,7 @@ s.append(" World")       // s is now "Hello World"
 
 **Creating a List**
 
-Create a concrete List type with `typealias`, then initialize with `{}`:
+Create a concrete List type with `typealias`, then instantiate it with `create()`:
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
@@ -537,7 +565,7 @@ var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayErro
 ```maxon
 var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
 var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
-var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
+var at2 = try list.remove(2) otherwise 0          // Remove at index — O(n)
 list.clear()                                       // Remove all elements
 ```
 
@@ -564,7 +592,7 @@ end 'loop'
 | `removeFirst` | O(1) |
 | `append` | O(1) |
 | `removeLast` | O(1) |
-| `get`, `insert`, `remove(at:)` | O(n) |
+| `get`, `insert`, `remove` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
 | iteration (for-in) | O(n) total |
 
@@ -573,6 +601,10 @@ end 'loop'
 ## Networking (TcpClient)
 
 `TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
+
+**Supported on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`**, over IPv4 only — `TcpClient` builds a `sockaddr_in`, so an IPv6-only host cannot be reached on any target. Windows reaches `ws2_32` and macOS reaches libSystem, so both resolve host names through the platform's own `getaddrinfo` (`/etc/hosts`, the search list, everything the C library does). The two Linux lanes link no libc and therefore have no `getaddrinfo` to call: they run a resolver built into the compiler's runtime instead, which parses a numeric address, consults `/etc/hosts`, and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/resolv.conf`. That resolver does not apply the `search`/`domain` suffixes, does not follow a `CNAME` the server did not answer alongside, does not fall over to a second nameserver, and applies no timeout of its own — so on those two lanes an unqualified name resolves only if `/etc/hosts` carries it, and an unresponsive nameserver makes a connect slow rather than wrong.
+
+**Not supported on `wasm32-wasi`.** Every `TcpClient` call is refused at compile time with `E3104` there. WASI Preview2 does define `wasi:sockets`, and this compiler is not wired to it.
 
 **NetworkPort Alias**
 
@@ -814,7 +846,7 @@ print("Running as: {exe.path}\n")
 
 Launch and manage child processes. Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path is `Subprocess.run(.name("git"), arguments: argv)`, which captures stdout/stderr into a `CollectedOutput` value. For full control, build a `Configuration` and call `.run()` on it.
 
-**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Wrap callers in `#if not os(Wasi)` for portable stdlib code.
+**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Any call into the `Subprocess` API on that target is a compile error (**E3074**), not a runtime failure, so the problem surfaces at build time. Wrap callers in `#if not os(Wasi)` (compile the call only on non-WASI targets) for portable stdlib code.
 
 ### Hot path
 
@@ -976,7 +1008,11 @@ The same `Subprocess.run` is callable from sync and async contexts. From a green
 
 Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams via background threads, and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
 
-**Currently Windows-only** (the runtime drives FILE_FLAG_OVERLAPPED named pipes through IOCP).
+⚠ **The read parks the green thread on Windows and blocks the OS thread on the POSIX lane.** Windows
+drives `FILE_FLAG_OVERLAPPED` pipes through IOCP, so a read in flight yields and other green threads keep
+running; there is no netpoll a pipe read can park on elsewhere yet, so a read there holds its thread until
+the child writes or exits. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
+which lanes run these builtins at all.
 
 ```maxon
 let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
@@ -1009,28 +1045,43 @@ Forgetting `release()` leaks the handle and an OS process slot. Lines longer tha
 
 Monotonic time helpers. Use for measuring elapsed durations — absolute values are platform-defined (e.g. milliseconds since boot) and only meaningful when subtracted.
 
+Two clocks are exposed. They read genuinely different hardware sources, so they differ in resolution: **use `nowNanos()` for anything you intend to measure**, and `nowMs()` only for coarse timeouts and deadlines.
+
 **Type aliases:**
 
-- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the monotonic clock.
+- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the coarse monotonic clock.
 - `Clock.DurationMs` = `int(0 to u64.max)` — a duration in milliseconds.
+- `Clock.InstantNanos` = `int(0 to u64.max)` — an absolute reading from the high-resolution monotonic clock.
+- `Clock.DurationNanos` = `int(0 to u64.max)` — a duration in nanoseconds.
 
 **Static Methods:**
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `nowMs()` | `InstantMs` | Monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
+| `nowMs()` | `InstantMs` | Coarse monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
 | `elapsedMs(since: instant)` | `DurationMs` | Milliseconds elapsed since a prior `nowMs()` reading. Clamps to `0` if the clock moves backwards. |
+| `nowNanos()` | `InstantNanos` | High-resolution monotonic time in nanoseconds. Same "differences only" contract as `nowMs()`. |
+| `elapsedNanos(since: instant)` | `DurationNanos` | Nanoseconds elapsed since a prior `nowNanos()` reading. Clamps to `0` if the clock moves backwards. |
 
 **Example:**
 
 ```maxon
-let start = Clock.nowMs()
+let start = Clock.nowNanos()
 doWork()
-let elapsed = Clock.elapsedMs(since: start)
-print("Took {elapsed}ms\n")
+let elapsed = Clock.elapsedNanos(since: start)
+print("Took {elapsed}ns\n")
 ```
 
-Backed by `QueryPerformanceCounter` (Windows), `clock_gettime(CLOCK_MONOTONIC)` (POSIX), or the WASI `monotonic-clock` interface.
+**Sources and resolution.**
+
+| Target | `nowMs()` source | `nowNanos()` source | `nowNanos()` period |
+|--------|------------------|---------------------|---------------------|
+| x64-windows | `GetTickCount64` | `QueryPerformanceCounter` scaled by `QueryPerformanceFrequency` | 100 ns (QPF = 10 MHz) |
+| arm64-macos | `gettimeofday` | `clock_gettime(CLOCK_MONOTONIC)` | 1 ns |
+| Linux (x64 / arm64) | *not implemented* | `clock_gettime(CLOCK_MONOTONIC)` syscall | 1 ns |
+| wasm32-wasi | `wasi:clocks/monotonic-clock.now` ÷ 1e6 | `wasi:clocks/monotonic-clock.now` | 1 ns |
+
+`nowMs()` is backed by the platform's coarse tick counter, whose period on Windows is ~15.6 ms — it cannot resolve a duration shorter than a scheduler tick, so a sub-tick operation measures as either 0 ms or 16 ms. `nowNanos()` always reports NANOSECONDS, but its PERIOD is platform-defined (see the table), so two back-to-back readings can legitimately compare equal.
 
 ---
 
@@ -1108,8 +1159,6 @@ var c = try arr.cursor() otherwise panic("empty array")
 ### Example
 
 ```maxon
-typealias IntIter = ArrayIterator with int
-
 var arr = [1, 2, 3, 4, 5]
 var c = try arr.cursor() otherwise panic("empty")
 print("{c.current()}\n")        // 1
@@ -1147,23 +1196,29 @@ Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Network
 
 Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
 
+All `__ManagedFile` methods that can fail at the OS layer throw `__ManagedFileError` instead of returning sentinel values; callers must wrap them in `try`. `exists` and `close` stay non-throwing (a missing file is a valid answer; close is idempotent). The handle is refcounted: it closes its descriptor automatically when the last reference goes out of scope.
+
 **Static Methods:**
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `openRead(managed)` | `__ManagedFile` | Open a file for reading. Returns `-1` on failure. |
-| `openWrite(managed)` | `__ManagedFile` | Open a file for writing (creates or truncates). Returns `-1` on failure. |
-| `exists(managed)` | `int` | Check if a file exists. Returns nonzero if the file exists. |
-| `delete(managed)` | `int` | Delete a file. Returns `0` on success. |
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `openRead(managed)` | `__ManagedFile` | `__ManagedFileError` | Open a file for reading. |
+| `openWrite(managed)` | `__ManagedFile` | `__ManagedFileError` | Open a file for writing (creates or truncates). |
+| `openWriteExecutable(managed)` | `__ManagedFile` | `__ManagedFileError` | As `openWrite`, with executable permission bits on Unix. |
+| `exists(managed)` | `int` | -- | Check if a file exists. Returns 1 if it does, 0 otherwise. |
+| `delete(managed)` | -- | `__ManagedFileError` | Delete a file. |
+| `stat(managed)` | `int` | `__ManagedFileError` | Return a raw stat-buffer pointer; release with `statFree`. |
+| `statField(buffer, index)` | `int` | -- | Read field `index` (0..5) from a stat buffer. Stdlib invariant — panics on null buffer or OOB index. |
+| `statFree(buffer)` | -- | -- | Free a stat buffer. Stdlib invariant — panics on null buffer. |
 
 **Instance Methods:**
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `size()` | `int` | Get the file size in bytes. |
-| `read(managed, size)` | `int` | Read up to `size` bytes into the managed buffer. Returns bytes read. |
-| `write(managed)` | `int` | Write the contents of the managed buffer. Returns bytes written, or negative on error. |
-| `close()` | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `size()` | `int` | `__ManagedFileError` | Get the file size in bytes. |
+| `read(managed, size)` | `int` | `__ManagedFileError` | Read up to `size` bytes into the managed buffer. Throws `readFailed` if `size > managed.capacity` or on I/O error. |
+| `write(managed)` | `int` | `__ManagedFileError` | Write the managed buffer. Returns bytes written. |
+| `close()` | -- | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
 
 The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).
 
@@ -1202,3 +1257,159 @@ Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creatio
 | `retreat()` | -- | `CursorError` | Move backward by 1 position. |
 | `seek(index)` | -- | `CursorError` | Jump to `index`. Throws when out of bounds. |
 | `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |
+
+---
+
+## Testing (Expect)
+
+`stdlib/Testing.maxon`. The assertion library a `test` body calls.
+
+Every matcher is a `static` function that **throws `TestFailure.assertion`** when it does not
+hold, so a test stops at its first bad assertion and a forgotten `try` is E3057 at compile time.
+The human-readable report is **printed to stderr at the assertion site** just before the throw —
+a caught error in Maxon is an enum you `match`, with no message field to carry two values of
+arbitrary type, and the assertion site is the one place both values are still fully typed.
+
+```maxon
+test 'splits on commas'
+	try Expect.equal("a,b,c".split(",").count(), expected: 3)
+end 'splits on commas'
+```
+
+A failure prints:
+
+```text
+FAIL main.maxon:12: Expect.equal
+  expected: 4
+  received: 5
+  message: two plus two
+```
+
+The `message:` line appears only when a message was given. The file and line are the
+**caller's**, from the `__file__` / `__line__` parameter defaults, so a report never names a line
+inside `Testing.maxon`.
+
+**Every matcher** takes an optional `message String` plus `file String = __file__` and
+`line SourceLineNumber = __line__`; only `fail` requires its message.
+
+| Matcher | Argument types | Holds when |
+|---------|----------------|------------|
+| `equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
+| `notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
+| `greaterThan(actual, than:)` | integer, float | `actual > than` |
+| `lessThan(actual, than:)` | integer, float | `actual < than` |
+| `atLeast(actual, than:)` | integer, float | `actual >= than` |
+| `atMost(actual, than:)` | integer, float | `actual <= than` |
+| `close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+
+NaN satisfies no comparison, so it FAILS every float matcher: each float arm tests whether the
+assertion holds rather than whether its negation does, which are the same question for every value
+except NaN.
+| `isTrue(actual)` / `isFalse(actual)` | `bool` | the value is `true` / `false` |
+| `contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
+| `startsWith(haystack, needle:)` | `String` | prefix match |
+| `endsWith(haystack, needle:)` | `String` | suffix match |
+| `isEmpty(haystack)` | `String` | no characters |
+| `fail(message)` | -- | never — the escape hatch |
+
+`equal` is **one overloaded name**, selected by argument type, and resolution sees through a
+method call, so `Expect.equal(parts.count(), expected: 3)` works. It sees through an enum's
+`name`, `ordinal` and `rawValue` too, so `Expect.equal(status.name, expected: "ready")` picks the
+`String` arm and `Expect.equal(status.ordinal, expected: 0)` picks the integer one. `String`
+values are rendered quoted in the report so an empty or space-padded value stays visible.
+
+**Floats deliberately have no `equal`** — a float `==` matcher passes on one target and fails on
+another, so `Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. The
+ordering matchers *do* have float arms: comparing against a threshold is stable, and it is exact
+bit-equality that is not.
+
+For a type the table does not name, `isTrue` is the escape hatch — `==` supplies the predicate
+and interpolation supplies the rendering, so one line reports both values:
+
+```maxon
+try Expect.isTrue(a == b, message: "expected {b}, got {a}")
+```
+
+That works for any `Equatable` + `Stringable` type. See `specs/testing-assertions.md`.
+
+---
+
+## Build
+
+`Build` describes what `maxon build` should compile. It is read by the **build manifest** — the
+`build.maxon` a project may carry — and by nothing else: `maxon build` with no path compiles that
+manifest, runs its `build` function, and reads the description off stdout.
+
+⭐ **A manifest is a program, not a configuration file.** These calls are how it says what it decided,
+so the description can be *computed* — a source list read from a directory, an output chosen by host
+— rather than only written down. See `maxon build` in [CLI_REFERENCE.md](/docs/cli/) for the
+manifest's own contract.
+
+```maxon
+export function build() returns ExitCode
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
+	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
+	Build.buildTargets(targets)
+	return 0
+end 'build'
+```
+
+**One target needs no name; several are listed rather than guessed at.** `maxon build` with no
+argument builds a manifest's only target, and with several it prints their names and compiles
+nothing — picking the first would build something the caller did not ask for and report success.
+`maxon build <name>` selects one.
+
+⛔ **A target name outranks a path of the same spelling.** A target names an OUTPUT as well as a
+source, so `maxon build maxon-bin` resolved as a path would compile the same directory to a different
+file and leave the real one stale. A spelling no target declares falls through to the path meaning, so
+a manifest never breaks an ordinary `maxon build some/file.maxon`.
+
+| Function | Returns | Throws | Description |
+|---|---|---|---|
+| `Build.build(source, output:, version:, defines:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
+| `Build.target(name, source:, output:, version:, defines:)` | `BuildConfig` | -- | One NAMED target, for a manifest that describes more than one thing to build. |
+| `Build.buildTargets(targets)` | -- | -- | Writes several named targets as a JSON array. One target may be a bare object; the compiler accepts either shape. |
+| `Build.buildWithConfig(config)` | -- | -- | Full control: several sources, compiled as ONE program in the order given. |
+| `Build.emitBuildConfig(config)` | -- | -- | Writes the description as JSON on stdout. The three calls above end here; a manifest rarely calls it directly. |
+
+**`BuildConfig`** carries the whole description:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `String` | What this build is called. Reported, not used to locate anything. |
+| `output` | `String` | Where the executable goes, **extension omitted** — the compiler appends `.exe` on Windows and nothing elsewhere. |
+| `sources` | `Array with String` | The files and directories to compile, as ONE program, in this order. |
+| `optimize` | `bool` | Reserved; the compiler's optimization is not currently switchable here. |
+| `debug_info` | `bool` | Write the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read. The executable is byte-identical either way. |
+| `version` | `String` | The product's own version, as a dotted number. Goes into the binary's metadata; empty means unversioned. |
+| `defines` | `Array with String` | `<name>=<value>` pairs, each replacing a top-level `String` constant's written-out default — the same thing `maxon build --define` does. |
+
+`BuildConfig.create(name, output:, sources:, optimize:, debug_info:, version:, defines:)` builds one.
+
+⭐⭐ **`defines` IS HOW A MANIFEST GETS SOMETHING IT COMPUTED INTO THE BINARY**, and it is the whole
+reason a manifest is a PROGRAM rather than a config file. This repository's own `build.maxon` derives
+the compiler's version from git and passes it as three defines; the alternative — writing them into a
+generated source file — cannot work, because generating that file needs a compiler and the compiler
+cannot be built without it.
+
+⚠ A name is matched bare or namespace-qualified, and a name matching no declaration or more than one is
+REFUSED (E3149 / E3150), as is a constant whose initializer is not a plain string literal (E3151). A
+`--define` typed on the command line wins over one the manifest wrote. See `docs/CLI_REFERENCE.md`.
+
+⭐ **`version` IS THE PRODUCT'S VERSION, AND IT REACHES THE BINARY ITSELF** — a Windows
+`VS_VERSIONINFO` resource that Explorer's Details tab and every installer reads, and a Mach-O
+`LC_SOURCE_VERSION`. Four fields are parsed off the dotted string, missing ones read 0, and a
+component that is not a number reads 0 as well: a version string a person wrote is metadata, and
+refusing to build over untidy metadata would be a compiler declining correct code.
+
+⚠ **THE BINARY'S PRODUCT NAME IS ITS OWN FILE NAME, NEVER `name`.** `name` is what SELECTS a build —
+a target's name, or for `Build.build` the source path, which is `.` for a project built from its own
+directory. What the thing is called is what it is called on disk.
+
+⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
+every file beneath the manifest — every spec, every test — under a command that named nothing at all.
+A manifest that means the current directory says so: `Build.build(".", output: ...)`.
+
+⚠ **`-o` and `--target` on the command line outrank the manifest.** The person typing the command is
+answering a narrower question than the file was.

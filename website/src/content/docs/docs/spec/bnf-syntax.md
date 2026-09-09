@@ -29,7 +29,7 @@ extended BNF notation.
 
 ### 1.1 Characters
 
-```text
+```
 letter        = 'a'..'z' | 'A'..'Z'
 digit         = '0'..'9'
 hex_digit     = digit | 'a'..'f' | 'A'..'F'
@@ -39,15 +39,16 @@ oct_digit     = '0'..'7'
 
 ### 1.2 Identifiers
 
-```text
+```
 IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ```
 
 ### 1.3 Keywords
 
-```text
-KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
-              | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
+```
+KEYWORD       = '__file__' | '__line__'
+              | 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
+              | 'countof' | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
@@ -60,7 +61,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | '
 
 ### 1.4 Literals
 
-```text
+```
 INTEGER       = decimal_int | hex_int | bin_int | oct_int
 decimal_int   = digit { digit | '_' }
 hex_int       = '0x' hex_digit { hex_digit | '_' }
@@ -95,13 +96,19 @@ BOOL          = 'true' | 'false'
 
 Block labels are character literals used as identifiers for block structures.
 
-```text
-LABEL         = "'" IDENTIFIER "'"
 ```
+LABEL         = "'" IDENTIFIER "'"
+TEST_NAME     = "'" { any character except "'" } "'"
+```
+
+A `LABEL` names a block and is spelled as an identifier. A `TEST_NAME` is the same character
+literal token, but its content is PROSE — spaces, digits and punctuation are all allowed, and
+the lexer validates none of it. It appears only in `test_decl`, where the trailing `end` must
+repeat it verbatim.
 
 ### 1.6 Operators and Punctuation
 
-```text
+```
 '+'   '-'   '*'   '/'
 '='   '=='  '!='  '<'  '<='  '>'  '>='
 '('   ')'   '{'   '}'   '['   ']'
@@ -110,7 +117,7 @@ LABEL         = "'" IDENTIFIER "'"
 
 ### 1.7 Comments
 
-```text
+```
 comment       = line_comment | block_comment
 line_comment  = '//' { <any character except newline> } NEWLINE
 block_comment = '/*' { <any character> } '*/'
@@ -119,7 +126,7 @@ doc_comment   = '///' { <any character except newline> } NEWLINE
 
 ### 1.8 Conditional Compilation Directives
 
-```text
+```
 hash_if       = '#if'
 hash_else     = '#else'
 hash_endif    = '#endif'
@@ -137,20 +144,24 @@ unary_expr    = 'not' unary_expr | atom
 atom          = 'os' '(' IDENTIFIER ')'
               | 'arch' '(' IDENTIFIER ')'
               | 'testing' '(' BOOL ')'
+              | 'rcSanitize' '(' BOOL ')'
+              | 'leakReport' '(' BOOL ')'
+              | 'compiler' '(' IDENTIFIER ')'
               | '(' condition ')'
 ```
 
-Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
+Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Supported `rcSanitize` values: `true`, `false` (true in `--rc-sanitize` builds). Supported `leakReport` values: `true`, `false` (true in `--leak-report` builds). Nested `#if` blocks are supported.
 
 ---
 
 ## 2 — Program Structure
 
-```text
+```
 program       = { top_level_decl }
 
 top_level_decl
               = function_decl
+              | test_decl
               | extern_decl
               | type_decl
               | enum_decl
@@ -165,7 +176,7 @@ top_level_decl
 
 ### 2.1 Visibility
 
-```text
+```
 visibility_prefix = [ 'export' | 'module' ]
 ```
 
@@ -176,13 +187,36 @@ The two modifiers are mutually exclusive — combining them is a parse error.
 `module` is a contextual keyword: it is recognised only when followed by a
 declaration token; in any other position it lexes as an identifier.
 
+A `test_decl` takes no `visibility_prefix` — a test is never referenced by name,
+so there is nothing for a visibility modifier to control.
+
 ---
 
 ## 3 — Declarations
 
+### 3.0 Test Declaration
+
+```
+test_decl     = 'test' TEST_NAME NEWLINE
+                body
+                'end' TEST_NAME
+```
+
+A test takes **no parameters** and **no `returns`**: `ExpectNewline` ends the header
+at the name, so `test 'x'(a int)` and `test 'x' returns int` are parse errors.
+
+`test` is a contextual keyword, recognised only at declaration position when the
+next token is a `TEST_NAME`; anywhere else it lexes as an identifier. The position
+half matters as much as the word: `match expression LABEL` makes `match test 'check'`
+the same two tokens, and only the declaration position separates them.
+
+Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`); the
+clause is never written and cannot be. A `test_decl` is legal only in a file whose
+name ends in `.test.maxon`.
+
 ### 3.1 Function Declaration
 
-```text
+```
 function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE
                 body
@@ -200,20 +234,30 @@ default_value = [ '-' ] INTEGER                              (* integer literal 
               | IDENTIFIER '.' IDENTIFIER                    (* enum case, e.g. Priority.medium *)
               | array_literal                                (* array literal, e.g. [10, 20, 12] *)
               | struct_literal                               (* struct constructor, e.g. Point{x: 0, y: 0} *)
+              | caller_location                              (* caller-location default, see below *)
+
+caller_location
+              = '__line__'                                   (* line of the call site *)
+              | '__file__'                                   (* calling file, relative to the compile root *)
+
+                (* caller_location is legal ONLY inside a parameter's default_value, and it is
+                   expanded at the CALL SITE, so each caller supplies its own. Anywhere else --
+                   an ordinary expression, or a field_default, which shares the `= expr`
+                   spelling but expands at a struct literal rather than a call -- is E2060. *)
 
 throws_clause = 'throws' type_ref
 ```
 
 ### 3.2 Extern Function Declaration
 
-```text
+```
 extern_decl   = 'extern' 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] NEWLINE
 ```
 
 ### 3.3 Type (Struct) Declaration
 
-```text
+```
 type_decl     = visibility_prefix 'type' IDENTIFIER [ uses_clause ]
                 [ conformance_clause ] [ where_clause ] NEWLINE
                 { type_member }
@@ -259,7 +303,7 @@ static_method_decl
 
 Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that).
 
-```text
+```
 enum_decl     = visibility_prefix 'enum' IDENTIFIER [ backing_type ]
                 [ conformance_clause ] NEWLINE
                 { enum_case NEWLINE }
@@ -292,7 +336,7 @@ raw_field_init
 
 Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly, but expose a synthesized `.unionCases` companion enum — `U.unionCases` is an int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization. Unions can also tag each variant with a compile-time struct backing (read via `.rawValue`, identical shape to struct-backed enums).
 
-```text
+```
 union_decl    = visibility_prefix 'union' IDENTIFIER
                 [ conformance_clause ] NEWLINE
                 { union_case NEWLINE }
@@ -312,7 +356,7 @@ When struct-backed, every variant must carry an `= struct_raw_literal` of the sa
 
 ### 3.6 Interface Declaration
 
-```text
+```
 interface_decl
               = visibility_prefix 'interface' IDENTIFIER [ extends_clause ]
                 [ uses_clause ] NEWLINE
@@ -329,7 +373,7 @@ interface_method
 
 ### 3.7 Extension Block
 
-```text
+```
 extension_block
               = 'extension' IDENTIFIER [ conformance_clause ] [ where_clause ] NEWLINE
                 { method_decl }
@@ -338,16 +382,23 @@ extension_block
 
 ### 3.8 Type Alias Declaration
 
-```text
+```
 typealias_decl
               = visibility_prefix 'typealias' IDENTIFIER '=' typealias_rhs NEWLINE
 
 typealias_rhs = ranged_type
+              | raw_pattern_type
               | generic_type
               | tuple_type
               | function_type
 
 ranged_type   = primitive_type '(' range_bound ('to' | 'upto') range_bound ')'
+
+; `bits` is an ordinary IDENTIFIER, not a keyword: what selects this production is
+; the name followed by '('. Legal widths are 1, 2, 4, 8, 16, 32 and 64 — the widths
+; a slot or a sub-byte packed field can hold; any other is E3146.
+raw_pattern_type
+              = 'bits' '(' INTEGER ')'
 
 primitive_type
               = 'int' | 'float' | 'byte'
@@ -370,15 +421,16 @@ sized_type_ref
 - Integer ranges cannot span both negative values and values above `i64.max`
 - `byte` ranges must have bounds within 0 to u8.max
 
-```text
-generic_type  = IDENTIFIER 'with' type_args
+```
+generic_type  = generic_base 'with' type_args
+generic_base  = IDENTIFIER [ '.' IDENTIFIER ]
 
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
 
 ### 3.9 Top-Level Variables
 
-```text
+```
 top_level_var = visibility_prefix 'var' IDENTIFIER '=' expression NEWLINE
 top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 ```
@@ -387,7 +439,7 @@ top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 
 ## 4 — Type System Clauses
 
-```text
+```
 uses_clause   = 'uses' IDENTIFIER { ',' IDENTIFIER }
 
 conformance_clause
@@ -423,7 +475,7 @@ function_type = 'function' '(' [ type_ref { ',' type_ref } ] ')' [ 'returns' typ
 
 ## 5 — Statements
 
-```text
+```
 body          = statement NEWLINE { statement NEWLINE }   (* at least one statement required; empty blocks are E3082 *)
 
 statement     = return_stmt
@@ -450,7 +502,7 @@ expression_stmt
 
 ### 5.1 Variable Declarations
 
-```text
+```
 annotated_decl
               = '@heap' ( var_decl | let_decl )
 
@@ -469,7 +521,7 @@ Constraints:
 
 ### 5.2 Assignment
 
-```text
+```
 assignment_stmt
               = target '=' expression
 
@@ -483,7 +535,7 @@ target        = IDENTIFIER
 
 Assigns multiple return values to existing mutable variables in one statement:
 
-```text
+```
 tuple_assign_stmt
               = '(' tuple_assign_target { ',' tuple_assign_target } ')' '=' expression
 
@@ -499,13 +551,13 @@ Constraints:
 
 ### 5.3 Return
 
-```text
+```
 return_stmt   = 'return' [ expression ]
 ```
 
 ### 5.4 If Statement
 
-```text
+```
 if_stmt       = 'if' condition LABEL NEWLINE
                 body
                 'end' LABEL [ else_clause ]
@@ -527,7 +579,7 @@ if_try_stmt   = 'if' 'try' expression LABEL NEWLINE
 
 ### 5.5 While Loop
 
-```text
+```
 while_stmt    = 'while' expression LABEL NEWLINE
                 body
                 'end' LABEL
@@ -535,7 +587,7 @@ while_stmt    = 'while' expression LABEL NEWLINE
 
 ### 5.6 For Loop
 
-```text
+```
 for_stmt      = 'for' loop_var 'in' iterable_expr LABEL NEWLINE
                 body
                 'end' LABEL
@@ -550,7 +602,7 @@ iterable_expr = expression ('to' | 'upto') expression          (* range form *)
 
 ### 5.7 Match Statement
 
-```text
+```
 match_stmt    = 'match' expression LABEL NEWLINE
                 { match_arm NEWLINE }
                 'end' LABEL
@@ -564,12 +616,11 @@ match_action  = statement [ 'and' 'fallthrough' ]
               | 'break' [ LABEL ]
 
 match_patterns
-              = match_pattern { 'or' match_pattern }
+              = match_pattern { 'or' NEWLINE match_pattern }      (* one alternative per line; E3147 otherwise *)
 
 match_pattern = literal_pattern
               | case_pattern
               | range_pattern
-              | case_range_pattern
 
 literal_pattern
               = [ '-' ] INTEGER
@@ -587,11 +638,18 @@ range_pattern = expression 'to' expression              (* inclusive both bounds
               | expression 'to' 'max'                   (* open upper bound *)
               | 'min' 'to' expression                   (* open lower, inclusive upper *)
               | 'min' 'upto' expression                 (* open lower, exclusive upper *)
-
-case_range_pattern
-              = IDENTIFIER 'to' IDENTIFIER              (* inclusive case range — bare case names *)
-              | IDENTIFIER 'upto' IDENTIFIER            (* exclusive upper case range — bare case names *)
 ```
+
+An arm's alternatives are joined by `or`, and the NEWLINE after each `or` is REQUIRED: one
+alternative per line, the chain continuing after a trailing `or`, with the last alternative
+carrying the arm's `then`/`gives` and its body. Packing two onto one line is E3147. The newline is
+admitted only AFTER an `or`, never before one — a line may not begin with `or`, which is itself a
+legal case name.
+
+There is no case-range pattern. `red to blue` over an enum or union is E3146: a range covered the
+cases whose declaration position fell in its span, so a case added inside that span was absorbed
+silently. `range_pattern` above is for SCALARS only (integers, characters, floats), whose domains
+admit no such insertion.
 
 Match arms for enum and union types use **bare case names** (e.g., `red`, `pending`), not
 qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
@@ -606,7 +664,7 @@ in match arms with E2049. Every single-statement `try` form (bare propagation,
 
 ### 5.8 Break and Continue
 
-```text
+```
 break_stmt    = 'break' [ LABEL ]   (* LABEL must NOT name the innermost
                                        enclosing loop; that's E2048 *)
 
@@ -615,19 +673,19 @@ continue_stmt = 'continue' [ LABEL ] (* same E2048 rule as `break` *)
 
 ### 5.9 Throw
 
-```text
+```
 throw_stmt    = 'throw' expression
 ```
 
 ### 5.11 Panic
 
-```text
+```
 panic_stmt    = 'panic' '(' ( STRING | STRING_INTERP ) ')'
 ```
 
 ### 5.12 Try Statement
 
-```text
+```
 try_stmt      = 'try' expression 'otherwise' otherwise_clause
               | 'try' expression                                (* propagation — only in throwing functions *)
               | try_block
@@ -680,7 +738,7 @@ try_block_otherwise
 
 ### 6.2 Expression Grammar
 
-```text
+```
 expression    = conditional_expr
 
 conditional_expr
@@ -718,7 +776,7 @@ postfix_op    = '.' IDENTIFIER [ '(' [ arg_list ] ')' ]   (* method call or fiel
 
 ### 6.3 Primary Expressions
 
-```text
+```
 primary       = INTEGER
               | FLOAT
               | STRING
@@ -743,6 +801,7 @@ primary       = INTEGER
               | await_expr
               | type_bound_expr
               | sizeof_expr
+              | countof_expr
               | IDENTIFIER
 
 array_literal = '[' [ expression { ',' expression } ] ']'
@@ -785,6 +844,8 @@ type_bound_expr
 
 sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time size in bytes *)
 
+countof_expr  = 'countof' '(' type_ref ')'                    (* element count of a fixed-size container type *)
+
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 
 closure       = 'function' '(' [ closure_params ] ')' 'gives' expression
@@ -795,7 +856,7 @@ closure_param = IDENTIFIER [ type_ref ]                          (* '_' discards
 
 ### 6.4 Match Expression
 
-```text
+```
 match_expr    = 'match' expression LABEL NEWLINE
                 { match_expr_arm NEWLINE }
                 'end' LABEL
@@ -811,23 +872,23 @@ match_expr_arm
 
 ### 6.5 Try Expression
 
-```text
+```
 try_expr      = 'try' expression 'otherwise' otherwise_clause
               | 'try' expression
 ```
 
 ### 6.6 Async/Await Expressions
 
-```text
-async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* spawn green thread, returns promise *)
-              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* spawn struct method call *)
+```
+async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* start a coroutine, returns promise *)
+              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* the same, on a static method *)
 
 await_expr    = 'await' expression                          (* wait for promise, returns result *)
 
 try_await     = 'try' 'await' expression                    (* await throwing promise, propagate error *)
               | 'try' 'await' expression 'otherwise' otherwise_clause  (* see 5.12 for all forms *)
 
-cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thread *)
+cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine *)
 ```
 
 **Restrictions:**
@@ -835,9 +896,33 @@ cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thr
 - `async` target function must yield (contain I/O operations or `await` points)
 - Throwing async functions require `try await` (not plain `await`)
 
-### 6.7 Function and Method Calls
 
-```text
+### 6.7 Spawn Expressions
+
+```
+spawn_expr    = 'spawn' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* start a service, returns TYPE.handle *)
+```
+
+**Restrictions:**
+- `spawn` is a CONTEXTUAL keyword, not a reserved word: it is an identifier followed by a name. `spawn`
+  therefore remains a perfectly good spelling for a function, a static, a parameter, a field or a local
+  (`Subprocess.spawn(cmd)` and `static function spawn() returns Self` are both live in this tree).
+- the target must be a STATIC FACTORY of a declared `type` that returns that type; there is no bare
+  `spawn f()` green thread (E3134). The unit of concurrency is a service.
+- `spawn Self.…` is refused: the whole-program walk that decides which types are services reads tokens
+  with no type scope.
+- naming a type in a `spawn` makes it a SERVICE program-wide, which synthesizes `TYPE.request` and
+  `TYPE.handle` beside it. That is a semantic rule over `visibility_prefix`, not a grammar change: no
+  `type_decl` production moves.
+- a message SEND has no production of its own either: it is `call_expr`'s method form (6.8) whose receiver
+  happens to be a `TYPE.handle`. Dispatch is decided by the receiver's TYPE, so the same spelling is a
+  direct call on a value and a message on a handle.
+- a `spawn` compiled for a target with no green-thread substrate is refused with E3104 — see 6.6's note;
+  the grammar is target-neutral and the refusal is not.
+
+### 6.8 Function and Method Calls
+
+```
 call_expr     = IDENTIFIER '(' [ arg_list ] ')'
               | postfix_expr '.' IDENTIFIER '(' [ arg_list ] ')'
 
@@ -858,7 +943,7 @@ Arguments with default values may be omitted.
 Every compound statement in Maxon requires a single-quoted label after
 the opening keyword and a matching label after `end`.
 
-```text
+```
 if <cond> 'label'  ...  end 'label'
 while <cond> 'label'  ...  end 'label'
 for <var> in <iter> 'label'  ...  end 'label'
@@ -869,7 +954,7 @@ else 'label'  ...  end 'label'
 
 Type, enum, union, interface, and extension bodies also end with a matching label:
 
-```text
+```
 type Point  ...  end 'Point'
 enum Color  ...  end 'Color'
 union Result  ...  end 'Result'
@@ -877,6 +962,15 @@ interface Hashable  ...  end 'Hashable'
 extension Iterable  ...  end 'Iterable'
 function main()  ...  end 'main'
 ```
+
+---
+
+## 8 — Reserved for Future Use
+
+The following tokens are recognized but not yet fully specified:
+
+- `'of'` — reserved keyword
+- `'extends'` — used in interface inheritance
 
 ---
 

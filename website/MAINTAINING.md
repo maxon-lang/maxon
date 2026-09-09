@@ -18,9 +18,12 @@ project layout; this doc covers running and evolving the site.
 - **Every change here is still built on push and on pull requests**, without deploying —
   `starlight-links-validator` fails the build on a dead internal link, so a broken site is a red
   pull request rather than a broken deploy.
-- ⛔ **Cloudflare's Pages *git integration* must stay disconnected.** If it is reconnected, every
-  push to `main` deploys from Cloudflare's own build as well as from the workflow — two deployers,
-  one of which is invisible from this repository.
+- ⛔ **The Pages project keeps its git connection, with automatic deployments DISABLED on all
+  branches.** A Pages project cannot be converted from Git integration to Direct Upload — Cloudflare:
+  *"If you deploy using the Git integration, you cannot switch to Direct Upload later."* Disabling
+  branch control is the supported way to stop it building while `wrangler` deploys directly. The
+  connection points at the archived `maxon-lang/maxon.dev`, so re-enabling it would deploy a repository
+  nobody pushes to.
 - **Domain/DNS:** `maxon.dev` registered at Namecheap, **nameservers delegated to Cloudflare**.
   Cloudflare manages the apex + `www` records and TLS automatically. The website is the only
   thing on `maxon.dev`.
