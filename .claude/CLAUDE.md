@@ -10,7 +10,9 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 `maxon-bin/.maxon/maxon`, suite `specs/`. On Windows the binary is `maxon.exe`; commands below show
 the Windows form.
 
-- **Build it:** `./maxon-bin/.maxon/maxon build` at the repo root, which runs `build.maxon`.
+- **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
+  declares two targets — `maxon-bin` and `dev-mcp` — so a BARE `maxon build` lists them rather than
+  picking one.
 - **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
   you run directly when the slot is empty. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
@@ -342,7 +344,7 @@ emits it.
 
 **If you edit anything under `maxon-dev-mcp/mcp/` — or pull a commit that does — the fix has THREE
 steps, in this order: (1) KILL the running MCP server process, which holds an open handle on its own
-binary; (2) `maxon build maxon-dev-mcp/mcp`; (3) RESTART THE SERVER.** Rebuilding first fails with
+binary; (2) `maxon build dev-mcp`; (3) RESTART THE SERVER.** Rebuilding first fails with
 `E6002: could not remove the previous build artifact ... it is locked or read-only`, and a rebuild
 alone does not replace the running process.
 

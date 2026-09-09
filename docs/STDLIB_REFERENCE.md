@@ -1342,16 +1342,30 @@ manifest's own contract.
 
 ```maxon
 export function build() returns ExitCode
-	Build.buildOne("maxon-bin", output: "maxon-bin/.maxon/maxon")
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
+	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
+	Build.buildTargets(targets)
 	return 0
 end 'build'
 ```
 
+**One target needs no name; several are listed rather than guessed at.** `maxon build` with no
+argument builds a manifest's only target, and with several it prints their names and compiles
+nothing — picking the first would build something the caller did not ask for and report success.
+`maxon build <name>` selects one.
+
+⛔ **A target name outranks a path of the same spelling.** A target names an OUTPUT as well as a
+source, so `maxon build maxon-bin` resolved as a path would compile the same directory to a different
+file and leave the real one stale. A spelling no target declares falls through to the path meaning, so
+a manifest never breaks an ordinary `maxon build some/file.maxon`.
+
 | Function | Returns | Throws | Description |
 |---|---|---|---|
-| `Build.buildOne(source, output:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
+| `Build.build(source, output:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
+| `Build.target(name, source:, output:)` | `BuildConfig` | -- | One NAMED target, for a manifest that describes more than one thing to build. |
+| `Build.buildTargets(targets)` | -- | -- | Writes several named targets as a JSON array. One target may be a bare object; the compiler accepts either shape. |
 | `Build.buildWithConfig(config)` | -- | -- | Full control: several sources, compiled as ONE program in the order given. |
-| `Build.build(name)` | -- | -- | Names the executable only, leaving `sources` empty. ⛔ An empty `sources` is **refused** by the compiler — see below. |
 | `Build.emitBuildConfig(config)` | -- | -- | Writes the description as JSON on stdout. The three calls above end here; a manifest rarely calls it directly. |
 
 **`BuildConfig`** carries the whole description:
@@ -1368,7 +1382,7 @@ end 'build'
 
 ⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
 every file beneath the manifest — every spec, every test — under a command that named nothing at all.
-`Build.build(name)` leaves it empty, so use `buildOne` or `buildWithConfig` to say what to compile.
+A manifest that means the current directory says so: `Build.build(".", output: ...)`.
 
 ⚠ **`-o` and `--target` on the command line outrank the manifest.** The person typing the command is
 answering a narrower question than the file was.

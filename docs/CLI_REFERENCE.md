@@ -79,7 +79,7 @@ was handed, and a path with no `stdlib/` anywhere above it is not in a checkout 
 ```bash
 maxon build hello.maxon                       # → hello.exe
 maxon build src/ -o build/app                 # a whole directory, named output
-maxon build maxon-bin                         # a project
+maxon build maxon-bin                         # a target named by build.maxon
 maxon build a.maxon b.maxon                   # one program out of two files, in that order
 maxon build app.maxon --emit-ir
 maxon build app.maxon --target=wasm32-wasi
@@ -645,19 +645,33 @@ nothing is compiled.
 
 ```maxon
 export function build() returns ExitCode
-	Build.buildOne("maxon-bin", output: "maxon-bin/.maxon/maxon")
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
+	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
+	Build.buildTargets(targets)
 	return 0
 end 'build'
 ```
+
+**One target needs no name; several are listed rather than guessed at.** `maxon build` with no
+argument builds a manifest's only target, and with several it prints their names and compiles
+nothing — picking the first would build something the caller did not ask for and report success.
+`maxon build <name>` selects one.
+
+⛔ **A target name outranks a path of the same spelling.** A target names an OUTPUT as well as a
+source, so `maxon build maxon-bin` resolved as a path would compile the same directory to a different
+file and leave the real one stale. A spelling no target declares falls through to the path meaning, so
+a manifest never breaks an ordinary `maxon build some/file.maxon`.
 
 **What it prints is the contract.** `stdlib/Build.maxon` writes the build description as JSON on
 stdout, and the compiler reads it back — so both ends share one description of what a build is:
 
 | Call | Meaning |
 |---|---|
-| `Build.buildOne(source, output:)` | Compile one file or directory to one output. The common shape. |
+| `Build.build(source, output:)` | Compile one file or directory to one output. The common shape. |
+| `Build.target(name, source:, output:)` | One NAMED target, for a manifest describing more than one. |
+| `Build.buildTargets(targets)` | Emit several named targets. |
 | `Build.buildWithConfig(config)` | Full control via a `BuildConfig`: several sources, in order. |
-| `Build.build(name)` | The executable name only; leaves `sources` empty, which is **refused** — see below. |
 
 The output path omits the extension: the compiler appends `.exe` on Windows and nothing elsewhere.
 

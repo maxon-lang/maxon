@@ -24,6 +24,9 @@ let buildTimeoutMs = 1800000
 // it and this tree's would never be read.
 let bootstrapRelativePath = "maxon"
 
+// The manifest target that builds the compiler.
+let CompilerTargetName = "maxon-bin"
+
 // Tail of captured output we surface in `rawTail`. Long enough to include
 // the error summary at the end of a failed build without flooding the MCP
 // response. ~4 KiB.
@@ -77,6 +80,9 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 	// directory and runs the build it describes.
 	var argv = StringArray.create()
 	argv.push("build")
+	// ⚠ THE TARGET IS NAMED, because the root manifest declares more than one and a bare `build` there
+	// LISTS them rather than picking. This tool builds the compiler.
+	argv.push(CompilerTargetName)
 
 	let timing = Clock.nowMs()
 	let result = try Subprocess.run(Executable.path(builtWith), arguments: argv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs) otherwise (err) 'spawn'

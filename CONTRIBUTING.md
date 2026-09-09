@@ -65,8 +65,8 @@ archive, because the compiler resolves `stdlib/` by walking up from its own exec
 one left beside it would be compiled in place of this tree's.
 
 ```bash
-./.bootstrap/maxon build            # first build, with the seed
-./maxon-bin/.maxon/maxon build      # afterwards, the compiler rebuilds itself
+./.bootstrap/maxon build maxon-bin            # first build, with the seed
+./maxon-bin/.maxon/maxon build maxon-bin      # afterwards, it rebuilds itself
 ./maxon-bin/.maxon/maxon spec-test
 ```
 

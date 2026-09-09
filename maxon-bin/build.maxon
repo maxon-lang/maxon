@@ -1,4 +1,13 @@
+// Building the compiler from inside its own directory. The repository root declares this same build as
+// its `maxon-bin` target; both spell one output, `maxon-bin/.maxon/maxon`, relative to their own
+// directory.
+//
+// ⛔ THE OUTPUT IS THE COMPILER'S OWN SLOT, so this REPLACES THE BINARY RUNNING IT. The compiler renames
+// its running image to `maxon.previous` first — an OS will not let a running executable be deleted, but
+// will let one be renamed — so a failed build leaves the slot EMPTY and the last good compiler at
+// `.previous`, rather than a stale binary answering as though it were current.
+
 export function build() returns ExitCode
-	Build.build("maxon-bin")
+	Build.build(".", output: ".maxon/maxon")
 	return 0
 end 'build'

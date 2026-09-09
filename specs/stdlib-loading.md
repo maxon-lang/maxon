@@ -687,7 +687,7 @@ ideographic
 ```
 
 <!-- test: stdlib-loading.build-config-from-stdlib -->
-`Build.build(name)` emits the JSON a `build.maxon` hands the compiler. It is the one new entry that
+`Build.build(source, output:)` emits the JSON a `build.maxon` hands the compiler. It is the one new entry that
 is neither a byte walk nor a classifier — a `type` with fields, a `static`, and an `Array with
 String` — so what it pins is that a stdlib module of ordinary shape reaches user code intact.
 
@@ -695,7 +695,7 @@ String` — so what it pins is that a stdlib module of ordinary shape reaches us
 none, so the module's per-line `print` calls run together.
 ```maxon
 function main() returns ExitCode
-	Build.build("demo")
+	Build.build("src", output: ".maxon/demo")
 	return 0
 end 'main'
 ```
@@ -703,7 +703,7 @@ end 'main'
 0
 ```
 ```stdout
-{  "name": "demo",  "output": ".maxon/demo",  "sources": [  ],  "optimize": false,  "debug_info": true}
+{  "name": "src",  "output": ".maxon/demo",  "sources": [    "src"  ],  "optimize": false,  "debug_info": true}
 ```
 
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->

@@ -425,6 +425,7 @@ let ManifestOutputStem = ".maxon/build-manifest"
 let ManifestEntryFunction = b"build"
 
 // The two fields `stdlib/Build.maxon` writes that this reads back.
+let ManifestNameKey = "name"
 let ManifestOutputKey = "output"
 let ManifestSourcesKey = "sources"
 
@@ -434,20 +435,59 @@ let ManifestSourcesKey = "sources"
 // directory, chosen from the host, stamped from a version file — rather than only spelled out.
 // Nothing here parses the manifest. The compiler COMPILES it, RUNS it, and reads what it prints.
 //
-// ⭐ **THE PROTOCOL IS `stdlib/Build.maxon`'s JSON, ON STDOUT.** `Build.build(name)` and
+// ⭐ **THE PROTOCOL IS `stdlib/Build.maxon`'s JSON, ON STDOUT.** `Build.build(source, output:)` and
 // `Build.buildWithConfig(config)` write it; this reads it back. Both ends therefore share ONE
 // description of what a build is, held in the stdlib where each can see it, and a field added there
 // is a field both ends already agree on.
 //
 // ⚠ A directory with no `build.maxon` gets the usage line, because "build what?" is then a question
 // nobody has answered.
-function runBuildManifest(args MaxonArgs) returns ExitCode
+// Which of a manifest's builds a command is about, and whether the manifest had one at all.
+//
+// ⛔ A NAME THAT IS NOT A TARGET IS NOT AN ERROR. `maxon build <x>` may equally mean "compile the path
+// x", so a manifest declaring no `x` answers `noSuchTarget` and the caller falls back to path
+// semantics — refusing here would make a manifest's presence break builds it was never part of.
+union ManifestRun
+	ran(code ExitCode)
+	noSuchTarget
+end 'ManifestRun'
+
+// A manifest's builds. ONE may be written as a bare object and SEVERAL as a JSON array, because a
+// single-target manifest should not have to say it is a list of one.
+function manifestBuilds(doc JsonDoc) returns JsonNodeIdArray
+	var builds = JsonNodeIdArray.create()
+	let count = try doc.arrayLength(doc.root) otherwise 'notArray'
+		builds.push(doc.root)
+		return builds
+	end 'notArray'
+
+	for i in 0 upto count 'eachBuild'
+		let id = try doc.arrayAt(doc.root, index: i) otherwise 'badElem'
+			return builds
+		end 'badElem'
+		builds.push(id)
+	end 'eachBuild'
+
+	return builds
+end 'manifestBuilds'
+
+// A build's declared name, empty when it carries none. A lone build needs none: there is nothing to
+// tell it apart from.
+function manifestTargetName(doc JsonDoc, build JsonNodeId) returns String
+	return try doc.getString(build, key: ManifestNameKey) otherwise ""
+end 'manifestTargetName'
+
+function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 	let manifest = Directory.currentPath().join(BuildManifestFileName)
 	if not File.exists(manifest) 'noManifest'
-		printError("Usage: maxon build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
+		if not targetName.isEmpty() 'nameWithoutManifest'
+			return ManifestRun.noSuchTarget
+		end 'nameWithoutManifest'
+
+		printError("Usage: maxon build <file|directory|target>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
 		printError("\n")
 		printError("With no path, `maxon build` runs the {BuildManifestFileName} in the current directory. There is none here.\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'noManifest'
 
 	// ⛔ THE MANIFEST IS BUILT FOR THIS HOST, WHATEVER `--target` SAYS. It is a program this machine
@@ -459,12 +499,12 @@ function runBuildManifest(args MaxonArgs) returns ExitCode
 	let manifestProduct = try compileToProduct(manifestPaths, target: detectHostTarget(), outputOverride: ManifestOutputStem, runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: false, entryFunction: ManifestEntryFunction) otherwise (e) 'manifestCompileErr'
 		printError("error: {BuildManifestFileName} did not compile — the diagnostics above are its own\n")
 		reportCompileError(e)
-		return 1
+		return ManifestRun.ran(1)
 	end 'manifestCompileErr'
 
 	let run = try Subprocess.run(Executable.path(manifestProduct.outputPath), arguments: StringArray.create()) otherwise 'manifestRunErr'
 		printError("error: {BuildManifestFileName} compiled but could not be run\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'manifestRunErr'
 
 	if run.exitCode() != 0 'manifestFailed'
@@ -472,10 +512,10 @@ function runBuildManifest(args MaxonArgs) returns ExitCode
 		if not run.stderr.isEmpty() 'hasStderr'
 			printError("{run.stderr}\n")
 		end 'hasStderr'
-		return 1
+		return ManifestRun.ran(1)
 	end 'manifestFailed'
 
-	return buildFromManifestOutput(run.stdout, args: args)
+	return buildFromManifestOutput(run.stdout, args: args, targetName: targetName)
 end 'runBuildManifest'
 
 // `-o` on the command line, or the manifest's `output` when none was typed. A function rather than a
@@ -495,49 +535,79 @@ end 'chosenOutput'
 // HERE. The writer is `Build.emitBuildConfig`, which always emits all of them; a document missing one
 // did not come from it, and guessing what its author meant is how a build compiles the wrong thing
 // while reporting success.
-function buildFromManifestOutput(stdout String, args MaxonArgs) returns ExitCode
+function buildFromManifestOutput(stdout String, args MaxonArgs, targetName String) returns ManifestRun
 	let doc = try Json.parse(stdout) otherwise 'badJson'
 		printError("error: {BuildManifestFileName} printed something that is not a build description.\n")
-		printError("It must print what `Build.build(name)` or `Build.buildWithConfig(config)` writes. It printed:\n")
+		printError("It must print what `Build.build(source, output:)` or `Build.buildWithConfig(config)` writes. It printed:\n")
 		printError("{stdout}\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'badJson'
 
-	let output = try doc.getString(doc.root, key: ManifestOutputKey) otherwise 'noOutput'
+	let builds = manifestBuilds(doc)
+	let buildCount = builds.count()
+
+	// ⭐ ONE TARGET NEEDS NO NAME; SEVERAL ARE LISTED RATHER THAN GUESSED AT. Picking the first of
+	// several would build something the caller did not ask for and report success for it.
+	var chosen = doc.root
+	if targetName.isEmpty() 'noNameGiven'
+		if buildCount != 1 'severalTargets'
+			printError("{BuildManifestFileName} declares {buildCount} targets. Name one:\n")
+			for id in builds 'eachTargetName'
+				printError("  {manifestTargetName(doc, build: id)}\n")
+			end 'eachTargetName'
+			return ManifestRun.ran(1)
+		end 'severalTargets'
+
+		chosen = try builds.get(0) otherwise panic("buildFromManifestOutput: builds.get OOB — buildCount is 1")
+	end 'noNameGiven' else 'nameGiven'
+		var found = false
+		for id in builds 'findTarget'
+			if manifestTargetName(doc, build: id) == targetName 'nameMatches'
+				chosen = id
+				found = true
+			end 'nameMatches'
+		end 'findTarget'
+
+		if not found 'noSuchName'
+			return ManifestRun.noSuchTarget
+		end 'noSuchName'
+	end 'nameGiven'
+
+	let output = try doc.getString(chosen, key: ManifestOutputKey) otherwise 'noOutput'
 		printError("error: {BuildManifestFileName}'s build description has no `{ManifestOutputKey}`\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'noOutput'
 
-	let sourcesId = try doc.getChild(doc.root, key: ManifestSourcesKey) otherwise 'noSources'
+	let sourcesId = try doc.getChild(chosen, key: ManifestSourcesKey) otherwise 'noSources'
 		printError("error: {BuildManifestFileName}'s build description has no `{ManifestSourcesKey}`\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'noSources'
 
 	let count = try doc.arrayLength(sourcesId) otherwise 'sourcesNotArray'
 		printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` is not a list of paths\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'sourcesNotArray'
 
-	// ⛔ AN EMPTY `sources` IS REFUSED, NOT READ AS "THIS DIRECTORY". `Build.build(name)` leaves it
-	// empty, so accepting it would compile the whole tree the manifest sits in — every spec, every
-	// test — under a command that named nothing at all.
+	// ⛔ AN EMPTY `sources` IS REFUSED, NOT READ AS "THIS DIRECTORY". Accepting it would compile the
+	// whole tree the manifest sits in — every spec, every test — under a command that named nothing at
+	// all. A manifest that means the current directory says so: `Build.build(".", output: …)`.
 	if count == 0 'noPaths'
 		printError("error: {BuildManifestFileName} named no sources to compile.\n")
 		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
-		return 1
+		return ManifestRun.ran(1)
 	end 'noPaths'
 
 	var inputPaths = MaxonSourcePathArray.create()
 	for i in 0 upto count 'eachSource'
 		let elemId = try doc.arrayAt(sourcesId, index: i) otherwise 'badElem'
 			printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` entry {i} could not be read\n")
-			return 1
+			return ManifestRun.ran(1)
 		end 'badElem'
 
 		let spelling = doc.get(elemId).stringValue
 		let path = try FilePath.from(spelling) otherwise 'badSourcePath'
 			printError("error: {BuildManifestFileName} named an invalid source path: {spelling}\n")
-			return 1
+			return ManifestRun.ran(1)
 		end 'badSourcePath'
 		inputPaths.push(path)
 	end 'eachSource'
@@ -549,24 +619,45 @@ function buildFromManifestOutput(stdout String, args MaxonArgs) returns ExitCode
 	var target = detectHostTarget()
 	match resolveTargetFlag(args.targetSpec) 'manifestTarget'
 		resolved(t) then target = t
-		unrecognized(spec) then return reportUnknownTarget(spec)
+		unrecognized(spec) then return ManifestRun.ran(reportUnknownTarget(spec))
 	end 'manifestTarget'
 
 	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage) otherwise (e) 'buildErr'
 		reportCompileError(e)
-		return 1
+		return ManifestRun.ran(1)
 	end 'buildErr'
 
 	print("Compiled -> {outputPath}\n")
-	return 0
+	return ManifestRun.ran(0)
 end 'buildFromManifestOutput'
 
 // diagnostic about a program the caller never asked for.
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.paths.count() == 0 'noPath'
-		return runBuildManifest(args)
+		match runBuildManifest(args, targetName: "") 'bareBuild'
+			ran(code) then return code
+			noSuchTarget then panic("runBuild: the manifest was asked for no target and cannot answer noSuchTarget")
+		end 'bareBuild'
 	end 'noPath'
 
+	// ⛔ A TARGET NAME OUTRANKS A PATH OF THE SAME SPELLING, and it has to: a target names an OUTPUT as
+	// well as a source, so `maxon build maxon-bin` resolved as a path would compile the same directory
+	// to a DIFFERENT file and quietly leave the real one stale. A spelling the manifest does not
+	// declare falls through to the path meaning below, so a manifest never breaks an ordinary build.
+	if args.paths.count() == 1 'maybeTargetName'
+		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
+		match runBuildManifest(args, targetName: only) 'namedBuild'
+			ran(code) then return code
+			noSuchTarget then return runBuildPaths(args)
+		end 'namedBuild'
+	end 'maybeTargetName'
+
+	return runBuildPaths(args)
+end 'runBuild'
+
+// Compile the positional paths — `build`'s meaning when no manifest target claimed them. Split out so
+// the fallback above is a RETURN rather than a match arm that does nothing.
+function runBuildPaths(args MaxonArgs) returns ExitCode
 	var inputPaths = MaxonSourcePathArray.create()
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
@@ -627,7 +718,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	let buildExit = compileAndReport(inputPaths, target: target, args: args)
 	releaseTreeLock()
 	return buildExit
-end 'runBuild'
+end 'runBuildPaths'
 
 // ⭐ **WHICH BUILDS ARE TREE-LEVEL, and therefore take this checkout's lock: a PROJECT build that was
 // not told where to put its output.** That is `maxon build maxon-bin` — the invocation that writes

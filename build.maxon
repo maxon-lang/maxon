@@ -1,20 +1,24 @@
-// How this repository builds: run `maxon build` at the root.
+// How this repository builds: run `maxon build <target>` at the root.
 //
 // ⭐ THIS IS A PROGRAM, NOT A CONFIG FILE. `maxon build` with no path compiles it, runs its `build`
-// task, and reads the build it describes off stdout — so a build can COMPUTE what it compiles, with
-// the whole standard library available, rather than only spell it out. This one has nothing to
-// compute; a project that needs to read a directory or stamp a version has somewhere to do it.
+// task, and reads the builds it describes off stdout — so a build can COMPUTE what it compiles, with
+// the whole standard library available, rather than only spell it out.
 //
 // ⚠ THE ENTRY POINT IS `build`, NOT `main`. A manifest holds TASKS, and `build` is the one this
 // command asks for by name.
 //
-// ⛔ THE OUTPUT IS THE COMPILER'S OWN SLOT, so `maxon build` here REPLACES THE BINARY RUNNING IT. That
-// works: the compiler renames its running image to `maxon.previous.exe` first, because an OS will not
-// let a running executable be deleted but will let one be renamed. A failed build therefore leaves the
-// slot EMPTY and the last good compiler at `.previous`, rather than leaving a stale binary to answer
-// as though it were current.
+// ⚠ TWO TARGETS, SO A BARE `maxon build` LISTS THEM rather than picking one. Name the one you want:
+// `maxon build maxon-bin` or `maxon build dev-mcp`.
+//
+// ⛔ `maxon-bin`'s OUTPUT IS THE COMPILER'S OWN SLOT, so building it REPLACES THE BINARY RUNNING THE
+// COMMAND. The compiler renames its running image to `maxon.previous` first — an OS will not let a
+// running executable be deleted, but will let one be renamed — so a failed build leaves the slot EMPTY
+// and the last good compiler at `.previous`, rather than a stale binary answering as though current.
 
 export function build() returns ExitCode
-	Build.buildOne("maxon-bin", output: "maxon-bin/.maxon/maxon")
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
+	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
+	Build.buildTargets(targets)
 	return 0
 end 'build'
