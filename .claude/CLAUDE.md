@@ -54,8 +54,18 @@ the Windows form.
 > for exactly this reason — the case failed 3/3 against `C1` and passed 3/3 against `C2`.
 >
 > ⚠ **`fixpoint.sh` DOES NOT CATCH THIS.** It builds `stage2` and `stage3` under `temp/` and compares
-> them — both are past the convergence point, so they agree while the SLOT still holds `C1`. Build
-> twice whenever the seed you built with predates a runtime change.
+> them — both are past the convergence point, so they agree while the SLOT still holds `C1`.
+>
+> ⭐⭐ **DO NOT GUESS WHICH CASE YOU ARE IN — ASK, BEFORE YOU BUILD:**
+> ```
+> scripts/self-compiles-needed.sh     # prints `once` or `twice`, and why
+> ```
+> The compiler stamps the commit it was built from, so *"has any runtime file changed since the slot
+> binary was built"* is a `git diff` rather than a judgement — and it counts uncommitted changes too.
+> ⛔ **THIS RULE IS ONLY ABOUT `Compiler/Runtime/`. EVERY OTHER CHANGE NEEDS ONE BUILD.** The old
+> wording asked whether "the seed you built with predates a runtime change", which nobody can evaluate
+> in their head, so the safe answer was always twice — and a needless self-compile is ninety seconds
+> off every task that touches the compiler.
 > ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` is found by walking up from
 > the EXECUTABLE, so an installed `maxon` on PATH compiles this repository against the RELEASE's
 > standard library — MEASURED: it succeeds and exits 0, having built a compiler from a library that is
