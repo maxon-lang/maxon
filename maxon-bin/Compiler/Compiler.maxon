@@ -176,6 +176,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
+	try ensureOutputDirectory(project, outputPath: outputPath)
 	vacateRunningImage(outputPath)
 	try discardPreviousOutput(project, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
@@ -402,6 +403,34 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 		try refuseCompile(project)
 	end 'undeletable'
 end 'discardPreviousOutput'
+
+// ⛔ THE BACKEND WRITES THE FILE AND DOES NOT CREATE THE PATH TO IT, so an output directory that does
+// not exist yet is the build's problem to solve and not the writer's to discover. Without this the
+// write fails and `requireOutputWritten` answers **E6003** — which names the missing OUTPUT and says
+// the write failed, sending the reader after an IO fault that is not there.
+//
+// ⚠ IT IS THE ORDINARY CASE, NOT AN EDGE ONE. Output directories are gitignored, so every project
+// whose build writes into one meets this on its FIRST build in a fresh clone — including this
+// repository, whose compiler lands in `maxon-bin/.maxon/`.
+//
+// Runs before `vacateRunningImage`, which renames within this directory: there is nothing to vacate
+// in a directory that does not exist, but the order removes the question.
+function ensureOutputDirectory(project Project, outputPath FilePath) throws CompileError
+	let parent = try outputPath.parent() otherwise 'noParent'
+		return
+	end 'noParent'
+
+	if parent.isEmpty() 'currentDirectory'
+		return
+	end 'currentDirectory'
+
+	if Directory.create(parent) 'created'
+		return
+	end 'created'
+
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputDirectoryNotCreated, message: "could not create the directory for the output at {outputPath} — nothing was compiled. Check that {parent} is writable and that no file of that name is in the way."))
+	try refuseCompile(project)
+end 'ensureOutputDirectory'
 
 // The backend claimed to have written the executable; check that something is actually there.
 //
