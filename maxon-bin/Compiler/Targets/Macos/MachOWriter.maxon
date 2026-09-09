@@ -68,6 +68,11 @@ let LcLoadDylib = 0x0C
 let LcLoadDylinker = 0x0E
 let LcUuid = 0x1B
 let LcBuildVersion = 0x32
+// ⭐ THE ONLY VERSION FIELD A BARE MACH-O EXECUTABLE HAS. There is no VS_VERSIONINFO analogue here:
+// a product NAME lives in a bundle's Info.plist, which a command-line tool does not have. `otool -l`
+// reads this one, and clang emits it as 0.0.0 unless told otherwise — which is what an output whose
+// version nobody has set should say.
+let LcSourceVersion = 0x2A
 let LcDyldChainedFixups = 0x80000034
 let LcDyldExportsTrie = 0x80000033
 
@@ -153,6 +158,8 @@ let DysymtabCommandSize = 80
 let MainCommandSize = 24
 let UuidCommandSize = 24
 let BuildVersionCommandSize = 24
+// LC_SOURCE_VERSION: cmd, cmdsize and one 64-bit packed version.
+let SourceVersionCommandSize = 16
 let CodeSignatureCommandSize = 16
 let ChainedFixupsCommandSize = 16
 let ExportsTrieCommandSize = 16
@@ -167,7 +174,7 @@ let MachHeaderSize = 32
 // M1 always emits: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
 // LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_LOAD_DYLIB, LC_BUILD_VERSION,
 // LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE.
-let MachoNumCommands = 14
+let MachoNumCommands = 15
 
 // LC_BUILD_VERSION platform = PLATFORM_MACOS, minos = 13.0.0 (encoded X<<16 | Y<<8).
 let PlatformMacos = 1
@@ -817,7 +824,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// --- Load-command sizes ---
 	let textCmdSize = SegmentCommandBaseSize + SectionHeaderSize * textSectionCount
 	let dataCmdSize = SegmentCommandBaseSize + SectionHeaderSize * dataSectionCount
-	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + DylibCommandSize + BuildVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
+	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + DylibCommandSize + BuildVersionCommandSize + SourceVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
 
 	// --- __TEXT layout: __text only ---
 	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
@@ -1000,6 +1007,14 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: MinOsMacos13)
 	writeDword(macho, value: 0)  // sdk
 	writeDword(macho, value: 0)  // ntools
+
+	// LC_SOURCE_VERSION — the version of the source this binary was built from, packed
+	// a24.b10.c10.d10.e10. Zero until something sets it, for `PeWriter.peVersionInfoFor`'s reason: the
+	// compiler knows its own version and nothing about the version of the program it is compiling.
+	writeDword(macho, value: LcSourceVersion)
+	writeDword(macho, value: SourceVersionCommandSize)
+	writeDword(macho, value: 0)
+	writeDword(macho, value: 0)
 
 	// LC_DYLD_CHAINED_FIXUPS.
 	writeDword(macho, value: LcDyldChainedFixups)
