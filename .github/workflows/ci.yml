@@ -16,6 +16,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a
+# branch still being pushed to — the verdict anyone wants is about the commit that gets MERGED, and a
+# run for an intermediate commit spends an hour of runner time on code that will not exist. It is
+# wrong on `main`, where "which commit broke it" is the question this workflow is here to answer:
+# cancelling commit N's run because N+1 landed is how a break becomes unattributable.
+#
+# ⚠ THE `run_id` FALLBACK IS WHAT TURNS CANCELLING OFF, and `cancel-in-progress: false` would not.
+# A group is the thing that supersedes, and a group still discards a run while it is QUEUED — which a
+# `main` run often is, because GitHub Free allows five concurrent macOS jobs and one run uses one.
+# Giving each `main` run a group of its own is the only way it is left alone.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
