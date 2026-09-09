@@ -31,7 +31,25 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
 
-RuntimeDir="maxon-bin/Compiler/Runtime"
+# ⛔⛔ **EMITTED RUNTIME LIVES IN TWO PLACES, AND MISSING THE SECOND IS A FALSELY REASSURING `once`.**
+# The portable half is `Compiler/Runtime/`; the per-target half — entry stubs, fault handlers, the
+# green-thread asm — sits beside each backend as `Targets/*/*Runtime*.maxon`. MEASURED: a commit
+# titled "runtime: the entry stub tells the console this program speaks UTF-8" touched only
+# `Targets/X64/X64GtRuntime.maxon`, and a check that looked at `Compiler/Runtime/` alone answered
+# `once` for it.
+#
+# ⚠ **THE NAME IS THE CONTRACT.** A new file of emitted per-target runtime must carry `Runtime` in
+# its name or this will not see it.
+RuntimePaths=(
+	"maxon-bin/Compiler/Runtime"
+	"maxon-bin/Compiler/Targets/*/*Runtime*.maxon"
+)
+
+# ⚠ **THE OBJECT WRITERS ARE DELIBERATELY NOT HERE**, though they have the same one-build lag: a
+# `PeWriter` change means `C1`'s own file was written by `C0` — measured, the compiler's own version
+# resource read stale until the second build. That is METADATA being stale, which is visible and
+# harmless. This check is about the compiler MISBEHAVING, which only emitted code it EXECUTES can
+# cause, and answering `twice` for every backend change would put the guess back.
 
 # ⚠ EVERY UNCERTAIN ANSWER IS `twice`. Being wrong in that direction costs one self-compile; being
 # wrong the other way is a compiler whose own runtime is stale, which reads as a miscompile somewhere
@@ -50,8 +68,8 @@ git cat-file -e "$built_from^{commit}" 2>/dev/null || answer twice "the slot bin
 # ⛔ BOTH HALVES, OR THE ANSWER IS WRONG IN THE COSTLY DIRECTION. A committed runtime change since the
 # slot was built counts, and so does one sitting uncommitted in the working tree — the compiler about
 # to be built carries it either way.
-committed="$(git diff --name-only "$built_from..HEAD" -- "$RuntimeDir")"
-working="$(git status --porcelain -- "$RuntimeDir")"
+committed="$(git diff --name-only "$built_from..HEAD" -- "${RuntimePaths[@]}")"
+working="$(git status --porcelain -- "${RuntimePaths[@]}")"
 
 if [ -n "$committed$working" ]; then
 	{
@@ -63,4 +81,4 @@ if [ -n "$committed$working" ]; then
 	exit 0
 fi
 
-answer once "no change under $RuntimeDir/ since the slot binary was built ($built_from)"
+answer once "no emitted-runtime change since the slot binary was built ($built_from)"
