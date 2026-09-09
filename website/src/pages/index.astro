@@ -1,0 +1,394 @@
+---
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import MaxonCode from '../components/MaxonCode.astro';
+import PlatformTabs from '../components/PlatformTabs.astro';
+import { RELEASE_VERSION } from '../version';
+
+const releaseVersion = RELEASE_VERSION;
+
+// All snippets below are real Maxon, drawn from / faithful to the example
+// programs in the compiler repo (examples/hello.maxon, spectral-norm.maxon).
+
+const heroSnippet = `function main() returns ExitCode
+	let port = Port{8080}
+	print("listening on {port}")
+	return 0
+end 'main'`;
+
+// "Legible for AI" pillar snippets — each demonstrates one design choice that
+// makes Maxon easy for an LLM to write correctly on the first try.
+const rangedTypesSnippet = `// Domain constraints live in the type
+// system, not in comments.
+typealias Port    = int(0 to 65535)
+typealias Percent = float(0.0 to 100.0)
+typealias Index   = int(0 to 5500)
+
+// Constructing an out-of-range value is
+// a compile error, so an agent can't
+// silently produce an invalid one.
+let port = Port{8080}`;
+
+const noNullSnippet = `// No null. Fallible reads must be
+// resolved explicitly with try ...
+// otherwise — there is no value to
+// forget to check, so "forgot the null
+// check" bugs can't occur.
+for col in 0 upto dimension 'inner'
+	let value = try row.get(col) otherwise 0.0
+	accumulator = accumulator + value
+end 'inner'`;
+
+const labeledBlocksSnippet = `// Every block names what it closes.
+// Structure is unambiguous to read
+// back — for a human or a model.
+while iteration < 10 'iterate'
+	applyAtA(previous, inputVector: current)
+	iteration = Iteration{iteration + 1}
+end 'iterate'`;
+
+// Quickstart shown in the install CTA, per platform. The visitor's platform is
+// detected client-side and that tab is preselected; every tab is rendered either
+// way, so the block still works with JS off (all three simply stack).
+//
+// `maxon build` with no -o writes the binary NEXT TO THE SOURCE, hence
+// `./examples/hello` rather than `./hello`. Verified against the 0.1.0 compiler.
+const quickstarts = [
+  {
+    id: 'windows',
+    label: 'Windows',
+    // winget package id, published from installer/winget in the compiler repo.
+    lines: [
+      'winget install MaxonLang.Maxon',
+      'maxon build examples\\hello.maxon',
+      '.\\examples\\hello.exe',
+    ],
+  },
+  {
+    id: 'macos',
+    label: 'macOS',
+    // Apple silicon only — the formula declares `depends_on arch: :arm64`.
+    lines: [
+      'brew install maxon-lang/tap/maxon',
+      'maxon build examples/hello.maxon',
+      './examples/hello',
+    ],
+  },
+  {
+    id: 'linux',
+    label: 'Linux',
+    lines: [
+      `tar -xzf maxon-${releaseVersion}-x64-linux.tar.gz`,
+      `export PATH="$PWD/maxon-${releaseVersion}-x64-linux:$PATH"`,
+      'maxon build examples/hello.maxon',
+      './examples/hello',
+    ],
+  },
+];
+
+// The "no single language had all of it" synthesis: each trait names the language
+// whose *experience* of that trait Maxon aims to match — the ease of it, not the
+// implementation technique. The trait·language pairs are surfaced as an
+// "Influences" strip above the grid (see `influences` below).
+const features = [
+  {
+    title: 'Memory safety, the ease of Rust',
+    body: 'Safe by construction — no nulls, no dangling references, no data races — with the borrow checker doing the work and no manual lifetime annotations to write.',
+  },
+  {
+    title: 'Concurrency, the ease of Go',
+    body: 'Concurrency that is easy to write and easy to read — the ergonomics Go is loved for, without the ceremony.',
+  },
+  {
+    title: 'Automatic memory, the ease of C#',
+    body: 'Memory is managed for you — you never free by hand — via deterministic reference counting, so there are no garbage-collector pauses.',
+  },
+  {
+    title: 'Native speed, the ease of C / Zig',
+    body: 'Compiles straight to native machine code with a from-scratch backend — C/Zig-class performance, no LLVM, no VM, no external runtime.',
+  },
+  {
+    title: 'Multiple targets',
+    body: 'Prebuilt today for Windows (x64), macOS (Apple Silicon), and Linux (x64 and Arm64) — plus a WebAssembly backend for the browser and the edge. One source, with more targets landing over time.',
+  },
+  {
+    title: 'Strong types, the ease of Swift',
+    body: "Static typing with real inference and ranged type aliases that encode domain bounds into the types — Swift's safety-with-clarity feel, none of the boilerplate.",
+  },
+  {
+    title: 'Clean errors, the ease of Swift',
+    body: 'Errors are explicit and resolved where they occur (try / otherwise) — no exceptions thrown across the program, no silent failures. The same structured codes are the signal an agent uses to correct itself.',
+  },
+  {
+    title: 'Tooling, the ease of Bun',
+    body: 'A fast, batteries-included toolchain: one command to build and run, with a Language Server and VS Code extension in the box — real-time diagnostics, completion, and hover.',
+  },
+  {
+    title: 'Free and open source',
+    body: 'The entire project — compiler, standard library, language server, and tooling — is open source under MIT and Apache-2.0. Read it, fork it, build on it.',
+  },
+];
+
+// The synthesis, stated as trait · language pairs. Rendered as a compact strip
+// above the feature grid: "no single language had all of it."
+const influences = [
+  ['Memory safety', 'Rust'],
+  ['Concurrency', 'Go'],
+  ['Managed memory', 'C#'],
+  ['Native speed', 'C / Zig'],
+  ['Strong types', 'Swift'],
+  ['Clean errors', 'Swift'],
+  ['Tooling', 'Bun'],
+];
+---
+
+<MarketingLayout
+  title="Maxon — You Aren't Going To Write It."
+  description="Maxon is a programming language built on a bet: the AI writes the code, you read it. So it optimizes for the reader, not the typist — explicit, unambiguous, nothing implicit. Written by AI, for AI."
+  path="/"
+>
+  <!-- Hero -->
+  <section class="relative overflow-hidden border-b border-ink-700/60">
+    <div class="mx-grid-bg absolute inset-0 -z-10" aria-hidden="true"></div>
+    <div class="mx-auto grid max-w-6xl gap-10 px-5 pb-20 pt-12 lg:grid-cols-[1.85fr_1fr] lg:items-center lg:pb-28 lg:pt-16">
+      <div>
+        <h1 class="whitespace-nowrap text-[1.75rem] font-bold leading-[1.1] tracking-tight text-white sm:text-4xl lg:text-5xl xl:text-[3.4rem]">
+          <span class="italic text-brand">You</span> Aren't Going To Write It.
+        </h1>
+        <p class="mt-7 max-w-2xl text-lg leading-relaxed text-slate-300">
+          Maxon makes a bet: the AI writes the code, and you read it. So the language
+          optimizes for the reader, not the typist. Where another language is terse, Maxon
+          is explicit — every constraint stated, every block named, nothing implicit to
+          puzzle out later. The verbosity isn't a cost; it's the product.
+        </p>
+        <p class="mt-4 max-w-2xl text-sm leading-relaxed text-slate-500">
+          A compiled language with from-scratch native backends — written by AI, for AI.
+          Its compiler, standard library, and docs were authored by AI coding agents.
+        </p>
+        <div class="mt-8 flex flex-wrap items-center gap-3">
+          <a
+            href="/docs/getting-started/introduction/"
+            class="rounded-lg bg-brand px-5 py-2.5 font-semibold text-ink-950 transition-colors hover:bg-brand-400"
+          >
+            Get started
+          </a>
+          <a
+            href="/examples/"
+            class="rounded-lg border border-ink-600 px-5 py-2.5 font-semibold text-slate-200 transition-colors hover:border-brand/50 hover:text-white"
+          >
+            See examples
+          </a>
+        </div>
+      </div>
+      <div class="lg:pl-4">
+        <MaxonCode code={heroSnippet} title="hello.maxon" />
+      </div>
+    </div>
+  </section>
+
+  <!-- Two pillars -->
+  <section class="mx-auto max-w-6xl px-5 py-20">
+    <div class="grid gap-16 lg:grid-cols-2 lg:gap-12">
+      <!-- Built by AI -->
+      <div>
+        <div class="font-mono text-sm text-brand-300">01 — Built by AI</div>
+        <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">
+          The whole language was written by AI.
+        </h2>
+        <p class="mt-4 leading-relaxed text-slate-300">
+          The compiler — with its from-scratch native backends — the standard library, and
+          the documentation were all authored by AI coding agents. Maxon is a working
+          demonstration of what agents can build end-to-end today: not a snippet, but a
+          complete, self-hosting toolchain that produces real native executables.
+        </p>
+        <ul class="mt-6 space-y-2.5 text-sm text-slate-300">
+          <li class="flex gap-3"><span class="text-brand">›</span> Compiler, LSP, and stdlib authored by agents</li>
+          <li class="flex gap-3"><span class="text-brand">›</span> Compiles straight to native executables — no LLVM, no VM</li>
+          <li class="flex gap-3"><span class="text-brand">›</span> Self-hosting: Maxon compiles Maxon</li>
+        </ul>
+      </div>
+      <!-- Built to be read -->
+      <div>
+        <div class="font-mono text-sm text-brand-300">02 — Built to be read</div>
+        <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">
+          Optimized for the reader, not the typist.
+        </h2>
+        <p class="mt-4 leading-relaxed text-slate-300">
+          Most languages trade away clarity for keystrokes — terse syntax, implicit
+          conversions, values that might be null. That trade made sense when a human typed
+          every character. It doesn't anymore. Maxon spends the keystrokes so the reader
+          never has to guess: constraints are stated, structure is named, and there are no
+          silent failures to trace. The same explicitness that makes it easy to read makes
+          it hard to get wrong.
+        </p>
+      </div>
+    </div>
+
+    <!-- Legible-for-AI snippet trio. Breaks out past the section's max-w-6xl on
+         wide screens so three code columns get enough room to read at full size. -->
+    <div class="mt-12 grid gap-6 lg:grid-cols-3 xl:-mx-16">
+      <div>
+        <h3 class="mb-3 font-semibold text-white">Constraints in the type system</h3>
+        <MaxonCode code={rangedTypesSnippet} compact />
+      </div>
+      <div>
+        <h3 class="mb-3 font-semibold text-white">No null to forget</h3>
+        <MaxonCode code={noNullSnippet} compact />
+      </div>
+      <div>
+        <h3 class="mb-3 font-semibold text-white">Unambiguous structure</h3>
+        <MaxonCode code={labeledBlocksSnippet} compact />
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature grid -->
+  <section class="border-y border-ink-700/60 bg-ink-950/40">
+    <div class="mx-auto max-w-6xl px-5 py-20">
+      <div class="font-mono text-sm text-brand-300">No single language had all of it</div>
+      <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">The best of each, in one language.</h2>
+      <p class="mt-3 max-w-2xl text-slate-400">
+        Every language Maxon admires nails something and gives up something else. None had the whole
+        set, so Maxon set out to combine them — the safety of Rust, the concurrency of Go, the
+        convenience of C#, the speed of C and Zig, the type system and error handling of Swift, the
+        tooling of Bun. And the AI story only holds up because the compiler does: this is a real,
+        statically-typed, compiled language that produces native executables today.
+      </p>
+
+      <!-- Influences strip: trait · language pairs -->
+      <ul class="mt-8 flex flex-wrap gap-2.5" aria-label="Language influences">
+        {
+          influences.map(([trait, lang]) => (
+            <li class="inline-flex items-baseline gap-2 rounded-full border border-ink-700 bg-ink-900 px-3.5 py-1.5 text-sm">
+              <span class="text-slate-300">{trait}</span>
+              <span class="font-mono text-xs text-brand-300">{lang}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <div class="mt-10 grid gap-px overflow-hidden rounded-xl border border-ink-700 bg-ink-700 sm:grid-cols-2 lg:grid-cols-3">
+        {
+          features.map((f) => (
+            <div class="bg-ink-900 p-6">
+              <h3 class="font-semibold text-white">{f.title}</h3>
+              <p class="mt-2 text-sm leading-relaxed text-slate-400">{f.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- Install CTA -->
+  <section class="mx-auto max-w-6xl px-5 py-20">
+    <div class="rounded-2xl border border-ink-700 bg-linear-to-br from-ink-850 to-ink-950 p-10 text-center sm:p-14">
+      <h2 class="text-2xl font-bold text-white sm:text-3xl">Build it and run something.</h2>
+      <p class="mx-auto mt-3 max-w-xl text-slate-400">
+        Clone the repository, build the compiler, and compile your first program in a
+        couple of commands.
+      </p>
+      <div class="mx-auto mt-7 max-w-md">
+        <PlatformTabs tabs={quickstarts} trailing="Hello, world!" />
+      </div>
+      <div class="mt-7 flex flex-wrap justify-center gap-3">
+        <a
+          href="/install/"
+          class="rounded-lg bg-brand px-5 py-2.5 font-semibold text-ink-950 transition-colors hover:bg-brand-400"
+        >
+          Installation guide
+        </a>
+        <a
+          href="/docs/getting-started/introduction/"
+          class="rounded-lg border border-ink-600 px-5 py-2.5 font-semibold text-slate-200 transition-colors hover:border-brand/50 hover:text-white"
+        >
+          Read the docs
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Contribute -->
+  <section class="border-t border-ink-700/60 bg-ink-950/40">
+    <div class="mx-auto max-w-6xl px-5 py-20">
+      <div class="max-w-2xl">
+        <div class="font-mono text-sm text-brand-300">Open source</div>
+        <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">
+          Written by AI — built in the open.
+        </h2>
+        <p class="mt-4 leading-relaxed text-slate-300">
+          The whole project — compiler, standard library, language server, and docs — is open
+          source under MIT and Apache-2.0. Contributions are welcome, whether that's a bug
+          report, a patch, a clearer doc, or a real program written in Maxon.
+        </p>
+      </div>
+
+      <div class="mt-10 grid gap-px overflow-hidden rounded-xl border border-ink-700 bg-ink-700 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="bg-ink-900 p-6">
+          <h3 class="font-semibold text-white">Report a bug</h3>
+          <p class="mt-2 text-sm leading-relaxed text-slate-400">
+            A miscompile, a crash, a confusing diagnostic — open an issue with a minimal
+            reproduction.
+          </p>
+        </div>
+        <div class="bg-ink-900 p-6">
+          <h3 class="font-semibold text-white">Improve the compiler</h3>
+          <p class="mt-2 text-sm leading-relaxed text-slate-400">
+            Fix bugs, sharpen diagnostics, or extend the standard library with a pull request.
+          </p>
+        </div>
+        <div class="bg-ink-900 p-6">
+          <h3 class="font-semibold text-white">Docs &amp; examples</h3>
+          <p class="mt-2 text-sm leading-relaxed text-slate-400">
+            A language meant to be read lives on good explanations. Clarify docs, add examples.
+          </p>
+        </div>
+        <div class="bg-ink-900 p-6">
+          <h3 class="font-semibold text-white">Build something</h3>
+          <p class="mt-2 text-sm leading-relaxed text-slate-400">
+            Write a real program in Maxon and tell us what was awkward, missing, or worked.
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-8 flex flex-wrap gap-3">
+        <a
+          href="/docs/contributing/"
+          class="rounded-lg bg-brand px-5 py-2.5 font-semibold text-ink-950 transition-colors hover:bg-brand-400"
+        >
+          Contributing guide
+        </a>
+        <a
+          href="https://github.com/maxon-lang/maxon"
+          target="_blank"
+          rel="noopener"
+          class="rounded-lg border border-ink-600 px-5 py-2.5 font-semibold text-slate-200 transition-colors hover:border-brand/50 hover:text-white"
+        >
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Where it fits — companion registry (Canra) -->
+  <section class="mx-auto max-w-6xl px-5 py-20">
+    <div class="max-w-2xl">
+      <div class="font-mono text-sm text-brand-300">Where it fits</div>
+      <h2 class="mt-3 text-2xl font-bold text-white sm:text-3xl">
+        One language, and the contracts to fill it.
+      </h2>
+      <p class="mt-4 leading-relaxed text-slate-300">
+        Because a Maxon agent reads contracts as well as it writes code, it pairs naturally with{' '}
+        <a
+          href="https://canra.dev"
+          target="_blank"
+          rel="noopener"
+          class="text-brand underline-offset-2 hover:underline"
+        >Canra</a> — a general, language-agnostic registry of machine-readable specs. Maxon projects
+        use Canra to fetch a spec and generate a verified native implementation, no third-party
+        package required.
+      </p>
+    </div>
+  </section>
+</MarketingLayout>
+
+

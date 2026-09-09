@@ -320,41 +320,77 @@ which is why the tap needs its own.
 
 ## Cutting a release
 
-**From v0.1.1 onward**, write the changelog entry, commit it, and tag THAT commit:
+A release happens on a **release branch**, and the tag is what turns it into one.
+
+### 1. Cut the branch
+
+```bash
+git checkout -b release/0.1.1
+```
+
+⭐ **The branch is what makes preparation possible.** A release usually takes more than one commit to
+get right — the changelog entry, a last documentation fix, a version-sensitive correction — and a
+compiler built on `release/X.Y.Z` already reports `X.Y.Z`, so everything can be rehearsed at the real
+version before anything is public. `release.yml` builds and suite-tests every push to such a branch
+and **publishes nothing**.
+
+### 2. Write the changelog entry
 
 ```bash
 scripts/changelog.sh --commits-since
 ```
 
-Read what landed, write the `## 0.1.1` section by hand — what a user would want to know, not what
-each commit did. Then:
+Read what landed and write the `## 0.1.1` section by hand — what a user would want to know, not what
+each commit did. See **The changelog** above.
+
+### 3. Write the website's release material
 
 ```bash
-git add CHANGELOG.md
-git commit -m 'changelog: 0.1.1'
-git tag -a v0.1.1 -m 'Maxon v0.1.1'
-git push origin v0.1.1
-```
-
-⛔ **The tag goes on the changelog commit, not before it.** The release notes, the maxon.dev post and
-the site's changelog page are all read out of the file AT THAT TAG, so an entry written after it is
-an entry nothing ships.
-
-`release.yml` fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and `ubuntu-24.04-arm`,
-builds and **natively suite-tests** each target, builds the MSI from the x64-windows job's own
-artifact, and publishes. Then, once the assets are live:
-
-```bash
-wingetcreate update MaxonLang.Maxon --version 0.1.1 --urls <msi-url> --submit
 scripts/announce.sh 0.1.1
 ```
 
-`announce.sh` writes the release post to the `maxon-web` checkout and pushes it, which is what
-deploys maxon.dev. It runs **by hand and last** because that repository needs push credentials this
-one's CI does not have — and because a step that runs after the release is live cannot fail a release
-that has already happened. Preview it first with `--dry-run`.
+It writes three files under `website/` — the announcement post, the changelog page, and the
+`RELEASE_VERSION` the download links are built from — and **commits nothing**. Commit them with
+everything else this branch carries.
 
-**For v0.1.0**, the same steps run by hand: package each target on hardware of its own architecture,
+### 4. Tag it
+
+```bash
+git add -A && git commit -m 'changelog: 0.1.1'
+git tag -a v0.1.1 -m 'Maxon v0.1.1'
+git push origin release/0.1.1 v0.1.1
+```
+
+⛔ **The tag goes on the finished branch tip.** Everything downstream reads the repository AT THE TAG:
+the release notes and the maxon.dev post take their text from `CHANGELOG.md` there, and `website.yml`
+builds the site from there. A fix committed after the tag is a fix nothing ships.
+
+`release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
+`ubuntu-24.04-arm`, builds and **natively suite-tests** each target, builds the MSI from the
+x64-windows job's own artifact, and publishes. Publishing fires `release: published`, which is what
+updates Homebrew, the VS Code extension and maxon.dev — so the download links go live only once the
+downloads exist.
+
+### 5. Submit to winget
+
+```bash
+wingetcreate update MaxonLang.Maxon --version 0.1.1 --urls <msi-url> --submit
+```
+
+### 6. Merge the branch back, then lock it
+
+```bash
+git checkout main && git merge --ff-only release/0.1.1 && git push origin main
+```
+
+The changelog entry, the website material and any fixes made while preparing all belong on `main` —
+without this they exist only on a branch nobody builds from again.
+
+⛔ **Then lock `release/0.1.1`** (GitHub → Settings → Branches, or a ruleset). It is the record of what
+was built and published; a later commit on it would describe a release that never existed, and
+`release.yml` would happily build and test one.
+
+**For v0.1.0**, the same steps ran by hand: package each target on hardware of its own architecture,
 collect the archives into one `dist/`, build the MSI, then `--publish`.
 
 ---

@@ -1,0 +1,191 @@
+// Fannkuch-redux benchmark from Computer Language Benchmarks Game
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html#fannkuchredux
+//
+// This implementation is a single-threaded version of the algorithm.
+// The algorithm generates all permutations of [0..n-1] and counts the maximum
+// number of "flips" (reversals from position 0 to position p[0]) needed
+// to sort any permutation back to the identity permutation.
+//
+// Expected output for n=10:
+// 73196
+// Pfannkuchen(10) = 38
+//
+// Expected output for n=12:
+// 3968050
+// Pfannkuchen(12) = 65
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+// Compute factorial
+function factorial(n Integer) returns Integer
+	var result = 1
+	for i in 1 to n 'fact_loop'
+		result = result * i
+	end 'fact_loop'
+	return result
+end 'factorial'
+
+// Copy array from src to dst
+function copyArray(dst IntArray, src IntArray, n Integer)
+	for i in 0 upto n 'copy_loop'
+		dst.set(i, value: try src.get(i) otherwise 0)
+	end 'copy_loop'
+end 'copyArray'
+
+// Generate the idx-th permutation of n elements
+function getPermutation(p IntArray, count IntArray, fact IntArray, n Integer, idx Integer)
+	// Initialize to identity permutation
+	for i in 0 upto n 'init_loop'
+		p.set(i, value: i)
+	end 'init_loop'
+
+	// Generate the idx-th permutation using factorial base
+	var pp = IntArray.create()
+	pp.resize(16)
+	var remaining = idx
+	var i = n - 1
+	while i > 0 'perm_loop'
+		var d = trunc(remaining / (try fact.get(i) otherwise 1))
+		count.set(i, value: d)
+		remaining = remaining mod (try fact.get(i) otherwise 1)
+
+		// Copy current permutation to temporary
+		copyArray(pp, src: p, n: n)
+
+		// Rotate: p[j] = pp[j+d] (with wraparound)
+		var j = 0
+		while j <= i 'rotate_loop'
+			if j + d <= i 'in_bounds'
+				p.set(j, value: try pp.get(j + d) otherwise 0)
+			end 'in_bounds' else 'out_of_bounds'
+				p.set(j, value: try pp.get(j + d - i - 1) otherwise 0)
+			end 'out_of_bounds'
+			j = j + 1
+		end 'rotate_loop'
+
+		i = i - 1
+	end 'perm_loop'
+end 'getPermutation'
+
+// Count the number of flips for a permutation
+function countFlips(perm IntArray, n Integer) returns Integer
+	var first = try perm.get(0) otherwise 0
+	if first == 0 'check_sorted'
+		return 0
+	end 'check_sorted'
+
+	// Copy permutation for flipping
+	var pp = IntArray.create()
+	pp.resize(16)
+	copyArray(pp, src: perm, n: n)
+
+	var flips = 1
+	var firstValue = first
+
+	while (try pp.get(firstValue) otherwise 0) != 0 'flip_loop'
+		var newFirst = try pp.get(firstValue) otherwise 0
+		pp.set(firstValue, value: firstValue)
+
+		// Reverse middle elements if firstValue > 2
+		if firstValue > 2 'reverse_middle'
+			var i = 1
+			var j = firstValue - 1
+			while i < j 'reverse_loop'
+				var temp = try pp.get(i) otherwise 0
+				pp.set(i, value: try pp.get(j) otherwise 0)
+				pp.set(j, value: temp)
+				i = i + 1
+				j = j - 1
+			end 'reverse_loop'
+		end 'reverse_middle'
+
+		firstValue = newFirst
+		flips = flips + 1
+	end 'flip_loop'
+
+	return flips
+end 'countFlips'
+
+// Advance to next permutation
+function nextPermutation(p IntArray, count IntArray)
+	// Swap p[0] and p[1]
+	var firstValue = try p.get(1) otherwise 0
+	p.set(1, value: try p.get(0) otherwise 0)
+	p.set(0, value: firstValue)
+
+	var i = 1
+	while (try count.get(i) otherwise 0) >= i 'rotate_loop'
+		count.set(i, value: 0)
+		i = i + 1
+
+		var newFirst = try p.get(1) otherwise 0
+		p.set(0, value: newFirst)
+
+		// Rotate left
+		for j in 1 upto i 'shift_loop'
+			p.set(j, value: try p.get(j + 1) otherwise 0)
+		end 'shift_loop'
+
+		p.set(i, value: firstValue)
+		firstValue = newFirst
+	end 'rotate_loop'
+
+	count.set(i, value: (try count.get(i) otherwise 0) + 1)
+end 'nextPermutation'
+
+function main() returns ExitCode
+	var n = 11
+
+	// Compute factorials
+	var fact = IntArray.create()
+	fact.resize(17)
+	for i in 0 to n 'fact_init'
+		fact.set(i, value: factorial(i))
+	end 'fact_init'
+
+	var totalPerms = try fact.get(n) otherwise 0
+
+	// Working arrays
+	var p = IntArray.create()
+	p.resize(16)
+	var count = IntArray.create()
+	count.resize(16)
+
+	// Initialize to first permutation
+	getPermutation(p, count: count, fact: fact, n: n, idx: 0)
+
+	var maxFlips = 0
+	var checkSum = 0
+	var idx = 0
+
+	while idx < totalPerms 'main_loop'
+		// Count flips for current permutation
+		if (try p.get(0) otherwise 0) != 0 'need_flips'
+			var flips = countFlips(p, n: n)
+
+			if flips > maxFlips 'update_max'
+				maxFlips = flips
+			end 'update_max'
+
+			// Update checksum (alternating sign based on permutation index)
+			if idx mod 2 == 0 'even_perm'
+				checkSum = checkSum + flips
+			end 'even_perm' else 'odd_perm'
+				checkSum = checkSum - flips
+			end 'odd_perm'
+		end 'need_flips'
+
+		// Advance to next permutation
+		idx = idx + 1
+		if idx < totalPerms 'continue_loop'
+			nextPermutation(p, count: count)
+		end 'continue_loop'
+	end 'main_loop'
+
+	// Results verified for n=10:
+	// - checkSum: 73196
+	// - maxFlips: 38
+	// Returning maxFlips as exit code
+	return maxFlips
+end 'main'

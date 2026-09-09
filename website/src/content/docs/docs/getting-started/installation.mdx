@@ -1,0 +1,124 @@
+---
+title: Installation
+description: Install Maxon from a release, or build the compiler from source.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Maxon ships as a single compiler and the standard library it reads. There is nothing else to install
+— no runtime, no toolchain, no SDK.
+
+For a full walk-through — every platform, the VS Code extension, and verifying your install — see the
+dedicated [Install page](/install/).
+
+## Install
+
+{/*
+  `syncKey="os"` persists the choice in localStorage as `starlight-synced-tabs__os`, keyed by the
+  tab label. The marketing pages' own PlatformTabs component reads and writes the same key, so a
+  visitor who picks a platform on /install/ finds it already selected here, and the other way round.
+  Keep these labels identical to the ones in `installCommands` in src/pages/install.astro.
+*/}
+<Tabs syncKey="os">
+  <TabItem label="Windows">
+
+```bash
+winget install MaxonLang.Maxon
+```
+
+Or download the `.msi` from the [latest release](https://github.com/maxon-lang/maxon/releases/latest)
+and run it. It installs to `C:\Program Files\Maxon` and adds that directory to your PATH.
+
+The installer is not code-signed yet, so SmartScreen warns on first run: choose **More info**, then
+**Run anyway**.
+
+  </TabItem>
+  <TabItem label="macOS">
+
+```bash
+brew install maxon-lang/tap/maxon
+```
+
+Homebrew puts `maxon` on your PATH straight away and clears the quarantine attribute, so there is no
+Gatekeeper warning to click through.
+
+The tap prefix is required and cannot be shortened: a bare `brew install maxon` resolves to Maxon
+Computer's Cinema 4D installer, which is a different product that happens to share the name.
+
+**Without Homebrew**, download the archive for your platform from the
+[latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere
+permanent, and add that directory to your PATH.
+
+```bash
+tar -xzf maxon-*-arm64-macos.tar.gz
+cd maxon-*-arm64-macos
+export PATH="$PWD:$PATH"
+maxon version
+```
+
+A downloaded archive is quarantined by Gatekeeper whatever is inside it. Clear it once:
+
+```bash
+xattr -d com.apple.quarantine ./maxon
+```
+
+  </TabItem>
+  <TabItem label="Linux">
+
+Download the archive for your platform from the
+[latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere
+permanent, and add that directory to your PATH.
+
+```bash
+tar -xzf maxon-*-x64-linux.tar.gz
+cd maxon-*-x64-linux
+export PATH="$PWD:$PATH"
+maxon version
+```
+
+The builds are static and need no libc, so any reasonably current distribution will do.
+
+  </TabItem>
+</Tabs>
+
+:::caution[Keep the compiler and the standard library together]
+The compiler finds `stdlib/` by walking **up from its own executable**, so moving `maxon` somewhere
+else on its own leaves it with no standard library. Move the whole directory, or put it on your PATH
+as it is.
+:::
+
+## Verify
+
+```bash
+maxon version
+maxon build examples/hello.maxon
+./examples/hello
+```
+
+## Building from source
+
+Maxon is written in Maxon, so building it needs a Maxon compiler — there is no second implementation
+to fall back on.
+
+**Prerequisites:** Git, and Node.js 20+ only if you are building the VS Code extension.
+
+Install a release first, as above, then:
+
+```bash
+git clone https://github.com/maxon-lang/maxon.git
+cd maxon
+
+mkdir -p .bootstrap && cp "$(which maxon)" .bootstrap/maxon   # the seed
+maxon build                                                    # build the compiler with it
+maxon-bin/.maxon/maxon spec-test                               # run the suite
+```
+
+`maxon build` with no path runs the repository's own [build manifest](/docs/language/build-system/).
+
+:::caution[Seed with the binary alone]
+Copy the `maxon` **binary** into `.bootstrap/`, not the unpacked archive. The compiler resolves
+`stdlib/` by walking up from its own executable, so a released `stdlib/` left beside the seed would be
+compiled in place of the checkout's own — the build would succeed, and compile the wrong library.
+:::

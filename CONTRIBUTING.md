@@ -52,6 +52,7 @@ in this repo to fall back on — the published release is what seeds a build.
 
 - Git (on Windows, **Git for Windows**, which includes Git Bash)
 - Node.js 20+, only if you are building the VS Code extension
+- Node.js 22.12+, only if you are building the website (`website/` — Astro 7's minimum)
 
 > The build scripts are bash. Run them in **Git Bash** on Windows, or bash on Linux and macOS — not
 > PowerShell or cmd.

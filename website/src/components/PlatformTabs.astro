@@ -1,0 +1,187 @@
+---
+// A terminal-styled, per-platform command block with a tab strip.
+//
+// ⭐ EVERY PANEL IS RENDERED, so the block still says everything with JavaScript off — the panels
+// simply stack, each under its own heading. The tab strip is revealed only once the script runs and
+// the headings are hidden in the same breath, so there is never a moment showing both.
+//
+// ⚠ THE VISITOR'S PLATFORM IS A PRESELECTION, NEVER A FILTER. Someone on Linux reading about the
+// Windows installer is a normal thing to be doing, and a detected platform that HID the others would
+// make that impossible.
+//
+// 🔗 SHARES ITS SELECTION WITH STARLIGHT'S <Tabs syncKey="os">. Both read and write the same
+// localStorage key, keyed by tab label, so picking macOS here leaves macOS picked in the docs and
+// the other way round. Tab labels must therefore match the docs' TabItem labels exactly.
+interface Tab {
+  id: string;
+  label: string;
+  lines: string[];
+}
+
+interface Props {
+  tabs: Tab[];
+  ariaLabel?: string;
+  /** Printed after the commands, unprefixed — the output they produce. */
+  trailing?: string;
+}
+
+const { tabs, ariaLabel = 'Choose your platform', trailing = '' } = Astro.props;
+---
+
+<div class="text-left" data-platform-tabs>
+  <div class="overflow-hidden rounded-xl border border-ink-700 bg-ink-950/80 shadow-2xl shadow-black/40">
+    <div class="flex items-center gap-2 border-b border-ink-700 px-4 py-2.5">
+      <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+      <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+      <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+      <div class="ml-1 flex gap-1" role="tablist" aria-label={ariaLabel} data-platform-tabs-strip hidden>
+        {
+          tabs.map((tab) => (
+            <button
+              type="button"
+              role="tab"
+              id={`pt-tab-${tab.id}`}
+              aria-controls={`pt-panel-${tab.id}`}
+              aria-selected="false"
+              tabindex="-1"
+              data-platform-tab={tab.id}
+              class="rounded px-2 py-0.5 font-mono text-xs text-slate-500 transition-colors hover:text-slate-300 aria-selected:bg-ink-700/70 aria-selected:text-brand-300"
+            >
+              {tab.label}
+            </button>
+          ))
+        }
+      </div>
+    </div>
+    {
+      tabs.map((tab) => (
+        <div
+          role="tabpanel"
+          id={`pt-panel-${tab.id}`}
+          aria-labelledby={`pt-tab-${tab.id}`}
+          data-platform-panel={tab.id}
+        >
+          <div
+            class="border-b border-ink-700/60 px-4 pt-3 font-mono text-xs text-slate-500"
+            data-platform-heading
+          >
+            {tab.label}
+          </div>
+          <pre class="overflow-x-auto p-4 font-mono text-[0.86rem] leading-relaxed text-slate-300">{
+            tab.lines.map((line) => (
+              <><span class="text-slate-500">$</span>{` ${line}
+`}</>
+            ))
+          }{trailing}</pre>
+        </div>
+      ))
+    }
+  </div>
+</div>
+
+{/*
+  ⚠ ONE SCRIPT FOR EVERY INSTANCE ON THE PAGE. The component may render more than once, and an
+  `is:inline` script renders with it — so the body guards on a flag and then walks EVERY root. Without
+  the guard a second instance would bind a second listener to every tab of the first.
+*/}
+<script is:inline>
+  (function () {
+    if (window.__maxonPlatformTabs) return;
+    window.__maxonPlatformTabs = true;
+
+    function detect() {
+      // userAgentData is the non-deprecated source, but it is Chromium-only and absent over plain
+      // HTTP, so userAgent stays the fallback.
+      var p = (navigator.userAgentData && navigator.userAgentData.platform) || '';
+      var ua = navigator.userAgent || '';
+      var hay = (p + ' ' + ua).toLowerCase();
+
+      if (hay.indexOf('win') !== -1) return 'windows';
+      // iOS/iPadOS get the macOS tab: closest shell, and neither can run the compiler anyway. Check
+      // Android before Linux — Android UAs say "Linux".
+      if (hay.indexOf('android') !== -1) return 'linux';
+      if (/mac|iphone|ipad|ipod/.test(hay)) return 'macos';
+      if (hay.indexOf('linux') !== -1 || hay.indexOf('x11') !== -1) return 'linux';
+      return null;
+    }
+
+    // Starlight persists its synced tabs as `starlight-synced-tabs__<syncKey>` holding the chosen
+    // tab's LABEL. Reading and writing that key is the whole of the integration.
+    var STORAGE_KEY = 'starlight-synced-tabs__os';
+
+    function readStored() {
+      try {
+        return localStorage.getItem(STORAGE_KEY);
+      } catch (e) {
+        // Storage can throw outright in a locked-down browser, not merely return null.
+        return null;
+      }
+    }
+
+    function writeStored(label) {
+      try {
+        localStorage.setItem(STORAGE_KEY, label);
+      } catch (e) {
+        /* A preference we cannot persist is not worth failing the page over. */
+      }
+    }
+
+    var detected = detect();
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-platform-tabs]'), function (root) {
+      var tabs = Array.prototype.slice.call(root.querySelectorAll('[data-platform-tab]'));
+      var panels = Array.prototype.slice.call(root.querySelectorAll('[data-platform-panel]'));
+      if (!tabs.length || !panels.length) return;
+
+      function select(id, persist) {
+        panels.forEach(function (panel) {
+          panel.hidden = panel.getAttribute('data-platform-panel') !== id;
+        });
+        tabs.forEach(function (tab) {
+          var on = tab.getAttribute('data-platform-tab') === id;
+          tab.setAttribute('aria-selected', on ? 'true' : 'false');
+          tab.tabIndex = on ? 0 : -1;
+          // Only an actual choice is stored — never the detected default, which would
+          // freeze a guess in place as though the visitor had made it.
+          if (on && persist) writeStored((tab.textContent || '').trim());
+        });
+      }
+
+      tabs.forEach(function (tab, i) {
+        tab.addEventListener('click', function () {
+          select(tab.getAttribute('data-platform-tab'), true);
+        });
+        tab.addEventListener('keydown', function (event) {
+          var step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+          if (!step) return;
+          event.preventDefault();
+          var next = tabs[(i + step + tabs.length) % tabs.length];
+          select(next.getAttribute('data-platform-tab'), true);
+          next.focus();
+        });
+      });
+
+      root.querySelectorAll('[data-platform-heading]').forEach(function (heading) {
+        heading.hidden = true;
+      });
+      root.querySelector('[data-platform-tabs-strip]').hidden = false;
+
+      // A stored choice was made deliberately, so it outranks a sniffed platform.
+      var stored = readStored();
+      var storedTab = stored
+        ? tabs.filter(function (tab) {
+            return (tab.textContent || '').trim() === stored;
+          })[0]
+        : null;
+
+      var initial = storedTab && storedTab.getAttribute('data-platform-tab');
+      if (!initial) {
+        var has = panels.some(function (panel) {
+          return panel.getAttribute('data-platform-panel') === detected;
+        });
+        initial = has ? detected : panels[0].getAttribute('data-platform-panel');
+      }
+      select(initial, false);
+    });
+  })();
+</script>

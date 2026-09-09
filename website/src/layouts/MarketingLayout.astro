@@ -1,0 +1,144 @@
+---
+/**
+ * Shared shell for the bespoke marketing pages (landing, install, examples).
+ * Starlight owns /docs separately; these pages are hand-designed but share the
+ * same dark, terminal-inspired chrome, nav, and footer.
+ */
+import '../styles/global.css';
+import { RELEASE_VERSION } from '../version';
+
+interface Props {
+  title: string;
+  description: string;
+  /** Path of the current page, used to mark the active nav link. */
+  path?: string;
+}
+
+const { title, description, path = '/' } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site ?? 'https://maxon.dev').href;
+const ogImage = new URL('/og.png', Astro.site ?? 'https://maxon.dev').href;
+
+const nav = [
+  { href: '/docs/getting-started/introduction/', label: 'Get Started', button: true },
+  { href: '/docs/', label: 'Docs' },
+  { href: '/examples/', label: 'Examples' },
+  { href: '/blog/', label: 'Blog' },
+  { href: 'https://github.com/maxon-lang/maxon', label: 'GitHub', external: true, icon: 'github' },
+];
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+
+    <!-- Open Graph / Twitter -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:site_name" content="Maxon" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+  </head>
+  <body class="bg-ink-900 text-slate-200 antialiased font-sans selection:bg-brand/30">
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-brand focus:px-3 focus:py-2 focus:text-ink-950">Skip to content</a>
+
+    <div class="border-b border-brand/20 bg-brand/10 px-5 py-2 text-center text-xs text-brand-200 sm:text-sm">
+      <span class="font-mono font-semibold text-brand-300">Early preview.</span>{' '}
+      Maxon is under active development — incomplete in places, with breaking changes expected before a 1.0 release.
+    </div>
+
+    <header class="sticky top-0 z-40 border-b border-ink-700/70 bg-ink-900/80 backdrop-blur">
+      <nav class="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
+        <div class="flex items-center gap-3">
+          <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
+            <svg width="26" height="26" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 1L14.5 4.5V11.5L8 15L1.5 11.5V4.5L8 1Z" fill="#00ADD8" fill-opacity="0.10" stroke="#00ADD8" stroke-width="1.2" stroke-linejoin="round"/>
+              <path d="M4 11V5L8 9L12 5V11" stroke="#00ADD8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="text-[1.05rem] text-white">Maxon</span>
+          </a>
+          <span class="hidden items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-2.5 py-0.5 font-mono text-[0.7rem] text-brand-300 sm:inline-flex">
+            v{RELEASE_VERSION} · early preview
+          </span>
+        </div>
+        <div class="flex items-center gap-1 text-sm">
+          {
+            nav.map((item) => (
+              <a
+                href={item.href}
+                target={item.external ? '_blank' : undefined}
+                rel={item.external ? 'noopener' : undefined}
+                class:list={[
+                  'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors',
+                  item.button
+                    ? 'mr-1 bg-brand font-semibold text-ink-950 hover:bg-brand-400'
+                    : 'hover:text-white hover:bg-ink-700/60',
+                  !item.button && path.startsWith(item.href) && item.href !== '/'
+                    ? 'text-white'
+                    : !item.button
+                      ? 'text-slate-400'
+                      : '',
+                ]}
+              >
+                {item.icon === 'github' && (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                  </svg>
+                )}
+                {item.label}
+              </a>
+            ))
+          }
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <slot />
+    </main>
+
+    <footer class="border-t border-ink-700/70 bg-ink-950">
+      <div class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-start sm:justify-between">
+        <div class="max-w-sm">
+          <div class="flex items-center gap-2.5">
+            <svg width="22" height="22" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 1L14.5 4.5V11.5L8 15L1.5 11.5V4.5L8 1Z" fill="#00ADD8" fill-opacity="0.10" stroke="#00ADD8" stroke-width="1.2" stroke-linejoin="round"/>
+              <path d="M4 11V5L8 9L12 5V11" stroke="#00ADD8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="font-semibold text-white">Maxon</span>
+          </div>
+          <p class="mt-3 text-sm leading-relaxed text-slate-400">
+            A compiled programming language, written by AI, for AI. Free and open source.
+          </p>
+        </div>
+        <div class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm">
+          <a class="text-slate-400 hover:text-white" href="/docs/getting-started/introduction/">Documentation</a>
+          <a class="text-slate-400 hover:text-white" href="/examples/">Examples</a>
+          <a class="text-slate-400 hover:text-white" href="/blog/">Blog</a>
+          <a class="text-slate-400 hover:text-white" href="/install/">Install</a>
+          <a class="text-slate-400 hover:text-white" href="/docs/contributing/">Contributing</a>
+          <a class="text-slate-400 hover:text-white" href="/docs/about/">About</a>
+          <a class="text-slate-400 hover:text-white" href="https://github.com/maxon-lang/maxon" target="_blank" rel="noopener">GitHub</a>
+          <a class="text-slate-400 hover:text-white" href="https://canra.dev" target="_blank" rel="noopener">Canra</a>
+        </div>
+      </div>
+      <div class="border-t border-ink-700/50">
+        <p class="mx-auto max-w-6xl px-5 py-5 text-xs text-slate-500">
+          Maxon is free and open source — the entire compiler, standard library, and tooling.
+          Dual-licensed under{' '}
+          <a class="text-slate-400 underline-offset-2 hover:text-white hover:underline" href="https://github.com/maxon-lang/maxon" target="_blank" rel="noopener">MIT and Apache-2.0</a>.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

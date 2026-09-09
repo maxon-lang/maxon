@@ -8,12 +8,23 @@
 # one, every job would fail on a condition no contributor can fix — so the seed step SKIPS the run and
 # writes a notice instead. It becomes real the moment a release is published, with no edit here.
 
+# ⚠ `website/` IS NOT THIS WORKFLOW'S BUSINESS. It is a Node project whose own build is
+# `website.yml`, and without the filter below a CSS change would seed, build and suite-test a compiler
+# on four architectures. `website.yml` carries the mirror-image `paths:` so exactly one of the two runs
+# for any given commit.
+#
+# ⛔ IF THIS EVER BECOMES A REQUIRED STATUS CHECK, `paths-ignore` STOPS IT REPORTING AT ALL on a
+# website-only pull request, which blocks the merge rather than passing it. This repository develops on
+# `main` and has no branch protection today; a future one needs a different shape, not a wider filter.
+
 name: ci
 
 on:
   push:
     branches: [main]
+    paths-ignore: ['website/**']
   pull_request:
+    paths-ignore: ['website/**']
   workflow_dispatch:
 
 # ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a

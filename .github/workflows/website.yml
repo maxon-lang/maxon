@@ -1,0 +1,107 @@
+# Build the website on every change to it, and deploy it when a release publishes.
+#
+# ⭐⭐ **THE SITE DESCRIBES THE RELEASED COMPILER, SO IT SHIPS WHEN THE COMPILER DOES.** Its download
+# links carry the version and its docs teach the syntax of a particular build — deploying `main`
+# continuously would publish instructions for a compiler nobody can download yet. `release: published`
+# fires once `release.yml` has built, tested, signed and uploaded every asset, so the links are true
+# the moment they appear. It is the same trigger `homebrew.yml` and `vscode-extension.yml` use: one
+# tag, and everything downstream of it moves together.
+#
+# ⚠ **`workflow_dispatch` IS THE ESCAPE HATCH, AND IT IS DELIBERATE RATHER THAN AUTOMATIC.** An essay
+# or a typo should not have to wait weeks for a release — but a scheduled or push-driven deploy would
+# leak documentation for unreleased behaviour, which is the failure this whole shape avoids.
+#
+# ⛔ **CLOUDFLARE'S PAGES GIT INTEGRATION MUST BE DISCONNECTED FOR THIS TO BE THE ONLY DEPLOYER.**
+# While both are live, every push to `main` deploys the site from Cloudflare's own build as well as
+# this — two deployers, one of which nobody can see from this repository. `website/MAINTAINING.md`
+# records which is in force.
+#
+# ⚠ NODE 22, NOT 20. Astro 7's minimum is 22.12, while `vscode-extension.yml` pins 20 for a
+# TypeScript build that has no reason to move. Per-workflow `setup-node` is what lets both be right.
+
+name: website
+
+on:
+  # ⭐ THE BUILD RUNS ON EVERY WEBSITE CHANGE, WHICH THE DEPLOY DOES NOT. `starlightLinksValidator`
+  # fails the build on a dead internal link, and until now nothing ran it before the site went live —
+  # `MAINTAINING.md` simply asked a human to remember. A red pull request is a better place to find out
+  # than a broken deploy.
+  push:
+    branches: [main]
+    paths: ['website/**', '.github/workflows/website.yml']
+  pull_request:
+    paths: ['website/**', '.github/workflows/website.yml']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: website
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - run: npm ci
+
+      # `astro check` types the components; `astro build` runs the link validator and Pagefind.
+      - run: npx astro check
+
+      - run: npm run build
+
+      # ⚠ THE PATH IS ROOT-RELATIVE EVEN THOUGH `working-directory` IS SET — the same asymmetry
+      # `vscode-extension.yml` already has to get right for its `.vsix`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website
+          path: website/dist
+
+  deploy:
+    needs: build
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # ⚠ A MISSING CREDENTIAL SKIPS WITH A NOTICE RATHER THAN GOING RED, while Cloudflare's own git
+      # integration may still be the thing deploying. A red mark on every release until someone adds a
+      # secret teaches people to ignore red marks — the same reasoning the tap job states. Once the
+      # integration is disconnected this is the only deployer, and the notice is how you find out it
+      # did nothing.
+      #
+      # `secrets` is not a context a step's `if:` can read, so the gate is inside the step.
+      - name: Deploy to Cloudflare Pages
+        working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::notice::no CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID — nothing deployed. If Cloudflare's Pages git integration is still connected, it is deploying instead; see website/MAINTAINING.md."
+            exit 0
+          fi
+          npx wrangler pages deploy website/dist --project-name=maxon-dev --branch=main

@@ -237,6 +237,13 @@ default. `fmt <file>` formats only that file, `fmt <dir>` that directory; `fmt -
 are REJECTED, exit 1, nothing written. The walk prunes any directory holding `.git`, so it cannot
 descend into a nested checkout or an agent worktree.
 
+⛔ **A SUBTREE THAT IS NOT A CHECKOUT NEEDS A `.maxonignore`, AND `website/` IS THE ONE THAT DOES.**
+The `.git` rule protects a sibling repository, not a directory of this one — so without the marker a
+root `fmt` rewrites `website/src/examples/*.maxon` in place and walks every directory under
+`node_modules/`. MEASURED: remove `website/.maxonignore`, mis-format one of those files, run `fmt`,
+and it is silently reformatted. The marker is a FLAG whose contents are never read, and both walks
+honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
+
 ⚠ **THE FORMATTER SELF-TEST RIDES `spec-test`** (`requireFormatterPreservesItsCorpus`, called from
 `SpecWorkerPool`) and REDDENS THE SUITE if formatting loses a comment, duplicates one, writes a
 lexer-error sentinel into a file, or stops being idempotent. There is no `fmt-selftest` command.

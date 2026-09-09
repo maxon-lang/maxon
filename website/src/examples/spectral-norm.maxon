@@ -1,0 +1,76 @@
+// Spectral-norm benchmark from Computer Language Benchmarks Game
+// Calculate eigenvalue using the power method
+// For n = 5500, result should be approximately 1.274224153
+
+typealias VectorIndex = int(0 to 5500)
+typealias Iteration = int(0 to 10)
+typealias VectorComponent = float(0.0 to f64.max)
+typealias Vector = Array with VectorComponent
+
+function evalA(row VectorIndex, col VectorIndex) returns VectorComponent
+	let indexSum = row + col
+	let denominator = ((indexSum * (indexSum + 1)) / 2) + row + 1
+	return 1.0 / denominator
+end 'evalA'
+
+function multiplyByMatrix(resultVector Vector, inputVector Vector, dimension VectorIndex)
+	for row in 0 upto dimension 'outer'
+		var accumulator = 0.0
+		for col in 0 upto dimension 'inner'
+			let inputComponent = try inputVector.get(col) otherwise 0.0
+			accumulator = accumulator + (inputComponent * evalA(VectorIndex{row}, col: VectorIndex{col}))
+		end 'inner'
+		resultVector.set(row, value: accumulator)
+	end 'outer'
+end 'multiplyByMatrix'
+
+function multiplyByTranspose(resultVector Vector, inputVector Vector, dimension VectorIndex)
+	for row in 0 upto dimension 'outer'
+		var accumulator = 0.0
+		for col in 0 upto dimension 'inner'
+			let inputComponent = try inputVector.get(col) otherwise 0.0
+			accumulator = accumulator + (inputComponent * evalA(VectorIndex{col}, col: VectorIndex{row}))
+		end 'inner'
+		resultVector.set(row, value: accumulator)
+	end 'outer'
+end 'multiplyByTranspose'
+
+function applyAtA(resultVector Vector, inputVector Vector, workspace Vector, dimension VectorIndex)
+	multiplyByMatrix(workspace, inputVector: inputVector, dimension: dimension)
+	multiplyByTranspose(resultVector, inputVector: workspace, dimension: dimension)
+end 'applyAtA'
+
+function main() returns ExitCode
+	let problemSize = VectorIndex{5500}
+
+	var eigenvector = Vector.create()
+	eigenvector.resize(5500)
+	var previousVector = Vector.create()
+	previousVector.resize(5500)
+	var workspace = Vector.create()
+	workspace.resize(5500)
+
+	for index in 0 upto problemSize 'init'
+		eigenvector.set(index, value: 1.0)
+	end 'init'
+
+	var iteration = Iteration{0}
+	while iteration < 10 'iterate'
+		applyAtA(previousVector, inputVector: eigenvector, workspace: workspace, dimension: problemSize)
+		applyAtA(eigenvector, inputVector: previousVector, workspace: workspace, dimension: problemSize)
+		iteration = Iteration{iteration + 1}
+	end 'iterate'
+
+	var numerator = 0.0
+	var denominator = 0.0
+	for index in 0 upto problemSize 'rayleigh'
+		let uComponent = try eigenvector.get(index) otherwise 0.0
+		let vComponent = try previousVector.get(index) otherwise 0.0
+		numerator = numerator + (uComponent * vComponent)
+		denominator = denominator + (vComponent * vComponent)
+	end 'rayleigh'
+
+	let spectralNorm = sqrt(numerator / denominator)
+
+	return trunc(spectralNorm * 1000000000.0)
+end 'main'

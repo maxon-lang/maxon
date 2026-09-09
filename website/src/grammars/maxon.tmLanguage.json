@@ -1,0 +1,546 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Maxon",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#enum-body"
+    },
+    {
+      "include": "#enum-member-access"
+    },
+    {
+      "include": "#block-labels"
+    },
+    {
+      "include": "#match-arm-patterns"
+    },
+    {
+      "include": "#function-definitions"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#named-arguments"
+    },
+    {
+      "include": "#function-calls"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#characters"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#variables"
+    }
+  ],
+  "repository": {
+    "enum-member-access": {
+      "comment": "Enum/type member access: EnumName.caseName (not followed by open paren)",
+      "match": "\\b([A-Z]\\w*)\\.(\\w+)\\b(?!\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.type.maxon"
+        },
+        "2": {
+          "name": "variable.other.enummember.maxon"
+        }
+      }
+    },
+    "enum-body": {
+      "comment": "Enum/union declaration body - matches case names, associated values, and raw values",
+      "begin": "\\b(enum|union)\\s+([A-Z]\\w*)",
+      "end": "\\b(end)\\s*('[^']*')",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.maxon"
+        },
+        "2": {
+          "name": "entity.name.type.enum.maxon"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "keyword.control.maxon"
+        },
+        "2": {
+          "name": "entity.name.label.maxon"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "comment": "Enum case with raw value assignment (any valid identifier)",
+          "match": "^\\s+([a-zA-Z_]\\w*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "2": {
+              "name": "keyword.operator.assignment.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Enum case with associated values: caseName(paramName Type, ...)",
+          "begin": "^\\s+([a-zA-Z_]\\w*)\\s*(\\()",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "2": {
+              "name": "punctuation.definition.parameters.begin.maxon"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.parameters.end.maxon"
+            }
+          },
+          "patterns": [
+            {
+              "comment": "Associated value parameter: paramName Type",
+              "match": "\\b([a-z_]\\w*)\\s+([A-Z]\\w*)",
+              "captures": {
+                "1": {
+                  "name": "variable.parameter.maxon"
+                },
+                "2": {
+                  "name": "entity.name.type.maxon"
+                }
+              }
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#keywords"
+            }
+          ]
+        },
+        {
+          "comment": "Enum case name (any valid identifier, including keywords used as case names). Allows an optional trailing line comment after the identifier.",
+          "match": "^\\s+([a-zA-Z_]\\w*)\\s*(?=//|$)",
+          "captures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            }
+          }
+        },
+        {
+          "include": "#block-labels"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#characters"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#operators"
+        }
+      ]
+    },
+    "function-definitions": {
+      "patterns": [
+        {
+          "comment": "Function/method declaration: function name(",
+          "match": "\\b(function)\\s+(\\w+)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.maxon"
+            },
+            "2": {
+              "name": "entity.name.function.maxon"
+            }
+          }
+        }
+      ]
+    },
+    "named-arguments": {
+      "patterns": [
+        {
+          "comment": "Named argument label: argName:",
+          "match": "\\b([a-z_]\\w*)(:)",
+          "captures": {
+            "1": {
+              "name": "variable.parameter.maxon"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.maxon"
+            }
+          }
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "comment": "Method call: .methodName(",
+          "match": "(?<=\\.)(\\w+)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.method.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Function call: functionName(",
+          "match": "\\b([a-z_]\\w*)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.call.maxon"
+            }
+          }
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.maxon",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.maxon",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.maxon",
+          "match": "\\b(return|end|if|else|while|for|in|break|continue|gives|throw|try|otherwise|ignore|match|then|fallthrough|default|upto|panic)\\b"
+        },
+        {
+          "name": "keyword.other.maxon",
+          "match": "\\b(function|returns|let|var|type|union|enum|uses|implements|typealias|with|static|export|self|Self|interface|extension|extends|from|to|throws)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.maxon",
+          "match": "\\b(mod|and|or|not|as|is|shl|shr|xor)\\b"
+        },
+        {
+          "name": "constant.language.maxon",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "storage.type.maxon",
+          "match": "\\b(of|int|float|bool|byte)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "comment": "Typealias declaration - highlight the alias name",
+          "match": "\\b(typealias)\\s+([A-Z]\\w*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.maxon"
+            },
+            "2": {
+              "name": "entity.name.type.maxon"
+            },
+            "3": {
+              "name": "keyword.operator.assignment.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Standard library types",
+          "match": "\\b(Integer|Float|Byte|String|Character|Array|Map|Set|Optional|Result)\\b",
+          "name": "support.type.maxon"
+        },
+        {
+          "comment": "User-defined type in type position (after returns, parameter types, etc.)",
+          "match": "(?<=\\breturns\\s+|:\\s*)[A-Z]\\w*\\b",
+          "name": "entity.name.type.maxon"
+        },
+        {
+          "comment": "Type constructor (Type{value})",
+          "match": "\\b([A-Z]\\w*)(?=\\{)",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Type after 'with' keyword (Array with Type)",
+          "match": "(?<=\\bwith\\s+)[A-Z]\\w*\\b",
+          "name": "entity.name.type.maxon"
+        },
+        {
+          "comment": "Generic PascalCase identifier that's likely a type",
+          "match": "\\b[A-Z][a-zA-Z0-9]*\\b",
+          "name": "entity.name.type.maxon"
+        }
+      ]
+    },
+    "match-arm-patterns": {
+      "patterns": [
+        {
+          "comment": "Match arm: identifier with args before 'then'/'gives' (enum variant with destructuring)",
+          "match": "\\b([a-zA-Z_]\\w*)\\(([^)]*)\\)\\s+(then|gives)\\b",
+          "captures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "3": {
+              "name": "keyword.control.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Match arm range: identifier to/upto identifier before 'then'/'gives'",
+          "match": "\\b([a-zA-Z_]\\w*)\\s+(to|upto)\\s+([a-zA-Z_]\\w*)\\s+(then|gives)\\b",
+          "captures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "2": {
+              "name": "keyword.control.maxon"
+            },
+            "3": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "4": {
+              "name": "keyword.control.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Match arm: bare identifier before 'then'/'gives' (enum variant without args)",
+          "match": "\\b([a-zA-Z_]\\w*)\\s+(then|gives)\\b",
+          "captures": {
+            "1": {
+              "name": "variable.other.enummember.maxon"
+            },
+            "2": {
+              "name": "keyword.control.maxon"
+            }
+          }
+        }
+      ]
+    },
+    "block-labels": {
+      "patterns": [
+        {
+          "comment": "Block labels like 'main' after end, if, then, while, for, or (guard-let), etc.",
+          "match": "(\\b(?:end|if|else|while|for|or|otherwise|then)\\b)\\s*('[^']*')",
+          "captures": {
+            "1": {
+              "name": "keyword.control.maxon"
+            },
+            "2": {
+              "name": "entity.name.label.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Block labels after closing paren, e.g. if condition() 'label'",
+          "match": "\\)\\s*('[^']*')",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.maxon"
+            }
+          }
+        },
+        {
+          "comment": "Block labels at end of line: multi-char word-only quoted label, e.g. if someVar 'label' or if x > 0 'label'",
+          "match": "('[a-zA-Z_][a-zA-Z0-9_]+')\\s*$",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.maxon"
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.maxon",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "comment": "Unicode escape \\uHHHH",
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\u[0-9a-fA-F]{4}"
+            },
+            {
+              "comment": "Hex escape \\xHH",
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\x[0-9a-fA-F]{2}"
+            },
+            {
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.maxon",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.maxon"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.maxon"
+                }
+              },
+              "patterns": [
+                {
+                  "comment": "Format specifier after colon (e.g., :04, :.2, :x)",
+                  "match": ":[0-9]*\\.?[0-9]*[dxXbo]?(?=\\})",
+                  "name": "constant.other.format-spec.maxon"
+                },
+                {
+                  "include": "#enum-member-access"
+                },
+                {
+                  "include": "#named-arguments"
+                },
+                {
+                  "include": "#function-calls"
+                },
+                {
+                  "include": "#keywords"
+                },
+                {
+                  "include": "#types"
+                },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#operators"
+                },
+                {
+                  "include": "#variables"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "comment": "Character literal",
+          "name": "constant.character.maxon",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "comment": "Unicode escape \\uHHHH",
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\u[0-9a-fA-F]{4}"
+            },
+            {
+              "comment": "Hex escape \\xHH",
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\x[0-9a-fA-F]{2}"
+            },
+            {
+              "comment": "Simple escape sequence",
+              "name": "constant.character.escape.maxon",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.maxon",
+          "match": "\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*\\b"
+        },
+        {
+          "name": "constant.numeric.binary.maxon",
+          "match": "\\b0[bB][01](_?[01])*\\b"
+        },
+        {
+          "name": "constant.numeric.octal.maxon",
+          "match": "\\b0[oO][0-7](_?[0-7])*\\b"
+        },
+        {
+          "name": "constant.numeric.float.maxon",
+          "match": "\\b[0-9](_?[0-9])*\\.[0-9](_?[0-9])*([eE][+-]?[0-9](_?[0-9])*)?\\b"
+        },
+        {
+          "name": "constant.numeric.byte.maxon",
+          "match": "\\b[0-9](_?[0-9])*b\\b"
+        },
+        {
+          "name": "constant.numeric.integer.maxon",
+          "match": "\\b[0-9](_?[0-9])*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.bitwise.maxon",
+          "match": "<<|>>|&|\\||\\^"
+        },
+        {
+          "name": "keyword.operator.comparison.maxon",
+          "match": "==|!=|>=|>|<=|<"
+        },
+        {
+          "name": "keyword.operator.arithmetic.maxon",
+          "match": "[+\\-*/]"
+        },
+        {
+          "name": "keyword.operator.assignment.maxon",
+          "match": "="
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "comment": "Variable/identifier (lowercase or underscore-leading)",
+          "match": "\\b[a-z_]\\w*\\b",
+          "name": "variable.other.readwrite.maxon"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.maxon"
+}

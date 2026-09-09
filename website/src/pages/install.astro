@@ -1,0 +1,251 @@
+---
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import PlatformTabs from '../components/PlatformTabs.astro';
+import { RELEASE_VERSION } from '../version';
+
+// Prebuilt downloads are published as GitHub Release assets on the compiler repo.
+// To wire up a release: bump `version` and set `released` to true.
+//
+// ⚠ THE LINKS ARE VERSIONED, NOT `latest/download`. That shortcut resolves to the newest release but
+// still needs the exact ASSET FILENAME, and ours carry the version (`maxon-0.1.0-x64-windows.zip`) —
+// so a `latest/download` link would 404 the day 0.1.1 ships while looking perfectly correct here.
+const RELEASES = 'https://github.com/maxon-lang/maxon/releases';
+const released = true;
+
+const version = RELEASE_VERSION;
+
+const downloads = [
+  {
+    os: 'Windows',
+    arch: 'x64',
+    asset: `maxon-${version}-x64.msi`,
+    note: 'Installer — Windows 10/11, 64-bit',
+  },
+  {
+    os: 'Windows',
+    arch: 'x64',
+    asset: `maxon-${version}-x64-windows.zip`,
+    note: 'Archive, if you would rather not install',
+  },
+  {
+    os: 'macOS',
+    arch: 'arm64',
+    asset: `maxon-${version}-arm64-macos.tar.gz`,
+    note: 'Apple silicon',
+  },
+  {
+    os: 'Linux',
+    arch: 'x64',
+    asset: `maxon-${version}-x64-linux.tar.gz`,
+    note: 'Static, no libc needed',
+  },
+  {
+    os: 'Linux',
+    arch: 'arm64',
+    asset: `maxon-${version}-arm64-linux.tar.gz`,
+    note: 'Static, no libc needed',
+  },
+];
+
+const installCommands = [
+  {
+    id: 'windows',
+    label: 'Windows',
+    lines: ['winget install MaxonLang.Maxon', 'maxon version'],
+  },
+  {
+    id: 'macos',
+    label: 'macOS',
+    lines: ['brew install maxon-lang/tap/maxon', 'maxon version'],
+  },
+  {
+    id: 'linux',
+    label: 'Linux',
+    lines: [
+      `tar -xzf maxon-${version}-x64-linux.tar.gz`,
+      `export PATH="$PWD/maxon-${version}-x64-linux:$PATH"`,
+      'maxon version',
+    ],
+  },
+];
+
+const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
+---
+
+<MarketingLayout
+  title="Install Maxon"
+  description="Install Maxon from a release, set up the VS Code extension, and compile your first program."
+  path="/install/"
+>
+  <section class="mx-auto max-w-3xl px-5 py-16">
+    <h1 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Install Maxon</h1>
+    <p class="mt-4 text-lg leading-relaxed text-slate-300">
+      Download a prebuilt release for your platform, or build the compiler from source. Either
+      way you'll end up with the <code class="font-mono text-brand-300">maxon</code> toolchain —
+      compiler, language server, and VS Code extension.
+    </p>
+
+    <!-- Package managers -->
+    <h2 class="mt-12 text-2xl font-bold text-white">Install</h2>
+    <p class="mt-3 text-slate-300">
+      The shortest path for your platform. Each one leaves{' '}
+      <code class="font-mono text-brand-300">maxon</code> on your{' '}
+      <code class="font-mono text-brand-300">PATH</code>.
+    </p>
+
+    <div class="mt-5">
+      <PlatformTabs tabs={installCommands} ariaLabel="Choose your platform" />
+    </div>
+
+    <p class="mt-4 text-sm text-slate-400">
+      On macOS the tap prefix is required and cannot be shortened — a bare{' '}
+      <code class="font-mono text-brand-300">brew install maxon</code> resolves to Maxon Computer's
+      Cinema 4D installer, a different product that happens to share the name. Homebrew also clears
+      the quarantine attribute a downloaded archive earns, so there is no Gatekeeper warning.
+    </p>
+
+    <!-- Download -->
+    <h2 class="mt-12 text-2xl font-bold text-white">Download</h2>
+    {
+      released ? (
+        <>
+          <p class="mt-3 text-slate-300">
+            Prebuilt binaries for {version}. On Windows, run the installer. Everywhere else, unpack
+            the archive and put that directory on your{' '}
+            <code class="font-mono text-brand-300">PATH</code> — the compiler finds its standard
+            library beside itself, so keep the two together.
+          </p>
+          <div class="mt-5 grid gap-4 sm:grid-cols-2">
+            {downloads.map((d) => (
+              <a
+                href={assetUrl(d.asset)}
+                class="group flex items-center justify-between rounded-xl border border-ink-700 bg-ink-950/50 p-5 transition-colors hover:border-brand/50"
+              >
+                <span>
+                  <span class="block font-semibold text-white">
+                    {d.os} <span class="text-slate-500">·</span>{' '}
+                    <span class="font-mono text-sm text-brand-300">{d.arch}</span>
+                  </span>
+                  <span class="mt-1 block text-xs text-slate-500">{d.note}</span>
+                </span>
+                <span class="ml-4 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-ink-950 transition-colors group-hover:bg-brand-400">
+                  Download
+                </span>
+              </a>
+            ))}
+          </div>
+          <p class="mt-4 text-sm text-slate-400">
+            Looking for another platform or an older version? See{' '}
+            <a class="text-brand-300 hover:text-brand" href={RELEASES} target="_blank" rel="noopener">
+              all releases on GitHub
+            </a>
+            .
+          </p>
+        </>
+      ) : (
+        <div class="mt-3 rounded-xl border border-ink-700 bg-ink-950/50 p-6">
+          <p class="text-slate-300">
+            Prebuilt binaries aren't published yet. For now, build from source with the steps
+            below — it takes a couple of commands. When releases are available they'll appear on{' '}
+            <a class="text-brand-300 hover:text-brand" href={RELEASES} target="_blank" rel="noopener">
+              the GitHub releases page
+            </a>
+            .
+          </p>
+        </div>
+      )
+    }
+
+    <!-- Build from source -->
+    <h2 class="mt-12 text-2xl font-bold text-white">Build from source</h2>
+    <p class="mt-3 text-slate-300">
+      Maxon is written in Maxon, so building it needs a Maxon compiler — there is no second
+      implementation to fall back on. Install a release first, then build the tree with it.
+    </p>
+
+    <!-- Prerequisites -->
+    <h3 class="mt-8 text-xl font-bold text-white">1. Prerequisites</h3>
+
+    <ul class="mt-4 space-y-2 text-slate-300">
+      <li class="flex gap-3"><span class="text-brand">›</span> Git</li>
+      <li class="flex gap-3"><span class="text-brand">›</span> An installed <code class="font-mono text-brand-300">maxon</code>, from the downloads above</li>
+      <li class="flex gap-3"><span class="text-brand">›</span> Node.js 20+ <span class="text-slate-500">— only needed to build the VS Code extension</span></li>
+    </ul>
+
+    <!-- Clone & build -->
+    <h3 class="mt-8 text-xl font-bold text-white">2. Clone and build</h3>
+    <p class="mt-3 text-slate-300">
+      Put a released compiler in <code class="font-mono text-brand-300">.bootstrap/</code> to seed the
+      build, then <code class="font-mono text-brand-300">maxon build</code> compiles the tree with it.
+    </p>
+    <div class="mt-4 overflow-hidden rounded-xl border border-ink-700 bg-ink-950/80">
+      <div class="flex items-center gap-2 border-b border-ink-700 px-4 py-2.5">
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="ml-2 font-mono text-xs text-slate-500">terminal</span>
+      </div>
+      <pre class="overflow-x-auto p-4 font-mono text-sm leading-relaxed text-slate-300"><span class="text-slate-500"># clone</span>
+<span class="text-brand-300">git</span> clone https://github.com/maxon-lang/maxon.git
+<span class="text-brand-300">cd</span> maxon
+
+<span class="text-slate-500"># seed with a released compiler — the BINARY alone</span>
+<span class="text-brand-300">mkdir</span> -p .bootstrap &amp;&amp; <span class="text-brand-300">cp</span> "$(which maxon)" .bootstrap/maxon
+
+<span class="text-slate-500"># build the compiler with it</span>
+<span class="text-brand-300">maxon</span> build</pre>
+    </div>
+
+    <p class="mt-4 text-sm text-slate-400">
+      Copy the <strong class="text-slate-300">binary</strong> into
+      <code class="font-mono text-brand-300">.bootstrap/</code>, not the unpacked archive: the compiler
+      finds <code class="font-mono text-brand-300">stdlib/</code> by walking up from its own
+      executable, so a released standard library left beside the seed would be compiled in place of
+      the checkout's own — and the build would succeed.
+    </p>
+
+    <!-- Verify -->
+    <h3 class="mt-8 text-xl font-bold text-white">3. Compile your first program</h3>
+    <p class="mt-3 text-slate-300">
+      Compile and run one of the bundled examples to confirm the build works:
+    </p>
+    <div class="mt-4 overflow-hidden rounded-xl border border-ink-700 bg-ink-950/80">
+      <div class="flex items-center gap-2 border-b border-ink-700 px-4 py-2.5">
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-ink-600"></span>
+        <span class="ml-2 font-mono text-xs text-slate-500">terminal</span>
+      </div>
+      <pre class="overflow-x-auto p-4 font-mono text-sm leading-relaxed text-slate-300"><span class="text-slate-500"># compile and run an example</span>
+<span class="text-brand-300">bin/maxon</span> build examples/spectral-norm.maxon
+
+<span class="text-slate-500"># run the full spec-test suite</span>
+<span class="text-brand-300">bin/maxon</span> spec-test</pre>
+    </div>
+    <p class="mt-4 text-sm text-slate-400">
+      The compiler produces a native executable next to your source file
+      (<code class="font-mono text-brand-300">.exe</code> on Windows). See the{' '}
+      <a class="text-brand-300 hover:text-brand" href="/docs/cli/">CLI reference</a> for every
+      command and flag.
+    </p>
+
+    <!-- Editor -->
+    <h3 class="mt-8 text-xl font-bold text-white">4. Set up your editor</h3>
+    <p class="mt-3 text-slate-300">
+      Maxon includes a Language Server and a VS Code extension — syntax highlighting, real-time
+      diagnostics, completion, and hover. Build the extension from the{' '}
+      <code class="font-mono text-brand-300">vscode-extension/</code> directory (Node.js 20+),
+      then install the generated <code class="font-mono text-brand-300">.vsix</code> or load the
+      extension folder directly in VS Code.
+    </p>
+
+    <div class="mt-12 rounded-xl border border-ink-700 bg-ink-950/60 p-6">
+      <p class="text-slate-300">
+        Built it? Head to{' '}
+        <a class="font-semibold text-brand-300 hover:text-brand" href="/docs/getting-started/first-program/">
+          your first program →
+        </a>
+      </p>
+    </div>
+  </section>
+</MarketingLayout>
