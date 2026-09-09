@@ -1,0 +1,1696 @@
+// UnswitchInvariantGuards — a Std→Std pass that VERSIONS a loop on the guards it asks on every
+// iteration but whose answers cannot change inside it. A test chain before the loop asks them once; a
+// FAST copy of the loop has each such branch folded to the arm the access proceeds on, with the arm that
+// refused now unreachable and dropped; the original loop stays as the SLOW version for every entry where
+// a guard fails. The loads the guards read, and every other read of the records' header fields, move
+// out of the copy into the test chain, so the copy's body is call-free but for the arm a bound failure
+// reaches.
+//
+// THE SHAPE. `InlineManagedPrimitives` puts three guards before every inlined element store —
+// `capacity@16 >= 0` (the buffer is this record's), `buffer@0 != 0`, and the buffer's refcount word is
+// 0 (nobody views it) — plus `element_destroy@40 == 0` where the lowering could not prove it, and
+// reloads `length@8`/`buffer@0` at every access. None of those words can change inside a loop whose
+// stores are element stores and whose calls are the managed reads and in-place writers.
+//
+// THE TWO FACTS IT RESTS ON are stated by the runtime that owns them and read here as data:
+//   • `elementStoreCannotAliasARecordField` — a store through an element slot address writes a buffer,
+//     which is its own allocation; no record field lies in it.
+//   • `managedCalleeHeaderEffect` — which `__managed_*` entries write nothing to the record, which write
+//     its header only through a copy-on-write detach, and (the default) which are unknown.
+//
+// THE THIRD PREMISE IS THIS PASS'S OWN. Every hoisted record field is loaded in the chain BEFORE the
+// loop's trip test, on an entry whose body may never run. LICM's Rule 2 refuses exactly that
+// speculation, because it hoists a load through ANY invariant address. This pass hoists only a field of
+// a record that a `__managed_*` call in the loop names as its first argument, and only when that value
+// is defined outside the loop: it is then a managed record pointer that dominates the header; the
+// language has no null value, and an empty slot throws `emptySlot` rather than yielding one; and a
+// record stays allocated while a value naming it is live. The load cannot fault, and a field nothing in
+// the loop grows or shares reads the same word before the loop as inside it.
+//
+// THE RULE. A natural loop L is versioned when:
+//   • L has a preheader (`soleLoopEntry`), every member has a terminator op and can be cloned, and its
+//     size fits the budgets;
+//   • every call in L is a direct `call`/`tryCall` whose effect is `writesNothing`, or
+//     `detachesUnlessOwnedUnshared` on a record defined outside L;
+//   • every store in L is an element store whose record is one such callee's, dominated by the bound
+//     guard on its index — so it lands inside the buffer, never in the buffer's own header;
+//   • L holds at least one SHAPE GUARD (`classifyManagedGuard`) on such a record;
+//   • for each writer's record, L's guards include all three shape predicates. That is the induction:
+//     the detach fires exactly when one of them fails; the copy is entered with all three true, nothing
+//     in the copy writes the header, so they hold on every iteration and the detach never fires. A
+//     writer runs a destructor only on a managed element, so the copy is entered only when
+//     `element_destroy@40 == 0` — the loop's own guard where it has one, a test emitted here otherwise;
+//   • every loop-defined value read after L is a block arg of a member, read only under ONE exit block
+//     whose predecessors are all members — the block that takes one phi per such value.
+//
+// INVARIANCE inside L extends `loopInvariantCodeMotion`'s: a value defined outside L, a pure op over
+// invariants, a load of a field of a callee's invariant record, and the refcount word of such a record's
+// buffer. Only guard operands and record-field loads are hoisted; a pure computation the body reads
+// stays in the copy, for the register reason LICM's Rule 3 states. The test chain evaluates the guards
+// in the loop's dominator order, so the refcount read runs only after the ownership and null tests
+// that make its address one with a header.
+//
+// WHICH ARM IS FAST is not a guess: every recognised guard puts its refusal on the THEN arm, so the
+// copy keeps the ELSE arm. An invariant compare of any other shape is left alone — versioning on it
+// would send every entry where it is false to the slow loop, costing the managed win for nothing.
+//
+// A LOOP WITH NO GUARD BUT AN INVARIANT RECORD FIELD IS HOISTED WITHOUT A COPY: the reads move into
+// the chain and the loop's own blocks read them from there — a get-only loop's `length@8`/`buffer@0`,
+// which plain LICM refuses because the checked read's slow arm is a call. Nothing is folded, so
+// nothing is versioned.
+//
+// EVERY ACCESS SITE LOADS ITS OWN COPY OF A FIELD, so the hoisted ops are VALUE-NUMBERED over their
+// operands before they are emitted: a loop with seven accesses to one record hoists one `length@8`
+// and one `buffer@0`, not seven of each, and the register budget counts what the copy reads after
+// that merge.
+//
+// NESTS: loops are decided outermost first, and a loop is refused when it contains or lies inside a
+// loop already versioned in this run — the outer copy already folds the inner loop's guards on the same
+// records, and a second versioning would clone the copy.
+//
+// EVERY LOOP OF A FUNCTION IS ANALYSED ON THE FUNCTION BEFORE ANY REWRITE, AND THE REWRITES ARE APPLIED
+// TOGETHER. Versioned loops are pairwise disjoint and non-nested, so one rewrite reads only its own
+// members, its preheader's exit and its exit block's entry. The exit phis are attached and their readers
+// rewritten BEFORE any copy is built — each read found through the function's use index, so a loop pays
+// for its own values' reads and never for a walk of the function — and a later loop's copy or test
+// chain then clones a read that already names the phi. The unreachable blocks — a copy's refused arms —
+// go at the end, once per function, after every position the analysis recorded has been read.
+//
+// EVERYTHING SIZED BY THE FUNCTION IS BUILT ONCE PER FUNCTION: the tree, the def index, the use index
+// and the two substitution columns. A loop's analysis and rewrite touch only what the loop holds and
+// reads, so a function with many loops costs the sum of its loops, not their product with its size.
+
+typealias VersionedLoopCount = int(0 to u64.max)
+typealias LoopOpCount = int(0 to u64.max)
+typealias GuardCount = int(0 to u64.max)
+typealias HoistedValueCount = int(0 to u64.max)
+
+let MaxOpsPerLoop = 256 as LoopOpCount
+
+// Guard SITES, before the numbering merges the ones that ask one compare; the copy's size is
+// `MaxOpsPerLoop`'s to bound.
+let MaxGuardsPerLoop = 32 as GuardCount
+
+// Hoisted values the copy reads are live across its whole body; past this many the trade is a
+// callee-saved register or a forced reload per use against one record load per use.
+let HoistedValueBudget = 6 as HoistedValueCount
+let UnswitchTestLabel = b"__us_test"
+let UnswitchSlowLabel = b"__us_slow"
+
+// Why a loop was left alone. Counted per reason into the pass summary and named in the per-loop trace.
+enum UnswitchRefusal
+	noPreheader
+	insideAVersionedLoop
+	containsAVersionedLoop
+	oplessMember
+	unclonableOp
+	tooManyOps
+	callWithUnknownEffect
+	writerOnAVariantRecord
+	noManagedCallee
+	storeNotAnElementSlot
+	elementStoreNotBounded
+	noInvariantGuard
+	tooManyGuards
+	writerWithoutItsShapeGuards
+	escapingOpResult
+	escapingUseNotUnderOneExit
+	hoistBudgetExceeded
+end 'UnswitchRefusal'
+
+function refusalText(reason UnswitchRefusal) returns String
+	return match reason 'r'
+		noPreheader gives "it has no preheader whose only successor is the header"
+		insideAVersionedLoop gives "it lies inside a loop versioned in this run"
+		containsAVersionedLoop gives "it contains a loop versioned in this run"
+		oplessMember gives "a member has no terminator op"
+		unclonableOp gives "a member holds an op the cloner refuses"
+		tooManyOps gives "its body is over the op budget"
+		callWithUnknownEffect gives "a call's effect on its record is unknown"
+		writerOnAVariantRecord gives "an in-place writer's record is defined inside the loop"
+		noManagedCallee gives "no call names a record"
+		storeNotAnElementSlot gives "a store is not an element store on a callee's record"
+		elementStoreNotBounded gives "an element store is not dominated by the bound guard on its index"
+		noInvariantGuard gives "no shape guard tests an invariant record and no record field is invariant"
+		tooManyGuards gives "its guards are over the budget"
+		writerWithoutItsShapeGuards gives "an in-place writer's record lacks one of the three shape guards"
+		escapingOpResult gives "an op result defined in the loop is read after it"
+		escapingUseNotUnderOneExit gives "no exit block with only loop predecessors dominates every read of a loop value"
+		hoistBudgetExceeded gives "the copy would read more hoisted values than the budget"
+	end 'r'
+end 'refusalText'
+
+// Version every admissible natural loop in every function, in place.
+export function unswitchInvariantGuards(module StdModule)
+	var versioned = 0 as VersionedLoopCount
+	var scratch = UnswitchScratch.create()
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		versioned = versioned + unswitchInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("unswitchInvariantGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+	end 'eachFunc'
+
+	let total = versioned
+	logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: versioned {total} loop(s) across {module.funcCount()} function(s); loops left alone: {scratch.refusals.summary(UnswitchRefusal.allCaseNames)}; invariant compares of another shape left in place: {scratch.genericGuardsLeftAlone}")
+end 'unswitchInvariantGuards'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Per-function driver
+// ══════════════════════════════════════════════════════════════════════════
+
+// Version every admissible loop of one function. Returns how many it versioned.
+function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScratch) returns VersionedLoopCount
+	let blockCount = func.blockRefs.count()
+
+	if blockCount < 2 or not holdsAManagedCallee(module, func: func, scratch: scratch) 'nothingToVersion'
+		return 0
+	end 'nothingToVersion'
+
+	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
+	var backEdges = LoopBackEdges.create()
+	findLoopBackEdges(succ, nodeCount: blockCount, edges: backEdges)
+
+	if backEdges.count() == 0 'loopless'
+		return 0
+	end 'loopless'
+
+	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
+	let analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
+	let headers = distinctLoopHeaders(backEdges, nodeCount: blockCount)
+	var plans = UnswitchPlanArray.create()
+
+	// Outermost first: the discovery order is innermost-first for a nest (`distinctLoopHeaders`).
+	var next = headers.count()
+	while next > 0 'eachLoopOutermostFirst'
+		next = next - 1
+		let header = (try headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}")) as BlockRefIndex
+		collectNaturalLoop(analysis.tree.pred, header: header as CsrIndex, edges: backEdges, nodeCount: blockCount as CsrIndex, into: scratch.members)
+
+		var plan = UnswitchPlan.create(func.name, header: header, members: scratch.members.blocks)
+		if analyzeLoop(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'admitted'
+			analysis.markVersioned(plan)
+			plans.push(plan)
+		end 'admitted'
+	end 'eachLoopOutermostFirst'
+
+	if plans.count() == 0 'nothingAdmitted'
+		return 0
+	end 'nothingAdmitted'
+
+	// Seeded ONCE, past every id the function uses; every copy, chain value and exit phi mints from here.
+	var minter = ValueMinter.create(analysis.valueBound as ParamCount)
+	var columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId)
+
+	for index in 0 upto plans.count() 'eachExitPhi'
+		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
+		substituteExitPhis(module, func: func, analysis: analysis, plan: plan, scratch: scratch, columns: columns, minter: minter)
+	end 'eachExitPhi'
+
+	for index in 0 upto plans.count() 'eachCopy'
+		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
+		applyPlan(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+	end 'eachCopy'
+
+	dropUnreachableBlocks(module, func: func)
+
+	return plans.count()
+end 'unswitchInFunc'
+
+// Whether any live op of `func` calls a runtime entry with a stated effect — the one op read most
+// functions pay, before the successor graph and the tree are built for a loop nothing here can serve.
+function holdsAManagedCallee(module StdModule, func IrFunction, scratch UnswitchScratch) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = module.getOp(opIdx)
+			if not op.rawValue.isCall 'notACall'
+				continue
+			end 'notACall'
+
+			classifyCallOperands(op, call: scratch.call)
+			if scratch.call.namesACallee() and managedCalleeHeaderEffect(scratch.call.callee) != ManagedHeaderEffect.unknown 'stated'
+				return true
+			end 'stated'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return false
+end 'holdsAManagedCallee'
+
+// The per-function facts every loop's analysis and rewrite read, gathered ONCE for a function that has
+// a back edge and a managed callee: the tree with O(1) dominance stamps, the shape reader over the def
+// index, every value's read sites, and which blocks a versioned loop has claimed.
+type UnswitchFunction
+	export var tree as StdDominatorTree
+	export var stamps as DominatorStamps
+	export var reader as StdShapeReader
+	// Value id -> every site that reads it. What makes the escape question and the exit-phi rewrite
+	// cost the loop's values × their reads rather than a walk of the function per loop.
+	export var sites as ReadSites
+	export var valueBound as ValueId
+	// Per position: a member of a loop versioned in this run, and a header of one.
+	var insideVersioned as BoolArray
+	var versionedHeader as BoolArray
+
+	static function gather(module StdModule, func IrFunction, tree StdDominatorTree, scratch UnswitchScratch) returns UnswitchFunction
+		let reader = StdShapeReader.create(module, func: func)
+		let valueBound = reader.defs.valueBound()
+		var insideVersioned = BoolArray.create()
+		insideVersioned.resize(tree.blockCount)
+		var versionedHeader = BoolArray.create()
+		versionedHeader.resize(tree.blockCount)
+		return Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, sites: ReadSites.collect(module, func: func, valueBound: valueBound, scratch: scratch), valueBound: valueBound, insideVersioned: insideVersioned, versionedHeader: versionedHeader}
+	end 'gather'
+
+	function isInsideAVersionedLoop(position BlockRefIndex) returns bool
+		return try self.insideVersioned.get(position) otherwise panic("unswitchInvariantGuards: insideVersioned.get OOB at {position}")
+	end 'isInsideAVersionedLoop'
+
+	function isAVersionedHeader(position BlockRefIndex) returns bool
+		return try self.versionedHeader.get(position) otherwise panic("unswitchInvariantGuards: versionedHeader.get OOB at {position}")
+	end 'isAVersionedHeader'
+
+	function markVersioned(plan UnswitchPlan)
+		for position in plan.members 'eachMember'
+			try self.insideVersioned.set(position, value: true) otherwise panic("unswitchInvariantGuards: insideVersioned.set OOB at {position}")
+		end 'eachMember'
+
+		try self.versionedHeader.set(plan.header, value: true) otherwise panic("unswitchInvariantGuards: versionedHeader.set OOB at {plan.header}")
+	end 'markVersioned'
+
+	// Whether `position` has a CFG edge to `target`.
+	function branchesTo(position BlockRefIndex, target BlockRefIndex) returns bool
+		for k in 0 upto self.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
+			if self.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex == target 'found'
+				return true
+			end 'found'
+		end 'eachSuccessor'
+
+		return false
+	end 'branchesTo'
+end 'UnswitchFunction'
+
+// Every (value, read site) pair of the function, as two CSRs over value ids. An OP site is an ordinal
+// into `siteOp`/`sitePosition` — the op and the block holding it; a terminator is a site of its block.
+// An EDGE site is the position of the block whose outgoing edge args read the value.
+type ReadSites
+	export var opReaders as CsrGraph
+	var siteOp as OpIndexArray
+	var sitePosition as BlockPositionColumn
+	export var edgeReaders as CsrGraph
+
+	static function collect(module StdModule, func IrFunction, valueBound ValueId, scratch UnswitchScratch) returns ReadSites
+		var sites = Self{opReaders: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), siteOp: OpIndexArray.create(), sitePosition: BlockPositionColumn.create(), edgeReaders: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create())}
+		var readValue = CsrColumn.create()
+		var readSite = CsrColumn.create()
+		var edgeValue = CsrColumn.create()
+		var edgeAt = CsrColumn.create()
+
+		for position in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = module.blockAtPosition(func, position: position)
+
+			for opIdx in block.opRefs 'eachOp'
+				sites.recordOpSite(module, opIdx: opIdx, position: position, readValue: readValue, readSite: readSite, scratch: scratch)
+			end 'eachOp'
+
+			if block.hasTerminatorOp() 'hasTerm'
+				sites.recordOpSite(module, opIdx: block.terminatorIndex(), position: position, readValue: readValue, readSite: readSite, scratch: scratch)
+			end 'hasTerm'
+
+			for edge in block.branchEdges 'eachEdge'
+				for argId in edge.argIds 'eachArg'
+					edgeValue.push(argId)
+					edgeAt.push(position)
+				end 'eachArg'
+			end 'eachEdge'
+		end 'eachBlock'
+
+		sites.opReaders = buildCsr(readValue, to: readSite, nodeCount: valueBound as CsrIndex)
+		sites.edgeReaders = buildCsr(edgeValue, to: edgeAt, nodeCount: valueBound as CsrIndex)
+		return sites
+	end 'collect'
+
+	// An op that reads nothing is no site.
+	function recordOpSite(module StdModule, opIdx OpIndex, position BlockRefIndex, readValue CsrColumn, readSite CsrColumn, scratch UnswitchScratch)
+		scratch.reads.clear()
+		collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
+		if scratch.reads.insertedIdCount() == 0 'readsNothing'
+			return
+		end 'readsNothing'
+
+		let site = self.siteOp.count() as CsrIndex
+		self.siteOp.push(opIdx)
+		self.sitePosition.push(position)
+
+		for i in 0 upto scratch.reads.insertedIdCount() 'eachRead'
+			readValue.push(scratch.reads.insertedIdAt(i))
+			readSite.push(site)
+		end 'eachRead'
+	end 'recordOpSite'
+
+	function opOfSite(site CsrIndex) returns OpIndex
+		return try self.siteOp.get(site) otherwise panic("unswitchInvariantGuards: siteOp.get OOB at {site}")
+	end 'opOfSite'
+
+	function positionOfSite(site CsrIndex) returns BlockRefIndex
+		return try self.sitePosition.get(site) otherwise panic("unswitchInvariantGuards: sitePosition.get OOB at {site}")
+	end 'positionOfSite'
+end 'ReadSites'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The plan — one loop's analysis, read by its rewrite
+// ══════════════════════════════════════════════════════════════════════════
+
+// One recognised guard of the loop: a shape guard the copy folds, or a bound guard a store is checked
+// against. `index` is meaningful for a bound only.
+type UnswitchGuard
+	export let position as BlockRefIndex
+	export let compareOpIdx as OpIndex
+	export let condId as ValueId
+	export let kind as ManagedGuardKind
+	export let record as ValueId
+	// A bound only: whether its index is a value, and which.
+	export let indexIsVariable as bool
+	export let index as ValueId
+	export let elseBlockId as BlockId
+
+	static function create(position BlockRefIndex, compareOpIdx OpIndex, condId ValueId, guard ManagedGuardOperands, elseBlockId BlockId) returns UnswitchGuard
+		return Self{position: position, compareOpIdx: compareOpIdx, condId: condId, kind: guard.kind, record: guard.record, indexIsVariable: guard.indexIsVariable, index: guard.index, elseBlockId: elseBlockId}
+	end 'create'
+end 'UnswitchGuard'
+
+typealias UnswitchGuardArray = Array with UnswitchGuard
+
+// One element store of the loop, by the record and index its slot address names.
+type ElementStoreSite
+	export let position as BlockRefIndex
+	export let record as ValueId
+	export let indexIsVariable as bool
+	export let index as ValueId
+
+	static function create(position BlockRefIndex, slot ElementSlotOperands) returns ElementStoreSite
+		return Self{position: position, record: slot.record, indexIsVariable: slot.indexIsVariable, index: slot.index}
+	end 'create'
+end 'ElementStoreSite'
+
+typealias ElementStoreSiteArray = Array with ElementStoreSite
+
+type UnswitchPlan
+	export let funcName as ByteArray
+	export var header as BlockRefIndex
+	export var preheader as BlockRefIndex = 0
+	// Whether the loop is copied and its guards folded, or only its invariant fields hoisted.
+	export var versioned = false
+	export var members as BlockPositionColumn
+	// The members in dominator preorder from the header (`recordLoopPreorder`) — the order the chain is
+	// emitted in and the copy is built in, so every def precedes its uses.
+	export var walkOrder as BlockPositionColumn
+	// The admitted shape guards, in walk order.
+	export var guards as UnswitchGuardArray
+	export var bounds as UnswitchGuardArray
+	export var stores as ElementStoreSiteArray
+	// Records named by a callee with a stated effect and defined outside the loop; the writers among
+	// them, whose three shape guards the loop must hold.
+	export var knownRecords as ValueIdArray
+	export var writerRecords as ValueIdArray
+	// Value ids whose defining op is emitted into the chain rather than into the copy; then, in walk
+	// order, each hoisted op's value and the value it is numbered equal to — itself, or an earlier
+	// hoisted op of the same shape over the same operands, which is the one the chain emits.
+	export var hoisted as StdValueUseSet
+	export var hoistedWalk as ValueIdArray
+	export var hoistedCanonical as ValueIdArray
+	export var hasExit = false
+	export var exit as BlockRefIndex = 0
+	// The loop's block args read after it, their types, and (once applied) the phis the exit takes.
+	export var escaping as ValueIdArray
+	export var escapingTypes as StdTypeArray
+	export var exitPhis as ValueIdArray
+
+	static function create(funcName ByteArray, header BlockRefIndex, members CsrColumn) returns UnswitchPlan
+		var positions = BlockPositionColumn.create()
+		for member in members 'eachMember'
+			positions.push(member as BlockRefIndex)
+		end 'eachMember'
+
+		return Self{funcName: funcName, header: header, members: positions, walkOrder: BlockPositionColumn.create(), guards: UnswitchGuardArray.create(), bounds: UnswitchGuardArray.create(), stores: ElementStoreSiteArray.create(), knownRecords: ValueIdArray.create(), writerRecords: ValueIdArray.create(), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(), hoistedCanonical: ValueIdArray.create(), escaping: ValueIdArray.create(), escapingTypes: StdTypeArray.create(), exitPhis: ValueIdArray.create()}
+	end 'create'
+
+	// The canonical of the `ordinal`-th hoisted op in walk order, which must be `valueId`'s: the
+	// numbering and the chain walk the members in one order, and a disagreement is a defect.
+	function canonicalOfHoisted(ordinal HoistedValueCount, valueId ValueId) returns ValueId
+		let recorded = try self.hoistedWalk.get(ordinal) otherwise panic("unswitchInvariantGuards: hoisted op {ordinal} defining {valueId} was not numbered — the chain walk found more hoisted ops than the numbering did")
+		if recorded != valueId 'anotherOp'
+			panic("unswitchInvariantGuards: hoisted op {ordinal} defines {valueId} in the chain walk and {recorded} in the numbering — the two walks disagree on the order")
+		end 'anotherOp'
+
+		return try self.hoistedCanonical.get(ordinal) otherwise panic("unswitchInvariantGuards: hoistedCanonical.get OOB at {ordinal} against a column parallel to hoistedWalk")
+	end 'canonicalOfHoisted'
+
+	function hasGuard(kind ManagedGuardKind, record ValueId) returns bool
+		for guard in self.guards 'eachGuard'
+			if guard.kind == kind and guard.record == record 'found'
+				return true
+			end 'found'
+		end 'eachGuard'
+
+		return false
+	end 'hasGuard'
+
+	// The admitted guard whose block is `position`, if there is one — answered as the guard's index
+	// plus one so the column's own zero means "none".
+	function guardAt(position BlockRefIndex) returns GuardCount
+		for (iter, guard) in self.guards.withIterator() 'eachGuard'
+			if guard.position == position 'found'
+				return iter.index() + 1
+			end 'found'
+		end 'eachGuard'
+
+		return NoGuardAtBlock
+	end 'guardAt'
+end 'UnswitchPlan'
+
+typealias UnswitchPlanArray = Array with UnswitchPlan
+
+let NoGuardAtBlock = 0 as GuardCount
+
+// ══════════════════════════════════════════════════════════════════════════
+// Admission
+// ══════════════════════════════════════════════════════════════════════════
+
+// Decide one loop, filling `plan`. Every clause that refuses does so through `refuse`, so the tally
+// and the trace name it.
+function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	if analysis.isInsideAVersionedLoop(plan.header) 'nested'
+		return refuse(plan, reason: UnswitchRefusal.insideAVersionedLoop, scratch: scratch)
+	end 'nested'
+
+	for position in plan.members 'eachMember'
+		if analysis.isAVersionedHeader(position) 'containsOne'
+			return refuse(plan, reason: UnswitchRefusal.containsAVersionedLoop, scratch: scratch)
+		end 'containsOne'
+	end 'eachMember'
+
+	match soleLoopEntry(analysis.tree, members: scratch.members, header: plan.header) 'entry'
+		none then return refuse(plan, reason: UnswitchRefusal.noPreheader, scratch: scratch)
+		position(preheader) then plan.preheader = preheader
+	end 'entry'
+
+	if not sizeFits(module, func: func, plan: plan, scratch: scratch) 'overBudget'
+		return false
+	end 'overBudget'
+
+	scratch.beginLoop()
+	collectLoopDefs(module, func: func, members: scratch.members, definedInLoop: scratch.definedInLoop, def: scratch.def)
+
+	if not scanCalls(module, func: func, plan: plan, scratch: scratch) 'aCallRefuses'
+		return false
+	end 'aCallRefuses'
+
+	if plan.knownRecords.count() == 0 'noRecordToGuard'
+		return refuse(plan, reason: UnswitchRefusal.noManagedCallee, scratch: scratch)
+	end 'noRecordToGuard'
+
+	recordLoopPreorder(analysis.tree, members: scratch.members, header: plan.header, into: plan.walkOrder)
+
+	if not classifyBody(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'aStoreRefuses'
+		return false
+	end 'aStoreRefuses'
+
+	if plan.guards.count() > MaxGuardsPerLoop 'tooManyGuards'
+		return refuse(plan, reason: UnswitchRefusal.tooManyGuards, scratch: scratch)
+	end 'tooManyGuards'
+
+	if not storesAreBounded(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'aStoreIsUnbounded'
+		return false
+	end 'aStoreIsUnbounded'
+
+	if not writersHaveTheirGuards(plan, scratch: scratch) 'aWriterIsUnguarded'
+		return false
+	end 'aWriterIsUnguarded'
+
+	if not refuseEscapingOpResults(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'anOpResultEscapes'
+		return false
+	end 'anOpResultEscapes'
+
+	plan.versioned = plan.guards.count() != 0
+	if plan.versioned and not resolveExit(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'noSingleExit'
+		return false
+	end 'noSingleExit'
+
+	markHoisted(module, func: func, analysis: analysis, plan: plan, scratch: scratch)
+	if not plan.versioned and plan.hoisted.isEmpty() 'nothingToDo'
+		return refuse(plan, reason: UnswitchRefusal.noInvariantGuard, scratch: scratch)
+	end 'nothingToDo'
+
+	return hoistFitsBudget(module, func: func, plan: plan, scratch: scratch)
+end 'analyzeLoop'
+
+// Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
+function refuse(plan UnswitchPlan, reason UnswitchRefusal, scratch UnswitchScratch) returns bool
+	scratch.refusals.add(reason.ordinal, count: 1)
+	logTrace(LogCategory.ir, message: function() gives "unswitchInvariantGuards: '{String.from(plan.funcName)}' loop at block position {plan.header} left alone — {refusalText(reason)}")
+	return false
+end 'refuse'
+
+// Every member has a terminator op — a copy cannot reproduce a physical fall-through — and holds only
+// ops the cloner accepts; the body fits the op budget.
+function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	var ops = 0 as LoopOpCount
+
+	for position in plan.members 'eachMember'
+		let block = module.blockAtPosition(func, position: position)
+		if not block.hasTerminatorOp() 'fallsThrough'
+			return refuse(plan, reason: UnswitchRefusal.oplessMember, scratch: scratch)
+		end 'fallsThrough'
+
+		for opIdx in block.opRefs 'eachOp'
+			if module.getOp(opIdx).rawValue.isUnsupportedInInlineBody 'notClonable'
+				return refuse(plan, reason: UnswitchRefusal.unclonableOp, scratch: scratch)
+			end 'notClonable'
+		end 'eachOp'
+
+		ops = ops + block.opRefs.count()
+	end 'eachMember'
+
+	if ops > MaxOpsPerLoop 'overBudget'
+		return refuse(plan, reason: UnswitchRefusal.tooManyOps, scratch: scratch)
+	end 'overBudget'
+
+	return true
+end 'sizeFits'
+
+// Every call of the loop, in any order: each must be a direct call whose effect the runtime states,
+// and each names the record it acts on. A writer's record must be defined outside the loop.
+// An INDEX loop over the members, here and below wherever the body writes another of the plan's
+// columns: a `for … in` element is a borrow of `plan` for the loop's whole body.
+function scanCalls(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	for index in 0 upto plan.members.count() 'eachMember'
+		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			if not admitCall(module, opIdx: opIdx, plan: plan, scratch: scratch) 'refused'
+				return false
+			end 'refused'
+		end 'eachOp'
+	end 'eachMember'
+
+	return true
+end 'scanCalls'
+
+function admitCall(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	let op = module.getOp(opIdx)
+	if not op.rawValue.isCall 'notACall'
+		return true
+	end 'notACall'
+
+	classifyCallOperands(op, call: scratch.call)
+	if not scratch.call.namesACallee() or scratch.call.argCount == 0 'noCalleeToLookUp'
+		return refuse(plan, reason: UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
+	end 'noCalleeToLookUp'
+
+	let record = scratch.call.firstArg
+	match managedCalleeHeaderEffect(scratch.call.callee) 'effect'
+		unknown then return refuse(plan, reason: UnswitchRefusal.callWithUnknownEffect, scratch: scratch)
+		writesNothing then admitKnownRecord(record, plan: plan, scratch: scratch)
+		detachesUnlessOwnedUnshared then return admitWriterRecord(record, plan: plan, scratch: scratch)
+	end 'effect'
+
+	return true
+end 'admitCall'
+
+// A record a pure read names is known only when it is invariant; a variant one is read through
+// nothing this pass hoists.
+function admitKnownRecord(record ValueId, plan UnswitchPlan, scratch UnswitchScratch)
+	if scratch.definedInLoop.contains(record) or scratch.known.contains(record) 'variantOrAlreadyKnown'
+		return
+	end 'variantOrAlreadyKnown'
+
+	scratch.known.insert(record)
+	plan.knownRecords.push(record)
+end 'admitKnownRecord'
+
+function admitWriterRecord(record ValueId, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	if scratch.definedInLoop.contains(record) 'variant'
+		return refuse(plan, reason: UnswitchRefusal.writerOnAVariantRecord, scratch: scratch)
+	end 'variant'
+
+	admitKnownRecord(record, plan: plan, scratch: scratch)
+
+	if not scratch.writers.contains(record) 'firstWrite'
+		scratch.writers.insert(record)
+		plan.writerRecords.push(record)
+	end 'firstWrite'
+
+	return true
+end 'admitWriterRecord'
+
+// Classify every member op in walk order — invariance, the stores, the guards. A def dominates its
+// uses, so one preorder pass decides every operand before the op that reads it (LICM's argument).
+function classifyBody(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	for index in 0 upto plan.walkOrder.count() 'eachBlock'
+		let position = try plan.walkOrder.get(index) otherwise panic("unswitchInvariantGuards: walkOrder.get OOB at {index}")
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			if not classifyBodyOp(module, opIdx: opIdx, position: position, analysis: analysis, plan: plan, scratch: scratch) 'refused'
+				return false
+			end 'refused'
+		end 'eachOp'
+
+		classifyTerminator(module, block: block, position: position, analysis: analysis, plan: plan, scratch: scratch)
+	end 'eachBlock'
+
+	return true
+end 'classifyBody'
+
+function classifyBodyOp(module StdModule, opIdx OpIndex, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	let op = module.getOp(opIdx)
+	if op.rawValue.isCall 'scannedAlready'
+		return true
+	end 'scannedAlready'
+
+	if op.rawValue.isStore 'aWrite'
+		return admitStore(op, position: position, analysis: analysis, plan: plan, scratch: scratch)
+	end 'aWrite'
+
+	classifyLoadOperands(op, load: scratch.load)
+	if scratch.load.isLoad() 'aRead'
+		admitLoadIfInvariant(analysis, scratch: scratch)
+		return true
+	end 'aRead'
+
+	if op.rawValue.isPure 'pure'
+		admitPureIfInvariant(op, scratch: scratch)
+	end 'pure'
+
+	return true
+end 'classifyBodyOp'
+
+// A store is admitted only as an element store — anything else, a field or global write among them,
+// refuses the loop. Whether its record is one a callee names is asked once every call has been read.
+function admitStore(op StdOp, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	classifyStoreOperands(op, store: scratch.store)
+	if not scratch.store.isStore() 'notAPlainStore'
+		return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
+	end 'notAPlainStore'
+
+	if not elementStoreCannotAliasARecordField(analysis.reader, addrId: scratch.store.addrId, out: scratch.slot) 'notASlot'
+		return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
+	end 'notASlot'
+
+	plan.stores.push(ElementStoreSite.create(position, slot: scratch.slot))
+	return true
+end 'admitStore'
+
+// A load is invariant when it reads a field of a known record, or the refcount word of a known
+// record's buffer as `emitIsSharedAllocation` reads it; both are hoisted.
+function admitLoadIfInvariant(analysis UnswitchFunction, scratch UnswitchScratch)
+	let result = scratch.load.resultId
+	if scratch.known.contains(scratch.load.addrId) 'aRecordField'
+		scratch.invariant.insert(result)
+		scratch.hoistableLoads.insert(result)
+		return
+	end 'aRecordField'
+
+	let box = try refcountLoadBox(analysis.reader, loadResultId: result) otherwise return
+	let record = try analysis.reader.fieldLoadBase(box, offset: ManagedRecordBufferOffset) otherwise return
+	if scratch.known.contains(record) and scratch.invariant.contains(box) 'theBuffersRefcount'
+		scratch.invariant.insert(result)
+		scratch.hoistableLoads.insert(result)
+	end 'theBuffersRefcount'
+end 'admitLoadIfInvariant'
+
+// A pure op — the arithmetic band, a constant, an address — is invariant when everything it reads is.
+function admitPureIfInvariant(op StdOp, scratch UnswitchScratch)
+	scratch.reads.clear()
+	collectStdOpUses(op, referenced: scratch.reads)
+
+	for i in 0 upto scratch.reads.insertedIdCount() 'eachRead'
+		if not operandIsInvariant(scratch.reads.insertedIdAt(i), definedInLoop: scratch.definedInLoop, invariant: scratch.invariant) 'varies'
+			return
+		end 'varies'
+	end 'eachRead'
+
+	stdOpDefinedValue(op, def: scratch.def)
+	if scratch.def.definesNothing() 'noDef'
+		return
+	end 'noDef'
+
+	scratch.invariant.insert(scratch.def.first)
+end 'admitPureIfInvariant'
+
+// A `condBranch` on a recognised guard: a bound is recorded for the stores, and — like a shape guard —
+// admitted for folding when its condition is invariant, which a constant index against an invariant
+// length is. An invariant condition of any other shape is counted and left.
+function classifyTerminator(module StdModule, block IrBlock, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
+	let terminatorIdx = block.terminatorIndex()
+	classifyBranch(module.getOp(terminatorIdx), out: scratch.branch)
+	if not scratch.branch.isCondBranch() 'notATest'
+		return
+	end 'notATest'
+
+	// One target named twice has two edges to tell apart — the shape `foldCondBranch` refuses too.
+	if scratch.branch.thenBlockId == scratch.branch.elseBlockId 'oneTargetTwoEdges'
+		return
+	end 'oneTargetTwoEdges'
+
+	let condId = scratch.branch.condId
+	if not classifyManagedGuard(analysis.reader, condId: condId, out: scratch.guard) 'notAManagedGuard'
+		if scratch.invariant.contains(condId) 'invariantButAnotherShape'
+			scratch.genericGuardsLeftAlone = scratch.genericGuardsLeftAlone + 1
+		end 'invariantButAnotherShape'
+
+		return
+	end 'notAManagedGuard'
+
+	let guard = UnswitchGuard.create(position, compareOpIdx: analysis.reader.defs.definingOp(condId), condId: condId, guard: scratch.guard, elseBlockId: scratch.branch.elseBlockId)
+
+	if scratch.guard.kind == ManagedGuardKind.indexOutOfRange 'aBound'
+		plan.bounds.push(guard)
+	end 'aBound'
+
+	if scratch.invariant.contains(condId) and scratch.known.contains(scratch.guard.record) 'admitted'
+		plan.guards.push(guard)
+	end 'admitted'
+end 'classifyTerminator'
+
+// Every element store writes a known invariant record's buffer at an index a bound guard on that record
+// admitted: the guard's block dominates the store and the store lies on its else arm.
+function storesAreBounded(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	for store in plan.stores 'eachStore'
+		if not scratch.known.contains(store.record) 'notACalleesRecord'
+			return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
+		end 'notACalleesRecord'
+
+		if store.indexIsVariable and not boundDominates(module, func: func, analysis: analysis, plan: plan, store: store) 'unbounded'
+			return refuse(plan, reason: UnswitchRefusal.elementStoreNotBounded, scratch: scratch)
+		end 'unbounded'
+	end 'eachStore'
+
+	return true
+end 'storesAreBounded'
+
+// Climb the store's dominator chain to the header; at each step the parent must be a bound guard on
+// the same record and index whose else arm is the block climbed from.
+function boundDominates(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, store ElementStoreSite) returns bool
+	var walk = store.position
+
+	while walk != plan.header 'climb'
+		let parent = analysis.tree.immediateDominatorOf(walk)
+		let childId = module.blockAtPosition(func, position: walk).id
+
+		for bound in plan.bounds 'eachBound'
+			if bound.position == parent and bound.record == store.record and bound.indexIsVariable and bound.index == store.index and bound.elseBlockId == childId 'found'
+				return true
+			end 'found'
+		end 'eachBound'
+
+		walk = parent
+	end 'climb'
+
+	return false
+end 'boundDominates'
+
+function writersHaveTheirGuards(plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	for record in plan.writerRecords 'eachWriter'
+		if not plan.hasGuard(ManagedGuardKind.bufferNotOwned, record: record) or not plan.hasGuard(ManagedGuardKind.bufferUnallocated, record: record) or not plan.hasGuard(ManagedGuardKind.bufferShared, record: record) 'aGuardIsMissing'
+			return refuse(plan, reason: UnswitchRefusal.writerWithoutItsShapeGuards, scratch: scratch)
+		end 'aGuardIsMissing'
+	end 'eachWriter'
+
+	return true
+end 'writersHaveTheirGuards'
+
+// No op result of the loop is read outside it, in EITHER mode. A hoisted op leaves its block for the
+// chain and a copied one gets a fresh id, and a reader outside the loop — after `elimTrivialBlockArgs`
+// has folded a one-edge exit phi onto the op — would keep an id nothing on its path defines. Only a
+// block arg, which carries a type, can take the exit phi a versioned loop needs.
+function refuseEscapingOpResults(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	scratch.escapingUses.clear()
+
+	for position in plan.members 'eachMember'
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			if opResultEscapes(module, opIdx: opIdx, analysis: analysis, scratch: scratch) 'escapes'
+				return refuse(plan, reason: UnswitchRefusal.escapingOpResult, scratch: scratch)
+			end 'escapes'
+		end 'eachOp'
+	end 'eachMember'
+
+	return true
+end 'refuseEscapingOpResults'
+
+// The loop's block args read outside it, and the one exit block whose predecessors are all members
+// that dominates every such read — the block the exit phis go on. A loop with no escaping value needs
+// no exit at all.
+function resolveExit(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	scratch.escapingUses.clear()
+
+	for index in 0 upto plan.members.count() 'eachMember'
+		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
+		let block = module.blockAtPosition(func, position: position)
+
+		for blockArg in block.blockArgs 'eachPhi'
+			if readOutsideTheLoop(blockArg.valueId, analysis: analysis, scratch: scratch) 'escapes'
+				plan.escaping.push(blockArg.valueId)
+				plan.escapingTypes.push(blockArg.argType)
+			end 'escapes'
+		end 'eachPhi'
+	end 'eachMember'
+
+	if plan.escaping.count() == 0 'nothingEscapes'
+		return true
+	end 'nothingEscapes'
+
+	for index in 0 upto plan.members.count() 'eachExitingMember'
+		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
+		for k in 0 upto analysis.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
+			let successor = analysis.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+			if servesAsTheExit(successor, analysis: analysis, scratch: scratch) 'found'
+				plan.hasExit = true
+				plan.exit = successor
+				return true
+			end 'found'
+		end 'eachSuccessor'
+	end 'eachExitingMember'
+
+	return refuse(plan, reason: UnswitchRefusal.escapingUseNotUnderOneExit, scratch: scratch)
+end 'resolveExit'
+
+// Whether a non-member reads `valueId`, recording every such reading block.
+function readOutsideTheLoop(valueId ValueId, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	var escapes = false
+	let sites = analysis.sites
+
+	for k in 0 upto sites.opReaders.degree(valueId as CsrIndex) 'eachOpRead'
+		if recordEscapingRead(sites.positionOfSite(sites.opReaders.neighbour(valueId as CsrIndex, k: k)), analysis: analysis, scratch: scratch) 'escapes'
+			escapes = true
+		end 'escapes'
+	end 'eachOpRead'
+
+	for k in 0 upto sites.edgeReaders.degree(valueId as CsrIndex) 'eachEdgeRead'
+		if recordEscapingRead(sites.edgeReaders.neighbour(valueId as CsrIndex, k: k) as BlockRefIndex, analysis: analysis, scratch: scratch) 'escapes'
+			escapes = true
+		end 'escapes'
+	end 'eachEdgeRead'
+
+	return escapes
+end 'readOutsideTheLoop'
+
+// Whether a read at `position` is outside the loop, recording it. A read the entry cannot reach is in
+// a block no path runs and no phi could serve.
+function recordEscapingRead(position BlockRefIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	if scratch.members.contains(position as CsrIndex) or not analysis.tree.canReach(position) 'insideTheLoopOrUnreachable'
+		return false
+	end 'insideTheLoopOrUnreachable'
+
+	scratch.escapingUses.push(position)
+	return true
+end 'recordEscapingRead'
+
+function opResultEscapes(module StdModule, opIdx OpIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+	if scratch.def.definesNothing() 'noDef'
+		return false
+	end 'noDef'
+
+	if readOutsideTheLoop(scratch.def.first, analysis: analysis, scratch: scratch) 'firstEscapes'
+		return true
+	end 'firstEscapes'
+
+	return scratch.def.definesPair() and readOutsideTheLoop(scratch.def.second, analysis: analysis, scratch: scratch)
+end 'opResultEscapes'
+
+// A non-member every predecessor of which is a member, dominating every escaping read.
+function servesAsTheExit(position BlockRefIndex, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	if scratch.members.contains(position as CsrIndex) 'aMember'
+		return false
+	end 'aMember'
+
+	for k in 0 upto analysis.tree.pred.degree(position as CsrIndex) 'eachPredecessor'
+		if not scratch.members.contains(analysis.tree.pred.neighbour(position as CsrIndex, k: k)) 'enteredFromOutside'
+			return false
+		end 'enteredFromOutside'
+	end 'eachPredecessor'
+
+	for reader in scratch.escapingUses 'eachRead'
+		if not analysis.stamps.dominates(position, b: reader) 'notUnderIt'
+			return false
+		end 'notUnderIt'
+	end 'eachRead'
+
+	return true
+end 'servesAsTheExit'
+
+// The hoisted set: every invariant record-field and refcount load, every admitted guard's compare, and
+// every invariant loop-defined value those compares read, transitively.
+function markHoisted(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
+	var worklist = ValueIdArray.create()
+
+	for position in plan.walkOrder 'eachBlock'
+		let block = module.blockAtPosition(func, position: position)
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if not scratch.def.definesNothing() and scratch.hoistableLoads.contains(scratch.def.first) 'hoistable'
+				worklist.push(scratch.def.first)
+			end 'hoistable'
+		end 'eachOp'
+	end 'eachBlock'
+
+	for guard in plan.guards 'eachGuard'
+		worklist.push(guard.condId)
+	end 'eachGuard'
+
+	while worklist.count() > 0 'transitively'
+		let valueId = try worklist.pop() otherwise panic("unswitchInvariantGuards: worklist.pop on a non-empty worklist failed")
+		if plan.hoisted.contains(valueId) 'alreadyHoisted'
+			continue
+		end 'alreadyHoisted'
+
+		plan.hoisted.insert(valueId)
+		scratch.reads.clear()
+		collectStdOpUses(module.getOp(analysis.reader.defs.definingOp(valueId)), referenced: scratch.reads)
+
+		for i in 0 upto scratch.reads.insertedIdCount() 'eachRead'
+			let read = scratch.reads.insertedIdAt(i)
+			if scratch.definedInLoop.contains(read) and scratch.invariant.contains(read) 'aHoistedOperand'
+				worklist.push(read)
+			end 'aHoistedOperand'
+		end 'eachRead'
+	end 'transitively'
+
+	numberHoisted(module, func: func, analysis: analysis, plan: plan, scratch: scratch)
+end 'markHoisted'
+
+// The shape of one hoisted op over its CANONICAL operands, as five words: the kind, two operands (or
+// an operand and an immediate, or an operand and a field offset), the opcode or predicate, and the
+// operand type. Two hoisted ops with equal keys compute one value.
+enum HoistShape
+	load
+	binary
+	binaryImm
+	compare
+	compareImm
+	unary
+end 'HoistShape'
+
+typealias HoistKeyWord = int(i64.min to i64.max)
+typealias HoistKeyColumn = Array with HoistKeyWord
+typealias HoistShapeColumn = Array with HoistShape
+
+// The key words a shape does not have: a load has no opcode, a unary op no second operand.
+let NoOpcodeInKey = 0 as HoistKeyWord
+let NoSecondOperandInKey = 0 as HoistKeyWord
+
+type HoistNumbering
+	var shape as HoistShapeColumn
+	var x as HoistKeyColumn
+	var y as HoistKeyColumn
+	var op as HoistKeyColumn
+	var width as HoistKeyColumn
+	var value as ValueIdArray
+
+	static function create() returns HoistNumbering
+		return Self{shape: HoistShapeColumn.create(), x: HoistKeyColumn.create(), y: HoistKeyColumn.create(), op: HoistKeyColumn.create(), width: HoistKeyColumn.create(), value: ValueIdArray.create()}
+	end 'create'
+
+	// The value an earlier op with this key computes, or `valueId` once this key is recorded for it.
+	function numberOf(kind HoistShape, left HoistKeyWord, right HoistKeyWord, opcode HoistKeyWord, operandWidth HoistKeyWord, valueId ValueId) returns ValueId
+		for k in 0 upto self.value.count() 'eachEarlier'
+			if self.keyAt(k, kind: kind, left: left, right: right, opcode: opcode, operandWidth: operandWidth) 'sameShape'
+				return try self.value.get(k) otherwise panic("unswitchInvariantGuards: value.get OOB at {k}")
+			end 'sameShape'
+		end 'eachEarlier'
+
+		self.shape.push(kind)
+		self.x.push(left)
+		self.y.push(right)
+		self.op.push(opcode)
+		self.width.push(operandWidth)
+		self.value.push(valueId)
+		return valueId
+	end 'numberOf'
+
+	function keyAt(k ElementIndex, kind HoistShape, left HoistKeyWord, right HoistKeyWord, opcode HoistKeyWord, operandWidth HoistKeyWord) returns bool
+		let sameShape = (try self.shape.get(k) otherwise panic("unswitchInvariantGuards: shape.get OOB at {k}")) == kind
+		let sameX = (try self.x.get(k) otherwise panic("unswitchInvariantGuards: x.get OOB at {k}")) == left
+		let sameY = (try self.y.get(k) otherwise panic("unswitchInvariantGuards: y.get OOB at {k}")) == right
+		let sameOp = (try self.op.get(k) otherwise panic("unswitchInvariantGuards: op.get OOB at {k}")) == opcode
+		let sameWidth = (try self.width.get(k) otherwise panic("unswitchInvariantGuards: width.get OOB at {k}")) == operandWidth
+		return sameShape and sameX and sameY and sameOp and sameWidth
+	end 'keyAt'
+end 'HoistNumbering'
+
+// Number the hoisted ops in walk order, recording for each the earlier one it equals. Operands are
+// read through the numbering already made, so a chain of duplicates — the refcount load over a
+// duplicate buffer load over one record — collapses whole.
+function numberHoisted(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
+	var numbering = HoistNumbering.create()
+
+	for index in 0 upto plan.walkOrder.count() 'eachBlock'
+		let position = try plan.walkOrder.get(index) otherwise panic("unswitchInvariantGuards: walkOrder.get OOB at {index}")
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if scratch.def.definesNothing() or not plan.hoisted.contains(scratch.def.first) 'notHoisted'
+				continue
+			end 'notHoisted'
+
+			let valueId = scratch.def.first
+			let canonical = numberHoistedOp(analysis, scratch: scratch, numbering: numbering, valueId: valueId)
+			if canonical != valueId 'aDuplicate'
+				scratch.canonical.insert(valueId, payload: canonical)
+			end 'aDuplicate'
+
+			plan.hoistedWalk.push(valueId)
+			plan.hoistedCanonical.push(canonical)
+		end 'eachOp'
+	end 'eachBlock'
+end 'numberHoisted'
+
+function numberHoistedOp(analysis UnswitchFunction, scratch UnswitchScratch, numbering HoistNumbering, valueId ValueId) returns ValueId
+	let reader = analysis.reader
+	if reader.loadDefining(valueId) 'aLoad'
+		return numbering.numberOf(HoistShape.load, left: canonicalOf(scratch.canonical, valueId: reader.load.addrId) as HoistKeyWord, right: reader.load.offset as HoistKeyWord, opcode: NoOpcodeInKey, operandWidth: reader.load.valueType.ordinal, valueId: valueId)
+	end 'aLoad'
+
+	if not reader.arithDefining(valueId) 'noShapeToMerge'
+		return valueId
+	end 'noShapeToMerge'
+
+	let lhs = canonicalOf(scratch.canonical, valueId: reader.arith.lhs) as HoistKeyWord
+	let width = reader.arith.operandType.ordinal as HoistKeyWord
+	if reader.arith.isBinaryArith() 'binary'
+		return numbering.numberOf(HoistShape.binary, left: lhs, right: canonicalOf(scratch.canonical, valueId: reader.arith.rhs) as HoistKeyWord, opcode: reader.arith.opcode.ordinal, operandWidth: width, valueId: valueId)
+	end 'binary'
+
+	if reader.arith.isBinaryArithImm() 'binaryImm'
+		return numbering.numberOf(HoistShape.binaryImm, left: lhs, right: reader.arith.imm as HoistKeyWord, opcode: reader.arith.opcode.ordinal, operandWidth: width, valueId: valueId)
+	end 'binaryImm'
+
+	if reader.arith.isComparison() 'compare'
+		return numbering.numberOf(HoistShape.compare, left: lhs, right: canonicalOf(scratch.canonical, valueId: reader.arith.rhs) as HoistKeyWord, opcode: reader.arith.pred.ordinal, operandWidth: width, valueId: valueId)
+	end 'compare'
+
+	if reader.arith.isComparisonImm() 'compareImm'
+		return numbering.numberOf(HoistShape.compareImm, left: lhs, right: reader.arith.imm as HoistKeyWord, opcode: reader.arith.pred.ordinal, operandWidth: width, valueId: valueId)
+	end 'compareImm'
+
+	if reader.arith.isUnary() 'unary'
+		return numbering.numberOf(HoistShape.unary, left: lhs, right: NoSecondOperandInKey, opcode: reader.arith.unaryOpcode.ordinal, operandWidth: width, valueId: valueId)
+	end 'unary'
+
+	return valueId
+end 'numberHoistedOp'
+
+// How many hoisted values the copy still reads — through an op that stays, a terminator that is not
+// folded, or an edge arg. Each is live across the copy's whole body.
+function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+	scratch.readHoisted.clear()
+
+	for position in plan.walkOrder 'eachBlock'
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'leavesTheCopy'
+				continue
+			end 'leavesTheCopy'
+
+			countHoistedReads(module, opIdx: opIdx, plan: plan, scratch: scratch)
+		end 'eachOp'
+
+		if plan.guardAt(position) == NoGuardAtBlock 'terminatorStays'
+			countHoistedReads(module, opIdx: block.terminatorIndex(), plan: plan, scratch: scratch)
+		end 'terminatorStays'
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				if plan.hoisted.contains(argId) 'readByAnEdge'
+					scratch.readHoisted.insert(canonicalOf(scratch.canonical, valueId: argId))
+				end 'readByAnEdge'
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	if scratch.readHoisted.insertedIdCount() > HoistedValueBudget 'overBudget'
+		return refuse(plan, reason: UnswitchRefusal.hoistBudgetExceeded, scratch: scratch)
+	end 'overBudget'
+
+	return true
+end 'hoistFitsBudget'
+
+function countHoistedReads(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch UnswitchScratch)
+	scratch.reads.clear()
+	collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
+
+	for i in 0 upto scratch.reads.insertedIdCount() 'eachRead'
+		let read = scratch.reads.insertedIdAt(i)
+		if plan.hoisted.contains(read) 'readByTheCopy'
+			scratch.readHoisted.insert(canonicalOf(scratch.canonical, valueId: read))
+		end 'readByTheCopy'
+	end 'eachRead'
+end 'countHoistedReads'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The rewrite
+// ══════════════════════════════════════════════════════════════════════════
+
+// The two substitution columns every rewrite of one function reads: every value of the function to
+// itself and every block to itself, with one loop's values and blocks mapped for its rewrite — a
+// loop-defined value to its copy's or the chain's fresh id, an escaping value to its exit phi, a member
+// to its copy — and restored by `reset`. The cloner refuses a value or block outside its column, so the
+// columns span the function; built once, they cost the function once rather than once per loop.
+type RewriteColumns
+	export var valueSubst as ValueIdArray
+	export var blockSubst as BlockIdArray
+	// What the current rewrite mapped, so `reset` restores exactly that.
+	var mappedValues as ValueIdArray
+	var mappedBlocks as BlockIdArray
+
+	static function identity(valueBound ValueId, blockBound BlockId) returns RewriteColumns
+		var valueSubst = ValueIdArray.create()
+		for valueId in 0 upto valueBound 'eachValue'
+			valueSubst.push(valueId)
+		end 'eachValue'
+
+		var blockSubst = BlockIdArray.create()
+		for blockId in 0 upto blockBound 'eachBlock'
+			blockSubst.push(blockId)
+		end 'eachBlock'
+
+		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(), mappedBlocks: BlockIdArray.create()}
+	end 'identity'
+
+	function mapValue(original ValueId, fresh ValueId)
+		try self.valueSubst.set(original, value: fresh) otherwise panic("unswitchInvariantGuards: value {original} is outside the substitution column sized by nextFreeValueId")
+		self.mappedValues.push(original)
+	end 'mapValue'
+
+	function mapBlock(original BlockId, fresh BlockId)
+		try self.blockSubst.set(original, value: fresh) otherwise panic("unswitchInvariantGuards: block {original} is outside the substitution column sized by nextBlockId")
+		self.mappedBlocks.push(original)
+	end 'mapBlock'
+
+	// Back to the identity, in O(what the rewrite mapped). Index loops: the element of a `for … in`
+	// over one column is a borrow of `self` while the body writes the other.
+	function reset()
+		for index in 0 upto self.mappedValues.count() 'eachValue'
+			let original = try self.mappedValues.get(index) otherwise panic("unswitchInvariantGuards: mappedValues.get OOB at {index}")
+			try self.valueSubst.set(original, value: original) otherwise panic("unswitchInvariantGuards: value {original} was mapped yet is outside the substitution column")
+		end 'eachValue'
+		self.mappedValues.clear()
+
+		for index in 0 upto self.mappedBlocks.count() 'eachBlock'
+			let original = try self.mappedBlocks.get(index) otherwise panic("unswitchInvariantGuards: mappedBlocks.get OOB at {index}")
+			try self.blockSubst.set(original, value: original) otherwise panic("unswitchInvariantGuards: block {original} was mapped yet is outside the substitution column")
+		end 'eachBlock'
+		self.mappedBlocks.clear()
+	end 'reset'
+end 'RewriteColumns'
+
+// Rewrite one loop. Versioned: mint the copy's blocks and ids, emit the test chain and build the copy.
+// Hoist-only: emit the chain and make the loop's own blocks read it. The exit phis are already on the
+// exit block (`substituteExitPhis`).
+function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+	if not plan.versioned 'hoistOnly'
+		emitTestChain(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+		readHoistedInPlace(module, func: func, plan: plan, scratch: scratch, columns: columns)
+		logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — no guard; the fields of {plan.knownRecords.count()} record(s) hoisted in place")
+	end 'hoistOnly' else 'versioned'
+		copyLoop(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+		logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — {plan.guards.count()} guard(s) folded, {plan.members.count()} block(s) copied, {plan.escaping.count()} exit phi(s)")
+	end 'versioned'
+
+	columns.reset()
+end 'applyPlan'
+
+function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+	var copyRefs = BlockRefArray.create()
+	for index in 0 upto plan.members.count() 'eachMember'
+		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
+		let original = module.blockAtPosition(func, position: position)
+		let copy = module.addBlock(func, label: original.label)
+		columns.mapBlock(original.id, fresh: copy.id)
+		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
+	end 'eachMember'
+
+	mintCopyValues(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+	emitTestChain(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+
+	for (iter, position) in plan.members.withIterator() 'eachCopy'
+		copyMember(module, func: func, plan: plan, position: position, copyRef: try copyRefs.get(iter.index()) otherwise panic("unswitchInvariantGuards: copyRefs.get OOB at {iter.index()}"), scratch: scratch, columns: columns)
+	end 'eachCopy'
+end 'copyLoop'
+
+// The hoist-only rewrite of the loop's own blocks: every hoisted op leaves its block, and every read
+// of one — an op's, the terminator's or an edge's — reads the chain's value.
+function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns)
+	for position in plan.members 'eachMember'
+		var block = module.blockAtPosition(func, position: position)
+		var kept = OpIndexArray.create()
+
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'leaves'
+				continue
+			end 'leaves'
+
+			kept.push(opIdx)
+		end 'eachOp'
+
+		block.opRefs = kept
+		substituteValuesInBlock(module, block: block, subst: columns.valueSubst)
+	end 'eachMember'
+end 'readHoistedInPlace'
+
+// Every loop-defined value the copy keeps gets a fresh id; a hoisted one is minted when the chain
+// emits it, so the copy reads the chain's value.
+function mintCopyValues(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+	for position in plan.members 'eachMember'
+		let block = module.blockAtPosition(func, position: position)
+
+		for blockArg in block.blockArgs 'eachPhi'
+			columns.mapValue(blockArg.valueId, fresh: minter.mint())
+		end 'eachPhi'
+
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if scratch.def.definesNothing() or plan.hoisted.contains(scratch.def.first) 'noCopyDef'
+				continue
+			end 'noCopyDef'
+
+			columns.mapValue(scratch.def.first, fresh: minter.mint())
+			if scratch.def.definesPair() 'twoDefs'
+				columns.mapValue(scratch.def.second, fresh: minter.mint())
+			end 'twoDefs'
+		end 'eachOp'
+	end 'eachMember'
+end 'mintCopyValues'
+
+// The chain under construction: the block ops are being appended to, and every test — its block and
+// the condition it branches on — so far. A test's successors are wired once all of them are known.
+type TestChain
+	export var currentRef as BlockRef
+	export var open as bool
+	// The chain's first block — where the preheader now branches — and whether one exists yet.
+	export var firstRef as BlockRef
+	export var started as bool
+	export var testRefs as BlockRefArray
+	export var testConds as ValueIdArray
+
+	static function create() returns TestChain
+		return Self{currentRef: 0, open: false, firstRef: 0, started: false, testRefs: BlockRefArray.create(), testConds: ValueIdArray.create()}
+	end 'create'
+
+	// The block to emit into, opened on demand so an empty block is never minted.
+	function block(module StdModule, func IrFunction) returns IrBlock
+		if not self.open 'openOne'
+			let fresh = module.addBlock(func, label: UnswitchTestLabel)
+			self.currentRef = registeredBlockRef(module, func: func, block: fresh)
+			self.open = true
+			if not self.started 'theFirst'
+				self.firstRef = self.currentRef
+				self.started = true
+			end 'theFirst'
+		end 'openOne'
+
+		return module.getBlock(self.currentRef)
+	end 'block'
+
+	function tests(condId ValueId) returns bool
+		for tested in self.testConds 'eachTest'
+			if tested == condId 'found'
+				return true
+			end 'found'
+		end 'eachTest'
+
+		return false
+	end 'tests'
+
+	// Close the current block as the test on `condId`.
+	function closeTest(condId ValueId)
+		if not self.open 'noBlock'
+			panic("unswitchInvariantGuards: a test closes a chain block that was never opened — the compare it branches on was emitted into no block")
+		end 'noBlock'
+
+		self.testRefs.push(self.currentRef)
+		self.testConds.push(condId)
+		self.open = false
+	end 'closeTest'
+end 'TestChain'
+
+// The chain of test blocks between the preheader and the two headers: the hoisted ops in walk order,
+// each admitted guard's compare closing a block whose refusal goes to `__us_slow` (which enters the
+// original) and whose pass goes on to the next test, the last pass entering the copy. A writer's
+// record without an `elementManaged` guard gets that test emitted here, after the guards.
+function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+	var chain = TestChain.create()
+	var guardCursor = 0 as GuardCount
+	var hoistCursor = 0 as HoistedValueCount
+
+	for position in plan.walkOrder 'eachBlock'
+		let block = module.blockAtPosition(func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+			if scratch.def.definesNothing() or not plan.hoisted.contains(scratch.def.first) 'staysInTheCopy'
+				continue
+			end 'staysInTheCopy'
+
+			let canonical = plan.canonicalOfHoisted(hoistCursor, valueId: scratch.def.first)
+			hoistCursor = hoistCursor + 1
+			if canonical != scratch.def.first 'aDuplicateOfAnEarlierOne'
+				columns.mapValue(scratch.def.first, fresh: clonedValue(canonical, subst: columns.valueSubst))
+				continue
+			end 'aDuplicateOfAnEarlierOne'
+
+			columns.mapValue(scratch.def.first, fresh: minter.mint())
+			module.spans.current = module.spans.at(opIdx)
+			module.appendOp(chain.block(module, func: func), op: remapStdOpForClone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+		end 'eachOp'
+
+		if guardCursor < plan.guards.count() and (try plan.guards.get(guardCursor) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardCursor}")).position == position 'aGuardCloses'
+			// Two sites on one record ask one compare, which the numbering merged: the later guard's
+			// test is the earlier one's, already in the chain, and it still folds in the copy.
+			let condId = clonedValue((try plan.guards.get(guardCursor) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardCursor}")).condId, subst: columns.valueSubst)
+			if not chain.tests(condId) 'aNewTest'
+				chain.closeTest(condId)
+			end 'aNewTest'
+
+			guardCursor = guardCursor + 1
+		end 'aGuardCloses'
+	end 'eachBlock'
+
+	if guardCursor != plan.guards.count() 'aGuardWasNotInTheWalk'
+		panic("unswitchInvariantGuards: {plan.guards.count() - guardCursor} admitted guard(s) sit in no member of the walk — the guards were recorded in walk order")
+	end 'aGuardWasNotInTheWalk'
+
+	if hoistCursor != plan.hoistedWalk.count() 'aHoistedOpWasNotInTheWalk'
+		panic("unswitchInvariantGuards: {plan.hoistedWalk.count() - hoistCursor} numbered hoisted op(s) were not met by the chain walk — the two walks disagree on the members")
+	end 'aHoistedOpWasNotInTheWalk'
+
+	emitDestructorTests(module, func: func, plan: plan, chain: chain, minter: minter)
+	wireTestChain(module, func: func, plan: plan, chain: chain, columns: columns)
+end 'emitTestChain'
+
+// `element_destroy@40 == 0` for each writer's record the loop does not already test — the runtime's
+// own spelling of the question, so the fast copy is entered only for elements that owe no drop.
+function emitDestructorTests(module StdModule, func IrFunction, plan UnswitchPlan, chain TestChain, minter ValueMinter)
+	for record in plan.writerRecords 'eachWriter'
+		if plan.hasGuard(ManagedGuardKind.elementManaged, record: record) 'theLoopTestsIt'
+			continue
+		end 'theLoopTestsIt'
+
+		let first = try plan.guards.get(0) otherwise panic("unswitchInvariantGuards: a plan with a writer has at least three guards")
+		module.spans.current = module.spans.at(first.compareOpIdx)
+		let destroy = emitLoadField(module, block: chain.block(module, func: func), record: record, offset: ManagedRecordElementDestroyOffset, ids: minter)
+		let managed = emitElementIsManaged(module, block: chain.block(module, func: func), destroy: destroy, ids: minter)
+		chain.closeTest(managed)
+	end 'eachWriter'
+end 'emitDestructorTests'
+
+// Terminate every chain block, mint `__us_slow` where a test can refuse, and turn the preheader's
+// exit onto the chain. In the hoist-only mode there is no test and no copy: the one chain block
+// enters the original header.
+function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, chain TestChain, columns RewriteColumns)
+	if not chain.started 'nothingEmitted'
+		panic("unswitchInvariantGuards: a plan with nothing to hoist and no guard reached the rewrite — `analyzeLoop` refuses both")
+	end 'nothingEmitted'
+
+	let header = module.blockAtPosition(func, position: plan.header)
+	let headerId = header.id
+	let copyHeaderId = clonedBlock(headerId, subst: columns.blockSubst)
+	var preheader = module.blockAtPosition(func, position: plan.preheader)
+	let takesArgs = header.blockArgs.count() != 0
+	let entryArgs = edgeArgsTo(preheader, targetId: headerId, takesArgs: takesArgs)
+
+	// Ops hoisted after the last test sit in an open block that enters the copy directly.
+	var fastEntry = copyHeaderId
+	if chain.open 'trailingOps'
+		var trailing = module.getBlock(chain.currentRef)
+		module.setTerminator(trailing, op: StdOp.branch(copyHeaderId))
+		if takesArgs 'headerTakesArgs'
+			attachEdge(trailing, targetId: copyHeaderId, argIds: entryArgs)
+		end 'headerTakesArgs'
+
+		fastEntry = trailing.id
+	end 'trailingOps'
+
+	if chain.testRefs.count() != 0 'aTestCanRefuse'
+		var slow = module.addBlock(func, label: UnswitchSlowLabel)
+		module.setTerminator(slow, op: StdOp.branch(headerId))
+		if takesArgs 'slowCarriesArgs'
+			attachEdge(slow, targetId: headerId, argIds: entryArgs)
+		end 'slowCarriesArgs'
+
+		wireTests(module, chain: chain, slowId: slow.id, fastEntry: fastEntry, copyHeaderId: copyHeaderId, takesArgs: takesArgs, entryArgs: entryArgs)
+	end 'aTestCanRefuse'
+
+	let firstChainId = module.getBlock(chain.firstRef).id
+	if preheader.hasTerminatorOp() 'replaceTheBranch'
+		module.spans.current = module.spans.at(preheader.terminatorIndex())
+		try module.ops.set(preheader.terminatorIndex(), value: StdOp.branch(firstChainId)) otherwise panic("unswitchInvariantGuards: ops.set OOB at terminator index {preheader.terminatorIndex()}")
+	end 'replaceTheBranch' else 'fellThroughIntoTheHeader'
+		module.setTerminator(preheader, op: StdOp.branch(firstChainId))
+	end 'fellThroughIntoTheHeader'
+	preheader.branchEdges = BranchEdgeArray.create()
+end 'wireTestChain'
+
+function wireTests(module StdModule, chain TestChain, slowId BlockId, fastEntry BlockId, copyHeaderId BlockId, takesArgs bool, entryArgs ValueIdArray)
+	for k in 0 upto chain.testRefs.count() 'eachTest'
+		var test = module.getBlock(try chain.testRefs.get(k) otherwise panic("unswitchInvariantGuards: testRefs.get OOB at {k}"))
+		let condId = try chain.testConds.get(k) otherwise panic("unswitchInvariantGuards: testConds.get OOB at {k}")
+		var passId = fastEntry
+		if k + 1 < chain.testRefs.count() 'anotherTestFollows'
+			passId = module.getBlock(try chain.testRefs.get(k + 1) otherwise panic("unswitchInvariantGuards: testRefs.get OOB at {k + 1}")).id
+		end 'anotherTestFollows'
+
+		module.setTerminator(test, op: StdOp.condBranch(condId, thenBlockId: slowId, elseBlockId: passId))
+		if passId == copyHeaderId and takesArgs 'entersTheCopy'
+			attachEdge(test, targetId: copyHeaderId, argIds: entryArgs)
+		end 'entersTheCopy'
+	end 'eachTest'
+end 'wireTests'
+
+// One member's copy: its phis, its ops less the hoisted ones, its exit — an admitted guard's
+// `condBranch` becomes `branch(else)` and keeps only that edge — and its edges, with the exit phis'
+// values appended on every edge into the exit block.
+function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, position BlockRefIndex, copyRef BlockRef, scratch UnswitchScratch, columns RewriteColumns)
+	let original = module.blockAtPosition(func, position: position)
+	var copy = module.getBlock(copyRef)
+
+	if original.blockArgs.count() != 0 'hasPhis'
+		var blockArgs = IrBlockArgArray.create()
+		for blockArg in original.blockArgs 'eachPhi'
+			blockArgs.push(IrBlockArg.create(clonedValue(blockArg.valueId, subst: columns.valueSubst), argType: blockArg.argType))
+		end 'eachPhi'
+		copy.blockArgs = blockArgs
+	end 'hasPhis'
+
+	for opIdx in original.opRefs 'eachOp'
+		stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
+		if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'hoisted'
+			continue
+		end 'hoisted'
+
+		module.spans.current = module.spans.at(opIdx)
+		module.appendOp(copy, op: remapStdOpForClone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+	end 'eachOp'
+
+	let terminatorIdx = original.terminatorIndex()
+	module.spans.current = module.spans.at(terminatorIdx)
+	let guardPlusOne = plan.guardAt(position)
+	var folded = false
+	var keptTargetId = 0 as BlockId
+
+	if guardPlusOne != NoGuardAtBlock 'foldTheGuard'
+		folded = true
+		keptTargetId = (try plan.guards.get(guardPlusOne - 1) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardPlusOne - 1}")).elseBlockId
+		module.setTerminator(copy, op: StdOp.branch(clonedBlock(keptTargetId, subst: columns.blockSubst)))
+	end 'foldTheGuard' else 'cloneTheExit'
+		module.setTerminator(copy, op: remapStdOpForClone(module.getOp(terminatorIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+	end 'cloneTheExit'
+
+	copy.branchEdges = copiedEdges(original, folded: folded, keptTargetId: keptTargetId, columns: columns)
+end 'copyMember'
+
+// The copy's edge column: every edge of the original (only the kept arm's when its guard was folded),
+// targets and args remapped. An exiting member's edge into the exit already carries the escaping
+// values — `attachExitPhis` runs before any copy — and the column maps each to the copy's own.
+function copiedEdges(original IrBlock, folded bool, keptTargetId BlockId, columns RewriteColumns) returns BranchEdgeArray
+	var edges = BranchEdgeArray.create()
+
+	for edge in original.branchEdges 'eachEdge'
+		if folded and edge.targetBlockId != keptTargetId 'theRefusedArm'
+			continue
+		end 'theRefusedArm'
+
+		edges.push(BranchEdge.create(clonedBlock(edge.targetBlockId, subst: columns.blockSubst), argIds: remappedArgs(edge.argIds, subst: columns.valueSubst)))
+	end 'eachEdge'
+
+	return edges
+end 'copiedEdges'
+
+// The exit block takes one phi per escaping value, and every exiting member's edge into it carries the
+// value itself — the copy's edges, remapped from these, then carry the copy's.
+function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, minter ValueMinter)
+	var exit = module.blockAtPosition(func, position: plan.exit)
+	var blockArgs = IrBlockArgArray.create()
+	for blockArg in exit.blockArgs 'eachExisting'
+		blockArgs.push(blockArg)
+	end 'eachExisting'
+
+	for index in 0 upto plan.escapingTypes.count() 'eachEscaping'
+		let escapingType = try plan.escapingTypes.get(index) otherwise panic("unswitchInvariantGuards: escapingTypes.get OOB at {index}")
+		let phi = minter.mint()
+		plan.exitPhis.push(phi)
+		blockArgs.push(IrBlockArg.create(phi, argType: escapingType))
+	end 'eachEscaping'
+	exit.blockArgs = blockArgs
+
+	for position in plan.members 'eachMember'
+		if not analysis.branchesTo(position, target: plan.exit) 'notAnExitingMember'
+			continue
+		end 'notAnExitingMember'
+
+		var member = module.blockAtPosition(func, position: position)
+		member.branchEdges = edgesWithEscapingAppended(member, exitId: exit.id, plan: plan)
+	end 'eachMember'
+end 'attachExitPhis'
+
+function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan UnswitchPlan) returns BranchEdgeArray
+	var edges = BranchEdgeArray.create()
+	var exitEdgeCarried = false
+
+	for edge in member.branchEdges 'eachEdge'
+		if edge.targetBlockId != exitId 'elsewhere'
+			edges.push(edge)
+			continue
+		end 'elsewhere'
+
+		var args = ValueIdArray.create()
+		args.append(edge.argIds)
+		args.append(plan.escaping)
+		edges.push(BranchEdge.create(exitId, argIds: args))
+		exitEdgeCarried = true
+	end 'eachEdge'
+
+	if not exitEdgeCarried 'newEdgeIntoTheExit'
+		var args = ValueIdArray.create()
+		args.append(plan.escaping)
+		edges.push(BranchEdge.create(exitId, argIds: args))
+	end 'newEdgeIntoTheExit'
+
+	return edges
+end 'edgesWithEscapingAppended'
+
+// Put the exit phis on the exit block and make every read of an escaping value outside the loop read
+// its phi, each read found through the use index. It runs before any copy is built: a later loop's copy
+// or chain clones a read that already names the phi, and this loop's members keep the value, which
+// their copy then reads too.
+function substituteExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+	if not plan.hasExit 'nothingEscapes'
+		return
+	end 'nothingEscapes'
+
+	attachExitPhis(module, func: func, analysis: analysis, plan: plan, minter: minter)
+	reloadMembers(plan, scratch: scratch, blockCount: analysis.tree.blockCount)
+
+	for (iter, valueId) in plan.escaping.withIterator() 'eachEscaping'
+		columns.mapValue(valueId, fresh: try plan.exitPhis.get(iter.index()) otherwise panic("unswitchInvariantGuards: exitPhis.get OOB at {iter.index()}"))
+	end 'eachEscaping'
+
+	let sites = analysis.sites
+	for valueId in plan.escaping 'eachValue'
+		for k in 0 upto sites.opReaders.degree(valueId as CsrIndex) 'eachOpRead'
+			let site = sites.opReaders.neighbour(valueId as CsrIndex, k: k)
+			if scratch.members.contains(sites.positionOfSite(site) as CsrIndex) 'insideTheLoop'
+				continue
+			end 'insideTheLoop'
+
+			substituteOpUses(module, opIdx: sites.opOfSite(site), subst: columns.valueSubst)
+		end 'eachOpRead'
+
+		for k in 0 upto sites.edgeReaders.degree(valueId as CsrIndex) 'eachEdgeRead'
+			let position = sites.edgeReaders.neighbour(valueId as CsrIndex, k: k)
+			if scratch.members.contains(position) 'insideTheLoop'
+				continue
+			end 'insideTheLoop'
+
+			substituteEdgeArgsInBlock(module.blockAtPosition(func, position: position as BlockRefIndex), subst: columns.valueSubst)
+		end 'eachEdgeRead'
+	end 'eachValue'
+
+	columns.reset()
+end 'substituteExitPhis'
+
+// `scratch.members` holds the loop analysed LAST; a rewrite reloads its own plan's set from the list.
+function reloadMembers(plan UnswitchPlan, scratch UnswitchScratch, blockCount BlockRefIndex)
+	scratch.members.reset(blockCount as CsrIndex)
+	for position in plan.members 'eachMember'
+		_ = scratch.members.admit(position as CsrIndex)
+	end 'eachMember'
+end 'reloadMembers'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Scratch
+// ══════════════════════════════════════════════════════════════════════════
+
+// The mutable state one run of the pass carries, created once per module. Every per-loop set is a
+// stamp set whose reset is O(1) (`LoopValueStamps`); the classification records are refilled per op.
+type UnswitchScratch
+	export var members as LoopMembership
+	export var definedInLoop as LoopValueStamps
+	export var invariant as LoopValueStamps
+	// Invariant loads the chain takes: a known record's field, or its buffer's refcount word.
+	export var hoistableLoads as LoopValueStamps
+	export var known as LoopValueStamps
+	export var writers as LoopValueStamps
+	// Hoisted value -> the earlier hoisted value it is numbered equal to.
+	export var canonical as CanonicalMap
+	// The reads of one op, refilled per op; the hoisted values the copy reads, refilled per loop.
+	export var reads as StdValueUseSet
+	export var readHoisted as StdValueUseSet
+	// Every non-member block reading a loop value, refilled per loop.
+	export var escapingUses as BlockPositionColumn
+	export var load as StdLoadOperands
+	export var store as StdStoreOperands
+	export var call as StdCallOperands
+	export var branch as StdBranchOperands
+	export var def as StdDefinedValues
+	export var guard as ManagedGuardOperands
+	export var slot as ElementSlotOperands
+	export var refusals as OrdinalTally
+	export var genericGuardsLeftAlone as TallyCount = 0
+
+	static function create() returns UnswitchScratch
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
+	end 'create'
+
+	function beginLoop()
+		self.definedInLoop.beginLoop()
+		self.invariant.beginLoop()
+		self.hoistableLoads.beginLoop()
+		self.known.beginLoop()
+		self.writers.beginLoop()
+		self.canonical.beginLoop()
+	end 'beginLoop'
+end 'UnswitchScratch'
+
+typealias CanonicalMap = LoopValueMap with ValueId
+
+// What a hoisted `valueId` is numbered equal to — itself when nothing earlier matches it.
+function canonicalOf(canonical CanonicalMap, valueId ValueId) returns ValueId
+	if not canonical.contains(valueId) 'itself'
+		return valueId
+	end 'itself'
+
+	return canonical.payloadOf(valueId)
+end 'canonicalOf'

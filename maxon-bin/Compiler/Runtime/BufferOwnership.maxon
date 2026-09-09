@@ -349,9 +349,24 @@ end 'appendRecordSlot'
 // where it stood keeps the property that made the fusion sound, for a future grower to re-derive from.
 export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
+	let floor = emitConst(module, block: block, value: LowestOwnedCapacity, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: floor, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferNotOwned'
+
+// The smallest `capacity@16` an OWNED buffer publishes; every `NotOwnedBufferCapacity` sentinel lies
+// below it.
+let LowestOwnedCapacity = 0 as ParsedInt
+
+// The record an `emitBufferNotOwned` compare tests, read back off the compare: `cmpImm lt
+// [record + capacity@16], LowestOwnedCapacity` once `foldConstOperands` has moved the constant into the
+// immediate. Beside the emitter, so the two spellings of one predicate sit together.
+export function bufferNotOwnedGuardRecord(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
+	if not reader.compareImmDefining(condId, pred: StdCmpPred.lt, imm: LowestOwnedCapacity) 'notTheCompare'
+		throw StdShapeMismatch.notTheShape
+	end 'notTheCompare'
+
+	return try reader.fieldLoadBase(reader.arith.lhs, offset: ManagedRecordCapacityOffset)
+end 'bufferNotOwnedGuardRecord'
 
 // ⭐⭐ **REFUSE A BUFFER THIS RECORD DOES NOT OWN BEFORE AN OS CALL FILLS IT — THE ONE HOME OF THE
 // WRITE-TARGET GUARD.** Asked by the two surfaces that hand a managed buffer to the KERNEL to be written

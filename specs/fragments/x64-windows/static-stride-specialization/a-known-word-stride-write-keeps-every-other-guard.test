@@ -43,70 +43,101 @@ func @fill {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 r13, 0
-  forhdr:
+  __us_test#26:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#1
+  __us_test#27:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, forhdr#1
+  __us_test#28:
+    x64.leaRegRegImm32 rax, r15, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, forhdr#1
+  __us_test#29:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, forhdr#15
+  forhdr#1:
     x64.cmpRegReg r13, r12
     x64.jcc greaterEqual, forexit
-  each:
+  each#2:
     x64.imulRegRegImm32 rax, r13, 3
     x64.leaRegRegImm32 rax, rax, 1
-    x64.cmpRegImm32 r13, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-known-word-stride-write-keeps-every-other-guard.test:7: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow
-  __im_bounds:
+    x64.jcc less, __im_slow#10
+  __im_bounds#11:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg r13, rcx
-    x64.jcc aboveEqual, __im_slow
+    x64.jcc aboveEqual, __im_slow#10
   __im_buffer:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow
+    x64.jcc equal, __im_slow#10
   __im_viewed:
     x64.leaRegRegImm32 rdx, rcx, -24
     x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_store
-  __im_slow:
+    x64.jcc equal, __im_store#14
+  __im_slow#10:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_set
-    x64.jmp __im_cont
-  __im_store:
-    x64.storeBaseIndexScaleReg.word64 [rcx + r13*8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep
+    x64.jcc notEqual, tryerr
+    x64.jmp forstep#3
+  __im_store#14:
+    x64.storeBaseIndexScaleReg.word64 [rcx + r13*8 + 0], rax
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr#1
+  forhdr#15:
+    x64.cmpRegReg r13, r12
+    x64.jcc greaterEqual, forexit
+  each#25:
+    x64.imulRegRegImm32 rax, r13, 3
+    x64.leaRegRegImm32 rax, rax, 1
+  __im_bounds#23:
+    x64.cmpRegReg r13, r14
+    x64.jcc below, __im_store#20
+  __im_slow#19:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#16
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-known-word-stride-write-keeps-every-other-guard.test:7: set: index out of range\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep:
+  __im_store#20:
+    x64.storeBaseIndexScaleReg.word64 [r15 + r13*8 + 0], rax
+  forstep#16:
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr
+    x64.jmp forhdr#15
   forexit:
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -121,6 +152,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -143,25 +176,19 @@ func @main {
     x64.callDirect fill
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
   forhdr#5:
     x64.cmpRegImm32 r13, 5
     x64.jcc greaterEqual, forexit#8
   check:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
+    x64.cmpRegReg r13, r14
     x64.jcc below, __im_load#19
   __im_slow#18:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
-    x64.jmp __im_cont#17
-  __im_load#19:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
-    x64.movRegImm32 rcx, 0
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-  __im_cont#17:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#9
   tryerr#10:
@@ -169,11 +196,16 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_load#19:
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + r13*8 + 0]
+    x64.movRegReg r8, rax
   tryok#9:
     x64.leaRegRegReg r12, r12, r8
   forstep#7:
@@ -188,6 +220,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -201,15 +235,6 @@ func @main {
   __im_slow#21:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.jmp __im_cont#20
-  __im_load#22:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 32
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-  __im_cont#20:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#13
   tryerr#14:
@@ -217,11 +242,18 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 32
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
   tryok#13:
     x64.cmpRegImm32 r8, 13
     x64.jcc equal, ifcont#16
@@ -231,6 +263,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -242,6 +276,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

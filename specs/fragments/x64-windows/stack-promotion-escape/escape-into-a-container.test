@@ -39,9 +39,9 @@ end 'fill'
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	fill(arr)
-	_ = churn(1000)
+	let noise = churn(1000)
 	let got = try arr.get(0) otherwise Item.create(0)
-	return got.value
+	return got.value if noise > 0 else 1
 end 'main'
 ---
 ExitCode: 42
@@ -137,9 +137,9 @@ func @fill {
     x64.callDirect Item.create
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
@@ -156,7 +156,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __mm_decref]
     x64.callDirect __managed_create
@@ -165,29 +166,30 @@ func @main {
     x64.callDirect fill
     x64.movRegImm32 rcx, 1000
     x64.callDirect churn
+    x64.movRegReg r12, r8
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#11
+    x64.jcc equal, critsplit#14
   __im_empty:
-    x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, critsplit#12
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, critsplit#15
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.jmp __im_cont
-  critsplit#12:
+  critsplit#15:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
-  critsplit#11:
+  critsplit#14:
     x64.movRegReg r10, rax
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -198,14 +200,18 @@ func @main {
     x64.movRegReg rcx, r8
     x64.jmp trycont
   tryok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
   trycont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc lessEqual, ternaryfalse
+  ternarytrue:
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+  matchcont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -216,14 +222,19 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at escape-into-a-container.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

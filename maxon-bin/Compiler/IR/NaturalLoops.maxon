@@ -160,7 +160,7 @@ export type LoopMembership
 
 	// The members, in the order the walk below discovers them: the header first, then the latches, then
 	// their predecessors. ⚠ NOT an order any dataflow may rely on — a consumer that needs defs before
-	// uses walks the DOMINATOR TREE (see `LoopInvariantCodeMotion.analyzeLoopBlocks`).
+	// uses walks the DOMINATOR TREE (see `LoopFacts.recordLoopPreorder`).
 	export var blocks as CsrColumn
 
 	export static function create() returns LoopMembership
@@ -178,7 +178,10 @@ export type LoopMembership
 	// Empty the set for the next loop, in time proportional to what the LAST loop held rather than to
 	// the node space. `growFilled` only zeroes the tail it ADDS, which is sound here precisely because
 	// every entry below that tail was cleared by the walk above it.
-	function reset(nodeCount CsrIndex)
+	//
+	// Exported with `admit` so a consumer holding a loop's member LIST can reload the set from it in
+	// O(the loop) — `unswitchInvariantGuards` rewrites every admitted loop after analysing them all.
+	export function reset(nodeCount CsrIndex)
 		for node in self.blocks 'eachMember'
 			try self.inLoop.set(node, value: false) otherwise panic("LoopMembership.reset: inLoop.set OOB at {node}")
 		end 'eachMember'
@@ -189,7 +192,7 @@ export type LoopMembership
 
 	// Add one member, answering whether it was NEW — which is the whole of what the walk's worklist test
 	// needs, and keeps membership and the list from ever disagreeing.
-	function admit(node CsrIndex) returns bool
+	export function admit(node CsrIndex) returns bool
 		if self.contains(node) 'alreadyAMember'
 			return false
 		end 'alreadyAMember'

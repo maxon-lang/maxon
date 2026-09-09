@@ -243,7 +243,7 @@ function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominator
 	end 'aCallCrossesEveryHoistedRange'
 
 	markMustExecuteBlocks(tree, backEdges: backEdges, header: header, scratch: scratch)
-	collectLoopDefs(module, func: func, scratch: scratch)
+	collectLoopDefs(module, func: func, members: scratch.members, definedInLoop: scratch.definedInLoop, def: scratch.def)
 	analyzeLoopBlocks(module, func: func, tree: tree, header: header, memoryIsStable: scratch.effects.memoryIsStable(), scratch: scratch)
 
 	if scratch.hoisted.count() == 0 'nothingInvariant'
@@ -263,7 +263,7 @@ end 'hoistIntoPreheader'
 typealias PredecessorCount = int(0 to u64.max)
 
 // Which block a loop is entered THROUGH, when there is exactly one and it goes nowhere else.
-union LoopPreheader
+module union LoopPreheader
 	none
 	position(preheader BlockRefIndex)
 end 'LoopPreheader'
@@ -283,7 +283,7 @@ end 'LoopPreheader'
 // block and re-pointing branch-edge argument lists — a CFG change this rung does not make, and one whose
 // interaction with `branchEdges` (the phi model the register allocator still consumes) is a rung of its
 // own. A loop entered from two places, or through a conditional branch, is skipped whole.
-function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header BlockRefIndex) returns LoopPreheader
+module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header BlockRefIndex) returns LoopPreheader
 	var found = LoopPreheader.none
 	var entries = 0 as PredecessorCount
 
@@ -464,89 +464,20 @@ end 'scanLoopEffects'
 // Invariance
 // ══════════════════════════════════════════════════════════════════════════
 
-// Record every value the loop DEFINES — the ones an operand test has to ask about. A value defined
-// outside is invariant by construction and needs no entry.
-//
-// ⚠ **A BLOCK ARG IS A DEF, AND SO IS THE SECOND HALF OF A TWO-DEF OP.** The header's phis are how the
-// index and every carried `var` come round the back edge, so they are the definition of "changes across
-// iterations"; and `tryCall`/`witnessTryCall` write a result AND an error flag. Missing the flag
-// makes its consumers appear to read a value defined outside the loop, so they get hoisted and the
-// loop's exit condition breaks. `stdOpDefinedValue` reports both halves,
-// so there is nothing here to forget.
-function collectLoopDefs(module StdModule, func IrFunction, scratch LicmScratch)
-	for position in scratch.members.blocks 'eachBlock'
-		let block = blockAtPosition(module, func: func, position: position as BlockRefIndex)
-
-		for blockArg in block.blockArgs 'eachPhi'
-			scratch.definedInLoop.insert(blockArg.valueId)
-		end 'eachPhi'
-
-		for opIdx in block.opRefs 'eachOp'
-			recordDefsOf(module, opIdx: opIdx, scratch: scratch)
-		end 'eachOp'
-
-		if block.hasTerminatorOp() 'hasTerm'
-			recordDefsOf(module, opIdx: block.terminatorIndex(), scratch: scratch)
-		end 'hasTerm'
-	end 'eachBlock'
-end 'collectLoopDefs'
-
-function recordDefsOf(module StdModule, opIdx OpIndex, scratch LicmScratch)
-	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("recordDefsOf: op index {opIdx} not in module.ops"), def: scratch.def)
-
-	if scratch.def.definesNothing() 'noDef'
-		return
-	end 'noDef'
-
-	scratch.definedInLoop.insert(scratch.def.first)
-
-	if scratch.def.definesPair() 'twoDefs'
-		scratch.definedInLoop.insert(scratch.def.second)
-	end 'twoDefs'
-end 'recordDefsOf'
-
-// Whether one operand is loop-invariant: either the loop does not define it at all, or this pass has
-// already decided to hoist the op that does.
-function operandIsInvariant(valueId ValueId, scratch LicmScratch) returns bool
-	return not scratch.definedInLoop.contains(valueId) or scratch.invariant.contains(valueId)
-end 'operandIsInvariant'
-
 // ══════════════════════════════════════════════════════════════════════════
 // The analysis walk
 // ══════════════════════════════════════════════════════════════════════════
 
-// Walk the loop's blocks in DOMINATOR-TREE PREORDER from the header, deciding op by op, and rebuild
-// each block's `opRefs` without the ops it gives up.
-//
-// ⭐⭐ **ONE PASS, NOT A FIXPOINT, AND SSA IS WHY.** A value's def DOMINATES its uses, so the defining
-// block is an ANCESTOR of the reading block in the dominator tree and a preorder therefore visits every
-// operand's def before the op that reads it. The one exception is a value carried round the BACK EDGE,
-// which arrives as a header block-arg and is recorded variant before the walk starts. A
-// `while changed` fixpoint over the loop's blocks would re-walk every loop per round for nothing.
-//
-// ⭐ **THE HEADER'S DOMINATOR SUBTREE IS EXACTLY THE LOOP, PLUS SUBTREES THAT CAN BE PRUNED WHOLE.**
-// Every member is dominated by the header, so all of them are in it; and a member's immediate dominator
-// is itself a member (it lies on every path from the header to that member, and such a path stays inside
-// the loop), so no member hangs below a non-member. That is what makes the prune below sound and the
-// walk O(the loop) instead of O(the function) — the reverse-postorder sweep it replaces read every block
-// of the function once per loop, which is the Θ(loops × blocks) `LoopMembership`'s header measures.
+// Walk the loop's blocks in dominator preorder (`recordLoopPreorder`), deciding op by op, and rebuild
+// each block's `opRefs` without the ops it gives up. One pass, no fixpoint: the preorder visits every
+// operand's def before the op that reads it, and the back-edge values were recorded variant first.
 function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorTree, header BlockRefIndex, memoryIsStable bool, scratch LicmScratch)
-	var stack = BlockPositionColumn.create()
-	stack.push(header)
+	scratch.walkOrder.clear()
+	recordLoopPreorder(tree, members: scratch.members, header: header, into: scratch.walkOrder)
 
-	while stack.count() > 0 'preorder'
-		let position = try stack.pop() otherwise panic("analyzeLoopBlocks: stack.pop on a non-empty stack failed")
-
-		if not scratch.members.contains(position as CsrIndex) 'notInThisLoop'
-			continue
-		end 'notInThisLoop'
-
+	for position in scratch.walkOrder 'eachBlock'
 		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
-
-		for k in 0 upto tree.children.degree(position as CsrIndex) 'eachChild'
-			stack.push(tree.children.neighbour(position as CsrIndex, k: k))
-		end 'eachChild'
-	end 'preorder'
+	end 'eachBlock'
 end 'analyzeLoopBlocks'
 
 // Classify every body op of one loop block, moving the admitted ones onto the hoist list and keeping the
@@ -644,11 +575,11 @@ end 'admitsOp'
 function admitsPureComputation(op StdOp, scratch LicmScratch) returns bool
 	requireArithOpIsPure(op, reader: "hoistLoopInvariants")
 
-	if not operandIsInvariant(scratch.arith.lhs, scratch: scratch) 'firstOperandVaries'
+	if not operandIsInvariant(scratch.arith.lhs, definedInLoop: scratch.definedInLoop, invariant: scratch.invariant) 'firstOperandVaries'
 		return false
 	end 'firstOperandVaries'
 
-	if scratch.arith.hasSecondValueOperand() and not operandIsInvariant(scratch.arith.rhs, scratch: scratch) 'secondOperandVaries'
+	if scratch.arith.hasSecondValueOperand() and not operandIsInvariant(scratch.arith.rhs, definedInLoop: scratch.definedInLoop, invariant: scratch.invariant) 'secondOperandVaries'
 		return false
 	end 'secondOperandVaries'
 
@@ -663,7 +594,7 @@ end 'admitsPureComputation'
 // only on that path — a load riding on a witness proves nothing further about the object, because the
 // span it proves is one the witness already proved.
 function admitsInvariantLoad(mustExecute bool, scratch LicmScratch) returns bool
-	if not operandIsInvariant(scratch.load.addrId, scratch: scratch) 'theAddressVaries'
+	if not operandIsInvariant(scratch.load.addrId, definedInLoop: scratch.definedInLoop, invariant: scratch.invariant) 'theAddressVaries'
 		return false
 	end 'theAddressVaries'
 
@@ -691,7 +622,7 @@ end 'admitsInvariantLoad'
 // its terminator — the only position that is right for both halves. An operand defined in the preheader
 // itself is therefore already available, and the branch that enters the loop still comes last.
 //
-// The collection order is `analyzeLoopBlocks`' DOMINATOR-TREE PREORDER, so a hoisted op that feeds
+// The collection order is `recordLoopPreorder`'s DOMINATOR-TREE PREORDER, so a hoisted op that feeds
 // another hoisted op was collected first and lands first: an operand's defining block is an ancestor of
 // its reader's, and a preorder visits an ancestor first. The def-before-use order the ops had inside the
 // loop is the order they arrive in.
@@ -802,21 +733,11 @@ typealias DominatorChainCountColumn = Array with DominatorChainCount
 // That is also what makes the witness test O(1) rather than a scan of the loads hoisted so far, which
 // would have been quadratic in a loop that reads many fields of one record.
 type LoadWitnessTable
-	// WHICH addresses have a witness in the CURRENT loop — the presence half, and it IS `LoopValueStamps`
-	// rather than a second copy of the stamp discipline. ⛔ Reviewed 2026-08-28 as this rung's one real
-	// duplication: this record used to carry its own `stampOf`/`current` pair with a byte-identical
-	// `beginLoop`, insert and staleness test, and the failure that invites is not a missed hoist — an edit
-	// to the discipline in one copy and not the other lets a witness from a PREVIOUS loop read as present,
-	// which is a load hoisted under Rule 2b on evidence that does not exist.
-	var proven as LoopValueStamps
-
-	// WHAT each of them proves. Two columns for one map, exactly as `ConstValueMap` is — "is there an
-	// entry" and "what it is" — because every `LoadCoverage` including 0 is a legitimate value and a
-	// single column would need one of them to mean "absent".
-	var covers as LoadCoverageColumn
+	// Address value -> the bytes a load hoisted under Rule 2a through it proves readable, this loop.
+	var proven as WitnessCoverageMap
 
 	static function create() returns LoadWitnessTable
-		return Self{proven: LoopValueStamps.create(), covers: LoadCoverageColumn.create()}
+		return Self{proven: WitnessCoverageMap.create(0)}
 	end 'create'
 
 	// Forget every witness. A witness from one loop says nothing about another (its address value may not
@@ -825,17 +746,15 @@ type LoadWitnessTable
 		self.proven.beginLoop()
 	end 'beginLoop'
 
-	// Record that a load through `addrId` reaching `proven` bytes is being hoisted unconditionally. The
-	// WIDEST such load wins, because coverage is a lower bound on the object's size and the largest one
-	// proven is the most that can be handed to Rule 2b.
+	// Record that a load through `addrId` reaching `bytes` is being hoisted unconditionally. The WIDEST
+	// such load wins, because coverage is a lower bound on the object's size and the largest one proven
+	// is the most that can be handed to Rule 2b.
 	function record(addrId ValueId, bytes LoadCoverage)
 		if bytes <= self.coverageOf(addrId) 'anotherLoadProvesMore'
 			return
 		end 'anotherLoadProvesMore'
 
-		self.proven.insert(addrId)
-		self.covers.growFilled(((addrId + 1) as ElementIndex), value: 0)
-		try self.covers.set(addrId, value: bytes) otherwise panic("LoadWitnessTable.record: covers.set OOB at {addrId}")
+		self.proven.insert(addrId, payload: bytes)
 	end 'record'
 
 	// Whether an unconditionally-hoisted load through `addrId` already proves at least `need` bytes
@@ -852,59 +771,11 @@ type LoadWitnessTable
 			return 0
 		end 'noWitnessInThisLoop'
 
-		return try self.covers.get(addrId) otherwise panic("LoadWitnessTable.coverageOf: `proven` holds {addrId} but `covers` is only {self.covers.count()} long — the two columns are extended together by `record`")
+		return self.proven.payloadOf(addrId)
 	end 'coverageOf'
 end 'LoadWitnessTable'
 
-// ⭐⭐ **A DENSE PER-VALUE SET WHOSE RESET IS O(1), AND THE RESET IS THE WHOLE REASON IT IS NOT
-// `StdValueUseSet`.** That type is the Std tier's one answer to "which values does this walk touch?" and
-// it is right for its callers, every one of which builds a set once per FUNCTION: its `clear` keeps the
-// column's capacity and the next `insert` re-extends it, which costs one pass over the value space per
-// set built. This pass builds a set once per LOOP, and one pass over the function's value space per loop
-// is Θ(loops × values) — the same shape `LoopMembership`'s header measures one column over, and MEASURED
-// here as `phase:loopInvariantCodeMotion` still growing ×2.21 in bytes and ×2.42 in CPU per doubling
-// after the block columns had been fixed.
-//
-// A GENERATION STAMP costs nothing to reset: entering a loop bumps one counter, and an entry stamped
-// with an older generation reads as absent. `NoLoopStamp` is what the column grows filled with, and the
-// first loop stamps 1, so an untouched slot can never match.
-//
-// THREE users, and they share this one implementation rather than three copies of it: the loop's defs,
-// the subset of those proved invariant, and `LoadWitnessTable`'s presence half.
-type LoopValueStamps
-	var stampOf as LoopStampColumn
-	var current as LoopStamp
-
-	static function create() returns LoopValueStamps
-		return Self{stampOf: LoopStampColumn.create(), current: NoLoopStamp}
-	end 'create'
-
-	function beginLoop()
-		self.current = self.current + 1
-	end 'beginLoop'
-
-	function insert(valueId ValueId)
-		self.stampOf.growFilled(((valueId + 1) as ElementIndex), value: NoLoopStamp)
-		try self.stampOf.set(valueId, value: self.current) otherwise panic("LoopValueStamps.insert: stampOf.set OOB at {valueId}")
-	end 'insert'
-
-	function contains(valueId ValueId) returns bool
-		if valueId >= self.stampOf.count() 'neverStamped'
-			return false
-		end 'neverStamped'
-
-		return (try self.stampOf.get(valueId) otherwise panic("LoopValueStamps.contains: stampOf.get OOB at {valueId}")) == self.current
-	end 'contains'
-end 'LoopValueStamps'
-
-// Which analysed loop an entry belongs to. `NoLoopStamp` is the value a freshly grown column holds and
-// the one `beginLoop` counts up from, so it never collides with a real loop's stamp.
-typealias LoopStamp = int(0 to u64.max)
-typealias LoopStampColumn = Array with LoopStamp
-
-let NoLoopStamp = 0 as LoopStamp
-
-typealias LoadCoverageColumn = Array with LoadCoverage
+typealias WitnessCoverageMap = LoopValueMap with LoadCoverage
 
 // The mutable state one run of the pass carries. ONE object threaded through the walk rather than seven
 // parameters at every level — they are created together, cleared together and reset together, and a walk
@@ -926,7 +797,8 @@ type LicmScratch
 	// Rule 2a's answer for that loop.
 	export var mustExecute as MustExecuteCounter
 	export var witness as LoadWitnessTable
-
+	// The loop's blocks in dominator preorder, refilled per loop.
+	export var walkOrder as BlockPositionColumn
 	// The op indices to move, in the order they were collected.
 	export var hoisted as OpIndexArray
 
@@ -941,7 +813,7 @@ type LicmScratch
 	export var def as StdDefinedValues
 
 	static function create() returns LicmScratch
-		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
+		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
 	end 'create'
 
 	// Empty every per-loop column, keeping capacity. ⛔ **A LEAKED ENTRY IS A MISCOMPILE, NOT A MISSED
@@ -949,10 +821,10 @@ type LicmScratch
 	// an `invariant` bit left over from the previous function names a value in a different value space,
 	// and the op reading it would be hoisted out of a loop that computes it. Clearing per LOOP is
 	// stricter than per function and makes both cases correct at one site.
-	// ⚠ THREE columns are NOT reset here, each because its own owner resets it before its first read:
-	// `members` (`collectNaturalLoop` clears it as it fills it), `effects` (`scanLoopEffects`) and
-	// `leaving` (`analyzeLoopBlock`, per BLOCK rather than per loop). Clearing them twice would cost a
-	// second walk and buy nothing. Every column that IS reset here is reset by the positions or ids the
+	// ⚠ FOUR columns are NOT reset here, each because its own owner resets it before its first read:
+	// `members` (`collectNaturalLoop` clears it as it fills it), `effects` (`scanLoopEffects`),
+	// `walkOrder` (`analyzeLoopBlocks`) and `leaving` (`analyzeLoopBlock`, per BLOCK rather than per
+	// loop). Clearing them twice would cost a second walk and buy nothing. Every column that IS reset here is reset by the positions or ids the
 	// last loop touched, never by the space it is dense over.
 	function beginLoop(blockCount BlockRefIndex)
 		self.definedInLoop.beginLoop()

@@ -55,11 +55,31 @@ func @reverseMiddle {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 1
     x64.leaRegRegImm32 r13, rdx, -1
-  whilehdr:
+  __us_test#66:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, whilehdr#1
+  __us_test#67:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, whilehdr#1
+  __us_test#68:
+    x64.leaRegRegImm32 rax, r15, -24
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, whilehdr#1
+  __us_test#69:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, whilehdr#38
+  whilehdr#1:
     x64.cmpRegReg r12, r13
     x64.jcc greaterEqual, whileexit
   __rc_ok#12:
@@ -71,18 +91,8 @@ func @reverseMiddle {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#38
-  tryerr#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-reverse-loop-proves-both-bounds.test:10: reverseMiddle: low < high < first <= a.count()\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  critsplit#38:
+    x64.jcc notEqual, tryerr#5
+  critsplit#71:
     x64.movRegReg r14, r8
     x64.jmp __rc_ok#14
   __im_load#22:
@@ -97,18 +107,8 @@ func @reverseMiddle {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#39
-  tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reverse-loop-proves-both-bounds.test:11: reverseMiddle: high < first <= a.count()\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  critsplit#39:
+    x64.jcc notEqual, tryerr#7
+  critsplit#72:
     x64.movRegReg rax, r8
     x64.jmp __rc_ok#16
   __im_load#25:
@@ -136,17 +136,8 @@ func @reverseMiddle {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __rc_ok#18
-  tryerr#9:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-reverse-loop-proves-both-bounds.test:12: reverseMiddle: low is in range\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#9
+    x64.jmp __rc_ok#18
   __im_store#31:
     x64.storeBaseIndexScaleReg.word64 [rcx + r12*8 + 0], rax
   __rc_ok#18:
@@ -172,25 +163,120 @@ func @reverseMiddle {
     x64.movRegReg rax, r14
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-reverse-loop-proves-both-bounds.test:13: reverseMiddle: high is in range\x0a"
+    x64.jcc notEqual, tryerr#11
+    x64.jmp tryok#10
+  __im_store#37:
+    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r14
+  tryok#10:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 r13, r13, -1
+    x64.jmp whilehdr#1
+  whilehdr#38:
+    x64.cmpRegReg r12, r13
+    x64.jcc greaterEqual, whileexit
+  __rc_ok#64:
+    x64.cmpRegReg r12, r14
+    x64.jcc below, __im_load#63
+  __im_slow#62:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __im_cont
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-reverse-loop-proves-both-bounds.test:10: reverseMiddle: low < high < first <= a.count()\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#37:
-    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r14
-  tryok:
+  __im_load#63:
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + r12*8 + 0]
+    x64.movRegReg r8, rax
+  __im_cont:
+    x64.storeSlotReg slot0, r8
+  __rc_ok#59:
+    x64.cmpRegReg r13, r14
+    x64.jcc below, __im_load#58
+  __im_slow#57:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#77
+  tryerr#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reverse-loop-proves-both-bounds.test:11: reverseMiddle: high < first <= a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  critsplit#77:
+    x64.movRegReg rax, r8
+    x64.jmp __im_bounds#53
+  __im_load#58:
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + r13*8 + 0]
+  __im_bounds#53:
+    x64.cmpRegReg r12, r14
+    x64.jcc below, __im_store#50
+  __im_slow#49:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __im_bounds#45
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-reverse-loop-proves-both-bounds.test:12: reverseMiddle: low is in range\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_store#50:
+    x64.storeBaseIndexScaleReg.word64 [r15 + r12*8 + 0], rax
+  __im_bounds#45:
+    x64.cmpRegReg r13, r14
+    x64.jcc below, __im_store#42
+  __im_slow#41:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.loadRegSlot rax, slot0
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#39
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-reverse-loop-proves-both-bounds.test:13: reverseMiddle: high is in range\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_store#42:
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseIndexScaleReg.word64 [r15 + r13*8 + 0], rax
+  tryok#39:
     x64.leaRegRegImm32 r12, r12, 1
     x64.leaRegRegImm32 r13, r13, -1
-    x64.jmp whilehdr
+    x64.jmp whilehdr#38
   whileexit:
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

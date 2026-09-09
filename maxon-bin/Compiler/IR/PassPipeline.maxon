@@ -199,7 +199,15 @@ union PassKind
 	refineValueRanges
 	commonSubexpressionElimination
 	loopInvariantCodeMotion
-
+	// `unswitchInvariantGuards` versions a loop on the guards `inlineManagedPrimitives` asks before
+	// every element access — the buffer's ownership, presence and sharing tests — whose answers a loop
+	// of element stores and managed reads cannot change: a test chain before the loop asks them once, a
+	// copy of the loop folds them away and reads the records' length and buffer from the chain, and the
+	// original loop stays for the entries where a guard fails. It runs AFTER `loopInvariantCodeMotion`,
+	// which has already hoisted what a call-free loop admits — this pass is the one that admits stores
+	// and calls, on the two facts the managed runtime states — and BEFORE `promoteStackRecords`, for
+	// that pass's own reason: it must see the final shape.
+	unswitchInvariantGuards
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
 	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
@@ -276,7 +284,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
 		// inside one function, and nothing about a callee is consulted.
 		loopInvariantCodeMotion gives PassClassification.perFunction
-
+		// Intra-function by construction: a loop, its copy and its exit phis are one function's CFG, and
+		// a callee's effect is read from a table rather than from the callee's body.
+		unswitchInvariantGuards gives PassClassification.perFunction
 		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
 		// convention are all facts about the CALL GRAPH, and a call site cannot be judged without the
 		// callee's row.
@@ -308,6 +318,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		strengthReduceDivision gives CompilePhase.strengthReduceDivision
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
+		unswitchInvariantGuards gives CompilePhase.unswitchInvariantGuards
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 		valueTupleReturn gives CompilePhase.valueTupleReturn
 	end 'phase'
@@ -332,6 +343,7 @@ function passKindToString(pass PassKind) returns String
 		strengthReduceDivision gives "strengthReduceDivision"
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
+		unswitchInvariantGuards gives "unswitchInvariantGuards"
 		promoteStackRecords gives "promoteStackRecords"
 		valueTupleReturn gives "valueTupleReturn"
 	end 'name'
@@ -384,6 +396,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.refineValueRanges)
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
+	passes.push(PassKind.unswitchInvariantGuards)
 	passes.push(PassKind.promoteStackRecords)
 	passes.push(PassKind.valueTupleReturn)
 	return passes
@@ -566,6 +579,7 @@ export type PassPipeline
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
+			unswitchInvariantGuards then unswitchInvariantGuards(self.stdModule)
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
 		end 'dispatch'

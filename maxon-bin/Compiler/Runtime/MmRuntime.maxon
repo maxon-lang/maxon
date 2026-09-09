@@ -2233,12 +2233,43 @@ end 'emitAdjustRefcount'
 // `buffer@0`) has no header, and the word this reads would be the previous element's data.
 export function emitIsSharedAllocation(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
 	let rc = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
-	let zeroConst = ids.mint()
-	module.appendOp(block, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let soleOwner = ids.mint()
+	module.appendOp(block, op: StdOp.const(soleOwner, value: SoleOwnerRefcount, valueType: StdType.i64))
 	let shared = ids.mint()
-	module.appendOp(block, op: StdOp.cmp(shared, lhs: rc, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.cmp(shared, lhs: rc, rhs: soleOwner, pred: StdCmpPred.ne, operandType: StdType.i64))
 	return shared
 end 'emitIsSharedAllocation'
+
+// The refcount word of a box with ONE owner — the `owners - 1` convention, stated once.
+let SoleOwnerRefcount = 0 as ParsedInt
+
+// The box whose refcount word `loadResultId` reads — `emitLoadRefcount`'s shape read back:
+// `[ (ptr - HeaderBytes) + HeaderRefcountOffset ]`, the subtraction an immediate once
+// `foldConstOperands` has run. The one way a reader outside this file learns which load is a
+// refcount without learning the geometry, which stays private beside the emitter.
+export function refcountLoadBox(reader StdShapeReader, loadResultId ValueId) returns ValueId throws StdShapeMismatch
+	let header = try reader.fieldLoadBase(loadResultId, offset: HeaderRefcountOffset)
+
+	if not reader.arithDefining(header) or not reader.arith.isBinaryArithImm() 'notAnImmediateSubtraction'
+		throw StdShapeMismatch.notTheShape
+	end 'notAnImmediateSubtraction'
+
+	if reader.arith.opcode != StdBinOpcode.sub or reader.arith.imm != HeaderBytes 'notTheHeaderBase'
+		throw StdShapeMismatch.notTheShape
+	end 'notTheHeaderBase'
+
+	return reader.arith.lhs
+end 'refcountLoadBox'
+
+// The box an `emitIsSharedAllocation` compare asks about, read back off the compare: `cmpImm ne
+// <its refcount word>, SoleOwnerRefcount`.
+export function sharedAllocationGuardBox(reader StdShapeReader, condId ValueId) returns ValueId throws StdShapeMismatch
+	if not reader.compareImmDefining(condId, pred: StdCmpPred.ne, imm: SoleOwnerRefcount) 'notTheCompare'
+		throw StdShapeMismatch.notTheShape
+	end 'notTheCompare'
+
+	return try refcountLoadBox(reader, loadResultId: reader.arith.lhs)
+end 'sharedAllocationGuardBox'
 
 // **THE REFCOUNT READ-MODIFY-WRITE EVERY DECREF SHARES.** Ask `emitIsSharedAllocation` (which owns both
 // the header geometry and what the count MEANS); when nobody else holds the box this is the FINAL owner

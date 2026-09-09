@@ -87,6 +87,11 @@
 // own `element_destroy@40` needs no store either (`StringRuntime.emitAllocOwnedInlineString`).
 export let TrivialElementDestroy = 0 as ParsedInt
 
+// The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It
+// is the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm
+// compares against exactly it.
+export let NoBufferAllocated = 0 as ParsedInt
+
 // --- Constant array literals over an immortal `.rdata` blob (P1.7 slice 2; generalized at
 // `ranged-int-bit-packing`) ---
 //
@@ -1925,6 +1930,97 @@ export function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, in
 	return emitBin(module, block: block, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlotAddr'
 
+// The record an element slot address names, and — where the index is a value rather than a constant
+// the folds absorbed into the address — that index. `index` is meaningful only when `indexIsVariable`.
+export type ElementSlotOperands
+	export var record as ValueId
+	export var indexIsVariable as bool
+	export var index as ValueId
+
+	export static function create() returns ElementSlotOperands
+		return Self{record: 0, indexIsVariable: false, index: 0}
+	end 'create'
+
+	function recordVariableSlot(owner ValueId, at ValueId)
+		self.record = owner
+		self.indexIsVariable = true
+		self.index = at
+	end 'recordVariableSlot'
+
+	function recordConstantSlot(owner ValueId)
+		self.record = owner
+		self.indexIsVariable = false
+	end 'recordConstantSlot'
+end 'ElementSlotOperands'
+
+// ⭐ **A STORE THROUGH AN ELEMENT SLOT ADDRESS CANNOT WRITE A FIELD OF ANY RECORD.** The address is
+// `emitSlotAddr`'s, `buffer@0 + index · stride`, read back in each form the folds leave it: a sum of
+// the buffer and a scaled index; the buffer plus an immediate, where the index was a constant; the
+// buffer itself, where that constant was 0. The buffer is its own `__mm_alloc` allocation
+// (`emitReallocateToCapacity`) and every record — this one's `ManagedRecordBytes` and any other — is
+// another, so the bytes the store reaches are never a record's. What it CAN write is the buffer's own
+// header, one word below `buffer@0`, if a VARIABLE index were negative: that is why every emitter of
+// the shape bounds the index first (`InlineManagedPrimitives.emitStoreArm` through
+// `emitIndexOutOfRange`, `emitStoreElemAt` behind the entries' own guards), and why a pass resting on
+// this fact checks that a bound guard on the same index dominates such a store. A constant
+// displacement is non-negative by construction and reaches nothing below the buffer.
+//
+// Answers with the slot's record and index when `addrId` has the shape, and false otherwise.
+export function elementStoreCannotAliasARecordField(reader StdShapeReader, addrId ValueId, out ElementSlotOperands) returns bool
+	if constantSlotOf(reader, addrId: addrId, out: out) 'constantIndex'
+		return true
+	end 'constantIndex'
+
+	if not reader.arithDefining(addrId) or not reader.arith.isBinaryArith() or reader.arith.opcode != StdBinOpcode.add 'notASum'
+		return false
+	end 'notASum'
+
+	let lhs = reader.arith.lhs
+	let rhs = reader.arith.rhs
+	return slotOfBufferAndOffset(reader, buffer: lhs, offset: rhs, out: out) or slotOfBufferAndOffset(reader, buffer: rhs, offset: lhs, out: out)
+end 'elementStoreCannotAliasARecordField'
+
+// The buffer itself, or the buffer plus a non-negative immediate.
+function constantSlotOf(reader StdShapeReader, addrId ValueId, out ElementSlotOperands) returns bool
+	if let record = try reader.fieldLoadBase(addrId, offset: ManagedRecordBufferOffset) 'theBufferItself'
+		out.recordConstantSlot(record)
+		return true
+	end 'theBufferItself' else 'notTheBuffer'
+		if not reader.arithDefining(addrId) or not reader.arith.isBinaryArithImm() or reader.arith.opcode != StdBinOpcode.add or reader.arith.imm < 0 'notAnImmediateSum'
+			return false
+		end 'notAnImmediateSum'
+
+		let record = try reader.fieldLoadBase(reader.arith.lhs, offset: ManagedRecordBufferOffset) otherwise return false
+		out.recordConstantSlot(record)
+		return true
+	end 'notTheBuffer'
+end 'constantSlotOf'
+
+function slotOfBufferAndOffset(reader StdShapeReader, buffer ValueId, offset ValueId, out ElementSlotOperands) returns bool
+	let record = try reader.fieldLoadBase(buffer, offset: ManagedRecordBufferOffset) otherwise return false
+	out.recordVariableSlot(record, at: slotIndexOf(reader, offset: offset))
+	return true
+end 'slotOfBufferAndOffset'
+
+// The index in `emitSlotAddr`'s `index · elementSize`, in each form the folds leave it: an immediate
+// multiply, a multiply by a value, or — at stride 1, where `foldConstOperands` drops the identity — the
+// index itself.
+function slotIndexOf(reader StdShapeReader, offset ValueId) returns ValueId
+	if not reader.arithDefining(offset) 'notArithmetic'
+		return offset
+	end 'notArithmetic'
+
+	if reader.arith.opcode != StdBinOpcode.mul 'notAMultiply'
+		return offset
+	end 'notAMultiply'
+
+	if reader.arith.isBinaryArithImm() or reader.arith.isBinaryArith() 'scaled'
+		return reader.arith.lhs
+	end 'scaled'
+
+	return offset
+end 'slotIndexOf'
+
 // ============================================================================================
 // SUB-BYTE BIT-PACKED ELEMENTS
 // ============================================================================================
@@ -2764,6 +2860,172 @@ let BoundsCompareOperandType = StdType.u64
 export function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids, operandType: BoundsCompareOperandType)
 end 'emitIndexOutOfRange'
+
+// ============================================================================================
+// WHAT A LOOP PASS MAY ASSUME ABOUT THIS RUNTIME — stated here, beside the bodies, and read by
+// `unswitchInvariantGuards` as data
+// ============================================================================================
+
+// What a `__managed_*` entry writes to the RECORD its first argument names: its six header slots and
+// the refcount word of the buffer `buffer@0` addresses. The default is `unknown`, so an entry this
+// table does not name — and every callee this runtime does not own — fails closed.
+export enum ManagedHeaderEffect
+	// A pure read of the record and its elements: `buildManagedGet`, `buildManagedGetUnchecked`,
+	// `buildManagedCount`, `buildManagedCapacity`, `buildManagedElementSize`, `buildManagedFirst` and
+	// `buildManagedByteAt`. None stores to the record, and `emitLoadElemAndOkReturn` writes nothing.
+	writesNothing
+	// An in-place element writer: `buildManagedSet`, `buildManagedMemSet`, `buildManagedSetByte`,
+	// `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
+	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetach`, or the
+	// detach block of `emitBufferAccessGuard`), which returns without a store exactly when
+	// `capacity@16 >= 0`, `buffer@0 != 0` and the buffer's refcount word is 0 — the three arms of
+	// `buildManagedCowDetach`. Every other write is an element slot (`emitStoreElemAt`). The invariant
+	// holds on EVERY path, the out-of-range one included: `mem_set` and `set_byte` detach before their
+	// capacity bound (`emitBufferAccessGuard`), `set` after its length bound, and in each case the
+	// header is written by the detach or not at all. `set` and `mem_set` run an element destructor —
+	// of the rejected value (`emitDestroyRejectedElement`) or the overwritten occupant
+	// (`emitDestroyRangeIfManaged`) — only when `element_destroy@40` is non-zero.
+	detachesUnlessOwnedUnshared
+	// Everything else: an entry that grows, shrinks, shares or releases the buffer (`push`, `resize`,
+	// `slice`, `clone`, `retain`, `decref`, …), the cursor entries, and every callee this runtime does
+	// not own.
+	unknown
+end 'ManagedHeaderEffect'
+
+export function managedCalleeHeaderEffect(callee ByteArray) returns ManagedHeaderEffect
+	if callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedFirstName) or callee.equals(ManagedByteAtName) 'pureRead'
+		return ManagedHeaderEffect.writesNothing
+	end 'pureRead'
+
+	if callee.equals(ManagedSetName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
+		return ManagedHeaderEffect.detachesUnlessOwnedUnshared
+	end 'inPlaceWriter'
+
+	return ManagedHeaderEffect.unknown
+end 'managedCalleeHeaderEffect'
+
+// The guards `InlineManagedPrimitives` asks before an inlined element access, and the bound every
+// checked access asks, each read back off a `condBranch`'s condition. Every kind puts its REFUSAL on
+// the THEN arm — that is how each emitter spells it — so the else arm is the one the access proceeds on.
+export enum ManagedGuardKind
+	// `emitBufferNotOwned`: `capacity@16 < 0`.
+	bufferNotOwned
+	// `InlineManagedPrimitives.emitStoreArm`'s null test: `buffer@0 == NoBufferAllocated`.
+	bufferUnallocated
+	// `emitIsSharedAllocation` over `buffer@0`: the buffer's refcount word is non-zero.
+	bufferShared
+	// `emitElementIsManaged`: `element_destroy@40 != TrivialElementDestroy`, which is 0.
+	elementManaged
+	// `emitIndexOutOfRange`: `index >=u length@8`, or `>=u capacity@16` for the buffer surface's write —
+	// or, for a constant index `K` once `foldConstOperands` has swapped it into the immediate and
+	// flipped the predicate, `length@8 <=u K`.
+	indexOutOfRange
+end 'ManagedGuardKind'
+
+export type ManagedGuardOperands
+	export var kind as ManagedGuardKind
+	// The record every kind tests a field of.
+	export var record as ValueId
+	// `indexOutOfRange` only: whether the index is a value, and which. A constant index is not a value.
+	export var indexIsVariable as bool
+	export var index as ValueId
+
+	export static function create() returns ManagedGuardOperands
+		return Self{kind: ManagedGuardKind.bufferNotOwned, record: 0, indexIsVariable: false, index: 0}
+	end 'create'
+
+	function recordShape(shape ManagedGuardKind, tested ValueId)
+		self.kind = shape
+		self.record = tested
+	end 'recordShape'
+
+	function recordVariableBound(tested ValueId, at ValueId)
+		self.kind = ManagedGuardKind.indexOutOfRange
+		self.record = tested
+		self.indexIsVariable = true
+		self.index = at
+	end 'recordVariableBound'
+
+	function recordConstantBound(tested ValueId)
+		self.kind = ManagedGuardKind.indexOutOfRange
+		self.record = tested
+		self.indexIsVariable = false
+	end 'recordConstantBound'
+end 'ManagedGuardOperands'
+
+// Whether `condId` is one of the five guard compares, filling `out`. The shapes are disjoint — two are
+// compares against zero of different fields, the third reads a refcount word and the bound reads two
+// values — so the order they are tried in decides nothing.
+export function classifyManagedGuard(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	return classifyBufferNotOwned(reader, condId: condId, out: out) or classifyBufferUnallocated(reader, condId: condId, out: out) or classifyBufferShared(reader, condId: condId, out: out) or classifyElementManaged(reader, condId: condId, out: out) or classifyIndexOutOfRange(reader, condId: condId, out: out)
+end 'classifyManagedGuard'
+
+function classifyBufferNotOwned(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	let record = try bufferNotOwnedGuardRecord(reader, condId: condId) otherwise return false
+	out.recordShape(ManagedGuardKind.bufferNotOwned, tested: record)
+	return true
+end 'classifyBufferNotOwned'
+
+function classifyBufferUnallocated(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	if not reader.compareImmDefining(condId, pred: StdCmpPred.eq, imm: NoBufferAllocated) 'notTheCompare'
+		return false
+	end 'notTheCompare'
+
+	let record = try reader.fieldLoadBase(reader.arith.lhs, offset: ManagedRecordBufferOffset) otherwise return false
+	out.recordShape(ManagedGuardKind.bufferUnallocated, tested: record)
+	return true
+end 'classifyBufferUnallocated'
+
+function classifyBufferShared(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	let box = try sharedAllocationGuardBox(reader, condId: condId) otherwise return false
+	let record = try reader.fieldLoadBase(box, offset: ManagedRecordBufferOffset) otherwise return false
+	out.recordShape(ManagedGuardKind.bufferShared, tested: record)
+	return true
+end 'classifyBufferShared'
+
+function classifyElementManaged(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	if not reader.compareImmDefining(condId, pred: StdCmpPred.ne, imm: TrivialElementDestroy) 'notTheCompare'
+		return false
+	end 'notTheCompare'
+
+	let record = try reader.fieldLoadBase(reader.arith.lhs, offset: ManagedRecordElementDestroyOffset) otherwise return false
+	out.recordShape(ManagedGuardKind.elementManaged, tested: record)
+	return true
+end 'classifyElementManaged'
+
+function classifyIndexOutOfRange(reader StdShapeReader, condId ValueId, out ManagedGuardOperands) returns bool
+	if not reader.arithDefining(condId) or reader.arith.operandType != BoundsCompareOperandType 'notAnUnsignedCompare'
+		return false
+	end 'notAnUnsignedCompare'
+
+	if reader.arith.isComparison() and reader.arith.pred == StdCmpPred.ge 'variableIndex'
+		let index = reader.arith.lhs
+		let record = try limitFieldRecord(reader, limit: reader.arith.rhs) otherwise return false
+		out.recordVariableBound(record, at: index)
+		return true
+	end 'variableIndex'
+
+	if reader.arith.isComparisonImm() and reader.arith.pred == StdCmpPred.le 'constantIndex'
+		let record = try limitFieldRecord(reader, limit: reader.arith.lhs) otherwise return false
+		out.recordConstantBound(record)
+		return true
+	end 'constantIndex'
+
+	return false
+end 'classifyIndexOutOfRange'
+
+// The record whose `length@8` or `capacity@16` a bound compares against.
+function limitFieldRecord(reader StdShapeReader, limit ValueId) returns ValueId throws StdShapeMismatch
+	if not reader.loadDefining(limit) 'notALoad'
+		throw StdShapeMismatch.notTheShape
+	end 'notALoad'
+
+	if reader.load.offset != ManagedRecordLengthOffset and reader.load.offset != ManagedRecordCapacityOffset 'notALimitField'
+		throw StdShapeMismatch.notTheShape
+	end 'notALimitField'
+
+	return reader.load.addrId
+end 'limitFieldRecord'
 
 // ⭐ **THE CLOSED-END TWIN OF THE TEST ABOVE, AND THE ONE THING IT CHANGES IS THAT END.** An ELEMENT index
 // addresses `[0, length)`; a BOUNDARY — a position BETWEEN elements — addresses `[0, length]`, because

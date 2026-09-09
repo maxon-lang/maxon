@@ -3394,7 +3394,7 @@ end 'requireArithOpIsPure'
 //
 // ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isLoad` SAYS THE RECORD WAS FILLED**, and none may be read as a
 // sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
-module type StdLoadOperands
+export type StdLoadOperands
 	var load as bool
 	export var resultId as ValueId
 
@@ -3404,7 +3404,7 @@ module type StdLoadOperands
 	export var offset as ByteOffset
 	export var valueType as StdType
 
-	module static function create() returns StdLoadOperands
+	export static function create() returns StdLoadOperands
 		return Self{load: false, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64}
 	end 'create'
 
@@ -3443,7 +3443,7 @@ module typealias LoadCoverage = int(0 to u64.max)
 
 // Fill `load` with the memory operands `op` carries, or with "not a load". Exhaustive over StdOp, no
 // bare `default` — see `StdLoadOperands` for why the arms name what they name.
-module function classifyLoadOperands(op StdOp, load StdLoadOperands)
+export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 	match op 'l'
 		const or
 			binOp or
@@ -3565,6 +3565,460 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			osHostSample then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
+
+// The operands of a `storeIndirect`, written into a caller-owned record — `StdLoadOperands`' twin for
+// the one memory op a pass that reasons about what a loop WRITES has to read. It lives here for the
+// load classifier's reason: the arms name the union's variants, so a variant no arm names fails to
+// compile rather than being classified as "not a store".
+//
+// ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isStore` SAYS THE RECORD WAS FILLED**, and none may be read as
+// a sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
+module type StdStoreOperands
+	var store as bool
+	// The ADDRESS the store writes through, and the field displacement from it.
+	export var addrId as ValueId
+	export var offset as ByteOffset
+	export var valueId as ValueId
+	export var valueType as StdType
+
+	module static function create() returns StdStoreOperands
+		return Self{store: false, addrId: 0, offset: 0, valueId: 0, valueType: StdType.i64}
+	end 'create'
+
+	export function isStore() returns bool
+		return self.store
+	end 'isStore'
+
+	function recordNotAStore()
+		self.store = false
+	end 'recordNotAStore'
+
+	function recordStore(address ValueId, displacement ByteOffset, written ValueId, writeType StdType)
+		self.store = true
+		self.addrId = address
+		self.offset = displacement
+		self.valueId = written
+		self.valueType = writeType
+	end 'recordStore'
+end 'StdStoreOperands'
+
+// Only `storeIndirect` fills the record. Every other op — the ordered store, the fill, the atomics and
+// the calls among them — answers "not a plain store", and a pass that must account for every write asks
+// the dialect's `isStore` flag beside this, which is what keeps the two from disagreeing about a variant
+// that writes memory through some other shape.
+module function classifyStoreOperands(op StdOp, store StdStoreOperands)
+	match op 's'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret or
+			param or
+			call or
+			retVoid or
+			globalAddr or
+			loadIndirect then store.recordNotAStore()
+		storeIndirect(addrId, offset, valueId, valueType) then store.recordStore(addrId, displacement: offset, written: valueId, writeType: valueType)
+		osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall or
+			errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample then store.recordNotAStore()
+	end 's'
+end 'classifyStoreOperands'
+
+// The two DIRECT-call shapes — `call` and `tryCall`, the ones that name a callee a pass can look up —
+// read off an op into a caller-owned record. Every other op answers `other`; a caller that must account
+// for every call asks the dialect's `isCall` flag beside this, so an indirect or witness call is a call
+// with no name rather than a non-call.
+module enum StdCallShape
+	other
+	directCall
+	throwingCall
+end 'StdCallShape'
+
+module type StdCallOperands
+	var shape as StdCallShape
+	export var resultId as ValueId
+	// `throwingCall` only.
+	export var errorFlagId as ValueId
+	// The callee's name, COPIED into a column this record owns: a `match` binding is immutable and a
+	// mutable field may not alias one, so the bytes are refilled per call rather than aliased.
+	export var callee as ByteArray
+	export var argCount as ParamCount
+	// The first argument — meaningful only when `argCount` is non-zero. It is what a callee-effect
+	// table keys on: every runtime entry that takes a record takes it first.
+	export var firstArg as ValueId
+
+	module static function create() returns StdCallOperands
+		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0}
+	end 'create'
+
+	export function namesACallee() returns bool
+		return self.shape != StdCallShape.other
+	end 'namesACallee'
+
+	function recordOther()
+		self.shape = StdCallShape.other
+	end 'recordOther'
+
+	function recordCall(defined ValueId, name ByteArray, arguments ValueIdArray)
+		self.shape = StdCallShape.directCall
+		self.resultId = defined
+		self.takeCallee(name, arguments: arguments)
+	end 'recordCall'
+
+	function recordTryCall(defined ValueId, flag ValueId, name ByteArray, arguments ValueIdArray)
+		self.shape = StdCallShape.throwingCall
+		self.resultId = defined
+		self.errorFlagId = flag
+		self.takeCallee(name, arguments: arguments)
+	end 'recordTryCall'
+
+	function takeCallee(name ByteArray, arguments ValueIdArray)
+		self.callee.clear()
+		self.callee.append(name)
+		self.argCount = arguments.count()
+		if self.argCount != 0 'hasArguments'
+			self.firstArg = try arguments.get(0) otherwise panic("StdCallOperands.takeCallee: arguments.get(0) failed on a non-empty argument list")
+		end 'hasArguments'
+	end 'takeCallee'
+end 'StdCallOperands'
+
+module function classifyCallOperands(op StdOp, call StdCallOperands)
+	match op 'c'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret or
+			param then call.recordOther()
+		call(resultId, callee, args) then call.recordCall(resultId, name: callee, arguments: args)
+		retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr then call.recordOther()
+		tryCall(resultId, errorFlagId, callee, args) then call.recordTryCall(resultId, flag: errorFlagId, name: callee, arguments: args)
+		errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample then call.recordOther()
+	end 'c'
+end 'classifyCallOperands'
+
+// Which live op defines each value of one function — `stdOpDefinedValue` inverted, for a reader that
+// holds a VALUE and needs the op computing it: a shape recogniser walking an address or a compare back
+// to the loads it reads. A block arg is defined by no op.
+export type StdValueDefs
+	var opOf as OpIndexArray
+	var hasOp as BoolArray
+
+	export static function build(module StdModule, func IrFunction) returns StdValueDefs
+		let bound = nextFreeValueId(module, func: func)
+		var opOf = OpIndexArray.create()
+		opOf.resize(bound)
+		var hasOp = BoolArray.create()
+		hasOp.resize(bound)
+		var defs = Self{opOf: opOf, hasOp: hasOp}
+		var def = StdDefinedValues.create()
+
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: def)
+			if def.definesNothing() 'noDef'
+				continue
+			end 'noDef'
+
+			defs.record(def.first, opIdx: opIdx)
+			if def.definesPair() 'twoDefs'
+				defs.record(def.second, opIdx: opIdx)
+			end 'twoDefs'
+		end 'eachOp'
+
+		return defs
+	end 'build'
+
+	function record(valueId ValueId, opIdx OpIndex)
+		try self.opOf.set(valueId, value: opIdx) otherwise panic("StdValueDefs.record: value {valueId} is outside the column sized by nextFreeValueId")
+		try self.hasOp.set(valueId, value: true) otherwise panic("StdValueDefs.record: value {valueId} is outside the column sized by nextFreeValueId")
+	end 'record'
+
+	// One past the highest id the function uses — `nextFreeValueId`'s answer, kept so a caller that
+	// needs both the index and the bound walks the function once.
+	export function valueBound() returns ValueId
+		return self.hasOp.count()
+	end 'valueBound'
+
+	export function isDefinedByAnOp(valueId ValueId) returns bool
+		if valueId >= self.hasOp.count() 'beyondTheColumn'
+			return false
+		end 'beyondTheColumn'
+
+		return try self.hasOp.get(valueId) otherwise panic("StdValueDefs.isDefinedByAnOp: hasOp.get OOB at {valueId}")
+	end 'isDefinedByAnOp'
+
+	// The op defining `valueId`. Panics for a value no op defines — callers ask `isDefinedByAnOp` first.
+	export function definingOp(valueId ValueId) returns OpIndex
+		if not self.isDefinedByAnOp(valueId) 'notAnOpResult'
+			panic("StdValueDefs.definingOp: value {valueId} is a block arg or outside this function — ask `isDefinedByAnOp` first")
+		end 'notAnOpResult'
+
+		return try self.opOf.get(valueId) otherwise panic("StdValueDefs.definingOp: opOf.get OOB at {valueId}")
+	end 'definingOp'
+end 'StdValueDefs'
+
+// The answer a shape recogniser gives when a value is not defined the way the emitter it reads back
+// spells the shape.
+export enum StdShapeMismatch implements Error
+	notTheShape
+end 'StdShapeMismatch'
+
+// What a shape recogniser reads one function's values through: the def index and the two
+// classification records it refills per question. A runtime file that emits a shape reads it back
+// through this, so recognising `emitSlotAddr`'s address or `emitBufferNotOwned`'s compare sits beside
+// the emitter and asks no pass to restate the shape.
+//
+// ⚠ `arith` and `load` are REFILLED by every question, so a reader that needs two answers copies the
+// first's fields out before asking the second.
+export type StdShapeReader
+	var module as StdModule
+	export var defs as StdValueDefs
+	export var arith as StdArithOperands
+	export var load as StdLoadOperands
+
+	export static function create(module StdModule, func IrFunction) returns StdShapeReader
+		return Self{module: module, defs: StdValueDefs.build(module, func: func), arith: StdArithOperands.create(), load: StdLoadOperands.create()}
+	end 'create'
+
+	// Whether an op defines `valueId` and it is a `loadIndirect`, filling `load`.
+	export function loadDefining(valueId ValueId) returns bool
+		if not self.defs.isDefinedByAnOp(valueId) 'notAnOpResult'
+			return false
+		end 'notAnOpResult'
+
+		classifyLoadOperands(self.module.getOp(self.defs.definingOp(valueId)), load: self.load)
+		return self.load.isLoad()
+	end 'loadDefining'
+
+	// Whether an op defines `valueId` and it is in the arithmetic band, filling `arith`.
+	export function arithDefining(valueId ValueId) returns bool
+		if not self.defs.isDefinedByAnOp(valueId) 'notAnOpResult'
+			return false
+		end 'notAnOpResult'
+
+		classifyArithOperands(self.module.getOp(self.defs.definingOp(valueId)), operands: self.arith)
+		return self.arith.isArithmetic()
+	end 'arithDefining'
+
+	// Whether `valueId` is `cmpImm <pred> x, imm` — a runtime guard's compare against a constant once
+	// `foldConstOperands` has moved it into the immediate; `x` is then `arith.lhs`. The caller names the
+	// constant the emitter compared against, so a renumbered one cannot silently stop matching.
+	export function compareImmDefining(valueId ValueId, pred StdCmpPred, imm ParsedInt) returns bool
+		if not self.arithDefining(valueId) or not self.arith.isComparisonImm() 'notAnImmediateCompare'
+			return false
+		end 'notAnImmediateCompare'
+
+		return self.arith.pred == pred and self.arith.imm as ParsedInt == imm
+	end 'compareImmDefining'
+
+	// The base a field load reads `offset` from: `valueId` must be `loadIndirect(base, offset)`.
+	export function fieldLoadBase(valueId ValueId, offset ByteOffset) returns ValueId throws StdShapeMismatch
+		if not self.loadDefining(valueId) or self.load.offset != offset 'notThatField'
+			throw StdShapeMismatch.notTheShape
+		end 'notThatField'
+
+		return self.load.addrId
+	end 'fieldLoadBase'
+end 'StdShapeReader'
 
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
 // still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg
@@ -4634,7 +5088,7 @@ module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, re
 	try subst.set(resultId, value: remappedValue(replacement, subst: subst)) otherwise panic("recordValueSubstitution: subst.set OOB at {resultId} against a column of {subst.count()}")
 end 'recordValueSubstitution'
 
-function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
+module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
 	var out = ValueIdArray.create()
 
 	for a in args 'each'
@@ -4686,10 +5140,10 @@ end 'remapStdOpForClone'
 function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray, def StdDefinedValues)
 	stdOpDefinedValue(op, def: def)
 
-	// A `tryCall`/`witnessTryCall` is the only two-def shape and `scanLeafBody` refuses a callee holding
-	// one, so the cloner never sees it.
+	// A `tryCall` defines a pair, and a loop copy clones one; both halves must come back remapped.
 	if def.definesPair() 'twoDefs'
-		panic("remapStdOpForClone: a two-def op reached the cloner — only `tryCall` and `witnessTryCall` define a pair, and both are calls, which `scanLeafBody` refuses a callee for")
+		requireClonedDefinesPair(cloned, wantFirst: clonedValue(def.first, subst: valueSubst), wantSecond: clonedValue(def.second, subst: valueSubst), def: def)
+		return
 	end 'twoDefs'
 
 	if def.definesNothing() 'noDef'
@@ -4699,6 +5153,18 @@ function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valu
 
 	requireClonedDefIs(cloned, want: clonedValue(def.first, subst: valueSubst), def: def)
 end 'requireClonedDefAgreesWithTheDefEnumerator'
+
+function requireClonedDefinesPair(cloned StdOp, wantFirst ValueId, wantSecond ValueId, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+
+	if not def.definesPair() 'pairLost'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a pair by `stdOpDefinedValue` yet its clone does not — the two def walks in this file disagree")
+	end 'pairLost'
+
+	if def.first != wantFirst or def.second != wantSecond 'pairNotRemapped'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining {def.first}/{def.second} where the column maps the original's pair to {wantFirst}/{wantSecond} — the def rewrite and `stdOpDefinedValue` name different fields")
+	end 'pairNotRemapped'
+end 'requireClonedDefinesPair'
 
 function requireClonedDefinesNothing(cloned StdOp, def StdDefinedValues)
 	stdOpDefinedValue(cloned, def: def)
@@ -4746,11 +5212,12 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		// A return DEFINES nothing and names no block: the splice replaces it with a branch to the
 		// continuation rather than cloning it, and it reaches here only through a body op scan.
 		ret then return op
-
-		// A `param` is never copied (its value is the call site's argument) and a call of any kind
-		// disqualifies the callee, so neither can reach a clone.
-		param or
-			call then panic("remapStdOpForClone: a `param`/`call` op reached the cloner — `scanLeafBody` refuses a callee holding a call, and a splice maps a parameter to its argument instead of copying it")
+		// A `param` is never copied: a splice maps a parameter to its argument, and a loop copy never
+		// holds the entry block.
+		param then panic("remapStdOpForClone: a `param` op reached the cloner — a splice maps a parameter to its argument instead of copying it, and a loop copy never holds the entry block")
+		// The two direct calls are cloned by `unswitchInvariantGuards`' loop copy; `scanLeafBody`
+		// refuses a callee holding either.
+		call(resultId, callee, args) then return StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: args)
 		retVoid then return op
 		globalAddr(resultId, label) then return StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
 		loadIndirect(resultId, addrId, offset, valueType) then return StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
@@ -4758,9 +5225,9 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		osAllocPages or
 			osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `scanLeafBody` refuses a callee for")
 		rdataAddr(resultId, label) then return StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
-		tryCall or
-			errorReturn or
-			osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a throwing call, a dual-register return or a process exit — each refused by `scanLeafBody`")
+		tryCall(resultId, errorFlagId, callee, args) then return StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: callee, args: args)
+		errorReturn or
+			osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a dual-register return or a process exit — each refused by `scanLeafBody`, and neither can sit inside a loop")
 		funcAddr(resultId, funcName) then return StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
 		callIndirect then panic("remapStdOpForClone: an indirect call reached the cloner — `scanLeafBody` refuses a callee holding one")
 		osPanic or
@@ -4884,7 +5351,7 @@ end 'clonedValue'
 
 // A cloned terminator's block target, through the splice's dense block column. Every callee block is
 // mapped: a copied block to its fresh caller block, a PANIC block to the splice's single slow arm.
-function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
+module function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
 	return try subst.get(id) otherwise panic("remapStdOpForClone: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
 end 'clonedBlock'
 
@@ -4916,33 +5383,53 @@ end 'clonedBlocks'
 // contract and `remapStdOpUses`' own header carries the measurement behind it (the pair form made
 // `elimTrivialBlockArgs` 54% of a large compile).
 module function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("substituteValuesInFunc: live op index {opIdx} not in module.ops")
-		try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInFunc: ops.set({opIdx}) OOB")
+	for blockRef in func.blockRefs 'eachBlock'
+		substituteValuesInBlock(module, block: module.getBlock(blockRef), subst: subst)
+	end 'eachBlock'
+end 'substituteValuesInFunc'
+
+// The per-block half of `substituteValuesInFunc` — the block's ops, its terminator and its outgoing
+// edge args — for a caller that rewrites a SUBSET of a function's blocks (`unswitchInvariantGuards`
+// rewrites the readers of an exit phi everywhere but inside the loop that defines the value).
+module function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray)
+	for opIdx in block.opRefs 'eachOp'
+		substituteOpUses(module, opIdx: opIdx, subst: subst)
 	end 'eachOp'
 
-	for blockRef in func.blockRefs 'eachPred'
-		var pred = try module.blocks.get(blockRef) otherwise panic("substituteValuesInFunc: blockRef from func.blockRefs not in module.blocks")
+	if block.hasTerminatorOp() 'hasTerm'
+		substituteOpUses(module, opIdx: block.terminatorIndex(), subst: subst)
+	end 'hasTerm'
 
-		// ⭐ **A BLOCK WHOSE EDGE ARGS THE COLUMN DOES NOT TOUCH KEEPS THE EDGES IT ALREADY HAS.** The
-		// rebuild is three allocations per edge — a `BranchEdgeArray`, a `BranchEdge` box and the
-		// `ValueIdArray` `remappedArgs` mints — and a substitution typically moves a handful of values in
-		// a function with dozens of edges, so almost every one of those rebuilds produced a column
-		// identical to the one it replaced. The test below is the same walk over the same args and
-		// allocates nothing, so asking first is strictly cheaper than rebuilding blind.
-		if not anyEdgeArgIsRemapped(pred, subst: subst) 'edgesUnchanged'
-			continue
-		end 'edgesUnchanged'
+	substituteEdgeArgsInBlock(block, subst: subst)
+end 'substituteValuesInBlock'
 
-		var newEdges = BranchEdgeArray.create()
+// The op half, on its own for a caller that holds the READ SITES of the values it rewrites
+// (`unswitchInvariantGuards` indexes them) and so touches only the ops that read one.
+module function substituteOpUses(module StdModule, opIdx OpIndex, subst ValueIdArray)
+	let op = module.getOp(opIdx)
+	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInBlock: ops.set({opIdx}) OOB")
+end 'substituteOpUses'
 
-		for edge in pred.branchEdges 'eachEdge'
-			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
-		end 'eachEdge'
+// The edge half: the block's outgoing edge args.
+//
+// ⭐ **A BLOCK WHOSE EDGE ARGS THE COLUMN DOES NOT TOUCH KEEPS THE EDGES IT ALREADY HAS.** The
+// rebuild is three allocations per edge — a `BranchEdgeArray`, a `BranchEdge` box and the
+// `ValueIdArray` `remappedArgs` mints — and a substitution typically moves a handful of values in
+// a function with dozens of edges, so almost every one of those rebuilds produced a column
+// identical to the one it replaced. The test below is the same walk over the same args and
+// allocates nothing, so asking first is strictly cheaper than rebuilding blind.
+module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
+	if not anyEdgeArgIsRemapped(block, subst: subst) 'edgesUnchanged'
+		return
+	end 'edgesUnchanged'
 
-		pred.branchEdges = newEdges
-	end 'eachPred'
-end 'substituteValuesInFunc'
+	var rewritten = block
+	var newEdges = BranchEdgeArray.create()
+	for edge in rewritten.branchEdges 'eachEdge'
+		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
+	end 'eachEdge'
+	rewritten.branchEdges = newEdges
+end 'substituteEdgeArgsInBlock'
 
 // Whether any branch-edge argument of `block` is a value `subst` rewrites — the question that decides
 // whether that block's edge column has to be rebuilt at all. It reads exactly the args the rebuild

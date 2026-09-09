@@ -1105,11 +1105,6 @@ function argAt(args ValueIdArray, index ParamCount, callee ByteArray) returns Va
 	return try args.get(index) otherwise panic("InlineManagedPrimitives: '{String.from(callee)}' was called with {args.count()} argument(s) and this expansion reads argument {index}")
 end 'argAt'
 
-// The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It is
-// the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm compares
-// against exactly it.
-let NoBufferAllocated = 0 as ParsedInt
-
 // An EMPTY managed slot — a slot inside `[0, length)` that a `resize` grew and nothing ever wrote. It is
 // zero because `__mm_alloc` zeroes and because every vacating operation erases on the way out (the
 // `[length, capacity)`-reads-ZERO invariant `ManagedMemoryRuntime` leans on), and it is what

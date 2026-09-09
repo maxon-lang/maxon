@@ -106,6 +106,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25) — intervals, branch refinement, widening; array lengths not yet modelled |
+| **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
@@ -1642,6 +1643,37 @@ walk of eight passes and is now a caller-owned record (whole-compile allocations
 emitted binary byte-identical); `IrModule.blockAtPosition` replaced five copies. Not yet modelled:
 array lengths (`loadIndirect` at +8 is any struct field at the Std tier), so the unsigned bound itself
 survives; inclusive `to` loops with a runtime top (`i + 1` may wrap).
+
+**`EC26` · Loop unswitching on the managed shape guards.** — ✅ **CLOSED 2026-09-09 (round 4 of the
+fannkuch loop): fannkuch −13.1%, self-compile +0.6% (inside the band).**
+`IR/Std/UnswitchInvariantGuards.maxon`, after `loopInvariantCodeMotion`: a natural loop whose
+branches test the shape guards `InlineManagedPrimitives` emits (ownership, buffer non-null, buffer
+unshared, trivial element, constant-index bounds) is versioned — a `__us_test` chain in the split
+preheader evaluates the hoisted loads and the guards once, a cloned fast copy has the guards folded and
+its refused arms dropped, the original stays as the slow version behind `__us_slow`; a guard-less loop
+with invariant header loads is hoisted in place. It rests on two facts stated as DATA beside the runtime
+that owns them rather than re-derived: `elementStoreCannotAliasARecordField` (a buffer is its own
+allocation; a variable index must be dominated by a bound guard on the same record) and
+`managedCalleeHeaderEffect` (`writesNothing` for get/count/…, `detachesUnlessOwnedUnshared` for the
+`set` family — the header is written on every path only through `__managed_cow_detach`, whose
+precondition is exactly a failed guard — `unknown` by default). The induction: guards true on entry,
+nothing in the fast copy writes the header except the detach, the detach needs a failed guard, so the
+guards hold on every iteration and `length@8`/`buffer@0` are invariant — they now sit in callee-saved
+registers across the loop, no E5001 anywhere. LCSSA is one block arg per escaping value at the single
+exit. ⛔ **The review found a real panic before landing**: the hoist-in-place mode skipped the escape
+check, so a hoisted `count()` read after its loop left the allocator a use with no def; refused now in
+both modes and pinned. ⛔ **The optimize step found a real quadratic**: three per-loop walks of the whole
+function made the phase ×3.9 per doubling of loop count; it is ×2.0 now, with `tests/ladders/genunswitch.sh`
+committed so the reading can be repeated (the scale corpus holds no versionable loop — its row is a blind
+spot). Sabotage (`__managed_push` declared header-pure): the push control reads slot 0 through a freed
+buffer and exits 1, the two-loop control answers wrong, and the compiler that sabotaged compiler builds
+MISCOMPILES ITSELF — the class of defect the table refuses. Timed A/B (control from the round-3 commit,
+interleaved, n=11): **4,440 → 3,860 ms**; n=12 **60,716 → 53,436 ms (ratio to C 2.93 → 2.58)**; census ops
+1712 → 2244 (two versions of every versioned loop) and `mgd-call` 54 → 76 (the slow versions). fannkuch:
+7 loops versioned, `flipCount`'s reverse loop is now `cmp/jcc + load` per get and `cmp/jcc + store` per
+set; the self-compile versions 71 loops (1,164 refused for a call with an unknown effect, 251 for no
+preheader). What remains per access is the bound check itself, which needs a SYMBOLIC upper bound
+(`idx < length` with the hoisted length as the bound) in the range analysis.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

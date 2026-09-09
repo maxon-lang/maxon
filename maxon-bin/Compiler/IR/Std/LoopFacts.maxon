@@ -1,0 +1,165 @@
+// LoopFacts — the per-loop facts two Std passes ask the same way, in ONE home: which values a natural
+// loop defines, whether an operand is invariant under the set a pass has proved so far, the loop's
+// blocks in dominator preorder, and the O(1)-reset sets those answers live in. `loopInvariantCodeMotion`
+// and `unswitchInvariantGuards` each ask all four, and two spellings of a def walk or a preorder would
+// be one fact written twice — the disagreement being a value one pass calls invariant and the other
+// calls loop-carried, which no case reddens.
+
+// Which analysed loop an entry belongs to. `NoLoopStamp` is the value a freshly grown column holds and
+// the one `beginLoop` counts up from, so it never collides with a real loop's stamp.
+typealias LoopStamp = int(0 to u64.max)
+typealias LoopStampColumn = Array with LoopStamp
+
+let NoLoopStamp = 0 as LoopStamp
+
+// ⭐⭐ **A DENSE PER-VALUE SET WHOSE RESET IS O(1), AND THE RESET IS THE WHOLE REASON IT IS NOT
+// `StdValueUseSet`.** That type is right for its callers, every one of which builds a set once per
+// FUNCTION: its `clear` keeps the column's capacity and the next `insert` re-extends it, which costs one
+// pass over the value space per set built. A loop pass builds a set once per LOOP, and one pass over the
+// function's value space per loop is Θ(loops × values) — the shape `LoopMembership`'s header measures
+// one column over, and measured on `phase:loopInvariantCodeMotion` at ×2.21 in bytes per doubling before
+// this type existed.
+//
+// A GENERATION STAMP costs nothing to reset: entering a loop bumps one counter, and an entry stamped
+// with an older generation reads as absent.
+module type LoopValueStamps
+	var stampOf as LoopStampColumn
+	var current as LoopStamp
+
+	module static function create() returns LoopValueStamps
+		return Self{stampOf: LoopStampColumn.create(), current: NoLoopStamp}
+	end 'create'
+
+	module function beginLoop()
+		self.current = self.current + 1
+	end 'beginLoop'
+
+	module function insert(valueId ValueId)
+		self.stampOf.growFilled(((valueId + 1) as ElementIndex), value: NoLoopStamp)
+		try self.stampOf.set(valueId, value: self.current) otherwise panic("LoopValueStamps.insert: stampOf.set OOB at {valueId}")
+	end 'insert'
+
+	module function contains(valueId ValueId) returns bool
+		if valueId >= self.stampOf.count() 'neverStamped'
+			return false
+		end 'neverStamped'
+
+		return (try self.stampOf.get(valueId) otherwise panic("LoopValueStamps.contains: stampOf.get OOB at {valueId}")) == self.current
+	end 'contains'
+end 'LoopValueStamps'
+
+// A per-loop map from a value to a payload, emptied in O(1) by the same stamp: `LoadWitnessTable`'s
+// proven coverage per address, `unswitchInvariantGuards`' canonical per hoisted value. Two columns for
+// one map — presence and payload — because every payload value is a legitimate one and a single column
+// would need one of them to mean "absent"; a payload beneath a stale stamp is never read.
+module type LoopValueMap uses Payload
+	typealias PayloadColumn = Array with Payload
+
+	var present as LoopValueStamps
+	var payloads as PayloadColumn
+	// What the payload column grows filled with — never read, since a slot is read only under a live stamp.
+	let fill as Payload
+
+	module static function create(fill Payload) returns Self
+		return Self{present: LoopValueStamps.create(), payloads: PayloadColumn.create(), fill: fill}
+	end 'create'
+
+	module function beginLoop()
+		self.present.beginLoop()
+	end 'beginLoop'
+
+	module function insert(valueId ValueId, payload Payload)
+		self.present.insert(valueId)
+		self.payloads.growFilled(((valueId + 1) as ElementIndex), value: self.fill)
+		try self.payloads.set(valueId, value: payload) otherwise panic("LoopValueMap.insert: payloads.set OOB at {valueId}")
+	end 'insert'
+
+	module function contains(valueId ValueId) returns bool
+		return self.present.contains(valueId)
+	end 'contains'
+
+	// The payload this loop wrote for `valueId`. Panics for a value it did not — callers ask `contains`.
+	module function payloadOf(valueId ValueId) returns Payload
+		if not self.present.contains(valueId) 'absent'
+			panic("LoopValueMap.payloadOf: value {valueId} was not mapped in this loop — ask `contains` first")
+		end 'absent'
+
+		return try self.payloads.get(valueId) otherwise panic("LoopValueMap.payloadOf: payloads.get OOB at {valueId} — `insert` grows the column to hold every present id")
+	end 'payloadOf'
+end 'LoopValueMap'
+
+// Every value the loop DEFINES — a block arg, and both halves of a two-def op — into `definedInLoop`.
+//
+// ⚠ **A BLOCK ARG IS A DEF, AND SO IS THE SECOND HALF OF A TWO-DEF OP.** The header's phis are how the
+// index and every carried `var` come round the back edge, so they are the definition of "changes across
+// iterations"; and `tryCall`/`witnessTryCall` write a result AND an error flag. Missing the flag makes
+// its consumers appear to read a value defined outside the loop. `stdOpDefinedValue` reports both
+// halves, so there is nothing here to forget.
+module function collectLoopDefs(module StdModule, func IrFunction, members LoopMembership, definedInLoop LoopValueStamps, def StdDefinedValues)
+	for position in members.blocks 'eachBlock'
+		let block = module.blockAtPosition(func, position: position as BlockRefIndex)
+
+		for blockArg in block.blockArgs 'eachPhi'
+			definedInLoop.insert(blockArg.valueId)
+		end 'eachPhi'
+
+		for opIdx in block.opRefs 'eachOp'
+			recordDefsOf(module, opIdx: opIdx, definedInLoop: definedInLoop, def: def)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			recordDefsOf(module, opIdx: block.terminatorIndex(), definedInLoop: definedInLoop, def: def)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectLoopDefs'
+
+function recordDefsOf(module StdModule, opIdx OpIndex, definedInLoop LoopValueStamps, def StdDefinedValues)
+	stdOpDefinedValue(module.getOp(opIdx), def: def)
+
+	if def.definesNothing() 'noDef'
+		return
+	end 'noDef'
+
+	definedInLoop.insert(def.first)
+
+	if def.definesPair() 'twoDefs'
+		definedInLoop.insert(def.second)
+	end 'twoDefs'
+end 'recordDefsOf'
+
+// Whether one operand is loop-invariant: either the loop does not define it at all, or the pass has
+// already proved the op that does.
+module function operandIsInvariant(valueId ValueId, definedInLoop LoopValueStamps, invariant LoopValueStamps) returns bool
+	return not definedInLoop.contains(valueId) or invariant.contains(valueId)
+end 'operandIsInvariant'
+
+// The loop's members in DOMINATOR-TREE PREORDER from the header, into `into`.
+//
+// ⭐⭐ **ONE PASS OVER THIS ORDER NEEDS NO FIXPOINT, AND SSA IS WHY.** A value's def DOMINATES its uses,
+// so the defining block is an ANCESTOR of the reading block in the dominator tree and a preorder visits
+// every operand's def before the op that reads it. The one exception is a value carried round the BACK
+// EDGE, which arrives as a header block arg and is recorded variant before any walk starts.
+//
+// ⭐ **THE HEADER'S DOMINATOR SUBTREE IS EXACTLY THE LOOP, PLUS SUBTREES THAT CAN BE PRUNED WHOLE.**
+// Every member is dominated by the header, and a member's immediate dominator is itself a member, so no
+// member hangs below a non-member. That is what makes the prune below sound and the walk O(the loop)
+// instead of O(the function). Children are pushed in the tree's order and popped last first — the
+// order both passes' outputs are laid out in.
+module function recordLoopPreorder(tree StdDominatorTree, members LoopMembership, header BlockRefIndex, into BlockPositionColumn)
+	var stack = BlockPositionColumn.create()
+	stack.push(header)
+
+	while stack.count() > 0 'preorder'
+		let position = try stack.pop() otherwise panic("recordLoopPreorder: stack.pop on a non-empty stack failed")
+
+		if not members.contains(position as CsrIndex) 'notInThisLoop'
+			continue
+		end 'notInThisLoop'
+
+		into.push(position)
+
+		for k in 0 upto tree.children.degree(position as CsrIndex) 'eachChild'
+			stack.push(tree.children.neighbour(position as CsrIndex, k: k))
+		end 'eachChild'
+	end 'preorder'
+end 'recordLoopPreorder'
