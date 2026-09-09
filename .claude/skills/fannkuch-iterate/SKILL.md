@@ -68,10 +68,12 @@ source change is not an A/B (roadmap, EC19). The note carries the WHY; the tool 
 
 ## 6. Headline
 
-Whenever n=11 moved by more than the arms' spread:
+Whenever n=11 moved by more than the arms' spread. One run is enough while the ratio is far
+from 1.0 (a 112 s run does not need averaging to read 5×); take 5 only when the arms are within a few
+percent of each other or of C:
 
 ```
-python scripts/bench-fannkuch.py --n 12 --runs 5 --ref $PRE --note "<candidate> headline"
+python scripts/bench-fannkuch.py --n 12 --runs 1 --warmup 0 --ref $PRE --note "<candidate> headline"
 ```
 
 ## 7. Record
