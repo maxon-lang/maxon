@@ -137,6 +137,39 @@ package_one() {
 # So the binary is added in its own pass with an explicit mode, and the rest of the tree follows in a
 # second pass that excludes it. `--mode` applies to everything in one invocation, which is why this is
 # two.
+#
+# ⚠ `--mode` IS GNU TAR'S FLAG AND macOS SHIPS BSDTAR, WHICH REFUSES IT OUTRIGHT — so the override is
+# asked for only where it is both supported and needed. It is needed exactly where the FILESYSTEM
+# cannot carry a mode: on a POSIX host the `chmod +x` in `package_one` is real and a plain tar records
+# it. The capability is PROBED rather than inferred from the platform, because "which tar is on PATH"
+# is not a property of the OS.
+tar_supports_mode() {
+	local probe rc
+	probe="$(mktemp -d)"
+	: > "$probe/f"
+	if tar -cf /dev/null -C "$probe" --mode=0755 f >/dev/null 2>&1; then
+		rc=0
+	else
+		rc=1
+	fi
+	rm -rf "$probe"
+	return "$rc"
+}
+
+# ⛔ VERIFY, NEVER ASSUME — THIS BIT HAS SHIPPED WRONG TWICE. An archive whose `maxon` is 0644 looks
+# perfectly normal until someone runs it and gets "Permission denied", and neither the build nor the
+# upload notices. The listing is the only place the shipped mode can be read back.
+require_executable_in_tar() {
+	local archive="$1"
+	local line
+	line="$(tar -tvzf "$archive" | grep -E '/maxon$' | head -n1 || true)"
+	[ -n "$line" ] || { echo "release.sh: $archive contains no maxon binary" >&2; return 1; }
+	case "$line" in
+		-rwx*) return 0 ;;
+		*) echo "release.sh: $archive ships maxon as NOT EXECUTABLE — $line" >&2; return 1 ;;
+	esac
+}
+
 make_tar() {
 	local archive="$1" stage="$2"
 	local dir base plain
@@ -145,9 +178,14 @@ make_tar() {
 	plain="${archive%.gz}"
 
 	rm -f "$plain"
-	tar -cf "$plain" -C "$dir" --mode=0755 "$base/maxon"
-	tar -rf "$plain" -C "$dir" --exclude="$base/maxon" "$base"
+	if tar_supports_mode; then
+		tar -cf "$plain" -C "$dir" --mode=0755 "$base/maxon"
+		tar -rf "$plain" -C "$dir" --exclude="$base/maxon" "$base"
+	else
+		tar -cf "$plain" -C "$dir" "$base"
+	fi
 	gzip -f "$plain"
+	require_executable_in_tar "$archive"
 }
 
 # ⚠ `zip` IS NOT A WINDOWS TOOL AND GIT BASH DOES NOT SHIP ONE, so this tries three writers in order of
