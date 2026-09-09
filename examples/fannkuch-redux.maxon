@@ -1,16 +1,16 @@
-// Fannkuch-redux benchmark from Computer Language Benchmarks Game
+// Fannkuch-redux benchmark from the Computer Language Benchmarks Game
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html#fannkuchredux
 //
-// This implementation is a single-threaded version of the algorithm.
-// The algorithm generates all permutations of [0..n-1] and counts the maximum
-// number of "flips" (reversals from position 0 to position p[0]) needed
-// to sort any permutation back to the identity permutation.
+// A transliteration of the C gcc #5 program (bench/fannkuch/fannkuchredux.gcc-5.c) with OpenMP
+// off: one block covering the whole permutation space, the same flip loop, the same
+// factorial-base next-permutation loop, the same checksum by parity. Every working array is
+// allocated once and reused across permutations. n is argv[1]; without one it runs n=11.
 //
 // Expected output for n=10:
 // 73196
 // Pfannkuchen(10) = 38
 //
-// Expected output for n=11 (the size this program runs):
+// Expected output for n=11 (the default):
 // 556355
 // Pfannkuchen(11) = 51
 //
@@ -23,197 +23,187 @@
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-// Every working array is sized for the largest permutation this program runs, so
-// each index below is in bounds by construction and a failing get/set is a bug in
-// the algorithm rather than a condition to recover from.
-let permutationSlots = 16
-let factorialSlots = 17
+let defaultN = 11
 
-// Compute factorial
-function factorial(n Integer) returns Integer
-	var result = 1
+// n! must fit an i64 and the pancake count must fit an exit code.
+let smallestN = 1
+let largestN = 12
+let usageExit = 2
 
-	for i in 1 to n 'fact_loop'
-		result = result * i
-	end 'fact_loop'
+// argv[1], or defaultN when there is none. A malformed or out-of-range argument is refused so a
+// typo cannot read as a pancake count.
+function problemSize() returns Integer throws ParseError
+	let args = CommandLine.args()
 
-	return result
-end 'factorial'
+	if args.count() < 2 'noArgument'
+		return defaultN
+	end 'noArgument'
 
-// Copy array from src to dst
-function copyArray(dst IntArray, src IntArray, n Integer)
-	for i in 0 upto n 'copy_loop'
-		let element = try src.get(i) otherwise panic("copyArray: i < n <= src.length")
-		try dst.set(i, value: element) otherwise panic("copyArray: i < n <= dst.length")
-	end 'copy_loop'
-end 'copyArray'
+	let raw = try args.get(1) otherwise panic("problemSize: count() >= 2, so index 1 is live")
+	let n = try int.fromString(raw)
 
-// Generate the idx-th permutation of n elements
-function getPermutation(p IntArray, count IntArray, fact IntArray, n Integer, idx Integer)
-	// Initialize to identity permutation
-	for i in 0 upto n 'init_loop'
-		try p.set(i, value: i) otherwise panic("getPermutation: i < n <= p.length")
-	end 'init_loop'
+	if n < smallestN or n > largestN 'outOfRange'
+		throw ParseError.invalidFormat
+	end 'outOfRange'
 
-	// Generate the idx-th permutation using factorial base
-	var pp = IntArray.create()
-	pp.resize(permutationSlots)
-	var remaining = idx
+	return n
+end 'problemSize'
+
+// The block prologue: the permutation with index firstIndex and its factorial-base counter. With
+// one block the index is 0 and this yields the identity, but it is what the C program runs.
+function initialPermutation(current IntArray, count IntArray, temp IntArray, fact IntArray, n Integer, firstIndex Integer)
+	try count.set(0, value: 0) otherwise panic("initialPermutation: n >= 1")
+
+	for i in 0 upto n 'identity'
+		try current.set(i, value: i) otherwise panic("initialPermutation: i < n = current.count()")
+	end 'identity'
+
+	var remaining = firstIndex
 	var i = n - 1
 
-	while i > 0 'perm_loop'
-		let factorialOfI = try fact.get(i) otherwise panic("getPermutation: i < n <= fact.length")
-		let d = try (remaining / factorialOfI) otherwise panic("getPermutation: a factorial is never 0")
-		try count.set(i, value: d) otherwise panic("getPermutation: i < n <= count.length")
-		remaining = try (remaining mod factorialOfI) otherwise panic("getPermutation: a factorial is never 0")
+	while i > 0 'digits'
+		let factorialOfI = try fact.get(i) otherwise panic("initialPermutation: i < n < fact.count()")
+		let d = try (remaining / factorialOfI) otherwise panic("initialPermutation: a factorial is never 0")
+		remaining = try (remaining mod factorialOfI) otherwise panic("initialPermutation: a factorial is never 0")
+		try count.set(i, value: d) otherwise panic("initialPermutation: i < n = count.count()")
 
-		// Copy current permutation to temporary
-		copyArray(pp, src: p, n: n)
+		for j in 0 upto n 'copy'
+			let element = try current.get(j) otherwise panic("initialPermutation: j < n = current.count()")
+			try temp.set(j, value: element) otherwise panic("initialPermutation: j < n = temp.count()")
+		end 'copy'
 
-		// Rotate: p[j] = pp[j+d] (with wraparound)
-		var j = 0
-
-		while j <= i 'rotate_loop'
-			if j + d <= i 'in_bounds'
-				let rotated = try pp.get(j + d) otherwise panic("getPermutation: j + d <= i < n <= pp.length")
-				try p.set(j, value: rotated) otherwise panic("getPermutation: j <= i < n <= p.length")
-			end 'in_bounds' else 'out_of_bounds'
-				let wrapped = try pp.get(j + d - i - 1) otherwise panic("getPermutation: d <= i and j <= i, so 0 <= j + d - i - 1 < n <= pp.length")
-				try p.set(j, value: wrapped) otherwise panic("getPermutation: j <= i < n <= p.length")
-			end 'out_of_bounds'
-
-			j = j + 1
-		end 'rotate_loop'
+		for j in 0 to i 'rotate'
+			let source = j + d if j + d <= i else j + d - i - 1
+			let rotated = try temp.get(source) otherwise panic("initialPermutation: d <= i and j <= i, so 0 <= source <= i < n")
+			try current.set(j, value: rotated) otherwise panic("initialPermutation: j <= i < n")
+		end 'rotate'
 
 		i = i - 1
-	end 'perm_loop'
-end 'getPermutation'
+	end 'digits'
+end 'initialPermutation'
 
-// Count the number of flips for a permutation
-function countFlips(perm IntArray, n Integer) returns Integer
-	let first = try perm.get(0) otherwise panic("countFlips: perm holds n >= 1 elements")
-
-	if first == 0 'check_sorted'
-		return 0
-	end 'check_sorted'
-
-	// Copy permutation for flipping
-	var pp = IntArray.create()
-	pp.resize(permutationSlots)
-	copyArray(pp, src: perm, n: n)
+// Flips that sort current. temp is the caller's scratch, so no permutation allocates; its
+// element 0 is never read, exactly as in C.
+function flipCount(current IntArray, temp IntArray, n Integer) returns Integer
+	for i in 1 upto n 'copy'
+		let element = try current.get(i) otherwise panic("flipCount: i < n = current.count()")
+		try temp.set(i, value: element) otherwise panic("flipCount: i < n = temp.count()")
+	end 'copy'
 
 	var flips = 1
-	var firstValue = first
+	var firstValue = try current.get(0) otherwise panic("flipCount: n >= 1")
 
-	while (try pp.get(firstValue) otherwise panic("countFlips: firstValue is a permutation element, so it is < n <= pp.length")) != 0 'flip_loop'
-		let newFirst = try pp.get(firstValue) otherwise panic("countFlips: firstValue is a permutation element, so it is < n <= pp.length")
-		try pp.set(firstValue, value: firstValue) otherwise panic("countFlips: firstValue is a permutation element, so it is < n <= pp.length")
+	while (try temp.get(firstValue) otherwise panic("flipCount: firstValue is a permutation element, so it is < n")) > 0 'flip'
+		let newFirstValue = try temp.get(firstValue) otherwise panic("flipCount: firstValue < n")
+		try temp.set(firstValue, value: firstValue) otherwise panic("flipCount: firstValue < n")
 
-		// Reverse middle elements if firstValue > 2
-		if firstValue > 2 'reverse_middle'
-			var i = 1
-			var j = firstValue - 1
+		if firstValue > 2 'reverseMiddle'
+			var low = 1
+			var high = firstValue - 1
 
-			while i < j 'reverse_loop'
-				let temp = try pp.get(i) otherwise panic("countFlips: i < j < firstValue < n <= pp.length")
-				let atJ = try pp.get(j) otherwise panic("countFlips: j < firstValue < n <= pp.length")
-				try pp.set(i, value: atJ) otherwise panic("countFlips: i < j < firstValue < n <= pp.length")
-				try pp.set(j, value: temp) otherwise panic("countFlips: j < firstValue < n <= pp.length")
-				i = i + 1
-				j = j - 1
-			end 'reverse_loop'
-		end 'reverse_middle'
+			while low < high 'reverse'
+				let atLow = try temp.get(low) otherwise panic("flipCount: low < high < firstValue < n")
+				let atHigh = try temp.get(high) otherwise panic("flipCount: high < firstValue < n")
+				try temp.set(low, value: atHigh) otherwise panic("flipCount: low < n")
+				try temp.set(high, value: atLow) otherwise panic("flipCount: high < n")
+				low = low + 1
+				high = high - 1
+			end 'reverse'
+		end 'reverseMiddle'
 
-		firstValue = newFirst
+		firstValue = newFirstValue
 		flips = flips + 1
-	end 'flip_loop'
+	end 'flip'
 
 	return flips
-end 'countFlips'
+end 'flipCount'
 
-// Advance to next permutation
-function nextPermutation(p IntArray, count IntArray)
-	// Swap p[0] and p[1]
-	var firstValue = try p.get(1) otherwise panic("nextPermutation: p holds n >= 2 elements")
-	let atZero = try p.get(0) otherwise panic("nextPermutation: p holds n >= 2 elements")
-	try p.set(1, value: atZero) otherwise panic("nextPermutation: p holds n >= 2 elements")
-	try p.set(0, value: firstValue) otherwise panic("nextPermutation: p holds n >= 2 elements")
+// The next-permutation step: swap the first two elements, then carry through the factorial-base
+// counter, rotating the first i+1 elements left by one at each carry.
+function advancePermutation(current IntArray, count IntArray)
+	var firstValue = try current.get(1) otherwise panic("advancePermutation: n >= 2")
+	let atZero = try current.get(0) otherwise panic("advancePermutation: n >= 1")
+	try current.set(1, value: atZero) otherwise panic("advancePermutation: n >= 2")
+	try current.set(0, value: firstValue) otherwise panic("advancePermutation: n >= 1")
 
 	var i = 1
+	let firstDigit = try count.get(i) otherwise panic("advancePermutation: 1 < n = count.count()")
+	var carried = firstDigit + 1
+	try count.set(i, value: carried) otherwise panic("advancePermutation: 1 < n")
 
-	while (try count.get(i) otherwise panic("nextPermutation: the factorial-base counter never carries past index n <= count.length")) >= i 'rotate_loop'
-		try count.set(i, value: 0) otherwise panic("nextPermutation: the factorial-base counter never carries past index n <= count.length")
+	while carried > i 'carry'
+		try count.set(i, value: 0) otherwise panic("advancePermutation: i < n")
 		i = i + 1
 
-		let newFirst = try p.get(1) otherwise panic("nextPermutation: p holds n >= 2 elements")
-		try p.set(0, value: newFirst) otherwise panic("nextPermutation: p holds n >= 2 elements")
+		let newFirstValue = try current.get(1) otherwise panic("advancePermutation: n >= 2")
+		try current.set(0, value: newFirstValue) otherwise panic("advancePermutation: n >= 1")
 
-		// Rotate left
-		for j in 1 upto i 'shift_loop'
-			let successor = try p.get(j + 1) otherwise panic("nextPermutation: j < i <= n <= p.length")
-			try p.set(j, value: successor) otherwise panic("nextPermutation: j < i <= n <= p.length")
-		end 'shift_loop'
+		for j in 1 upto i 'rotate'
+			let successor = try current.get(j + 1) otherwise panic("advancePermutation: j + 1 <= i < n")
+			try current.set(j, value: successor) otherwise panic("advancePermutation: j < i < n")
+		end 'rotate'
 
-		try p.set(i, value: firstValue) otherwise panic("nextPermutation: i <= n <= p.length")
-		firstValue = newFirst
-	end 'rotate_loop'
+		try current.set(i, value: firstValue) otherwise panic("advancePermutation: the last permutation is never advanced, so the carry stops below n")
+		firstValue = newFirstValue
 
-	let carried = try count.get(i) otherwise panic("nextPermutation: the factorial-base counter never carries past index n <= count.length")
-	try count.set(i, value: carried + 1) otherwise panic("nextPermutation: the factorial-base counter never carries past index n <= count.length")
-end 'nextPermutation'
+		let digit = try count.get(i) otherwise panic("advancePermutation: i < n")
+		carried = digit + 1
+		try count.set(i, value: carried) otherwise panic("advancePermutation: i < n")
+	end 'carry'
+end 'advancePermutation'
 
 function main() returns ExitCode
-	let n = 11
+	let n = try problemSize() otherwise 'badArgument'
+		printError("usage: fannkuch-redux [n]  with {smallestN} <= n <= {largestN}\n")
+		return usageExit
+	end 'badArgument'
 
-	// Compute factorials
 	var fact = IntArray.create()
-	fact.resize(factorialSlots)
+	fact.resize(n + 1)
+	try fact.set(0, value: 1) otherwise panic("main: fact holds n + 1 >= 1 slots")
 
-	for i in 0 to n 'fact_init'
-		try fact.set(i, value: factorial(i)) otherwise panic("main: i <= n < fact.length")
-	end 'fact_init'
+	for i in 1 to n 'factorials'
+		let previous = try fact.get(i - 1) otherwise panic("main: i - 1 <= n < fact.count()")
+		try fact.set(i, value: i * previous) otherwise panic("main: i <= n < fact.count()")
+	end 'factorials'
 
-	let totalPerms = try fact.get(n) otherwise panic("main: n < fact.length")
+	let permutationCount = try fact.get(n) otherwise panic("main: n < fact.count()")
+	let lastIndex = permutationCount - 1
 
-	// Working arrays
-	var p = IntArray.create()
-	p.resize(permutationSlots)
+	// The block body's three working arrays, allocated once for the whole run.
 	var count = IntArray.create()
-	count.resize(permutationSlots)
+	count.resize(n)
+	var current = IntArray.create()
+	current.resize(n)
+	var temp = IntArray.create()
+	temp.resize(n)
 
-	// Initialize to first permutation
-	getPermutation(p, count: count, fact: fact, n: n, idx: 0)
+	initialPermutation(current, count: count, temp: temp, fact: fact, n: n, firstIndex: 0)
 
 	var maxFlips = 0
-	var checkSum = 0
-	var idx = 0
+	var checksum = 0
 
-	while idx < totalPerms 'main_loop'
-		// Count flips for current permutation
-		if (try p.get(0) otherwise panic("main: p holds n >= 1 elements")) != 0 'need_flips'
-			let flips = countFlips(p, n: n)
+	for index in 0 to lastIndex 'permutations'
+		if (try current.get(0) otherwise panic("main: n >= 1")) > 0 'unsorted'
+			let flips = flipCount(current, temp: temp, n: n)
 
-			if flips > maxFlips 'update_max'
+			if index mod 2 == 0 'even'
+				checksum = checksum + flips
+			end 'even' else 'odd'
+				checksum = checksum - flips
+			end 'odd'
+
+			if flips > maxFlips 'newMax'
 				maxFlips = flips
-			end 'update_max'
+			end 'newMax'
+		end 'unsorted'
 
-			// Update checksum (alternating sign based on permutation index)
-			if idx mod 2 == 0 'even_perm'
-				checkSum = checkSum + flips
-			end 'even_perm' else 'odd_perm'
-				checkSum = checkSum - flips
-			end 'odd_perm'
-		end 'need_flips'
+		if index < lastIndex 'more'
+			advancePermutation(current, count: count)
+		end 'more'
+	end 'permutations'
 
-		// Advance to next permutation
-		idx = idx + 1
-
-		if idx < totalPerms 'continue_loop'
-			nextPermutation(p, count: count)
-		end 'continue_loop'
-	end 'main_loop'
-
-	print("{checkSum}\n")
+	print("{checksum}\n")
 	print("Pfannkuchen({n}) = {maxFlips}\n")
 
 	return maxFlips

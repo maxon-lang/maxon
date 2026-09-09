@@ -161,7 +161,8 @@ def find_symtable_blob(sect):
     for start in range(0, len(sect) - 12, 4):
         count = struct.unpack_from("<I", sect, start)[0]
         header = 4 + 8 * count
-        if count < 100 or start + header >= len(sect):
+        # A small program holds a handful of functions; only the shape identifies the table.
+        if count < 2 or start + header >= len(sect):
             continue
         first_code, first_name = struct.unpack_from("<II", sect, start + 4)
         if first_name != header or first_code > 0x10000:
