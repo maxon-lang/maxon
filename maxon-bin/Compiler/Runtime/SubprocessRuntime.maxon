@@ -301,8 +301,10 @@ let PathExtDefault = b".COM;.EXE;.BAT;.CMD"
 // `__proc_exe_path`'s doubling loop).
 let EnvFirstGuessBytes = 512 as ParsedInt
 
-// The prefix `subprocessLastErrorMessage()` puts in front of the Win32 error number.
-let SubpErrorPrefix = b"win32 error "
+// The prefix `subprocessLastErrorMessage()` puts in front of the error number `osLastError` answers. That
+// number is in Win32's vocabulary on every lane (`buildSubpLastError` says why), so the prefix names the
+// OS rather than Win32: a caller sees one spelling wherever the program runs.
+let SubpErrorPrefix = b"os error "
 
 // The widest decimal an i64 can render to, plus its terminator — the scratch `__int_to_string` writes into.
 let DecimalDigitsMax = 24 as ParsedInt
@@ -1070,7 +1072,7 @@ end 'emitSubpEnvVectorCall'
 // through untouched, so every reader extracts `ManagedRecordBufferOffset` itself — which is why
 // `__gt_subp_argv_command` and `__gt_subp_env_vector` both take a RECORD. Handing the record straight to
 // `lpEnvironment` gives `CreateProcessA` a struct header to read as `NAME=VALUE` text — MEASURED as
-// `win32 error 87` (ERROR_INVALID_PARAMETER) on every spawn that names an override, while `inherit` goes on
+// `os error 87` (ERROR_INVALID_PARAMETER) on every spawn that names an override, while `inherit` goes on
 // working because it never reads the slot.
 function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, build IrBlock, env ValueId, envInherit ValueId, shape SpawnEnvironmentShape) returns ValueId
 	var inheritEnv = module.addBlock(func, label: b"subpinhenv")
@@ -1988,14 +1990,20 @@ end 'buildSubpResultRelease'
 
 // ⭐⭐ `__gt_subp_last_error() -> ownedManagedMemory` — `__Builtins.subprocessLastErrorMessage()`.
 //
-// ⚠⚠ **IT ANSWERS THE WIN32 ERROR NUMBER RATHER THAN AN ENGLISH SENTENCE, AND THAT IS DELIBERATE.** A
-// fixed message picked from a handful of blobs tells a caller WHICH code path failed and nothing about
-// WHY. The number tells them why: `2` is "the executable is not there", `5` is "access denied", `267` is
-// "the working directory is not a directory". There is no `.rdata` producer reachable from a runtime
-// builder and no `FormatMessageA` import, so the choice is a fixed English string or the OS's own code —
-// and the code carries strictly more information for the same bytes.
+// ⚠⚠ **IT ANSWERS THE ERROR NUMBER RATHER THAN AN ENGLISH SENTENCE, AND THAT IS DELIBERATE.** A fixed
+// message picked from a handful of blobs tells a caller WHICH code path failed and nothing about WHY. The
+// number tells them why: `2` is "the executable is not there", `5` is "access denied", `267` is "the
+// working directory is not a directory". There is no `.rdata` producer reachable from a runtime builder
+// and no message-formatting import, so the choice is a fixed English string or the OS's own code — and
+// the code carries strictly more information for the same bytes.
 //
-// A code of 0 means "nothing has failed", and answers the empty buffer rather than `win32 error 0`.
+// ⚠ **THE NUMBER IS IN Win32's VOCABULARY ON EVERY LANE.** `osLastError` is `GetLastError()` on Windows and
+// `mrt_host_last_error` on POSIX, which translates the errno into the same codes (`ENOENT` → 2, `ENOTDIR`
+// → 3, `EACCES`/`EPERM` → 5, anything else → `ErrorGenericFailure`; `Targets/Shared/PosixRuntime` holds the
+// table). So `2` means the same thing wherever the program runs, and `SubpErrorPrefix` names the OS rather
+// than Win32.
+//
+// A code of 0 means "nothing has failed", and answers the empty buffer rather than `os error 0`.
 function buildSubpLastError(module StdModule)
 	var func = IrFunction.createFromStd(SubpLastErrorName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2017,7 +2025,7 @@ function buildSubpLastError(module StdModule)
 	let emptyRecord = emitSubpEmptyManaged(module, block: noError, ids: ids)
 	module.setTerminator(noError, op: StdOp.ret(emptyRecord))
 
-	// render: `win32 error <n>` — the prefix is stored byte by byte at build time, the digits by the shared
+	// render: `os error <n>` — the prefix is stored byte by byte at build time, the digits by the shared
 	// `__int_to_string`, which writes into a caller buffer and answers the length it wrote.
 	let digitsSize = emitConst(module, block: render, value: DecimalDigitsMax, ids: ids)
 	let digitsBuf = ids.mint()

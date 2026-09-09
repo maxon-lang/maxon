@@ -108,13 +108,19 @@ line, so this producer answers the bare name itself, which is exactly the String
 returns on its miss branch. **The observable behaviour is identical**; only which of
 `resolveByName`'s two branches runs differs.
 
-### `subprocessLastErrorMessage()` answers the Win32 error NUMBER
+### `subprocessLastErrorMessage()` answers the OS error NUMBER
 
 A fixed English sentence tells a caller which code path failed and nothing about why. The number
 tells them why — `2` is "the executable is not there", `5` is "access denied" — and there is neither
-an `.rdata` producer reachable from a runtime builder nor a `FormatMessageA` import, so the choice
+an `.rdata` producer reachable from a runtime builder nor a message-formatting import, so the choice
 was a fixed string or the OS's own code. A code of `0` means nothing has failed and answers the
 empty message.
+
+⚠ **THE NUMBER IS IN Win32's VOCABULARY ON EVERY LANE.** Windows answers `GetLastError()`; each POSIX
+lane answers `mrt_host_last_error`, which translates the errno into the same codes (`ENOENT` → 2,
+`ENOTDIR` → 3, `EACCES`/`EPERM` → 5, anything else → `ERROR_GEN_FAILURE` 31 — the table is
+`Targets/Shared/PosixRuntime`'s). So `2` means the same thing wherever the program runs, and the
+prefix is `os error` rather than `win32 error` because a caller sees one spelling on every lane.
 
 ### Targets — the Win32 substrate gate
 
@@ -419,7 +425,7 @@ function main() returns ExitCode
 	let missing = "Z:/no/such/dir/nope.txt"
 	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, missing.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
 	let reason = String.init(__Builtins.subprocessLastErrorMessage())
-	let expected = "win32 error 3"
+	let expected = "os error 3"
 	print("spawn={h} reason={reason == expected}\n")
 	return 0 as ExitCode
 end 'main'
@@ -1470,9 +1476,10 @@ grew=true absolute=true missIsNull=0 missEchoed=true
 ```
 
 <!-- test: subprocess-builtins.last-error-is-empty-when-clean -->
-`subprocessLastErrorMessage()` answers the EMPTY buffer while nothing has failed, and the Win32
+`subprocessLastErrorMessage()` answers the EMPTY buffer while nothing has failed, and the OS
 error NUMBER once something has — here a spawn of an executable that does not exist, which
-`CreateProcessA` refuses with `ERROR_FILE_NOT_FOUND` (2).
+`CreateProcessA` refuses with `ERROR_FILE_NOT_FOUND` (2) and a POSIX spawn with `ENOENT`, which
+`mrt_host_last_error` translates to the same 2.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -1494,7 +1501,7 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
 	let failed = String.init(__Builtins.subprocessLastErrorMessage())
-	let expected = "win32 error 2"
+	let expected = "os error 2"
 	print("cleanLen={clean.byteLength()} spawn={h} message={failed == expected}")
 	return 0 as ExitCode
 end 'main'
