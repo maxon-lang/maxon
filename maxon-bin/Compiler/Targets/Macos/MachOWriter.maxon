@@ -783,7 +783,7 @@ end 'machoUuid'
 
 // --- Main writer ---
 
-export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
+export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target, productVersion String)
 	logInfo(LogCategory.binary, message: function() gives "Writing Mach-O file: {outputPath} ({targetToString(target)})")
 
 	if target.cpu != CpuArch.arm64 or target.os != Os.macos 'wrongTarget'
@@ -1011,10 +1011,14 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// LC_SOURCE_VERSION — the version of the source this binary was built from, packed
 	// a24.b10.c10.d10.e10. Zero until something sets it, for `PeWriter.peVersionInfoFor`'s reason: the
 	// compiler knows its own version and nothing about the version of the program it is compiling.
+	// Packed a24.b10.c10.d10.e10, so the first three components occupy the high 44 bits. Only three are
+	// filled: a dotted version from a manifest is semver, and semver has three.
+	let vMajor = versionComponent(productVersion, index: 0) as MachineWord
+	let vMinor = versionComponent(productVersion, index: 1) as MachineWord
+	let vPatch = versionComponent(productVersion, index: 2) as MachineWord
 	writeDword(macho, value: LcSourceVersion)
 	writeDword(macho, value: SourceVersionCommandSize)
-	writeDword(macho, value: 0)
-	writeDword(macho, value: 0)
+	writeQword(macho, value: (vMajor shl 40) or (vMinor shl 30) or (vPatch shl 20))
 
 	// LC_DYLD_CHAINED_FIXUPS.
 	writeDword(macho, value: LcDyldChainedFixups)

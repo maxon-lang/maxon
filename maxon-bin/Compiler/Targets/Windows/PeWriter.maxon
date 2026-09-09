@@ -1238,10 +1238,35 @@ end 'peAsciiOrEmpty'
 // compiler knows its OWN version and nothing about the version of the program it is compiling;
 // stamping the former onto the latter would tell every user's binary it was 0.1.0 of something. What
 // IS true of any output is which compiler produced it, and that goes in `FileDescription`.
-function peVersionInfoFor(outputPath FilePath) returns PeVersionInfo
+// One component of a dotted version, or 0. ⚠ A MALFORMED VERSION IS NOT A BUILD FAILURE: the string
+// comes from a manifest a person wrote, and refusing to build over it would be a compiler refusing to
+// compile correct code because its metadata was untidy. A component that is not a number reads 0, and
+// the binary then plainly says so.
+export function versionComponent(dotted String, index ProductVersionIndex) returns VersionField
+	let parts = dotted.split(".")
+	if index >= parts.count() 'absent'
+		return 0
+	end 'absent'
+
+	let text = try parts.get(index) otherwise ""
+	let value = try parseInt(text.toByteArray()) otherwise 0
+	if value < 0 or value > 65535 'outOfRange'
+		return 0
+	end 'outOfRange'
+
+	return value as VersionField
+end 'versionComponent'
+
+typealias ProductVersionIndex = int(0 to 3)
+
+function peVersionInfoFor(outputPath FilePath, productVersion String) returns PeVersionInfo
 	let stem = peAsciiOrEmpty(outputPath.stem())
 	let suffix = outputPath.fileExtension()
-	return PeVersionInfo.create(0, minor: 0, patch: 0, build: 0, product: stem, originalFilename: "{stem}{suffix}", company: "", description: "Built with Maxon {CompilerVersion}", tableName: "040904B0")
+	// ⚠ THE PRODUCT NAME IS THE OUTPUT'S STEM, not the manifest's `name`: that field is whatever
+	// SELECTED the build — a target name, or the source path, which is `.` for a project built from its
+	// own directory.
+	let product = stem
+	return PeVersionInfo.create(versionComponent(productVersion, index: 0), minor: versionComponent(productVersion, index: 1), patch: versionComponent(productVersion, index: 2), build: versionComponent(productVersion, index: 3), product: product, originalFilename: "{stem}{suffix}", company: "", description: "Built with Maxon {CompilerVersion}", tableName: "040904B0")
 end 'peVersionInfoFor'
 
 // --- VS_VERSIONINFO (RT_VERSION) ---
@@ -1540,7 +1565,7 @@ end 'buildRsrcSection'
 
 // --- Main PE writer ---
 
-export function writePe(outputPath FilePath, codeResult CodeResult, target Target)
+export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion String)
 	logInfo(LogCategory.binary, message: function() gives "Writing PE file: {outputPath}")
 	var pe = ByteArray.create()
 	pe.reserve(4096)
@@ -1629,7 +1654,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// data-entry pointer is image-relative, so `.rsrc`'s own RVA must be fixed before the
 	// section is built.
 	let rsrcRva = idataRva + idataSizeVirtual
-	let rsrcData = buildRsrcSection(rsrcRva as Rva, version: peVersionInfoFor(outputPath))
+	let rsrcData = buildRsrcSection(rsrcRva as Rva, version: peVersionInfoFor(outputPath, productVersion: productVersion))
 	let rsrcSize = rsrcData.count()
 	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
 	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)

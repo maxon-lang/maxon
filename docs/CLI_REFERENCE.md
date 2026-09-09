@@ -689,12 +689,17 @@ stdout, and the compiler reads it back — so both ends share one description of
 
 | Call | Meaning |
 |---|---|
-| `Build.build(source, output:)` | Compile one file or directory to one output. The common shape. |
-| `Build.target(name, source:, output:)` | One NAMED target, for a manifest describing more than one. |
+| `Build.build(source, output:, version:)` | Compile one file or directory to one output. The common shape. |
+| `Build.target(name, source:, output:, version:)` | One NAMED target, for a manifest describing more than one. |
 | `Build.buildTargets(targets)` | Emit several named targets. |
 | `Build.buildWithConfig(config)` | Full control via a `BuildConfig`: several sources, in order. |
 
 The output path omits the extension: the compiler appends `.exe` on Windows and nothing elsewhere.
+
+⭐ **`version` PUTS A VERSION INSIDE THE BINARY** — a Windows `VS_VERSIONINFO` resource, and a Mach-O
+`LC_SOURCE_VERSION`. Omit it and the binary reports 0.0.0.0, which is what an unversioned program
+honestly is. The product NAME in that metadata is the output's own file name, not the manifest's
+`name`: that field is what selected the build, and is `.` for a project built from its own directory.
 
 ⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
 every file beneath the manifest — every spec, every test — under a command that named nothing at all.

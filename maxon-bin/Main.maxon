@@ -431,10 +431,11 @@ let ManifestOutputStem = ".maxon/build-manifest"
 // way any program is, beginning somewhere else.
 let ManifestEntryFunction = b"build"
 
-// The two fields `stdlib/Build.maxon` writes that this reads back.
+// The fields of `stdlib/Build.maxon`'s JSON that this reads back.
 let ManifestNameKey = "name"
 let ManifestOutputKey = "output"
 let ManifestSourcesKey = "sources"
+let ManifestVersionKey = "version"
 
 // ⭐⭐ **`maxon build` WITH NO PATH RUNS `build.maxon`, WHICH IS A MAXON PROGRAM AND NOT A CONFIG
 // FILE.** That distinction is the whole design: a project's build is described by CODE, with the
@@ -629,7 +630,15 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 		unrecognized(spec) then return ManifestRun.ran(reportUnknownTarget(spec))
 	end 'manifestTarget'
 
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage) otherwise (e) 'buildErr'
+	// ⚠ AN ABSENT `version` IS NOT AN ERROR: a manifest written before the key existed must keep
+	// building, so a missing one reads as "unversioned".
+	//
+	// ⛔ THE DESCRIPTION'S `name` IS NOT THE PRODUCT NAME. It is whatever selected this build — a target
+	// name, or for `Build.build` the SOURCE path, which is `.` for a project built from its own
+	// directory. The binary's product name comes from the OUTPUT, which is what the thing is called.
+	let productVersion = try doc.getString(chosen, key: ManifestVersionKey) otherwise ""
+
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, productVersion: productVersion) otherwise (e) 'buildErr'
 		reportCompileError(e)
 		return ManifestRun.ran(1)
 	end 'buildErr'

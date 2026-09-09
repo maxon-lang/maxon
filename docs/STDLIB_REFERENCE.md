@@ -1362,8 +1362,8 @@ a manifest never breaks an ordinary `maxon build some/file.maxon`.
 
 | Function | Returns | Throws | Description |
 |---|---|---|---|
-| `Build.build(source, output:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
-| `Build.target(name, source:, output:)` | `BuildConfig` | -- | One NAMED target, for a manifest that describes more than one thing to build. |
+| `Build.build(source, output:, version:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
+| `Build.target(name, source:, output:, version:)` | `BuildConfig` | -- | One NAMED target, for a manifest that describes more than one thing to build. |
 | `Build.buildTargets(targets)` | -- | -- | Writes several named targets as a JSON array. One target may be a bare object; the compiler accepts either shape. |
 | `Build.buildWithConfig(config)` | -- | -- | Full control: several sources, compiled as ONE program in the order given. |
 | `Build.emitBuildConfig(config)` | -- | -- | Writes the description as JSON on stdout. The three calls above end here; a manifest rarely calls it directly. |
@@ -1377,8 +1377,19 @@ a manifest never breaks an ordinary `maxon build some/file.maxon`.
 | `sources` | `Array with String` | The files and directories to compile, as ONE program, in this order. |
 | `optimize` | `bool` | Reserved; the compiler's optimization is not currently switchable here. |
 | `debug_info` | `bool` | Write the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read. The executable is byte-identical either way. |
+| `version` | `String` | The product's own version, as a dotted number. Goes into the binary's metadata; empty means unversioned. |
 
-`BuildConfig.create(name, output:, sources:, optimize:, debug_info:)` builds one.
+`BuildConfig.create(name, output:, sources:, optimize:, debug_info:, version:)` builds one.
+
+⭐ **`version` IS THE PRODUCT'S VERSION, AND IT REACHES THE BINARY ITSELF** — a Windows
+`VS_VERSIONINFO` resource that Explorer's Details tab and every installer reads, and a Mach-O
+`LC_SOURCE_VERSION`. Four fields are parsed off the dotted string, missing ones read 0, and a
+component that is not a number reads 0 as well: a version string a person wrote is metadata, and
+refusing to build over untidy metadata would be a compiler declining correct code.
+
+⚠ **THE BINARY'S PRODUCT NAME IS ITS OWN FILE NAME, NEVER `name`.** `name` is what SELECTS a build —
+a target's name, or for `Build.build` the source path, which is `.` for a project built from its own
+directory. What the thing is called is what it is called on disk.
 
 ⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
 every file beneath the manifest — every spec, every test — under a command that named nothing at all.
