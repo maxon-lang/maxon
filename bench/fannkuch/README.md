@@ -91,19 +91,27 @@ reverse-loop iteration where clang emits ~8.
 
 ## Candidate ranking
 
-Re-ranked after every round from the new profile; a closed row keeps its measured delta.
+**General, classical passes first** (user direction): each row is a compiler-wide optimization, and the
+fannkuch shape it happens to cover is named beside it. Re-ranked after every round from the new
+profile; a closed row keeps its measured delta.
 
-| # | Candidate | Instr saved per set / get | Risk | Live regs added | State |
+| # | Candidate | What it is | The fannkuch shape it covers | Risk | State |
 |---|---|---|---|---|---|
-| 1 | A4 static trivial-element stamp (skip the `@40` guard, drop `__im_empty`) | −3 / −3 | low | 0 | open |
-| 2 | A2 sink the `try` flag test into the slow arm | −4 / −4 | low-med | 0 | open |
-| 3 | A3 sink the `__rc_` ≥ 0 check into the slow arm | −2 / −2 | low-med | 0 | open |
-| 4 | B-lite LICM of `length@8` across element stores + the two slow arms | −1 / −1 | med | +1 per record (budgeted) | open |
-| 5 | A5 drop the buffer-null guard (implied by the bound) | −3 / 0 | med (runtime audit) | 0 | open |
-| 6 | B+ loop versioning: shape guards hoisted, call-free hot copy | set→3, get→3 | high | +2 per record | open |
-| 7 | Loop rotation (one taken `jmp` per iteration) | — | med | 0 | open |
-| 8 | Managed-array stack promotion (`__managed_create` records) | allocation-bound programs only | med | 0 | open |
-| 9 | Program-side narrow element type | — | n/a | — | open |
+| 1 | Jump threading through constant phi inputs | a `condBranch` on a block argument that is a constant on an incoming edge is resolved on that edge | the `try` flag test after every inlined fast arm (`cmp r10,0 / jcc` + the phi copy), −4 per access | low-med | open |
+| 2 | Value-range analysis + redundant-check elimination | ranges for induction variables and loads along dominators; a check implied by a dominating check or the range is deleted | the `ElementIndex >= 0` guard (−2 per access), then the bound itself for loop-bounded indices | med | open |
+| 3 | Alias-aware loop-invariant code motion | memory disambiguation by object + field offset so an element store does not pin the record-header loads; known-effect calls admitted | `length@8` reloaded per access; today LICM refuses any loop with a store or a call | med | open |
+| 4 | Loop unswitching | loop-invariant conditions hoisted by versioning the loop | the remaining shape guards (ownership, buffer, sharing) leave the loop and the hot copy is call-free | high | open |
+| 5 | Loop rotation + block layout | one taken jump fewer per iteration; cold arms out of line | every loop's back edge; 54 slow arms inline with the hot code | med | open |
+| 6 | General inlining with a cost model | beyond today's leaf-only single round | `flipCount`/`advancePermutation` into `main` | med | open |
+| 7 | Escape analysis for managed arrays | `__managed_create` records promoted to the frame like struct records | allocation-bound programs only (not this one since the rewrite) | med | open |
+| 8 | Target-tier peephole | there is none today | address-mode and compare/branch residue after the passes above | med | open |
+| 9 | Program-side narrow element type | `Array with int(0 to 15)` mirroring `int8_t` | — | n/a | open |
+
+Closed:
+
+| Round | Change | n=11 A/B (control → change) | census | self-compile |
+|---|---|---|---|---|
+| 1 | static trivial-element stamp — the inlined get/set arms omit the `element_destroy@40` guard and the `__im_empty` block where the element type owes no drop (`specs/static-trivial-element.md`) | 7,926 → 7,698 ms (**−2.9%**) | ops 2308 → 2111, im-blocks 209 → 172, mov 266 → 236 | 40,491 → 40,103 ms (−1.0%) |
 
 Declined for this program: EC18 (already took the `mod 2`), refcount inlining (no managed elements),
 EC22 rel8 (size only), EC21/EC23 (measured empty by `docs/emitted-code-roadmap.md`).

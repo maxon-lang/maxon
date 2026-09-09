@@ -106,7 +106,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
-| **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15) |
+| **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
 | Store-forwarding / dead-store elim | ❌ |
 | mem2reg / SROA | **n/a — see below** |
 | Escape analysis → stack | ✅ `PromoteStackRecords` |
@@ -1571,6 +1571,20 @@ stand in for. New
 the one token that drops the negative half): **six of the eight go RED**, at exit 101, exit 1 ×2,
 exit 2 ×2 and **3221225477 — `0xC0000005`, an ACCESS VIOLATION**; the two that stay green are the two
 with no negative index in them.
+
+**`A4` · The `element_destroy@40` guard is asked at run time of a record whose element type the
+compiler already knows.** — ✅ **CLOSED 2026-09-08 (round 1 of the fannkuch loop, `bench/fannkuch/`).**
+`EC15`'s stride stamp gained a sibling: `LowerMaxonToStd.recordStaticElementFacts` also records, per
+Std op index, every typed array site whose element owes no drop (`Project.stdOpTrivialElementSites`),
+and `InlineManagedPrimitives` then emits the `__managed_set` fast arm without the `@40` load, compare
+and branch, and the `__managed_get` tail without them and without the `__im_empty` block. Unlike the
+stride, the stamp is always the record's: `@40` is stamped from the element type of the record's own
+instance by every producer (`specs/static-trivial-element.md` carries the writer census and the three
+sabotage-measured controls — exit 101, 0-for-42, 101). Timed A/B by `scripts/bench-fannkuch.py`, control
+built from the pre-change commit, runs interleaved, n=11: **7,926 → 7,698 ms (−2.9%)**; census ops
+2308 → 2111, `im-blocks` 209 → 172, `mov` 266 → 236; the compiler's own self-compile 40,491 → 40,103 ms
+and its binary 43 KB smaller. ⚠ **−8.5% of the ops bought −2.9% of the time** — `EC14`'s lesson again:
+a predictable branch on an L1-hitting load is mostly absorbed by the core.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

@@ -996,6 +996,10 @@ export typealias ImmortalConstArraySiteMap = Map with (OpIndex, ImmortalRecordKi
 // reason. See `Project.stdOpElementStrides`.
 export typealias StdOpElementStrideMap = Map with (OpIndex, ElementStride)
 
+// ⭐⭐ The **STD** op indices, in `StdOpElementStrideMap`'s key space, whose container's element owes no drop.
+// See `Project.stdOpTrivialElementSites`.
+export typealias StdOpTrivialElementSiteSet = Set with OpIndex
+
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
@@ -8046,7 +8050,27 @@ export type Project
 	// that must still go to the runtime) — a reader treating a negative stamp as an error rather than as a
 	// width would specialize a packed array onto a byte access.
 	export var stdOpElementStrides as StdOpElementStrideMap
-
+	// ⭐⭐ **THE SITES WHOSE CONTAINER'S ELEMENT OWES NO DROP** — what lets `inlineManagedPrimitives` omit
+	// the `element_destroy@40` guard from a fast arm instead of loading and comparing, at every element
+	// access in every program, a field the compiler stamped from the element type. Keyed exactly as
+	// `stdOpElementStrides` is — the Std op index of the call `LowerMaxonToStd` is appending, recorded by
+	// the same door under the same gate — so every argument above for why that key survives to the read is
+	// this table's too.
+	//
+	// ⭐ **A SECOND COLUMN RATHER THAN A STRUCT VALUE IN THE STRIDE MAP, AND THAT IS A COST DECISION.** A
+	// Maxon struct value is a heap record, so a map carrying `(stride, owesDrop)` would allocate one per
+	// element-access site in every program; a `Set` of the trivial sites costs a word per site and nothing
+	// for the sites that are not.
+	//
+	// ⭐ **UNLIKE THE STRIDE, THIS STAMP IS ALWAYS THE RECORD'S.** Every writer of `element_destroy@40`
+	// stamps it from the element type of the record's own instance: a concrete creation site from
+	// `containerElementOwesDrop`, a creation inside a shared generic body from the threaded layout
+	// descriptor's `destroyFunc@40` (0 for a trivial instantiation), an image-data record from
+	// `columnDestroyStamp`, and a view or clone copies its source's slot. So the W57 reading that keeps a
+	// byte stride from fixing a width does not arise: the slot WIDTH inside a shared body is the body's,
+	// but the element's OWNERSHIP is the instantiation's, and the descriptor carries that per
+	// instantiation.
+	export var stdOpTrivialElementSites as StdOpTrivialElementSiteSet
 	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
@@ -8160,6 +8184,7 @@ export type Project
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			stdOpElementStrides: StdOpElementStrideMap.create(),
+			stdOpTrivialElementSites: StdOpTrivialElementSiteSet.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,

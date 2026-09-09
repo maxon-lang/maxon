@@ -133,11 +133,12 @@ end 'main'
 ```
 
 <!-- test: a-known-word-stride-write-keeps-every-other-guard -->
-The store mirror, and the case that says the specialization removes the STRIDE FORK and nothing else.
-`__managed_set`'s fast arm still proves the element has no destructor, that the index is in range, that
-the buffer is this record's, that it exists and that nobody is viewing it — all five survive, and their
-refusals still reach the slow arm's `callDirect __managed_set`. What is gone is the `element_size@24`
-load, the two compares and the byte arm.
+The store mirror, and the case that says the stride specialization removes the STRIDE FORK and nothing
+else. `__managed_set`'s fast arm still proves that the buffer is this record's, that the index is in
+range, that the buffer exists and that nobody is viewing it — all four survive, and their refusals still
+reach the slow arm's `callDirect __managed_set`. What is gone here is the `element_size@24` load, the two
+compares and the byte arm; the destructor question is answered statically for a `Word` element
+(`static-trivial-element`), so no `[<rec> + 40]` load appears either.
 
 Every slot is written and read back, so a wrong width or a wrong address is a wrong exit code.
 ```maxon

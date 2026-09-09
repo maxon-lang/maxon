@@ -43,7 +43,8 @@
 // type outright: `element_size@24` is neither a machine word nor a single byte for a 2- or 4-byte element,
 // an unset stride and every sub-byte-packed width, and each of those leaves in at most two compares. On the
 // STORE path `element_destroy@40 != 0` refuses every managed-element array next, whose occupant is the
-// runtime's to destroy. The bound and the three copy-on-write arms, which refuse rarely, follow.
+// runtime's to destroy — asked at run time only where the lowering could not answer it (see the ownership
+// stamp below). The bound and the three copy-on-write arms, which refuse rarely, follow.
 //
 // ⚠ **EC1 MEASURED THAT DOOR ON `ByteArray`, AND EC3 MOVED `ByteArray` TO THE OTHER SIDE OF IT.** The
 // number this paragraph used to carry — a `ByteArray` element access paying 4 instructions before reaching
@@ -86,12 +87,12 @@
 // derived from `MachineWordBytes`, a second derivation of a width the runtime already derives, paired by
 // hand with `StdType.i64` at each of three call sites and with `StdType.u8` at three more.
 
-// ⭐⭐ **AND SINCE EC15 THE FORK IS NOT EMITTED WHERE THE COMPILER ALREADY KNOWS THE ANSWER.** `Array with
+// ⭐⭐ **THE FORK IS NOT EMITTED WHERE THE COMPILER ALREADY KNOWS THE ANSWER.** `Array with
 // Integer` stamps `element_size@24` with 8 in every program that ever runs, and this pass was emitting a
 // `loadIndirect` of that field, two compares and two branches AT EVERY ELEMENT ACCESS IN EVERY PROGRAM —
-// a runtime dispatch on a compile-time constant. `LowerMaxonToStd.recordStaticElementStride` writes the
+// a runtime dispatch on a compile-time constant. `LowerMaxonToStd.recordStaticElementFacts` writes the
 // stamp down against the Std op index of the call it is appending (`Project.stdOpElementStrides`), and
-// `stridePlanAt` reads it back here. What follows from the answer:
+// `stridePlanFor` reads it back here. What follows from the answer:
 //
 //   • **`singleArm`** — ONE arm is emitted, INTO THE SITE'S OWN BLOCK. No fork, no `element_size@24` load,
 //     no second arm, and no branch into the arm either, because with one successor the arm IS the block.
@@ -109,6 +110,18 @@
 // at the machine-word slot inside a shared body and handed back under a SUBSTITUTED concrete type — so a
 // byte stamp does not fix the width. `strideDispatchPlanForStamp` is where that reading lives, with the
 // program that measured it; this file acts on the plan and asks no stride question of its own.
+//
+// ⭐⭐ **THE OWNERSHIP STAMP RIDES THE SAME KEY, AND UNLIKE THE STRIDE IT IS ALWAYS THE RECORD'S.** The
+// same door records, in `Project.stdOpTrivialElementSites`, every site whose element the lowering knows owes
+// no drop, and the two checked expanders read it back: such a site's store arm omits the `element_destroy@40`
+// load, compare and branch, and its checked-get tail omits them and the `__im_empty` block with them. The
+// W57 caveat does not apply because every writer of `element_destroy@40` stamps the element type of the
+// record's OWN instance — a concrete creation from `containerElementOwesDrop`, a creation inside a shared
+// generic body from the threaded descriptor's `destroyFunc@40` (0 for a trivial instantiation), an
+// image-data record from `columnDestroyStamp`, and a view or clone from its source's slot. The slot WIDTH
+// inside a shared body is the body's; the element's OWNERSHIP is the instantiation's, and the descriptor
+// carries that per instantiation. The refusal direction is the stride's: an opaque `T` records nothing, and
+// its site keeps both guards.
 //
 // ⭐ **AND FOR `__managed_get_unchecked` A KNOWN STRIDE REMOVES THE SLOW ARM WITH THE FORK**, because the
 // fork was that expansion's ONLY precondition — see `expandUncheckedGetUnguarded`. The loop body of a
@@ -235,7 +248,7 @@ export function inlineManagedPrimitives(project Project, module StdModule)
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, strides: project.stdOpElementStrides)
+		var inliner = PrimitiveInliner.create(module, func: func, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -252,11 +265,13 @@ type PrimitiveInliner
 
 	// ⭐ **THE COMPILE-TIME `element_size@24` STAMP OF EVERY CALL SITE THAT HAS ONE (EC15)**, keyed by the
 	// call's own index in `module.ops` and written by `LowerMaxonToStd` — the tier that still holds the
-	// container's TYPE, which this one deliberately does not. Read through `stridePlanAt` and nowhere else;
-	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, which since EC17 is
-	// the ONLY pass between the write and this read.
+	// container's TYPE, which this one deliberately does not. Read through `stridePlanFor` and nowhere else;
+	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, the only pass between
+	// the write and this read.
 	let strides as StdOpElementStrideMap
-
+	// The sites in that key space whose element owes no drop, written by the same door and read by the
+	// two checked expanders off the same op index.
+	let trivialElements as StdOpTrivialElementSiteSet
 	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
 	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
 	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
@@ -268,8 +283,8 @@ type PrimitiveInliner
 	var seeded as bool
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, strides StdOpElementStrideMap) returns PrimitiveInliner
-		return Self{module: module, func: func, strides: strides, ids: sharedUnseededMinter, seeded: false, expanded: 0}
+	static function create(module StdModule, func IrFunction, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
+		return Self{module: module, func: func, strides: strides, trivialElements: trivialElements, ids: sharedUnseededMinter, seeded: false, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -551,8 +566,7 @@ type PrimitiveInliner
 		// DOES ANYWHERE ELSE (EC15)** — not merely which arm to emit, but whether a SLOW ARM exists at all and
 		// whether to expand. The other two expanders keep the bound and the ownership gates under every plan,
 		// so they always carve a frame and always have somewhere for a refusal to go.
-		let plan = self.stridePlanAt(blockRef, pos: pos)
-
+		let plan = self.stridePlanFor(self.opIndexAt(blockRef, pos: pos))
 		match plan 'plan'
 			runtimeFork then break 'plan'
 			singleArm(stride) then return self.expandUncheckedGetUnguarded(blockRef, pos: pos, arr: arr, index: index, resultId: resultId, stride: stride)
@@ -609,18 +623,20 @@ type PrimitiveInliner
 	//
 	// ⭐ **THE BOUND IS PER-ARM AND THE EMPTY-SLOT TAIL IS SHARED, WHICH IS WHERE THE WIDTHS DIVERGE AND
 	// WHERE THEY DO NOT.** The bound is three ops, so emitting it once per width costs less than keeping
-	// `element_size@24` live across it to re-ask which width this is; the tail is six and reads only the
-	// loaded VALUE, so the two arms rejoin at `loaded` carrying it as a block arg and the tail is written —
-	// and emitted — once.
+	// `element_size@24` live across it to re-ask which width this is; the tail is up to six and reads only
+	// the loaded VALUE, so the two arms rejoin at `loaded` carrying it as a block arg and the tail is
+	// written — and emitted — once.
 	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
-		let plan = self.stridePlanAt(blockRef, pos: pos)
-
+		// Both site facts are read off the op index BEFORE the carve moves the call.
+		let site = self.opIndexAt(blockRef, pos: pos)
+		let plan = self.stridePlanFor(site)
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
 
+		let trivialElement = self.trivialElements.contains(site)
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
 
@@ -631,7 +647,7 @@ type PrimitiveInliner
 		if arms.count() == 1 'oneKnownWidth'
 			let only = try arms.get(0) otherwise panic("expandCheckedGet: a one-arm plan produced an empty arm list")
 			let bounded = self.emitBoundedLoad(self.blockAt(only.blockRef), arr: arr, index: index, stride: only.stride, slow: frame.slow)
-			self.emitCheckedGetTail(self.blockAt(bounded.blockRef), arr: arr, value: bounded.value, frame: frame)
+			self.emitCheckedGetTail(self.blockAt(bounded.blockRef), arr: arr, value: bounded.value, frame: frame, trivialElement: trivialElement)
 			return self.finish(frame.carve)
 		end 'oneKnownWidth'
 
@@ -649,8 +665,7 @@ type PrimitiveInliner
 		for arm in arms 'eachArm'
 			self.emitBoundedLoadArm(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, slow: frame.slow, loaded: loaded)
 		end 'eachArm'
-
-		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame)
+		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame, trivialElement: trivialElement)
 
 		return self.finish(frame.carve)
 	end 'expandCheckedGet'
@@ -659,6 +674,11 @@ type PrimitiveInliner
 	// `cur` holds the loaded element — as its own block arg when the two widths rejoined there, and as the
 	// value the one arm's load defined otherwise.
 	//
+	// ⭐ **WHERE THE LOWERING RECORDED THAT THE ELEMENT OWES NO DROP, THE TAIL IS THE EDGE AND NOTHING
+	// ELSE.** A trivial element's 0 is a genuine value, so there is no empty slot to distinguish and the
+	// `element_destroy@40` question is answered before this pass runs; the load, the compare and the
+	// `__im_empty` block are asked at run time only where the lowering could not answer.
+	//
 	// ⚠ THREE CONSTANTS THAT ARE ALL ZERO TODAY, AND THEY STAY THREE. "no error in flight", "no
 	// per-element destructor" (inside `emitElementIsManaged`, which owns that one) and "an empty managed
 	// slot" are three different facts that happen to share a value; folding them into one `const 0` would
@@ -666,22 +686,28 @@ type PrimitiveInliner
 	// `MemoryIndexOutOfBoundsOrdinal` makes about not aliasing itself to `ArrayErrorIndexOutOfBoundsFlag`.
 	// It costs nothing: `foldConstOperands` folds both compares into immediates and DCEs their consts,
 	// leaving only the flag, whose reader is the edge below.
-	function emitCheckedGetTail(cur IrBlock, arr ValueId, value ValueId, frame InlineFrame)
+	function emitCheckedGetTail(cur IrBlock, arr ValueId, value ValueId, frame InlineFrame, trivialElement bool)
 		let noError = emitConst(self.module, block: cur, value: NoErrorFlag, ids: self.valueIds())
-		let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
 
-		var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
-		self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
+		if trivialElement 'noEmptySlotToReport'
+			self.module.setTerminator(cur, op: StdOp.branch(frame.carve.cont.id))
+		end 'noEmptySlotToReport' else 'askTheRecord'
+			let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+			let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
+
+			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
+			self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
+
+			// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
+			// takes it as its own block arg, and `cur` dominates this block — so both reach this block's own edge
+			// to the continuation too.
+			let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
+			let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
+			self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.carve.cont.id))
+			attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
+		end 'askTheRecord'
+
 		attachEdge(cur, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
-
-		// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
-		// takes it as its own block arg, and `cur` dominates this block — so both reach this block's own edge
-		// to the continuation too.
-		let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
-		let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
-		self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.carve.cont.id))
-		attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
 	end 'emitCheckedGetTail'
 
 	// ⭐ One width's half of the checked get: the `length@8` bound, then the slot load — and NOT the edge
@@ -727,35 +753,43 @@ type PrimitiveInliner
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
-		let plan = self.stridePlanAt(blockRef, pos: pos)
-
+		let site = self.opIndexAt(blockRef, pos: pos)
+		let plan = self.stridePlanFor(site)
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
 
+		let trivialElement = self.trivialElements.contains(site)
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
-			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame)
+			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame, trivialElement: trivialElement)
 		end 'eachArm'
 
 		return self.finish(frame.carve)
 	end 'expandElementStore'
 
-	// ⭐ **ONE WIDTH'S WHOLE FAST ARM, AND THE STORE'S FIVE GUARDS LIVE HERE RATHER THAN ABOVE THE STRIDE
+	// ⭐ **ONE WIDTH'S WHOLE FAST ARM, AND THE STORE'S GUARDS LIVE HERE RATHER THAN ABOVE THE STRIDE
 	// FORK.** Every one of them is width-INDEPENDENT, so they could equally have been asked once above a
 	// second stride test placed just before the store — and that shape was rejected: it puts two more
 	// instructions (a compare and a branch) on the WORD path, which is every `Array with Int`, `String`
-	// element and pointer slot in the language, to save emitting five guards a second time. The guards are
+	// element and pointer slot in the language, to save emitting the guards a second time. The guards are
 	// paid in CODE SIZE, once per call site; the second test would be paid in TIME, once per element access.
 	// Nothing about the arms differs but the stride constant and the access width, which is why they are one
 	// function called twice rather than two.
-	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride SingleOpStride, frame InlineFrame)
+	//
+	// ⭐ **THE DESTRUCTOR GUARD IS ASKED AT RUN TIME ONLY WHERE THE LOWERING COULD NOT ANSWER IT.** A site
+	// whose element the lowering recorded as owing no drop emits four guards — ownership, the bound, the
+	// buffer, the sharing test; every other site emits the `element_destroy@40` test ahead of them, and
+	// the guards it keeps are the same four in the same order either way.
+	function emitStoreArm(cur IrBlock, arr ValueId, index ValueId, value ValueId, limitOffset ByteOffset, stride SingleOpStride, frame InlineFrame, trivialElement bool)
 		var at = cur
 
-		let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-		let managed = emitElementIsManaged(self.module, block: at, destroy: destroy, ids: self.valueIds())
-		at = self.guard(at, refused: managed, slow: frame.slow, next: InlineOwnedLabel)
+		if not trivialElement 'ownershipNotKnownStatically'
+			let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
+			let managed = emitElementIsManaged(self.module, block: at, destroy: destroy, ids: self.valueIds())
+			at = self.guard(at, refused: managed, slow: frame.slow, next: InlineOwnedLabel)
+		end 'ownershipNotKnownStatically'
 
 		// ⛔⛔ **OWNERSHIP IS ASKED BEFORE THE BOUND, AND THAT ORDER IS THE BOUND'S PRECONDITION (A2).** The
 		// `mem_set` limit is `capacity@16`, the ONE field that carries `BufferOwnership`'s negative sentinels,
@@ -797,13 +831,16 @@ type PrimitiveInliner
 	// recorded for an opaque `T` element in a shared generic body (W57 — one body serves every width), for an
 	// array reached through an interface or an existential, or for any call the lowering could not type. Those
 	// sites keep `emitStrideDispatch` exactly as they had it.
-	function stridePlanAt(blockRef BlockRef, pos BlockOpPos) returns StrideDispatchPlan
-		let stamp = try self.strides.get(self.opIndexAt(blockRef, pos: pos)) otherwise 'nothingRecorded'
+	//
+	// ⚠ The key is the call's op index, which is the block's to give only until the carve moves the call —
+	// every expander reads its site facts (this plan and `trivialElements`) before it carves.
+	function stridePlanFor(site OpIndex) returns StrideDispatchPlan
+		let stamp = try self.strides.get(site) otherwise 'nothingRecorded'
 			return StrideDispatchPlan.runtimeFork
 		end 'nothingRecorded'
 
 		return strideDispatchPlanForStamp(stamp)
-	end 'stridePlanAt'
+	end 'stridePlanFor'
 
 	// ⭐⭐ **THE ARMS THIS SITE'S FAST PATH NEEDS, WITH THE HEAD ALREADY WIRED TO THEM (EC15).** One list,
 	// walked by all three expanders, so "how many widths does this site serve" is asked once rather than at

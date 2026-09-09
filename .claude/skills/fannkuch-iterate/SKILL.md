@@ -55,16 +55,29 @@ A candidate that names no shape is not a candidate.
   are reference, not a gate: review the minted diff under `--update-required` with a filter, line by
   line, and keep every moved fragment.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
+- ⛔ **Never run the entire spec suite** (user ruling). Every spec run — yours, an implementer's, a
+  reviewer's, and `/land`'s battery — is `spec-test --filter=<spec>` over the spec files the change
+  touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The self-compile stays
+  (it is the E3092 gate, not a spec run).
 - The git tail is one commit on `fannkuch-loop`. No rebase. No push.
 
 ## 5. A/B
 
 ```
-python scripts/bench-fannkuch.py --n 11 --runs 5 --ref $PRE --note "<candidate>: <mechanism>; census <col> a->b; predicted <shape>"
+python scripts/bench-fannkuch.py --n 11 --runs 5 --ref $PRE --self-compile --note "<candidate>: <mechanism>; census <col> a->b; predicted <shape>"
 ```
 
 Control and experiment are two compilers in ONE session, runs interleaved. A before/after across a
 source change is not an A/B (roadmap, EC19). The note carries the WHY; the tool cannot.
+
+> ## ⛔ HALT ON A SLOWER SELF-COMPILE (user ruling 2026-09-08)
+>
+> `--self-compile` times each arm's compiler compiling `maxon-bin` (the control arm — `--ref $PRE`
+> — is listed first, so put it first). **A `HALT` line means the change made the compiler compile
+> itself more than 5% slower than the control does.** Do not land it; do not narrow the pass to make
+> the number pass. Stop, report the two times and the mechanism, and wait for the user's ruling —
+> the compiler's own build time is a budget the user owns, and a benchmark win does not spend it.
+> Between +2% and +5%, say so in the note and carry on.
 
 ## 6. Headline
 

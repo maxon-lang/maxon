@@ -51,7 +51,15 @@ CENSUS_SCRIPT = os.path.join(REPO, "scripts", "emitted-code-count.py")
 WINDOWS_CLANG = r"C:\Program Files\LLVM\bin\clang.exe"
 # Single-threaded on purpose: without -fopenmp the pragma is a comment and the blocks run in sequence.
 CLANG_FLAGS = ["-O3", "-march=native", "-Wall", "-Wno-unknown-pragmas"]
+# The seed predates the manifest's named targets, so it compiles `maxon-bin/` as a plain program and
+# has to be told the output stem — the same command `.github/workflows/ci.yml` runs on a fresh checkout.
+SEED_BUILD_ARGS = "build maxon-bin -o maxon-bin/.maxon/maxon"
 LEAK_EXIT_CODE = 101
+# The self-compile band: a change that makes the compiler compile ITSELF this much slower than the
+# control does is a HALT for the user (ruling 2026-09-08), whatever it bought the benchmark. The
+# threshold sits above the ±3% build-to-build layout noise docs/emitted-code-roadmap.md records.
+SELF_COMPILE_HALT_FRACTION = 0.05
+SELF_COMPILE_SOURCE = "maxon-bin"
 BUILD_TIMEOUT_S = 1200
 RUN_TIMEOUT_S = 1800
 
@@ -266,6 +274,18 @@ def profile_arm(arm, n, hz):
     return path, r.stdout
 
 
+def time_self_compile(arm):
+    """Wall time of this arm's compiler compiling the tree's own compiler sources into a scratch stem."""
+    stem = os.path.join(arm["dir"], "selfcompile", "maxon")
+    os.makedirs(os.path.dirname(stem), exist_ok=True)
+    start = time.perf_counter()
+    r = run([arm["compiler"], "build", SELF_COMPILE_SOURCE, "-o", stem], cwd=REPO)
+    ms = (time.perf_counter() - start) * 1000.0
+    if r.returncode != 0 or not os.path.exists(stem + EXE):
+        raise BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+    return ms, os.path.getsize(stem + EXE)
+
+
 def hot_functions_section(report):
     lines = report.splitlines()
     out = []
@@ -300,13 +320,15 @@ def main():
     ap.add_argument("--compiler", action="append", default=[], help="a compiler binary as an arm (repeatable)")
     ap.add_argument("--label", action="append", default=[], help="label for the matching --compiler")
     ap.add_argument("--ref", action="append", default=[], help="a git ref to build a compiler from, as an arm")
-    ap.add_argument("--ref-build-args", default="build maxon-bin",
-                    help="what the seed runs in a ref's worktree (refs before dc2404d2 need 'build')")
+    ap.add_argument("--ref-build-args", default=SEED_BUILD_ARGS,
+                    help="what the seed runs in a ref's worktree (default: the CI seed build command)")
     ap.add_argument("--no-slot", action="store_true", help="do not add the slot compiler as an arm")
     ap.add_argument("--no-c", action="store_true", help="skip the C reference")
     ap.add_argument("--profile", action="store_true", help="profile each Maxon arm with `maxon profile run`")
     ap.add_argument("--profile-n", type=int, default=None, help="n for the profile run (default --n)")
     ap.add_argument("--profile-hz", type=int, default=1000)
+    ap.add_argument("--self-compile", action="store_true",
+                    help="also time each arm's compiler compiling maxon-bin; the first arm is the control and any other arm slower by more than the halt band prints HALT")
     ap.add_argument("--note", default="", help="append a log row per Maxon arm with this note")
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     ap.add_argument("--source", default=DEFAULT_SOURCE)
@@ -334,17 +356,19 @@ def main():
     today = datetime.date.today().isoformat()
 
     try:
+        # Ref arms first: an A/B's control is the pre-change ref, and the self-compile band is
+        # measured against the FIRST arm.
         arms = []
+        for ref in args.ref:
+            sha, compiler = build_compiler_from_ref(ref, out_dir, args.ref_build_args.split())
+            arms.append((f"ref@{sha}", compiler))
+        for i, compiler in enumerate(args.compiler):
+            label = args.label[i] if args.label else f"compiler{i + 1}"
+            arms.append((label, os.path.abspath(compiler)))
         if not args.no_slot:
             if not os.path.exists(SLOT_COMPILER):
                 raise BuildFailure(f"the slot compiler is missing at {SLOT_COMPILER}; build it or pass --no-slot")
             arms.append(("slot", SLOT_COMPILER))
-        for i, compiler in enumerate(args.compiler):
-            label = args.label[i] if args.label else f"compiler{i + 1}"
-            arms.append((label, os.path.abspath(compiler)))
-        for ref in args.ref:
-            sha, compiler = build_compiler_from_ref(ref, out_dir, args.ref_build_args.split())
-            arms.append((f"ref@{sha}", compiler))
         if not arms and args.no_c:
             print("usage: nothing to run", file=sys.stderr)
             return 3
@@ -425,6 +449,30 @@ def main():
         censuses[arm["label"]] = c
         print("  " + f"{arm['label']:<16}" + "".join(f"{c[k]:>15}" for k in CENSUS_COLUMNS))
 
+    self_compiles = {}
+    halted = False
+    if args.self_compile:
+        print()
+        print(f"  self-compile ({SELF_COMPILE_SOURCE}) per arm, control first:")
+        control_ms = None
+        for arm in maxon_arms:
+            try:
+                ms, size = time_self_compile(arm)
+            except BuildFailure as e:
+                print(f"BUILD FAILURE: {e}", file=sys.stderr)
+                return 2
+            self_compiles[arm["label"]] = {"ms": ms, "bytes": size}
+            if control_ms is None:
+                control_ms = ms
+                print(f"  {arm['label']:<16} {fmt_ms(ms):>10} ms   {size:,} B   (control)")
+            else:
+                delta = ms / control_ms - 1.0
+                verdict = ""
+                if delta > SELF_COMPILE_HALT_FRACTION:
+                    verdict = f"   HALT: +{delta * 100:.1f}% over the control's self-compile (band {SELF_COMPILE_HALT_FRACTION * 100:.0f}%)"
+                    halted = True
+                print(f"  {arm['label']:<16} {fmt_ms(ms):>10} ms   {size:,} B   {delta * 100:+.1f}%{verdict}")
+
     profiles = {}
     if args.profile:
         profile_n = args.profile_n if args.profile_n is not None else args.n
@@ -447,9 +495,12 @@ def main():
             s = stats[arm["label"]]
             c_cell = f"{fmt_ms(c_stats['min'])} / {fmt_ms(c_stats['median'])}" if c_stats else "-"
             ratio = f"{s['median'] / c_stats['median']:.2f}" if c_stats else "-"
+            note = args.note.replace("|", "/")
+            if arm["label"] in self_compiles:
+                note = f"{note}; self-compile {fmt_ms(self_compiles[arm['label']]['ms'])} ms"
             append_log_row([today, head, "dirty" if dirty else "clean", str(args.n), str(args.runs), c_cell,
                             f"{fmt_ms(s['min'])} / {fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
-                            str(censuses[arm["label"]]["ops"]), arm["label"], args.note.replace("|", "/")])
+                            str(censuses[arm["label"]]["ops"]), arm["label"], note])
         print()
         print(f"  {len(maxon_arms)} row(s) appended to {os.path.relpath(LOG_PATH, REPO)}")
 
@@ -457,9 +508,13 @@ def main():
         payload = {"date": today, "head": head, "dirty": dirty, "n": args.n, "runs": args.runs,
                    "clang": clang_line, "clang_flags": CLANG_FLAGS, "stats": stats,
                    "arms": [{k: v for k, v in arm.items()} for arm in maxon_arms],
-                   "census": censuses, "profiles": profiles, "note": args.note}
+                   "census": censuses, "profiles": profiles, "self_compile": self_compiles,
+                   "halted": halted, "note": args.note}
         with open(os.path.join(out_dir, "last-run.json"), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
+    if halted:
+        print()
+        print("HALT: the change slows the compiler's own self-compile beyond the band; stop and ask before landing it.")
     return 0
 
 
