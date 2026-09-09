@@ -1,0 +1,44 @@
+// "A spawned green thread reached a worker M" is a property to BLOCK ON, not one to sample. `main`
+// can publish every message and read `schedMaxActiveWorkers()` before the OS has run the thread
+// `__sched_wake_or_spawn` created for it, and a correct runtime then reads `workers=1` — failing both
+// halves of the assertion by winning a race instead of by being wrong.
+//
+// ⭐ THE COUNTERS THIS WAITS ON ARE PROCESS-WIDE AND MONOTONIC. `schedMaxActiveWorkers` is a
+// high-water mark and `slabRemoteFreeCount` sums one per-P word over `__sched_procs`, so WHICH
+// machine asks is irrelevant and WHEN it asks is everything. That is why callers read them at the
+// point their work is published rather than wherever is convenient.
+
+// One turn costs a real millisecond, so the turn budget IS the timeout in milliseconds.
+let arrivalTurnMs = 1
+let arrivalTurns = 3000
+
+// The second machine, and the processor count below which there cannot be one.
+let secondWorker = 2
+
+// False ONLY on timeout, so a caller that prints the answer cannot report a starved run as a clean
+// one.
+//
+// ⚠ `sleep` AND NOT `Runtime.yield()`. A yield is one turn on THIS machine and returns as soon as
+// nothing else is runnable, so it neither hands a processor to the machine being waited for nor stops
+// draining the queue that machine would steal from — under the saturation this exists for, a yield
+// spin competes with its own subject. A sleep parks on a timer and the scheduler netpolls.
+export function awaitWorkerArrival() returns bool
+	// With one processor there is no second machine and `workers=1` is the correct reading, so waiting
+	// here would spend the whole budget to learn nothing.
+	if __Builtins.schedProcessorCount() < secondWorker 'oneProcessor'
+		return true
+	end 'oneProcessor'
+
+	var turn = 0
+
+	while turn < arrivalTurns 'wait'
+		if __Builtins.schedMaxActiveWorkers() >= secondWorker 'arrived'
+			return true
+		end 'arrived'
+
+		sleep(arrivalTurnMs)
+		turn = turn + 1
+	end 'wait'
+
+	return false
+end 'awaitWorkerArrival'

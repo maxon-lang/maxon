@@ -1,4 +1,4 @@
-// Track-0 SERVICE torture (SV1) — the first program in this directory whose
+// SERVICE torture (SV1) — the first program in this directory whose
 // concurrency is REAL, and the one that flips `pin-matrix.sh`'s assertion 4.
 //
 // ⭐⭐ EVERY OTHER PROGRAM HERE IS A COROUTINE PROGRAM, AND `pin-matrix.sh` ASSERTS
@@ -128,17 +128,31 @@ function main() returns ExitCode
 		r = r + 1
 	end 'eachRound'
 
-	// ⚠ READ BEFORE THE HANDLES DROP. `workers`/`steals` are cumulative counters,
-	// and every worker M this program creates was created by the FIRST `spawn` —
-	// long before this line — so reading here measures what the sends did rather
-	// than what the teardown did.
+	// Blocked on rather than sampled: every message is published, so the work a woken
+	// machine would take exists — what is not yet certain is that the OS has run the
+	// machine.
+	let arrived = awaitWorkerArrival()
+
+	// ⚠ READ BEFORE THE HANDLES DROP. These are cumulative counters, and every worker M
+	// this program creates was created by the FIRST `spawn` — long before this line — so
+	// reading here measures what the sends did rather than what the teardown did.
 	let workers = __Builtins.schedMaxActiveWorkers()
 	let steals = __Builtins.schedStealCount()
 	let cpus = __Builtins.cpuCount()
+	let procs = __Builtins.schedProcessorCount()
+
+	// ⚠ A LOWER BOUND ON THIS RUN'S CROSS-P FREES, NOT A TOTAL: sinks are still queued
+	// here, so the payloads they have yet to release are not in this number.
+	let remoteFrees = __Builtins.slabRemoteFreeCount()
+
+	let waitVerdict = "ok" if arrived else "timeout"
 
 	print("aggregate={total}\n")
+	print("workerwait={waitVerdict}\n")
 	print("workers={workers}\n")
 	print("steals={steals}\n")
+	print("procs={procs}\n")
+	print("remoteFrees={remoteFrees}\n")
 	print("cpucount={cpus}\n")
 
 	// The array's element drop is the HANDLE drop, so every service is shut down

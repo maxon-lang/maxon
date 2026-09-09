@@ -105,14 +105,14 @@ every service case below now tallies in `self` and reports through an awaited re
 the COROUTINE half — a coroutine cannot reach a second processor at any processor count, so the `async`
 answers below are the answers everywhere. **Work stealing, the head CAS under contention and the Dekker
 fence on the ring publish are still out of reach from a case pinned to one P**; the multi-processor gate is
-`maxon-bin/track0/pin-matrix.sh`, which drives the `track0` programs across
+`scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
 `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program and
 `workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
 
 ⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS UNREACHABLE FOR A COROUTINE ALTOGETHER, WHATEVER ELSE THE
 PROGRAM SPAWNS.** It needs a second M popping the thread out of the dropper's queue while the dropper is
 still spawning; a coroutine enters no queue a second M reads, so no processor count exposes it.
-`maxon-bin/track0/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
+`scripts/multicore-stress/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
 
 ⚠ **EVERY CASE HERE CARRIES An `unsupported-targets:` MARKER, and that is a property of the subject.** They are all
 green-thread programs, and the green-thread substrate exists on exactly the lanes that have written it —
@@ -485,7 +485,7 @@ just at the one processor a spec case gets.
 KEEPS ITS SUBJECT AND LOST ITS OLD JUSTIFICATION.** It used to say *"the scheduler still RUNS its
 stealing rounds here"*; it does not — `__sched_find_runnable` is not even laid out in this program any
 more. What the case still pins is that the QUERY works: the builtin, the `__sched_steal_count` walk it
-roots and the per-P counter it reads are all still emitted and still answer. `track0/pin-matrix.sh`,
+roots and the per-P counter it reads are all still emitted and still answer. `multicore-stress/pin-matrix.sh`,
 which can raise `MAXON_MAX_PROCS`, is where the zero becomes a measurement of the pin.
 ```maxon
 function work(v Integer) returns Integer
@@ -520,7 +520,7 @@ it ended up in.
 WAS SOUND *"because a spec case gets no environment, `DefaultMaxProcs` is 1, and one P means one M"*.** That
 argument expired with the default, and `specs/green-thread-globals.md` now refuses the write outright —
 so each `Sink` tallies into its own field and `main` sums 300 awaited replies on the one green thread that
-awaited them. The old note's escape hatch, `track0/service-torture.maxon`, is no longer the only place the
+awaited them. The old note's escape hatch, `multicore-stress/service-torture.maxon`, is no longer the only place the
 shape can be read at more than one processor: this program's answer is now processor-independent by
 construction.
 
@@ -959,7 +959,7 @@ sPos=1 yPos=2
 because a coroutine never enters a P ring at all, so its zero is an arm nothing executes. This one reads
 0 for the opposite reason: twelve services and twelve hundred messages DO fill a ring, `__sched_steal` IS
 laid out and its rounds ARE reached — there is simply nobody to steal from at one processor. That is what
-makes the `steals > 0` reading in `track0/pin-matrix.sh` a measurement rather than a number that is
+makes the `steals > 0` reading in `multicore-stress/pin-matrix.sh` a measurement rather than a number that is
 always there.
 
 ⭐ **SEEN RED, AND THE TWIN STAYED GREEN — which is the whole reason these are two cases.** With

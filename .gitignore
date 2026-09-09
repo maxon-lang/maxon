@@ -79,27 +79,20 @@ vendor/*
 # reason) when it is absent, so a clone without it still builds and tests — it just cannot re-verify
 # the size-class table against upstream Go.
 
-# track0 harness scratch: each driver compiles its programs into a working directory beside itself
-# and leaves per-run logs there. Regenerated on every invocation.
-# ⚠ THE `.work/` LINE IS A PRE-EXISTING GAP CLOSED HERE, not new debt: `validate.sh` has written
-# `maxon-bin/track0/.work/` (two compiler binaries and their debug sidecars) and
-# `maxon-bin/track0/alloc-torture.exe` since W212, and neither was ignored — the same shape the
-# netpoll-park-driver block above records, found the same way.
-# ⭐ ONE PATTERN, NOT A LINE PER DRIVER. It was three literals and the fourth driver
-# (`awaitany-index-race.sh`, W219) arrived with its `.awaitany-race/` untracked AND
-# unignored, holding a built binary and per-run logs — the same shape the block above
-# records, found the same way and for the same reason: a roster that has to be extended
-# by hand is a roster that will be forgotten. Every driver here writes into a DOT
-# directory beside itself, so that is what is matched.
-maxon-bin/track0/.*/
-maxon-bin/track0/*.exe
-maxon-bin/track0/*.mxdbg
+# multicore-stress harness scratch: each driver compiles its programs into a working directory beside
+# itself and leaves per-run logs there. Regenerated on every invocation.
+# ⭐ ONE PATTERN, NOT A LINE PER DRIVER. Every driver writes into a DOT directory beside itself, so
+# that is what is matched: a roster extended by hand is a roster that will be forgotten the next time
+# a driver arrives.
+scripts/multicore-stress/.*/
+scripts/multicore-stress/*.exe
+scripts/multicore-stress/*.mxdbg
 
 # ⚠ THE SAME SHAPE, ONE DIRECTORY OVER — a compiler SOURCE directory, which is worse.
 # `maxon build maxon-bin/Compiler/<file>.maxon` writes its output beside the source, so
 # probing one file leaves a ~10 MB binary INSIDE the tree the compiler is built from
 # (`BorrowCheck.exe`, found untracked and un-ignored during the multi-M work). A stray
-# `.exe` in `track0/` is scratch; one here is a `git add -A` away from being committed as
+# `.exe` in `multicore-stress/` is scratch; one here is a `git add -A` away from being committed as
 # compiler source, and it is the third time this pattern has been found by someone tripping
 # over it rather than by the rule that should have covered it.
 maxon-bin/Compiler/*.exe

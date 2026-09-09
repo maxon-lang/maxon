@@ -13,7 +13,7 @@ category: system
 that set no `MAXON_MAX_PROCS` ran on **one** P and therefore one worker M, and every multi-processor
 property the scheduler has — the ring's head CAS under contention, the Dekker fence on its publish, the four
 stealing rounds, the handoff of a P off a blocked M — was reachable only by a driver script that set the
-variable by hand (`maxon-bin/track0/pin-matrix.sh`). ⇒ **the code was written, built and shipped, and the
+variable by hand (`scripts/multicore-stress/pin-matrix.sh`). ⇒ **the code was written, built and shipped, and the
 default build never executed it.** Flipping the default is what puts it under the program that runs.
 
 ⭐ **THE DEFAULT IS NO LONGER A CONSTANT, WHICH IS WHY IT COULD NOT BE A CONSTANT SUBSTITUTION.** A

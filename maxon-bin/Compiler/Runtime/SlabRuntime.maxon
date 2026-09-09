@@ -5,7 +5,7 @@
 //
 // ⭐⭐ **S5 TOOK THE THREE ITEMS THIS HEADER USED TO LIST AS "NOT TAKEN" — the global lock, the per-P
 // remote-free MPSC queues and the `owning_p` gate — BECAUSE G1 BUILT REAL Ps AND THE SLAB WAS MEASURED
-// BREAKING UNDER THEM.** `maxon-bin/track0/alloc-torture.maxon` at `MAXON_MAX_PROCS=2` died with **exit 86,
+// BREAKING UNDER THEM.** `scripts/multicore-stress/alloc-torture.maxon` at `MAXON_MAX_PROCS=2` died with **exit 86,
 // `slabSpanExhaustedPastItsEnd`** — INV-1 below, tripped because two OS threads were popping slots out of
 // ONE unsharded mcache row. At 7 it segfaulted outright. The allocator naming its own invariant is what
 // localised that to this file rather than leaving a mystery fault in the scheduler.
@@ -374,7 +374,7 @@ export let SlabScavengeName = b"__slab_scavenge"
 // ⭐⭐ `__slab_remote_free_count() -> i64` — how many slots have been freed onto a processor's remote-free
 // queue by a machine that did not own their span, summed over every P. `__Builtins.slabRemoteFreeCount()`
 // lowers straight to it, and it is the ONLY way a program can observe that the cross-processor free road was
-// TAKEN. `track0/service-torture` and `track0/service-fanin-torture` drive thousands of boxes down it in each
+// TAKEN. `multicore-stress/service-torture` and `multicore-stress/service-fanin-torture` drive thousands of boxes down it in each
 // direction and nothing read a number that would move if it stopped being taken — the road was exercised but
 // not observed, and a regression routing every free down the LOCAL arm would have kept the suite green.
 //

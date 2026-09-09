@@ -33,11 +33,11 @@ this tree — a multi-processor version of the last case failed **1 run in 6** a
 1 in 6 again in a version that WAITED for the property across up to 500 waves. `pin-matrix.sh:100-137` had
 already hit the same wall from the other side.
 
-⚠ **AND THE OLD SENTENCE NAMED THE WRONG GATE.** It called `track0/alloc-torture.maxon` "the
+⚠ **AND THE OLD SENTENCE NAMED THE WRONG GATE.** It called `multicore-stress/alloc-torture.maxon` "the
 multi-processor gate", which EC10 ended: its work is `async`, an `async` frame is a coroutine of its caller,
 and that program now reads `workers=1` at every count — a fact this file's own later paragraphs already
 record. The multi-processor readings come from the SPAWN family (`service-torture`, `service-fanin-torture`)
-driven by `track0/pin-matrix.sh`, which runs standalone and sweeps the count.
+driven by `multicore-stress/pin-matrix.sh`, which runs standalone and sweeps the count.
 
 What a ONE-processor program CAN reach, and what each case below is for:
 
@@ -57,12 +57,12 @@ What a ONE-processor program CAN reach, and what each case below is for:
 ⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
 actually REJECTING a span, two threads contending for the raw row, and — since EC8 — whether the traffic
 counters are stepped ATOMICALLY. Those need a second OS thread crediting the same word, and were verified
-by measurement instead — see `track0/`.
+by measurement instead — see `multicore-stress/`.
 
 ⭐ **THE REMOTE-FREE TREIBER PUSH IS NOW COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
 `__Builtins.slabRemoteFreeCount()` sums a per-P counter, so the road that `service-torture` and
 `service-fanin-torture` have driven since SV1 finally moves a number instead of being believed. ⚠ **The
-non-zero reading is `track0`'s and not this file's** — see the last case for the measurement that says why.
+non-zero reading is `multicore-stress`'s and not this file's** — see the last case for the measurement that says why.
 What this file pins is the counter's other edge: at one processor it must be exactly **0**, because a
 counter that answers non-zero where no free can cross is counting the wrong frees.
 
@@ -398,7 +398,7 @@ more than one processor. ⛔ This used to add *"which a spec case cannot set"*, 
 per-case processor marker landed: a case CAN ask for four now, and the case at the end of this file does.
 At one processor the plain form
 is exact too, so this case passes either way and does not claim otherwise. That half is measured with
-`track0/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
+`multicore-stress/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
 the lost-update oracle — EC8 measured it clean with the atomic and exit 101 at 2, 4 and 12 with the
 atomic forced off, which is the positive control this case cannot be.
 
@@ -484,7 +484,7 @@ end 'main'
 ⭐ **`__Builtins.slabRemoteFreeCount()` EXISTS BECAUSE THE CROSS-P FREE HAD PRODUCERS AND NO OBSERVER.** A
 box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —
 `SlabRuntime`'s remote-free road, a CAS push onto the owning P's Treiber stack. `service-torture` and
-`service-fanin-torture` drive thousands of those, and `track0/README.md` said what that was worth: the road
+`service-fanin-torture` drive thousands of those, and `multicore-stress/README.md` said what that was worth: the road
 was **exercised but not observed**. This counter is the observation; it is per-P and summed like
 `schedStealCount()`, so it costs no `.data` word and no golden churn.
 
@@ -503,7 +503,7 @@ schedules that worker while twelve harness workers are competing is not somethin
 `pin-matrix.sh:100-137` had already measured the same wall from the other side: at total CPU saturation
 *both* 400 and 4,000 rounds failed 40 of 40, and *"no program-side change can fix that"*.
 
-⇒ **A committed case that needs the OS to co-operate is a flake, so the multi-M reading lives in `track0/`**,
+⇒ **A committed case that needs the OS to co-operate is a flake, so the multi-M reading lives in `multicore-stress/`**,
 which runs standalone rather than under a twelve-way load, sweeps the processor count, and already asserts
 the same class of property (`steals > 0` at every effective N ≥ 2) for the spawn family. ⚠ **This is a
 statement about where the reading belongs, not a retreat from taking it** — the counter is read there, and a

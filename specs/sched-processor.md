@@ -78,7 +78,7 @@ processor, and whether a second M starts is decided by the WORK — a service pr
 `async`-only program still runs on one.
 
 ⭐ **MEASURED, and it is the difference the pin makes rather than a claim about it.**
-`maxon-bin/track0/pin-matrix.sh` drives the `track0` programs across `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and
+`scripts/multicore-stress/pin-matrix.sh` drives the `multicore-stress` programs across `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and
 at the default. `steal-torture` — which is `async` — reads `workers=1 steals=0` at every one; on the commit
 before the pin, on the same box, it read `workers=8 steals=3996` at N=12. The two SPAWN-driven programs read
 the other way, which is the same script's other family.
@@ -112,7 +112,7 @@ CORRECT.
 MPSC queue and the span ownership gate. A green run of either does not cover them. ⭐ **A DIFFERENT
 PROGRAM DOES, NOW THAT `spawn` HAS LANDED:** `service-torture` and `service-fanin-torture` move 4,800 heap
 `String`s each ACROSS Ms, so a record allocated on one M is released on another — which is the remote-free
-push. `maxon-bin/track0/README.md` states which rows cover what, once, where the programs are.
+push. `scripts/multicore-stress/README.md` states which rows cover what, once, where the programs are.
 
 ⛔ **THE SUITE USED TO BE STRUCTURALLY UNABLE TO SET THE KNOB, AND THAT IS THE OTHER THING THAT HAS
 CHANGED.** This paragraph said a spec case had no way to set an environment variable for the program it

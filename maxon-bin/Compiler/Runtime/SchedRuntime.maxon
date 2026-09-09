@@ -84,8 +84,8 @@
 //      makes it correct*, which G2's own note said and EC10 is the experiment for. `MmRuntime.
 //      emitAdjustRefcount` carries the argument and the measurement. ⚠ G2 cited its reproducer as
 //      `temp/g2/rc-field.maxon`; `temp/` is gitignored and swept, so that file no longer exists and the
-//      measurement is now `maxon-bin/track0/refcount-torture.maxon`, COMMITTED, driven by
-//      `track0/refcount-race.sh`.
+//      measurement is now `scripts/multicore-stress/refcount-torture.maxon`, COMMITTED, driven by
+//      `multicore-stress/refcount-race.sh`.
 //   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is what the seven
 //      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pending`, `__io_pipe_seq`, and —
 //      since MC1 — `__sched_progress`, `__sched_nmspinning` and `__sched_active_workers`) call instead of
@@ -110,7 +110,7 @@
 //
 // ✅ **THE TWO ITEMS THAT WERE STILL RACY ABOVE ONE M ARE BOTH CLOSED.**
 //   • **THE ALLOCATOR (S5).** It was ONE shard with no lock and no ownership gate, and
-//     `maxon-bin/track0/alloc-torture.maxon` died at `MAXON_MAX_PROCS=2` and above with exit 86
+//     `scripts/multicore-stress/alloc-torture.maxon` died at `MAXON_MAX_PROCS=2` and above with exit 86
 //     (`slabSpanExhaustedPastItsEnd`, INV-1) or a segfault. S5 sharded it PER P: each processor owns its own
 //     mcache row and is the sole writer of every span cached there, every span carries the P that owns it, a
 //     free by a P that does not own the span CAS-pushes onto the owner's remote-free queue, and an OS thread
@@ -553,7 +553,7 @@ let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 // `osSleepMs` calls on an object nobody can signal, so a driver that found nothing runnable did not observe a
 // promise ANOTHER M answered until its own interval was up — and by then the deadline it slept on had fired
 // too, so both promises read `completed` and the scan answered the one that finished SECOND.
-// **`maxon-bin/track0/README.md` owns the measurement** (the reproducer, its rate, the wake-removed control
+// **`scripts/multicore-stress/README.md` owns the measurement** (the reproducer, its rate, the wake-removed control
 // and the latency before and after). It is not restated here: W219 already produced two copies of that
 // reading that disagreed about which number they were quoting.
 //
@@ -894,7 +894,7 @@ let POffPendingWaiter = 0x50 as ByteOffset
 // is cooperative by construction, so the safety mechanism `runqput`'s guard is asking for still does not
 // exist.
 //
-// ⭐⭐ **MEASURED, NOT INFERRED — `maxon-bin/track0/runnext-starvation-probe.maxon`, ONE PROGRAM, TWO
+// ⭐⭐ **MEASURED, NOT INFERRED — `scripts/multicore-stress/runnext-starvation-probe.maxon`, ONE PROGRAM, TWO
 // COMPILERS, `MAXON_MAX_PROCS=1`, THREE RUNS EACH, ON A TREE WHOSE `__sysmon` IS LIVE:**
 //
 //   • **shipped (no `runnext`):** `bystander-ran` then `pingpong-done`, **3 of 3**.
@@ -912,7 +912,7 @@ let POffPendingWaiter = 0x50 as ByteOffset
 // at — and it is the honest name of the dependency.
 //
 // ⭐⭐ **AND THE QUESTION "DOES THE COMPILER'S COOPERATIVE MODEL MAKE GO'S OBJECTION INAPPLICABLE?" WAS ASKED
-// PROPERLY AND ANSWERED NO.** `maxon-bin/track0/runnext-starvation-probe.maxon` is two services that ready
+// PROPERLY AND ANSWERED NO.** `scripts/multicore-stress/runnext-starvation-probe.maxon` is two services that ready
 // each other and a third that must still get a turn. **MEASURED at `MAXON_MAX_PROCS=1`, one program, two
 // compilers: on the shipped one the bystander runs FIRST on 3 of 3 runs; with a runnext slot published by
 // `__sched_runq_put` and consulted by `__sched_runq_get` — Go's own two sites — the bystander runs LAST on
@@ -1014,8 +1014,8 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐⭐ **HOW MANY SLOTS HAVE BEEN FREED ONTO THIS PROCESSOR'S REMOTE-FREE QUEUE BY SOMEBODY ELSE — the
 // reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
-// cross-processor free road was TAKEN rather than merely built.** `track0/service-torture` and
-// `track0/service-fanin-torture` push thousands of heap boxes across machines in each direction, and until
+// cross-processor free road was TAKEN rather than merely built.** `multicore-stress/service-torture` and
+// `multicore-stress/service-fanin-torture` push thousands of heap boxes across machines in each direction, and until
 // this slot existed nothing anywhere read a number that would move if that road stopped being taken: the
 // sharded allocator's remote arm was EXERCISED but not OBSERVED, so a regression that quietly routed every
 // free down the local arm would have left both tortures and the whole suite green.
@@ -1583,7 +1583,7 @@ export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 //     would search, find nothing and re-park while the driver slept on; signalling ALL of them would put every
 //     parked worker through a full `__sched_find_runnable` per reply.
 //   • **NO PROCESSOR, NO SPAWN ARM.** A completed promise is not work, so there is nothing for a new OS
-//     thread to run and nothing to take off `__sched_pidle` — `track0/pin-matrix.sh` reads a worker started
+//     thread to run and nothing to take off `__sched_pidle` — `multicore-stress/pin-matrix.sh` reads a worker started
 //     here as a permanently idle machine. The driver already holds the processor it needs.
 //   • **NO SPINNING HAND-OVER, AND NO IDLE-LIST POP.** The driver is not part of the worker pool's
 //     accounting and is not on `__sched_midle`; `MOffParkedDriverOwner` says why it must not be.
@@ -1664,7 +1664,7 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 
 // ⭐ `__sched_steal_count() -> i64` — the sum of every P's steal counter, and the floor of
 // `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
-// happened, which is what `maxon-bin/track0/steal-torture.maxon` asserts on.
+// happened, which is what `scripts/multicore-stress/steal-torture.maxon` asserts on.
 //
 // ⚠ **IT LIVES HERE RATHER THAN BESIDE `__sched_max_active_workers` IN `CpuParallelRuntime`, AND THE SPLIT
 // IS THAT FILE'S OWN TEST APPLIED HONESTLY.** That file holds the queries whose answer costs no scheduler —
@@ -2410,7 +2410,7 @@ let SchedPublishOwesNothing = 0 as ParsedInt
 // worker M cannot run a coroutine: it is driven only by its owner's chain of drivers, which is running on
 // the M that just published it. So waking an idle M for one is a park/unpark that finds nothing, and
 // `__sched_wake_or_spawn`'s SPAWN arm would start an OS thread that idles for the life of the process —
-// which `track0/pin-matrix.sh` reads directly, as `workers`.
+// which `multicore-stress/pin-matrix.sh` reads directly, as `workers`.
 //
 // ⚠⚠ **THE STORELOAD FENCE ARGUMENT BELONGS TO THE TWO GREEN-THREAD ARMS AND IS STATED WITH THEM.** The
 // Dekker pair in `buildSchedWakeOrSpawn` needs the queue publish to be visible before the `idleFlag` reads,
@@ -2522,7 +2522,7 @@ end 'emitSchedPublishLocked'
 //     `buildSchedWakeOrSpawn`'s `idleFlag` scan depends on, and a nested leave releases nothing.
 //   • **ONLY IF OWED**, because an unconditional wake in a coroutine-only program would find no idle M and
 //     then START one on a free P — an OS thread that idles for the life of the process, which is exactly the
-//     `workers` reading `track0/pin-matrix.sh` pins at 1.
+//     `workers` reading `multicore-stress/pin-matrix.sh` pins at 1.
 export function emitSchedWakeIfOwed(module StdModule, cur IrBlock, owed ValueId, wake IrBlock, cont IrBlock, ids ValueMinter)
 	let owesNothing = emitConst(module, block: cur, value: SchedPublishOwesNothing, ids: ids)
 	let nothingOwed = emitCmp(module, block: cur, a: owed, b: owesNothing, pred: StdCmpPred.eq, ids: ids)
@@ -3872,7 +3872,7 @@ end 'buildSchedSweepDropped'
 // `__Builtins.slabRemoteFreeCount()` (`POffRemoteFreeCount`). Between them they are the only ways a Maxon
 // program can observe that work stealing ever happened, that a processor was ever retaken from a machine
 // stuck in the kernel, and that a box was ever freed on a machine other than the one that allocated it —
-// which is what makes `track0/steal-torture.maxon`'s `steals > 0`, `sched-syscall-handoff`'s `retaken=yes`
+// which is what makes `multicore-stress/steal-torture.maxon`'s `steals > 0`, `sched-syscall-handoff`'s `retaken=yes`
 // and `slab-sharding`'s `ok=yes` assertions rather than hopes.
 //
 // ⚠ **IT SUMS RATHER THAN READING A GLOBAL, AND THAT IS THE `.data` RULE THIS RUNG IS ARRANGED AROUND.** A
@@ -4207,7 +4207,7 @@ end 'buildSchedStartM'
 // stack, a new event object, a new roster entry, none of them ever reclaimed (an M is never freed).
 //
 // ⭐ **IT IS BOUNDED, AND THE BOUND IS MEASURED RATHER THAN ARGUED.** It self-limits — k extra machines
-// require k parking machines to be inside their windows at once — and `track0/pin-matrix.sh` reads the
+// require k parking machines to be inside their windows at once — and `multicore-stress/pin-matrix.sh` reads the
 // high-water mark directly off `__Builtins.schedMaxActiveWorkers()`. **MEASURED on this tree against its
 // parent, same box, same programs: `syscall-stack-torture` at `MAXON_MAX_PROCS=12` reads 13 machines where
 // the parent reads 12** (eleven processors are worker-eligible, P[0] being the main thread's), and at the
@@ -4494,7 +4494,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// terminates.
 	//
 	// ⛔⛔ **AND IT IS CURRENTLY UNEXERCISED ON EVERY REACHABLE PATH — MEASURED, AND SAID HERE RATHER THAN
-	// IMPLIED AWAY.** This drain was written to fix `track0/awaitany-index-race.sh`, on the reasoning that a
+	// IMPLIED AWAY.** This drain was written to fix `multicore-stress/awaitany-index-race.sh`, on the reasoning that a
 	// ring filled between `__sched_find_runnable`'s answer and this lock would be stranded by the narrowed
 	// final look. **That reasoning is sound and the situation does not arise.** With the drain REMOVED and
 	// `emitSchedPidlePutLocked`'s assertion left in place, the assertion did not fire once in **200 runs at

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Track-0 PIN MATRIX (EC10) — the positive control for "an `async` frame is a
+# PIN MATRIX (EC10) — the positive control for "an `async` frame is a
 # COROUTINE of its green thread".
 #
 # ⛔ IT IS NOT `validate.sh`. That one measures the emitted RUNTIME's slab and
@@ -115,18 +115,19 @@
 #     service-fanin    rounds=400    0/40   0/40   0/40  40/40
 #     service-fanin    rounds=4000   0/40   0/40   0/40  37/40
 #
-# ⛔⛔ READ THE K=16 COLUMN BEFORE QUOTING THIS SCRIPT AS GREEN: AT TOTAL CPU
-# SATURATION BOTH LENGTHS FAIL, AND NO PROGRAM-SIDE CHANGE CAN FIX THAT. With every
-# processor already held by a runnable CPU-bound thread, whether the worker M gets a
-# timeslice inside the program's lifetime is the OS scheduler's decision and nothing
-# the program does can compel it; ten times the work bought 4 runs out of 40. ⇒ this
-# gate's readings are only meaningful on a box with a spare processor, which is the
-# condition every K < 16 column is. What WOULD make it unconditional is a different
-# shape, not a longer one: `main` must BLOCK until the property holds — spin on
-# `schedMaxActiveWorkers() >= 2` with a bounded timeout and report the timeout — which
-# tests "a worker M ran" instead of sampling for it. That needs a `numProcs` builtin
-# the runtime does not expose (the program cannot otherwise tell a one-P row, where
-# the wait must not happen, from a starved multi-P one), so it is a rung, not a patch.
+# ⚠⚠ EVERY CELL ABOVE IS A READING OF THE *SAMPLED* SHAPE, WHICH THESE PROGRAMS NO
+# LONGER HAVE. It was taken when `main` published its messages and read
+# `schedMaxActiveWorkers()` straight away, so a K=16 cell is the OS declining to give
+# the worker M a timeslice inside a ~40 ms window. The table is kept because it is what
+# motivated the wait and it has not been re-run against it; re-measuring the four cells
+# under `yes > /dev/null` x K for K in {0,4,8,16} is the outstanding reading.
+#
+# ⭐⭐ THE SHAPE IS NOW BLOCKING. `main` waits on `schedMaxActiveWorkers() >= 2` with a
+# bounded budget (`worker-arrival.maxon`), short-circuits when
+# `__Builtins.schedProcessorCount()` resolves to one — the row where the wait must not
+# happen — and reports expiry as `workerwait=timeout`. So a starved box is a NAMED
+# timeout in its own column rather than a `workers=1` reading indistinguishable from the
+# coroutine pin, and this script fails such a row instead of quietly passing it.
 #
 # ⛔ THE BAR IS NOT WEAKENED AND MUST NOT BE. "A spawned green thread reached a
 # worker M at least once" is the whole content of the row; a program too short to
@@ -209,10 +210,10 @@
 # TABLE (SV1). `service-torture` moves 4,800 freshly built heap `String`s across to
 # twelve services and `service-fanin-torture` moves 4,800 the other way — in both,
 # a record allocated on the M that built it is RELEASED on whichever M ran its
-# receiver, which is the remote-free push these two were written for. Converting
-# them to drive it themselves is separate work and has not been done; what has
-# changed is that a green run of the two service rows IS a cross-P allocation
-# reading, where before SV1 nothing in this directory was.
+# receiver, which is the remote-free push these two were written for. Both now READ that
+# push directly — `__Builtins.slabRemoteFreeCount()`, printed as `remoteFrees=` and
+# asserted by `validate.sh` — so a green run of the two service rows is a cross-P
+# allocation reading rather than a program that merely happens to produce one.
 #
 # ⭐⭐ syscall-stack-torture IS THE ONLY ONE THAT PUTS TWO Ms INSIDE THE SYSCALL
 # SHIM AT ONCE, WHICH IS WHY W213-C1 ADDED IT. Every other program here computes;
@@ -267,14 +268,10 @@
 
 set -u
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=scripts/multicore-stress/lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-# Overridable so the same script can take the PARENT reading from a binary staged
-# elsewhere — which is how the delta above was measured, and the only way it can be.
-MAXON="${MAXON:-$REPO/maxon-bin/.maxon/maxon.exe}"
-[ -x "$MAXON" ] || MAXON="$MAXON.exe"
-
+HERE="$MULTICORE_HERE"
 WORK="$HERE/.pin-matrix"
 
 # ⭐⭐ `default` IS A ROW, NOT A COUNT — it means "run with MAXON_MAX_PROCS UNSET",
@@ -323,19 +320,6 @@ effective_count() {
 }
 PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
 
-# ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — the one fact assertion 4 is keyed
-# by, written down once so a program added to either family cannot inherit the
-# other's expectation by being appended to the wrong list. A `spawn` publishes to a
-# P RING; an `async` publishes to its caller's own coroutine queue.
-SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture service-fanin-torture syscall-stack-torture}"
-
-spawns_green_threads() {
-	case " $SPAWNING_PROGRAMS " in
-		*" $1 "*) return 0 ;;
-		*) return 1 ;;
-	esac
-}
-
 # ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
 # `refcount-torture.maxon` hands ONE heap `String` to twelve tasks — the shape its
 # own header's 96-run table is about — and the same program written with SERVICES is
@@ -374,7 +358,7 @@ echo
 # measure a stale one it forgot to overwrite.
 # ----------------------------------------------------------------------------
 for prog in $PROGRAMS; do
-	if ! "$MAXON" build "$HERE/$prog.maxon" -o "$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
+	if ! build_program "$prog" "$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
 		echo "FAIL: $prog did not build"
 		cat "$WORK/$prog.build.log"
 		exit 1
@@ -405,17 +389,8 @@ done
 echo "refused: $REFUSED_PROGRAMS"
 echo
 
-# Read one field off a program's stdout, or "-" when the program does not print it.
-# Each torture program prints a different subset, deliberately, and a driver that
-# demanded all of them would be pinning the harness rather than the runtime.
-field() {
-	local file="$1" name="$2" v
-	v="$(grep -o "^$name=[0-9-]*" "$file" | grep -o -- '-\?[0-9]*$' | head -1)"
-	printf '%s' "${v:--}"
-}
-
-printf '%-24s %7s %14s %9s %9s %6s %8s\n' program procs aggregate workers steals exit leaked
-printf '%-24s %7s %14s %9s %9s %6s %8s\n' ------- ------- --------- ------- ------ ---- ------
+printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' program procs aggregate workers steals exit leaked workerwait
+printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' ------- ------- --------- ------- ------ ---- ------ ----------
 
 for prog in $PROGRAMS; do
 	REF_AGG=""
@@ -433,11 +408,12 @@ for prog in $PROGRAMS; do
 		fi
 		effective="$(effective_count "$p")"
 
-		agg="$(field "$WORK/$prog.$p.out" aggregate)"
-		wk="$(field "$WORK/$prog.$p.out" workers)"
-		st="$(field "$WORK/$prog.$p.out" steals)"
-		lk="$(field "$WORK/$prog.$p.out" leaked)"
-		printf '%-24s %7s %14s %9s %9s %6s %8s\n' "$prog" "$p" "$agg" "$wk" "$st" "$rc" "$lk"
+		agg="$(number_field "$WORK/$prog.$p.out" aggregate)"
+		wk="$(number_field "$WORK/$prog.$p.out" workers)"
+		st="$(number_field "$WORK/$prog.$p.out" steals)"
+		lk="$(number_field "$WORK/$prog.$p.out" leaked)"
+		wait="$(word_field "$WORK/$prog.$p.out" workerwait)"
+		printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' "$prog" "$p" "$agg" "$wk" "$st" "$rc" "$lk" "$wait"
 
 		# 1 + 2: determinism against the N=1 row.
 		if [ -z "$REF_AGG" ]; then
@@ -458,7 +434,14 @@ for prog in $PROGRAMS; do
 		# 4: THE PIN, per family — see the header. A program that prints neither
 		# counter (`-`) is asserted nothing, which is how it has always been.
 		if spawns_green_threads "$prog"; then
-			# A SPAWN-driven program. At an EFFECTIVE count of 1 there is no second M to
+			# A timeout means this row never observed the property, so the workers/steals
+			# readings under it are a sample rather than a measurement. Named here, because
+			# a starved row otherwise looks exactly like a pinned one.
+			if [ "$wait" = timeout ]; then
+				bad "$prog procs=$p workerwait=timeout — the wait expired before a second worker M arrived, so this row measured nothing"
+			fi
+
+			# At an EFFECTIVE count of 1 there is no second M to
 			# wake, so it reads like a coroutine program and that row is the CONTROL for
 			# the others. `effective` rather than `$p` because the `default` row's count
 			# is the machine's, and on a one-processor box that is this arm.

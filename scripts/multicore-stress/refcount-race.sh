@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Track-0 REFCOUNT-RACE driver (EC10) — runs `refcount-torture.maxon` REPS times
+# REFCOUNT-RACE driver (EC10) — runs `refcount-torture.maxon` REPS times
 # at each MAXON_MAX_PROCS and tabulates EXIT CODES.
 #
 # ⭐⭐ THE EXIT CODE IS THE ONLY DISCRIMINATOR, AND THAT IS MEASURED RATHER THAN
@@ -30,16 +30,10 @@
 
 set -u
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=scripts/multicore-stress/lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-# ⛔ THE DEFAULT ALREADY ENDS IN `.exe`, SO THE FALLBACK STRIPS IT — it does not add
-# one. It read `MAXON="$MAXON.exe"` until W219, which on macOS/Linux (where the binary
-# has NO extension) produced `maxon.exe` and then reported "no the compiler binary" at
-# a path that never existed on any platform. Windows took the `-x` branch and never
-# reached it, which is why it survived.
-MAXON="${MAXON:-$REPO/maxon-bin/.maxon/maxon.exe}"
-[ -x "$MAXON" ] || MAXON="${MAXON%.exe}"
+HERE="$MULTICORE_HERE"
 
 REPS="${1:-12}"
 PROCS_LIST="${PROCS_LIST:-1 2 4 12}"
@@ -59,7 +53,7 @@ echo "compiler: $MAXON"
 echo "reps:     $REPS per processor count"
 echo
 
-if ! "$MAXON" build "$HERE/refcount-torture.maxon" -o "$WORK/refcount-torture" >"$WORK/build.log" 2>&1; then
+if ! build_program refcount-torture "$WORK/refcount-torture" >"$WORK/build.log" 2>&1; then
 	echo "FAIL: refcount-torture did not build"
 	cat "$WORK/build.log"
 	exit 1
@@ -72,7 +66,7 @@ for N in $PROCS_LIST; do
 	c42=0; c101=0; c139=0; other=0; agg="-"
 	i=0
 	while [ "$i" -lt "$REPS" ]; do
-		out="$(MAXON_MAX_PROCS=$N "$WORK/refcount-torture" 2>/dev/null)"
+		out="$(MAXON_MAX_PROCS=$N "$WORK/refcount-torture$MAXON_EXE_EXT" 2>/dev/null)"
 		rc=$?
 		case "$rc" in
 			42)  c42=$((c42+1));  agg="$(printf '%s' "$out" | grep -o '^aggregate=[0-9]*' | head -1)";;

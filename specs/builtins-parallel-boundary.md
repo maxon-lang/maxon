@@ -41,7 +41,7 @@ completion on the caller's own OS thread, at the point the driver reaches it —
 a direct call would, plus a coroutine's stack and switch. What the marker does is satisfy E3073 for a
 function that neither waits nor yields, and that is ALL it does. ⇒ **its natural future is as the marker
 on a `spawn` target** (`SERVICES_DESIGN.md`), where a CPU-bound body really would run on another M and
-the intent it spells becomes load-bearing. It is kept for that, and because `maxon-bin/track0`'s
+the intent it spells becomes load-bearing. It is kept for that, and because `scripts/multicore-stress`'s
 torture programs need it today to make their CPU-bound tasks spawnable at all.
 
 ⚠ **IT IS A CHECKPOINT, NOT A YIELD.** It does not reschedule, it does not park, and it does not hand

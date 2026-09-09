@@ -1,4 +1,4 @@
-// Track-0 MANY-SENDER torture (SV1 wave 4) — the mailbox's MULTI-PRODUCER side,
+// MANY-SENDER torture (SV1 wave 4) — the mailbox's MULTI-PRODUCER side,
 // which nothing else in this directory reaches.
 //
 // ⭐⭐ `service-torture.maxon` IS ONE SENDER AND TWELVE MAILBOXES; THIS IS TWELVE
@@ -82,7 +82,9 @@ type Sink
 	// the drop cross a green thread: the `String` was allocated on whichever M ran
 	// its SENDER and is released on whichever M runs this SINK. At N >= 2 those are
 	// routinely different Ps, so this is the allocator's remote-free path driven by
-	// a real producer rather than by a probe.
+	// a real producer rather than by a probe. `remoteFrees` below is that path's own
+	// counter, and this is the site that sees almost all of it: every payload but
+	// the last has already crossed by the time the report runs.
 	export function take(s String)
 		self.taken = self.taken + 1
 		self.bytes = self.bytes + (s.byteLength() as Integer)
@@ -94,6 +96,7 @@ type Sink
 			print("taken={self.taken}\n")
 			print("workers={__Builtins.schedMaxActiveWorkers()}\n")
 			print("steals={__Builtins.schedStealCount()}\n")
+			print("remoteFrees={__Builtins.slabRemoteFreeCount()}\n")
 			print("cpucount={__Builtins.cpuCount()}\n")
 		end 'lastMessage'
 	end 'take'
@@ -147,10 +150,18 @@ function main() returns ExitCode
 		k = k + 1
 	end 'startEach'
 
-	// ⚠ NOTHING IS PRINTED HERE, AND THAT IS THE POINT OF THE HEADER'S SECOND
-	// PARAGRAPH. `main` returns before a single sender has necessarily run; the
-	// array's element drop shuts each of them down, each drains its one `run`
-	// message to completion, and the sink reports when the last payload lands.
+	// ⭐ THE WAIT BELONGS HERE, WHERE THE RACE IS. Twelve `run` messages are queued and
+	// what is not yet certain is that the OS has run the machine created to take them.
+	// By the sink's last message every sender has finished, so a wait there would have
+	// nothing left to wait for.
+	let waitVerdict = "ok" if awaitWorkerArrival() else "timeout"
+	print("workerwait={waitVerdict}\n")
+	print("procs={__Builtins.schedProcessorCount()}\n")
+
+	// ⚠ THE AGGREGATE IS THE SINK'S AND CANNOT BE REPORTED HERE. `main` returns before a
+	// single sender has necessarily run; the array's element drop shuts each of them
+	// down, each drains its one `run` message to completion, and the sink reports when
+	// the last payload lands.
 	// Fixed success ExitCode: deterministic across runs, and never 101.
 	return 42
 end 'main'

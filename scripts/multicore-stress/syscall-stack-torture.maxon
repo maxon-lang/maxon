@@ -1,4 +1,4 @@
-// Track-0 SYSCALL-STACK torture (W213-C1) — the ONE program in this directory
+// SYSCALL-STACK torture (W213-C1) — the ONE program in this directory
 // whose subject is the 64 KB SCRATCH STACK a green thread's kernel calls run on,
 // and the only one that puts more than one M inside the syscall shim at once.
 //
@@ -152,6 +152,11 @@ function main() returns ExitCode
 		i = i + 1
 	end 'kick'
 
+	// Twelve long-running green threads are queued; what is not yet certain is that the
+	// OS has run the machine created to take them. Waiting here and not after `collect`,
+	// where the replies are already in and there is nothing left to wake for.
+	let arrived = awaitWorkerArrival()
+
 	// The aggregate: an order-independent sum of twelve deterministic checksums,
 	// so a difference between two processor counts is a handler that ran twice,
 	// not at all, or on top of another one's stack.
@@ -169,10 +174,14 @@ function main() returns ExitCode
 	// cumulative counters, and every worker M was created long before this line.
 	let workers = __Builtins.schedMaxActiveWorkers()
 	let steals = __Builtins.schedStealCount()
+	let procs = __Builtins.schedProcessorCount()
+	let waitVerdict = "ok" if arrived else "timeout"
 
 	print("aggregate={total}\n")
+	print("workerwait={waitVerdict}\n")
 	print("workers={workers}\n")
 	print("steals={steals}\n")
+	print("procs={procs}\n")
 
 	return 42
 end 'main'

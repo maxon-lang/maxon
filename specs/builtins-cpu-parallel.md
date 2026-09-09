@@ -18,7 +18,7 @@ member, `__Builtins.parallelBoundary()`, is a marker rather than a query and has
 | `__Builtins.cpuCount()` | how many logical CPUs the OS reports for this MACHINE, as an `int`, never below 1 |
 | `__Builtins.schedMaxActiveWorkers()` | the high-water mark of concurrently-active green-thread worker Ms this PROCESS has had, as an `int`, never below 1 |
 
-Both take no arguments. Their one caller in this tree is `maxon-bin/track0/alloc-torture.maxon`, the
+Both take no arguments. Their one caller in this tree is `scripts/multicore-stress/alloc-torture.maxon`, the
 multi-core validation harness, which prints both so its driver can sweep the core-count clamp
 (`cpucount=`) and see that more than one core actually ran the work (`workers=`).
 
@@ -43,7 +43,7 @@ this holds now that the default is the machine's processor count and not 1.
 high-water mark of a population that never exceeds one is 1, in every program"* — rested on there being no
 producer of a green thread "until a `spawn` primitive lands". `spawn` has landed. A program that spawns
 services publishes real green threads to a P ring, wakes worker Ms and reads this intrinsic above 1;
-`track0/pin-matrix.sh` asserts exactly that, per family. The cases below are `async` programs and their
+`multicore-stress/pin-matrix.sh` asserts exactly that, per family. The cases below are `async` programs and their
 subject is the `async` half.
 
 ⚠ **`__Builtins.schedStealCount()` answers 0 for the same reason and not for a different one**: a steal
@@ -56,7 +56,7 @@ the slot is SEEDED TO 1 rather than written by an initializer, so a program that
 scheduler still reads the truth (one M: its own) with no code at all. ⚠ **The `workers=2, 7, 11-12`
 this used to report under `MAXON_MAX_PROCS ∈ {2, 7, 12}` was measured before EC10 pinned `async`, when
 a spawn published a green thread to the scheduler.** On this tree an `async` program's sweep reads **1 at
-every value and at the default** — `track0/pin-matrix.sh` asserts that for the coroutine family and asserts
+every value and at the default** — `multicore-stress/pin-matrix.sh` asserts that for the coroutine family and asserts
 `workers >= 2` for the spawn family, which is the same gate seen from both sides.
 
 ⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
@@ -65,7 +65,7 @@ threads; it never RUNS one and it never adopts a P.
 
 ### What the compiler answers for `alloc-torture.maxon`
 
-`maxon-bin/track0/alloc-torture.maxon` is the one program in this tree that calls both intrinsics.
+`scripts/multicore-stress/alloc-torture.maxon` is the one program in this tree that calls both intrinsics.
 MEASURED on a 12-logical-CPU Windows host: `aggregate=205500`, `workers=1`, `cpucount=12`, exit 42.
 The `aggregate=` row is the harness's own determinism signal.
 
@@ -79,7 +79,7 @@ worker M starts, the WORK is.
 (`slabSpanExhaustedPastItsEnd`) at `MAXON_MAX_PROCS=2`"* because the allocator was one unsharded shard.
 **S5 sharded the allocator per P**, so the second half was already false; and **EC10 pinned `async`**,
 so the first half is false too — this program's tasks are coroutines and no worker M is created at any
-value. MEASURED with `track0/pin-matrix.sh` on this tree: `aggregate=205500`, `workers=1`, exit 42 at
+value. MEASURED with `multicore-stress/pin-matrix.sh` on this tree: `aggregate=205500`, `workers=1`, exit 42 at
 `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and at the default. See `sched-processor.md`, which carries the same
 correction and the cost that comes with it (the cross-P allocator paths are correct and, for THIS program,
 still UNREACHED — `spawn`'s service programs are what reach them).
@@ -377,7 +377,7 @@ sentence used to give the reason as *"a spec case cannot set that variable"*, wh
 the per-case processor marker landed — `specs/sched-default-procs.md` owns it, and three other files
 already retracted this same claim. The case stays unpinned deliberately: its subject is that an `async`-only
 program reaches no worker M **at whatever count the machine happens to have**, so pinning one would narrow
-it to a count nobody runs. The sweep over `{1, 2, 7, 12}` is still `track0/pin-matrix.sh`'s, because
+it to a count nobody runs. The sweep over `{1, 2, 7, 12}` is still `multicore-stress/pin-matrix.sh`'s, because
 comparing counts is what that instrument is for and a spec case runs at exactly one.
 
 ⛔ **THE MARKER IS NAMED HERE AND NOT SPELLED, AND THAT IS DELIBERATE.** Writing it out verbatim inside a

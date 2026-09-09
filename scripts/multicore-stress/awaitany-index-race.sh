@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Track-0 AWAIT-ANY INDEX race driver — runs `awaitany-index-torture.maxon`
+# AWAIT-ANY INDEX race driver — runs `awaitany-index-torture.maxon`
 # REPS times at each MAXON_MAX_PROCS and tabulates the SELECT LATENCY the
 # program encodes in its exit status.
 #
@@ -46,13 +46,10 @@
 
 set -u
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=scripts/multicore-stress/lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-# ⚠ The fallback STRIPS `.exe`, it does not add one: the default already ends in it,
-# and the non-Windows binary has no extension. `refcount-race.sh` carries the incident.
-MAXON="${MAXON:-$REPO/maxon-bin/.maxon/maxon.exe}"
-[ -x "$MAXON" ] || MAXON="${MAXON%.exe}"
+HERE="$MULTICORE_HERE"
 
 REPS="${1:-50}"
 
@@ -86,7 +83,7 @@ echo "late when: worst select latency > ${LATE_MS} ms"
 echo "gate:      procs $GATED_PROCS (other rows are recorded, not asserted)"
 echo
 
-if ! "$MAXON" build "$HERE/awaitany-index-torture.maxon" -o "$WORK/awaitany-index-torture" >"$WORK/build.log" 2>&1; then
+if ! build_program awaitany-index-torture "$WORK/awaitany-index-torture" >"$WORK/build.log" 2>&1; then
 	echo "FAIL: awaitany-index-torture did not build"
 	cat "$WORK/build.log"
 	exit 1
@@ -103,7 +100,7 @@ for N in $PROCS_LIST; do
 	clean=0; late=0; wrong=0; other=0; worst=0
 	i=0
 	while [ "$i" -lt "$REPS" ]; do
-		MAXON_MAX_PROCS=$N "$WORK/awaitany-index-torture" >/dev/null 2>&1
+		MAXON_MAX_PROCS=$N "$WORK/awaitany-index-torture$MAXON_EXE_EXT" >/dev/null 2>&1
 		rc=$?
 		verdict="?"
 		if [ "$rc" -eq "$WRONG_INDEX_EXIT" ]; then

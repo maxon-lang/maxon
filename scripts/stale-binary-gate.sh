@@ -99,9 +99,11 @@ STALE_EXIT=2
 # working tree stays clean throughout.
 VICTIM="maxon-bin/Main.maxon"
 
-# A `.maxon` file under the project root that `maxon build` deliberately leaves OUT: `track0/` carries
-# a `.maxonignore`, so its program is not in the binary and cannot make it stale.
-EXCLUDED="maxon-bin/track0/alloc-torture.maxon"
+# A `.maxon` file under the project root that `maxon build` deliberately leaves OUT: its directory
+# carries a `.maxonignore`, so it is not in the binary and cannot make it stale. A dedicated fixture
+# rather than a borrowed program — a control sharing a file with something else stops controlling
+# anything the moment that something else moves.
+EXCLUDED="maxon-bin/excluded-source-fixture/excluded.maxon"
 
 # A cheap slice of the suite, nothing interesting: every check below is about whether the harness ran
 # AT ALL, so the tests themselves must be among the cheapest there are.
@@ -344,7 +346,7 @@ fi
 
 # ---- CHECK 5: FALSE-REFUSAL CONTROL — a source the build does not compile ---------------------------
 #
-# `track0/` carries a `.maxonignore`, so `maxon build maxon-bin` never reads its program and no edit
+# `$EXCLUDED` sits in a `.maxonignore`d subtree, so `maxon build maxon-bin` never reads it and no edit
 # to it can change what the binary does. Refusing over one would wedge the whole suite over a file
 # that is not in the binary — the same class of wrong answer as running on a stale one, arrived at
 # from the other side.

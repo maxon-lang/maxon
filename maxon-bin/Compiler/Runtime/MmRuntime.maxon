@@ -38,7 +38,7 @@
 // the identity argument it looked like: the packed id is stamped PER ALLOCATION, not per address (it
 // pre-increments `__ds_alloc_id`), and `__mm_free` emits its event BEFORE the reclaim — so a reused
 // address reads `free(id=7)` … `alloc(id=9)` in that order and no two live boxes ever share an id.
-// MEASURED at S4 on `track0/alloc-torture.maxon --small` under `MAXON_MAX_PROCS=1`: 840 allocations with
+// MEASURED at S4 on `multicore-stress/alloc-torture.maxon --small` under `MAXON_MAX_PROCS=1`: 840 allocations with
 // 840 DISTINCT ids, 840 frees naming exactly those ids, 0 events dropped — before the cutover and after.
 //
 // ⭐ **AND THE FILE OWNS BOTH HALVES OF A MANAGED VALUE'S LIFECYCLE: the per-type DESTRUCTOR cascade
@@ -2153,7 +2153,7 @@ end 'emitLoadRefcount'
 // ⭐ **THE CONTROL IS COMMITTED, BECAUSE THE LAST ONE WAS NOT.** G2's measurement lived in
 // `temp/g2/rc-global.maxon`, and `temp/` is gitignored and swept — so the evidence for a `lock` prefix on
 // every retain and release in the language survived only as a path in a comment. It is
-// `maxon-bin/track0/refcount-torture.maxon` now, driven by `track0/refcount-race.sh`.
+// `scripts/multicore-stress/refcount-torture.maxon` now, driven by `multicore-stress/refcount-race.sh`.
 //
 // ⚠ **AND THE SHAPE G2's NOTE DESCRIBED GENERATES NO CONTENDED TRAFFIC AT ALL** — twelve green threads
 // *storing* one `String` into a module-level slot is a deep CLONE per reader (`__mm_alloc` + `__str_copy` +

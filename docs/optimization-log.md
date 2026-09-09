@@ -296,8 +296,8 @@ reply passes through — calls `__sched_wake_parked_drivers(owner)`, which is ga
 parked.
 
 **The defect it closes is a WRONG ANSWER**, and the reproducer
-(`maxon-bin/track0/awaitany-index-torture.maxon` + `awaitany-index-race.sh`) is committed with it.
-⚠ **THE NUMBERS ARE IN `maxon-bin/track0/README.md` UNDER "W219's READINGS" AND ARE NOT REPEATED HERE** —
+(`scripts/multicore-stress/awaitany-index-torture.maxon` + `awaitany-index-race.sh`) is committed with it.
+⚠ **THE NUMBERS ARE IN `scripts/multicore-stress/README.md` UNDER "W219's READINGS" AND ARE NOT REPEATED HERE** —
 the reproducer's rate before and after, the 80 ms variant's latency, the wake-removed control and the
 send-and-await wall times. That section exists because the first cut of this change scattered five copies of
 those readings and two of them disagreed about which configuration they were quoting.
@@ -347,7 +347,7 @@ per P and `_mrt_darwin_event_set` on `#0x38`. A census of the emitted image find
 **2026-09-01 — MC1: SPINNING-M ACCOUNTING. A RUNTIME row, not a compiler one — no `scale-test` numbers
 exist for it and none should be looked for.** `scale-test` measures the COMPILER compiling; this change is
 in the scheduler the compiler EMITS, and its subject is a program with twelve services and half a million
-messages. The instrument is `maxon-bin/track0/service-torture.maxon` scaled to 480,000 sends
+messages. The instrument is `scripts/multicore-stress/service-torture.maxon` scaled to 480,000 sends
 (`rounds = 40000`), driven by a PowerShell harness that reads **process-wide CPU off `GetProcessTimes`**
 (`TotalProcessorTime` / `UserProcessorTime` / `PrivilegedProcessorTime`) rather than a wall clock, with the
 two binaries **interleaved rep by rep in one session**. Medians of 3 reps, all times in ms:
@@ -397,7 +397,7 @@ satisfies its `steals > 0` family assertion. The steal COUNT is the instrument, 
   RELEASED, because that release is the StoreLoad fence.
 - **`runnext` (`POffRunnext`, reserved since W212).** Whether the compiler's cooperative model makes Go's
   no-`sysmon` objection inapplicable was settled by a probe rather than by argument:
-  `maxon-bin/track0/runnext-starvation-probe.maxon`, one program, two compilers, `MAXON_MAX_PROCS=1` —
+  `scripts/multicore-stress/runnext-starvation-probe.maxon`, one program, two compilers, `MAXON_MAX_PROCS=1` —
   shipped compiler runs the bystander FIRST on 3 of 3, an experimental `runnext` runs it LAST on 3 of 3,
   after all 4,000 bounces. The 61-schedule fairness check does not rescue it: it consults the GLOBAL
   queue, and the starved thread is in a P's LOCAL RING. The slot stays reserved for W213.
@@ -426,7 +426,7 @@ over the one-processor run, and it grows only mildly with the count (734 → 953
 `resetspinning` → `wakep` — is a third of it: deleting it reads **625 ms against 922 at an identical wall
 and MORE steals**, and it is kept anyway, because what it buys is bounded by `ParkTimeoutIdleMs` and a
 bursty producer that goes quiet would otherwise wait 100 ms for its second M. That trade is the next
-thing to measure here, and it needs a LATENCY corpus `track0/` does not have.
+thing to measure here, and it needs a LATENCY corpus `multicore-stress/` does not have.
 
 **2026-08-11 — CORPUS CHANGE, NO ROW: the scaling corpus grew one statement per SCOPE-FILLER LOCAL, so
 rows above this line are not comparable term for term with rows below it.** The `var-should-be-let` spec

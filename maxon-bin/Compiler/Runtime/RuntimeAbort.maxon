@@ -287,7 +287,7 @@ export enum RuntimeAbort
 	// It was not: work published to a ring just before that ring's processor went idle was visible to nobody
 	// — no machine held the processor, and the global-only look could not see the ring — until something
 	// unrelated happened to wake a machine. **MEASURED: `awaitAny` returned the wrong completed index on
-	// 7.5% of runs at `MAXON_MAX_PROCS=16`** (`track0/awaitany-index-race.sh`), because by the time anything
+	// 7.5% of runs at `MAXON_MAX_PROCS=16`** (`multicore-stress/awaitany-index-race.sh`), because by the time anything
 	// re-scanned, BOTH promises had completed and the scan correctly answered the lowest index. Not a
 	// premature read and not a recycled cell — a LATE one, which a version-stamped build ruled the other two
 	// out of over 560 runs.
@@ -312,7 +312,7 @@ export enum RuntimeAbort
 	// on another machine was invisible until the interval expired, by which time the driver's own deadline had
 	// fired too and the scan answered the promise that finished SECOND. Deleting a timer-firing site moved the
 	// window; it did not close it. ⇒ **removing a call from `wpoll` is not a fix and must not be attempted as
-	// one.** `track0/README.md` owns W219's measurement, and `SchedRuntime.MOffParkedDriverOwner` is the cure.
+	// one.** `multicore-stress/README.md` owns W219's measurement, and `SchedRuntime.MOffParkedDriverOwner` is the cure.
 	//
 	// ⚠ **NONE OF THAT RETIRES THIS ABORT, AND THE PARAGRAPH ABOVE IS WHY.** The 200-run refutation still
 	// stands on its own terms — every release found `runqhead == runqtail` — so the drain at `wpark` remains a

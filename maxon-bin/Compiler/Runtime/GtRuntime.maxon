@@ -3356,7 +3356,7 @@ function buildGtTimerCheck(module StdModule)
 	// this P's ring and may belong to a parked or absent worker M, so somebody owes `__sched_wake_or_spawn`; a
 	// COROUTINE goes to its owner's queue and must NOT wake anything — that wake would park-and-unpark an M
 	// which cannot run it, and its SPAWN arm would start an OS thread that idles for the life of the process
-	// (`track0/pin-matrix.sh` reads exactly that, as `workers`). So the walk REMEMBERS whether it published any
+	// (`multicore-stress/pin-matrix.sh` reads exactly that, as `workers`). So the walk REMEMBERS whether it published any
 	// green thread and wakes ONCE after the release, which is also the only point where the StoreLoad fence
 	// the Dekker pair needs exists.
 	let count = ids.mint()
@@ -4212,7 +4212,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// OBJECT and nothing can end it early, so a driver with a deadline out at a sleeping handler's delay would
 	// not observe a promise ANOTHER M answered until the whole delay had elapsed — by which time its own
 	// deadline had fired too, and `__gt_any_completed` would answer the promise that finished SECOND.
-	// **`maxon-bin/track0/README.md` owns that measurement**, on `awaitany-index-torture.maxon`. ⛔ Nor is the
+	// **`scripts/multicore-stress/README.md` owns that measurement**, on `awaitany-index-torture.maxon`. ⛔ Nor is the
 	// cure a shorter sleep: capping the delta at the poll granularity is a 1 ms busy-poll, the wakeup traffic
 	// `__sched_nmspinning` exists to remove.
 	//
@@ -6263,7 +6263,7 @@ end 'buildGtProcCount'
 // promise, had already come and gone. MEASURED before the fix: 39-52 GT structs stranded at seven processors
 // and 53-72 at twelve, against 54-96 threads a worker M had taken out of main's ring — and 0 at ONE
 // processor, where nothing can be running underneath the dropper. Invisible to the exit gate, which reads a
-// count the drop had already debited (`maxon-bin/track0/drop-running-torture.maxon` is that measurement).
+// count the drop had already debited (`scripts/multicore-stress/drop-running-torture.maxon` is that measurement).
 // ⚠ **IT TAKES THE M AND NOT THE P (W213-C1).** *"Which green thread is running"* is a fact about the OS
 // THREAD that is executing it — `SchedRuntime.MOffCurrentGt` carries why — and the driver on either side of
 // the context switch below is this M's, whatever processor it happens to hold.
