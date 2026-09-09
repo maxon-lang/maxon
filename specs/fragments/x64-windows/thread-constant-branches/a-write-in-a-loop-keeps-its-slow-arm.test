@@ -1,0 +1,181 @@
+// Test: a-write-in-a-loop-keeps-its-slow-arm
+typealias Word = int(i64.min to i64.max)
+typealias Idx = int(0 to u64.max)
+typealias WordArray = Array with Word
+
+function put(a WordArray, i Idx, v Word) returns bool
+	try a.set(i, value: v) otherwise return false
+	return true
+end 'put'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.resize(4)
+	var stored = 0
+	for i in 0 upto 5 'each'
+		if put(a, i: i, v: i * 10) 'ok'
+			stored = stored + 1
+		end 'ok'
+	end 'each'
+	if stored != 4 'count'
+		return 1
+	end 'count'
+	var seen = 0
+	for v in a 'check'
+		seen = seen + v
+	end 'check'
+	if seen != 60 'sum'
+		return 2
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @put {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-write-in-a-loop-keeps-its-slow-arm.test:6: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rdx, rsi
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_store
+  __im_slow:
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rax
+  tryok:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  forhdr#1:
+    x64.cmpRegImm32 r13, 5
+    x64.jcc greaterEqual, forexit#4
+  each:
+    x64.imulRegRegImm32 rax, r13, 10
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect put
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, critsplit
+  ok:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.jmp forstep#3
+  critsplit:
+    x64.movRegReg rax, r12
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.jmp forhdr#1
+  forexit#4:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc equal, ifcont#8
+  count:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+  forhdr#9:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forexit#12
+  check:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#11:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#9
+  forexit#12:
+    x64.cmpRegImm32 rax, 60
+    x64.jcc equal, ifcont#14
+  sum:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

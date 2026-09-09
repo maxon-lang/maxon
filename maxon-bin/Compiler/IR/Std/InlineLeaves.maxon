@@ -1403,8 +1403,7 @@ type LeafInliner
 			if guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
 				continue
 			end 'insideADeclinedCascade'
-
-			if self.blockHoldsAPanic(calleeBlock, calleeFunc: calleeFunc) 'panicBlock'
+			if self.blockHoldsAPanic(calleeBlock) 'panicBlock'
 				blocks.hasPanicBlock = true
 				try blocks.isPanic.set(calleeBlock.id, value: true) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 				continue
@@ -1562,12 +1561,11 @@ type LeafInliner
 
 	function copyBlockOps(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction)
 		for opIdx in calleeBlock.opRefs 'eachOp'
-			// ⚠ **THE OP IS READ THROUGH `opAtIndex` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
+			// ⚠ **THE OP IS READ THROUGH `getOp` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
 			// E3070's DOING.** `self.module.ops.get(...)` inline here BORROWS `module`, and `appendOp`
 			// mutates it — which the self-compile refuses (`cannot mutate 'module' via 'appendOp' while it
 			// is borrowed`).
-			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
-
+			let op = self.module.getOp(opIdx)
 			if leafOpRole(op) == LeafOpRole.parameter 'parameterOp'
 				assertParamOpMatchesConvention(op, calleeFunc: calleeFunc)
 				continue
@@ -1592,8 +1590,7 @@ type LeafInliner
 			return
 		end 'oplessTerminator'
 
-		let term = self.opAtIndex(calleeBlock.terminatorIndex(), ofFunc: calleeFunc)
-
+		let term = self.module.getOp(calleeBlock.terminatorIndex())
 		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
 		// walk left the cursor on this block's LAST op, which is a different statement.
 		self.module.spans.current = self.module.spans.at(calleeBlock.terminatorIndex())
@@ -1778,10 +1775,9 @@ type LeafInliner
 	// Does this block hold a panic op? A panic is a BODY op (followed by an unreachable return — see
 	// `InsertRangeChecks.emitPanicBlock`), so the terminator half is not consulted; `scanLeafBody` panics
 	// if one ever reaches a terminator slot.
-	function blockHoldsAPanic(block IrBlock, calleeFunc IrFunction) returns bool
+	function blockHoldsAPanic(block IrBlock) returns bool
 		for opIdx in block.opRefs 'eachOp'
-			let op = self.opAtIndex(opIdx, ofFunc: calleeFunc)
-
+			let op = self.module.getOp(opIdx)
 			if leafOpRole(op) == LeafOpRole.panicking 'panics'
 				return true
 			end 'panics'
@@ -1796,7 +1792,7 @@ type LeafInliner
 		return try self.module.blocks.get(blockRef) otherwise panic("LeafInliner: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
 	end 'blockAt'
 
-	// The flat `module.ops` index a block names at `pos`. Read through a function for `opAtIndex`'s
+	// The flat `module.ops` index a block names at `pos`. Read through a function for `IrModule.getOp`'s
 	// stated reason: an inline `self.blockAt(...).opRefs.get(...)` borrows `module` across the append
 	// that follows, which the self-compile refuses.
 	function blockOpRefAt(blockRef BlockRef, pos BlockOpPos) returns OpIndex
@@ -1804,19 +1800,10 @@ type LeafInliner
 	end 'blockOpRefAt'
 
 	function opAt(blockRef BlockRef, pos BlockOpPos) returns StdOp
-		return self.opAtIndex(self.blockOpRefAt(blockRef, pos: pos), ofFunc: self.func)
+		return self.module.getOp(self.blockOpRefAt(blockRef, pos: pos))
 	end 'opAt'
 
-	// ⚠ **EVERY OP READ ON A MUTATING PATH GOES THROUGH HERE, and that is E3070 rather than tidiness.**
-	// A `self.module.ops.get(...)` written inline borrows `module` for as long as the value lives, and
-	// this pass appends ops and blocks to `module` in the very next breath, which the SELF-COMPILE
-	// refuses. Reading through a function ends the borrow at the return, the same discipline
-	// `PrimitiveInliner.opAt` follows.
-	function opAtIndex(opIdx OpIndex, ofFunc IrFunction) returns StdOp
-		return try self.module.ops.get(opIdx) otherwise panic("LeafInliner: op index {opIdx} named by a block of '{String.from(ofFunc.name)}' is not in module.ops")
-	end 'opAtIndex'
-
-	// A copied block's source footprint. Read and written in ONE call for `opAtIndex`'s reason: the read
+	// A copied block's source footprint. Read and written in ONE call for `IrModule.getOp`'s reason: the read
 	// borrows `module` and the write mutates it.
 	function carryBlockSourceInfo(sourceRef BlockRef, to BlockRef)
 		let sourceInfo = try self.module.blockSourceInfo.get(sourceRef) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo has no entry for blockRef {sourceRef}")

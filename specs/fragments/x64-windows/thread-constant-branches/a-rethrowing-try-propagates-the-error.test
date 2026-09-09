@@ -1,27 +1,24 @@
-// Test: an-integer-element-read-asks-no-destructor-question
+// Test: a-rethrowing-try-propagates-the-error
 typealias Word = int(i64.min to i64.max)
 typealias Idx = int(0 to u64.max)
 typealias WordArray = Array with Word
 
-function pick(a WordArray, i Idx) returns Word
-	return try a.get(i) otherwise panic("pick: index out of range")
-end 'pick'
+function twice(a WordArray, i Idx) returns Word throws ArrayError
+	let v = try a.get(i)
+	return v * 2
+end 'twice'
 
 function main() returns ExitCode
 	var a = WordArray.create()
-	for i in 0 upto 6 'seed'
-		a.push(i * i)
-	end 'seed'
-	var t = 0
-	for i in 0 upto 6 'sum'
-		t = t + pick(a, i: i)
-	end 'sum'
-	if t != 55 'total'
+	a.push(21)
+	let present = try twice(a, i: 0) otherwise 0
+	let absent = try twice(a, i: 5) otherwise 100
+	if present != 42 'first'
 		return 1
-	end 'total'
-	if pick(a, i: 0) != 0 'zeroIsAValue'
+	end 'first'
+	if absent != 100 'second'
 		return 2
-	end 'zeroIsAValue'
+	end 'second'
 	return 0
 end 'main'
 ---
@@ -34,7 +31,7 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pick {
+func @twice {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -42,9 +39,10 @@ func @pick {
     x64.cmpRegImm32 rdx, 0
     x64.jcc greaterEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-integer-element-read-asks-no-destructor-question.test:6: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-rethrowing-try-propagates-the-error.test:6: Range check failed: value outside typealias 'Idx'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -54,19 +52,23 @@ func @pick {
     x64.jcc below, __im_load
   __im_slow:
     x64.callDirect __managed_get
+    x64.jmp __im_cont
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rax
+  __im_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-integer-element-read-asks-no-destructor-question.test:7: pick: index out of range\x0a"
-    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
   tryok:
+    x64.imulRegRegImm32 r8, r8, 2
+    x64.movRegImm32 r10, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -78,76 +80,67 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
-  forhdr#1:
-    x64.cmpRegImm32 r12, 6
-    x64.jcc greaterEqual, forexit#4
-  seed:
-    x64.movRegReg rdx, r12
-    x64.imulRegReg rdx, r12, r12
+    x64.movRegImm32 rdx, 21
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-  forstep#3:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#1
-  forexit#4:
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
-  forhdr#5:
-    x64.cmpRegImm32 r13, 6
-    x64.jcc greaterEqual, forexit#8
-  sum:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect pick
-    x64.leaRegRegReg r12, r12, r8
-  forstep#7:
-    x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr#5
-  forexit#8:
-    x64.cmpRegImm32 r12, 55
-    x64.jcc equal, ifcont#10
-  total:
+    x64.callDirect twice
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont#3:
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect twice
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 100
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.cmpRegImm32 r12, 42
+    x64.jcc equal, ifcont#8
+  first:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc equal, ifcont#10
+  second:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#10:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect pick
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont#12
-  zeroIsAValue:
-    x64.movRegImm32 r12, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#12:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

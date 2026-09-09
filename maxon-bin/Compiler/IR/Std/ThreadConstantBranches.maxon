@@ -1,0 +1,645 @@
+// ThreadConstantBranches — a Std→Std pass that decides a join block's branch at the EDGES that already
+// know the answer.
+//
+// THE SHAPE. A block C with block args whose whole body is one `cmpImm` of one of its own block args
+// (slot k) against an immediate, and whose terminator is a `condBranch` on that compare. When a
+// predecessor passes a `const` for slot k, the test's answer is fixed the moment that edge is taken.
+//
+// THE REWRITE keeps C as the join, so no phi is rebuilt anywhere:
+//   • every constant-passing predecessor must decide the SAME target X. C's terminator becomes
+//     `branch(X)`, and C loses the compare, its edge to the other target Y, and block-arg slot k;
+//   • every other predecessor P gets the compare on its own incoming value for slot k and a `condBranch`
+//     between Y and C, keeping C's then/else orientation, plus an edge to Y — C's edge args with C's own
+//     block args replaced by P's incoming values by slot — when Y takes block args.
+// A C left holding only `branch(X)` is removed by the Target-tier jump threading (`BranchCleanup`), so
+// a constant-passing predecessor reaches X with no test, no copy of the constant and no jump.
+//
+// WHY IT EXISTS. Every `try f(…) otherwise …` whose callee `inlineManagedPrimitives` expanded ends in a
+// continuation `__im_cont(value, flag)`: the fast arm passes `const 0` for the flag, the slow arm the
+// call's real flag, and the continuation's body is the `try`'s own `flag != 0` test. The fast path —
+// every checked element read and write — paid a constant, a phi copy, a compare and a branch for an
+// answer known where the edge is. The rule is stated for any phi of constants feeding a branch.
+//
+// THE RULE, clause by clause:
+//   • The compare's result is read only by C's terminator, and the tested arg only by the compare. The
+//     `otherwise (e)` binding forms and a rethrowing bare `try` read the flag in `tryerr`, which the
+//     rewrite reaches from P directly, where C's block args are not defined.
+//   • Every predecessor reaches C through `branch(C)` with exactly that one edge. A `condBranch` or
+//     `switch` predecessor would need one arm retargeted, which is a different rewrite, and a physical
+//     fall-through has no terminator op to overwrite.
+//   • The constant-deciding predecessors agree on X, and there is at least one. Two answers would need
+//     two exits from C.
+//   • X has exactly one predecessor, C. That is what keeps X dominated by C once P's edges to Y exist:
+//     every block X dominates keeps X as a dominator (a new path P→Y→…→B avoiding X would have been the
+//     old path P→C→Y→…→B, which also avoided X), so C's block args stay defined wherever they are read.
+//   • Every read of C's other block args is in a block X dominates, or is an arg on one of C's own edges:
+//     the edge to X keeps C's definitions in scope, and the edge to Y is what the P→Y edges are built from.
+//   • An unsigned compare is declined by the evaluator this pass shares with `foldConstants`.
+// A constant that reaches C THROUGH an empty forwarding join — an `else if` chain's inner merge, left
+// with one predecessor once `foldConstants` folded the outer `if` — is not seen: the value C's
+// predecessor passes is that join's block arg, and `elimTrivialBlockArgs` has already run.
+//
+// SCHEDULING: right after `foldConstOperands`, which is what makes the test a `cmpImm`.
+//
+// EVERY CANDIDATE IS CHECKED ON THE FUNCTION BEFORE ANY REWRITE, AND THE REWRITES ARE APPLIED TOGETHER.
+// That is sound because two admitted candidates are never adjacent: a candidate's successors are
+// reached through its `condBranch`, which refuses the successor as a candidate. So one rewrite changes
+// the terminators of blocks that are no other candidate's predecessor (its own P's, which end in a
+// `branch` to it, and itself), adds edges only into its Y, which is no candidate, and mints reads only of
+// values already read in the same block — P's incoming value, and C's own edge args to Y.
+//
+// A REWRITE CAN ORPHAN A REGION: a C with no non-constant predecessor leaves its Y with no way in, and
+// everything only Y reached goes with it — possibly another admitted candidate, already rewritten and
+// counted. So the tested slots are dropped FIRST, while every rewritten join is still registered and
+// the count can be checked, and the unreachable region is removed after that. A Y whose only remaining
+// way in is itself unreachable is the same allocator hazard, so the removal runs after every function
+// that rewrote anything, not only where a Y visibly lost its last predecessor.
+
+typealias ThreadedSiteCount = int(0 to u64.max)
+typealias CandidateIndex = int(0 to u64.max)
+typealias ArgSlot = int(0 to u64.max)
+
+// Why the rule left a SHAPED block alone. Counted per reason into the pass summary and named in the
+// per-site trace, so a reader can tell what widening the rule would buy before writing the widening.
+enum ThreadRefusal
+	unreachable
+	conditionReadElsewhere
+	testedArgReadElsewhere
+	predecessorNotALoneBranch
+	unsignedCompare
+	targetsDisagree
+	noConstantPredecessor
+	keptTargetHasAnotherWayIn
+	valueArgReadOutsideKeptTarget
+end 'ThreadRefusal'
+
+function refusalText(reason ThreadRefusal) returns String
+	return match reason 'r'
+		unreachable gives "the entry cannot reach it"
+		conditionReadElsewhere gives "its compare's result is read by more than the terminator"
+		testedArgReadElsewhere gives "the tested block arg is read by more than the compare"
+		predecessorNotALoneBranch gives "a predecessor does not reach it through a lone `branch`"
+		unsignedCompare gives "the compare is unsigned, which the shared evaluator declines"
+		targetsDisagree gives "two constant predecessors decide different targets"
+		noConstantPredecessor gives "no predecessor passes a constant for the tested arg"
+		keptTargetHasAnotherWayIn gives "the target its constants decide has a predecessor other than the join"
+		valueArgReadOutsideKeptTarget gives "another block arg is read in a block the kept target does not dominate"
+	end 'r'
+end 'refusalText'
+
+// One tally per reason, indexed by `ThreadRefusal` ordinal, for the whole module.
+typealias RefusalTally = Array with ThreadedSiteCount
+
+// What every function's scan refills, created ONCE for the module: the candidate list (`Array.clear`
+// keeps its capacity), the two classification records the scan reads ops into, and the refusal tally.
+// Per function these would be three allocations paid by the many functions that hold no candidate.
+type ThreadScratch
+	export var candidates as ThreadCandidateArray
+	export var arith as StdArithOperands
+	export var branch as StdBranchOperands
+	export var refusals as RefusalTally
+
+	static function create() returns ThreadScratch
+		var refusals = RefusalTally.create()
+		refusals.resize(ThreadRefusal.allCases.count())
+		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), refusals: refusals}
+	end 'create'
+end 'ThreadScratch'
+
+// Thread every admissible join block in every function, in place.
+export function threadConstantBranches(module StdModule)
+	var threaded = 0 as ThreadedSiteCount
+	var scratch = ThreadScratch.create()
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		threaded = threaded + threadConstantBranchesInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("threadConstantBranches: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+	end 'eachFunc'
+
+	let total = threaded
+	logDebug(LogCategory.ir, message: function() gives "threadConstantBranches: threaded {total} site(s) across {module.funcCount()} function(s); shaped blocks left alone: {refusalSummary(scratch.refusals)}")
+end 'threadConstantBranches'
+
+// `count × reason` for every reason that refused a block, or `none`.
+function refusalSummary(refusals RefusalTally) returns String
+	var summary = ""
+	var any = false
+
+	for reason in ThreadRefusal.allCases 'eachReason'
+		let count = try refusals.get(reason.ordinal) otherwise panic("threadConstantBranches: refusals.get OOB at ordinal {reason.ordinal}")
+		if count == 0 'nothingRefused'
+			continue
+		end 'nothingRefused'
+
+		summary.append("{", " if any else ""}{count} x {reason.name}")
+		any = true
+	end 'eachReason'
+
+	return summary if any else "none"
+end 'refusalSummary'
+
+// One join block that has the SHAPE, and — once `admit` has run — whether the rule admits it and
+// which target it keeps. Positions are `func.blockRefs` positions, the key space `StdDominatorTree`
+// answers in.
+type ThreadCandidate
+	export var position as BlockRefIndex
+	export var blockRef as BlockRef
+	export var blockId as BlockId
+	export var compareOpIdx as OpIndex
+	// The compare's result, read only by the terminator.
+	export var condId as ValueId
+	// The block arg the compare tests, and its slot.
+	export var testedArg as ValueId
+	export var testedSlot as ArgSlot
+	export var imm as Imm32
+	export var pred as StdCmpPred
+	export var operandType as StdType
+	export var thenBlockId as BlockId
+	export var elseBlockId as BlockId
+	export var admitted = false
+	// Filled by `admit`: the target every constant-passing predecessor decides (X), its position, and
+	// the other target (Y).
+	export var keptTarget as BlockId = 0
+	export var keptPosition as BlockRefIndex = 0
+	export var droppedTarget as BlockId = 0
+
+	static function create(position BlockRefIndex, blockRef BlockRef, blockId BlockId, compareOpIdx OpIndex, condId ValueId, testedArg ValueId, testedSlot ArgSlot, imm Imm32, pred StdCmpPred, operandType StdType, thenBlockId BlockId, elseBlockId BlockId) returns ThreadCandidate
+		return Self{position: position, blockRef: blockRef, blockId: blockId, compareOpIdx: compareOpIdx, condId: condId, testedArg: testedArg, testedSlot: testedSlot, imm: imm, pred: pred, operandType: operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId}
+	end 'create'
+end 'ThreadCandidate'
+
+typealias ThreadCandidateArray = Array with ThreadCandidate
+
+// Thread one function. Returns how many join blocks it rewrote.
+function threadConstantBranchesInFunc(module StdModule, func IrFunction, scratch ThreadScratch) returns ThreadedSiteCount
+	collectThreadCandidates(module, func: func, scratch: scratch)
+	if scratch.candidates.count() == 0 'noCandidate'
+		// The common case, and the only cost most functions pay: one op read per block.
+		return 0
+	end 'noCandidate'
+
+	let analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
+	let bound = blockArgIdBound(module, func: func)
+	var argOwner = ValueIdArray.create()
+	argOwner.resize(bound)
+	var argSlot = ValueIdArray.create()
+	argSlot.resize(bound)
+
+	var admittedCount = 0 as ThreadedSiteCount
+	for index in 0 upto scratch.candidates.count() 'eachCandidate'
+		var candidate = try scratch.candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
+		if admit(module, func: func, analysis: analysis, candidate: candidate) 'admitted'
+			candidate.admitted = true
+			admittedCount = admittedCount + 1
+			recordBlockArgOwner(module, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot)
+		end 'admitted'
+	end 'eachCandidate'
+
+	if admittedCount == 0 'nothingAdmitted'
+		return 0
+	end 'nothingAdmitted'
+
+	refuseEscapingReads(module, func: func, analysis: analysis, candidates: scratch.candidates, argOwner: argOwner)
+
+	return applyAdmitted(module, func: func, analysis: analysis, candidates: scratch.candidates, argOwner: argOwner, argSlot: argSlot)
+end 'threadConstantBranchesInFunc'
+
+// Every block with the SHAPE — block args, exactly one body op which is a `cmpImm` on one of them, and
+// a `condBranch` on that compare between two distinct targets — into `scratch.candidates`. Whether the
+// rule ADMITS a block is `admit`'s question, asked only of a function that has at least one of these.
+function collectThreadCandidates(module StdModule, func IrFunction, scratch ThreadScratch)
+	scratch.candidates.clear()
+
+	for position in 0 upto func.blockRefs.count() 'eachBlock'
+		let blockRef = try func.blockRefs.get(position) otherwise panic("threadConstantBranches: blockRefs.get OOB at {position}")
+		let block = module.getBlock(blockRef)
+
+		if block.blockArgs.count() == 0 or block.opRefs.count() != 1 or not block.hasTerminatorOp() 'notTheShape'
+			continue
+		end 'notTheShape'
+
+		let compareOpIdx = try block.opRefs.get(0) otherwise panic("threadConstantBranches: opRefs.get(0) on a one-op block")
+		classifyArithOperands(module.getOp(compareOpIdx), operands: scratch.arith)
+		if not scratch.arith.isComparisonImm() 'notACompare'
+			continue
+		end 'notACompare'
+
+		classifyBranch(module.getOp(block.terminatorIndex()), out: scratch.branch)
+		if not scratch.branch.isCondBranch() 'notACondBranch'
+			continue
+		end 'notACondBranch'
+
+		pushIfBranchOnTheCompare(scratch.candidates, block: block, position: position, blockRef: blockRef, compareOpIdx: compareOpIdx, operands: scratch.arith, condId: scratch.branch.condId, thenBlockId: scratch.branch.thenBlockId, elseBlockId: scratch.branch.elseBlockId)
+	end 'eachBlock'
+end 'collectThreadCandidates'
+
+// The last two shape questions, asked once the terminator is known to be a `condBranch`: it must test
+// THIS compare, the compare must read one of the block's own args, and the two arms must differ (one
+// arm named twice has two edges to tell apart — the case `foldConstants.foldCondBranch` refuses too).
+function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock, position BlockRefIndex, blockRef BlockRef, compareOpIdx OpIndex, operands StdArithOperands, condId ValueId, thenBlockId BlockId, elseBlockId BlockId)
+	if condId != operands.resultId or thenBlockId == elseBlockId 'notTheShape'
+		return
+	end 'notTheShape'
+
+	for slot in 0 upto block.blockArgs.count() 'eachArg'
+		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
+		if arg.valueId == operands.lhs 'testsThisArg'
+			candidates.push(ThreadCandidate.create(position, blockRef: blockRef, blockId: block.id, compareOpIdx: compareOpIdx, condId: condId, testedArg: operands.lhs, testedSlot: slot, imm: operands.imm, pred: operands.pred, operandType: operands.operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId))
+			return
+		end 'testsThisArg'
+	end 'eachArg'
+end 'pushIfBranchOnTheCompare'
+
+// The per-function facts every admission question reads, gathered ONCE for a function that has at
+// least one candidate: the constants, the dominator tree with O(1) dominance stamps, the function-wide
+// use multiplicities, and the block-id → position index.
+type FunctionAnalysis
+	export var constMap as ConstValueMap
+	export var tree as StdDominatorTree
+	export var stamps as DominatorStamps
+	export var valueUses as StdValueUseSet
+	export var positionById as BlockIndexById
+	// The pass's refusal tally and terminator record, aliased in from `ThreadScratch`: every clause
+	// that refuses, and every predecessor read, already holds this record.
+	export var refusals as RefusalTally
+	export var branch as StdBranchOperands
+
+	static function gather(module StdModule, func IrFunction, scratch ThreadScratch) returns FunctionAnalysis
+		var def = StdFoldableDef.create()
+		let constMap = collectConstValues(module, opIndices: module.liveOpIndices(func), def: def)
+		let tree = StdDominatorTree.build(module, func: func)
+		var valueUses = StdValueUseSet.createTrackingRepeats()
+		collectFunctionValueUses(module, func: func, referenced: valueUses)
+		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.refusals, branch: scratch.branch}
+	end 'gather'
+
+	function positionOf(blockId BlockId) returns BlockRefIndex
+		return try self.positionById.get(blockId) otherwise panic("threadConstantBranches: block {blockId} is a branch target of this function but is not in its blockRefs")
+	end 'positionOf'
+end 'FunctionAnalysis'
+
+// The rule's clauses about the candidate itself and its neighbours — everything but the reads of its
+// other block args, which `refuseEscapingReads` checks for every admitted candidate in one walk.
+function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate) returns bool
+	if not analysis.tree.canReach(candidate.position) 'unreachable'
+		return refuse(candidate, reason: ThreadRefusal.unreachable, analysis: analysis)
+	end 'unreachable'
+
+	if analysis.valueUses.containsRepeat(candidate.condId) 'conditionReadElsewhere'
+		return refuse(candidate, reason: ThreadRefusal.conditionReadElsewhere, analysis: analysis)
+	end 'conditionReadElsewhere'
+
+	if analysis.valueUses.containsRepeat(candidate.testedArg) 'testedArgReadElsewhere'
+		return refuse(candidate, reason: ThreadRefusal.testedArgReadElsewhere, analysis: analysis)
+	end 'testedArgReadElsewhere'
+
+	if not decideTargetFromPredecessors(module, func: func, analysis: analysis, candidate: candidate) 'predecessorsRefuse'
+		return false
+	end 'predecessorsRefuse'
+
+	// "X has one predecessor" implies "C dominates X" only for a non-entry X: the entry has no predecessor
+	// at all and dominates everything, so it is refused before the degree is read.
+	candidate.keptPosition = analysis.positionOf(candidate.keptTarget)
+	if candidate.keptPosition == StdEntryBlockPosition or analysis.tree.pred.degree(candidate.keptPosition as CsrIndex) != 1 'keptTargetHasAnotherWayIn'
+		return refuse(candidate, reason: ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
+	end 'keptTargetHasAnotherWayIn'
+
+	return true
+end 'admit'
+
+// Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
+function refuse(candidate ThreadCandidate, reason ThreadRefusal, analysis FunctionAnalysis) returns bool
+	let count = try analysis.refusals.get(reason.ordinal) otherwise panic("threadConstantBranches: refusals.get OOB at ordinal {reason.ordinal}")
+	try analysis.refusals.set(reason.ordinal, value: count + 1) otherwise panic("threadConstantBranches: refusals.set OOB at ordinal {reason.ordinal}")
+	logTrace(LogCategory.ir, message: function() gives "threadConstantBranches: block_{candidate.blockId} left alone — {refusalText(reason)}")
+	return false
+end 'refuse'
+
+// Walk C's predecessors: each must reach C through `branch(C)` with that one edge; each that passes a
+// constant in the tested slot must decide the same target. Writes `keptTarget`/`droppedTarget` and
+// answers whether at least one constant predecessor decided.
+function decideTargetFromPredecessors(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate) returns bool
+	var decided = false
+	let join = module.getBlock(candidate.blockRef)
+
+	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
+		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
+		let pred = blockAtFuncPosition(module, func: func, position: predPosition)
+
+		if not predecessorBranchesOnlyTo(module, pred: pred, targetId: candidate.blockId, branch: analysis.branch) 'notABranchPredecessor'
+			return refuse(candidate, reason: ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
+		end 'notABranchPredecessor'
+
+		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
+		if not analysis.constMap.contains(incoming) 'runtimeValue'
+			continue
+		end 'runtimeValue'
+
+		var target = candidate.thenBlockId
+		match evaluateIntCompare(candidate.pred, lhs: analysis.constMap.constantOf(incoming), rhs: candidate.imm as ParsedInt, operandType: candidate.operandType) 'verdict'
+			folded(payload) then target = candidate.thenBlockId if payload != ConditionIsFalse else candidate.elseBlockId
+			notFoldable then return refuse(candidate, reason: ThreadRefusal.unsignedCompare, analysis: analysis)
+		end 'verdict'
+
+		if decided and target != candidate.keptTarget 'twoAnswers'
+			return refuse(candidate, reason: ThreadRefusal.targetsDisagree, analysis: analysis)
+		end 'twoAnswers'
+
+		decided = true
+		candidate.keptTarget = target
+		candidate.droppedTarget = candidate.elseBlockId if target == candidate.thenBlockId else candidate.thenBlockId
+	end 'eachPred'
+
+	if not decided 'noConstantPredecessor'
+		return refuse(candidate, reason: ThreadRefusal.noConstantPredecessor, analysis: analysis)
+	end 'noConstantPredecessor'
+
+	return true
+end 'decideTargetFromPredecessors'
+
+// Whether `pred` ends in `branch(targetId)` and carries exactly that one edge — the only predecessor
+// shape whose terminator the rewrite can overwrite with a `condBranch`.
+function predecessorBranchesOnlyTo(module StdModule, pred IrBlock, targetId BlockId, branch StdBranchOperands) returns bool
+	if not pred.hasTerminatorOp() or pred.branchEdges.count() != 1 'notOneBranch'
+		return false
+	end 'notOneBranch'
+
+	let edge = try pred.branchEdges.get(0) otherwise panic("threadConstantBranches: branchEdges.get(0) on a one-edge block")
+	if edge.targetBlockId != targetId 'edgeElsewhere'
+		return false
+	end 'edgeElsewhere'
+
+	classifyBranch(module.getOp(pred.terminatorIndex()), out: branch)
+	return branch.isBranch() and branch.targetBlockId == targetId
+end 'predecessorBranchesOnlyTo'
+
+// The one edge `pred` carries. Read through a function so the borrow of `pred` ends at the return —
+// the rewrite appends to the block while it still holds the edge's args.
+function soleEdge(pred IrBlock) returns BranchEdge
+	return try pred.branchEdges.get(0) otherwise panic("threadConstantBranches: branchEdges.get(0) on a one-edge block")
+end 'soleEdge'
+
+// Index C's block args by value id: which admitted candidate owns each (its index plus one, so the
+// zero-filled column carries its own "no candidate" answer, as `buildBlockIdIndex` does) and at which
+// slot. Both are what the read walk and the edge substitution look up per value, in O(1).
+function recordBlockArgOwner(module StdModule, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray)
+	let block = module.getBlock(candidate.blockRef)
+	for slot in 0 upto block.blockArgs.count() 'eachArg'
+		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
+		try argOwner.set(arg.valueId, value: index + 1) otherwise panic("threadConstantBranches: block arg {arg.valueId} is outside the block-arg id space")
+		try argSlot.set(arg.valueId, value: slot) otherwise panic("threadConstantBranches: block arg {arg.valueId} is outside the block-arg id space")
+	end 'eachArg'
+end 'recordBlockArgOwner'
+
+// The `argOwner` entry of a block arg no admitted candidate owns — the zero the column is filled with.
+let UnownedBlockArg = 0 as ValueId
+
+// Whether an admitted candidate owns block arg `valueId`. Ids above the block-arg space are op results
+// and parameters, which no candidate owns. Two questions rather than one returned union, for
+// `StdFoldableDef`'s measured reason: this is asked once per value READ in the function.
+function isOwnedByACandidate(valueId ValueId, argOwner ValueIdArray) returns bool
+	if valueId >= argOwner.count() 'notABlockArg'
+		return false
+	end 'notABlockArg'
+
+	let ownerPlusOne = try argOwner.get(valueId) otherwise panic("threadConstantBranches: argOwner.get OOB at {valueId}")
+	return ownerPlusOne != UnownedBlockArg
+end 'isOwnedByACandidate'
+
+// The candidate that owns block arg `valueId`. Panics for one no candidate owns — every caller has
+// asked `isOwnedByACandidate` first, and no index answers for "none" that is not some candidate's.
+function candidateOwning(valueId ValueId, argOwner ValueIdArray) returns CandidateIndex
+	let ownerPlusOne = try argOwner.get(valueId) otherwise panic("threadConstantBranches: argOwner.get OOB at {valueId}")
+	if ownerPlusOne == UnownedBlockArg 'unowned'
+		panic("threadConstantBranches: block arg {valueId} is owned by no admitted candidate — ask `isOwnedByACandidate` first")
+	end 'unowned'
+
+	return (ownerPlusOne - 1) as CandidateIndex
+end 'candidateOwning'
+
+// The last clause of the rule, for every admitted candidate in ONE walk of the function's reads: a
+// read of a candidate's block arg — other than the tested one, whose reads the repeat test settled —
+// must sit in a block the kept target dominates, or be an arg on the candidate's own edges. Any other
+// read refuses the candidate.
+function refuseEscapingReads(module StdModule, func IrFunction, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray)
+	var reads = StdValueUseSet.createRecordingIds()
+
+	for position in 0 upto func.blockRefs.count() 'eachBlock'
+		let block = blockAtFuncPosition(module, func: func, position: position)
+
+		for opIdx in block.opRefs 'eachOp'
+			refuseEscapingOpReads(module, opIdx: opIdx, position: position, analysis: analysis, candidates: candidates, argOwner: argOwner, reads: reads)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			refuseEscapingOpReads(module, opIdx: block.terminatorIndex(), position: position, analysis: analysis, candidates: candidates, argOwner: argOwner, reads: reads)
+		end 'hasTerm'
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				refuseIfReadEscapes(argId, position: position, isEdgeArg: true, analysis: analysis, candidates: candidates, argOwner: argOwner)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+end 'refuseEscapingReads'
+
+function refuseEscapingOpReads(module StdModule, opIdx OpIndex, position BlockRefIndex, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, reads StdValueUseSet)
+	reads.clear()
+	collectStdOpUses(module.getOp(opIdx), referenced: reads)
+
+	for i in 0 upto reads.insertedIdCount() 'eachRead'
+		refuseIfReadEscapes(reads.insertedIdAt(i), position: position, isEdgeArg: false, analysis: analysis, candidates: candidates, argOwner: argOwner)
+	end 'eachRead'
+end 'refuseEscapingOpReads'
+
+function refuseIfReadEscapes(valueId ValueId, position BlockRefIndex, isEdgeArg bool, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray)
+	if not isOwnedByACandidate(valueId, argOwner: argOwner) 'unowned'
+		return
+	end 'unowned'
+
+	let index = candidateOwning(valueId, argOwner: argOwner)
+	refuseIfOwnedReadEscapes(try candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}"), valueId: valueId, position: position, isEdgeArg: isEdgeArg, analysis: analysis)
+end 'refuseIfReadEscapes'
+
+function refuseIfOwnedReadEscapes(candidate ThreadCandidate, valueId ValueId, position BlockRefIndex, isEdgeArg bool, analysis FunctionAnalysis)
+	if not candidate.admitted or valueId == candidate.testedArg 'nothingToCheck'
+		return
+	end 'nothingToCheck'
+
+	if position == candidate.position 'readInTheJoinItself'
+		if isEdgeArg 'onItsOwnEdge'
+			return
+		end 'onItsOwnEdge'
+
+		panic("threadConstantBranches: block arg {valueId} of block_{candidate.blockId} is read by an op of its own block, whose only op is the compare on a different arg")
+	end 'readInTheJoinItself'
+
+	if not analysis.tree.canReach(position) or not analysis.stamps.dominates(candidate.keptPosition, b: position) 'escapes'
+		candidate.admitted = refuse(candidate, reason: ThreadRefusal.valueArgReadOutsideKeptTarget, analysis: analysis)
+	end 'escapes'
+end 'refuseIfOwnedReadEscapes'
+
+// Rewrite every admitted candidate, then the function-wide follow-ups the rewrites owe: the compares
+// come out of their blocks, an orphaned Y comes out of the function, the tested slots come off their
+// blocks and every incoming edge, and the constants nothing reads any more are retired.
+function applyAdmitted(module StdModule, func IrFunction, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, argSlot ValueIdArray) returns ThreadedSiteCount
+	// Seeded ONCE, before any rewrite, past every id the function uses; each duplicated compare mints
+	// its result from here.
+	var minter = ValueMinter.create(nextFreeValueId(module, func: func) as ParamCount)
+	var doomedCompares = StdValueUseSet.create()
+	var applied = 0 as ThreadedSiteCount
+
+	for index in 0 upto candidates.count() 'eachCandidate'
+		let candidate = try candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
+		if not candidate.admitted 'refused'
+			continue
+		end 'refused'
+
+		threadOne(module, func: func, analysis: analysis, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot, minter: minter)
+		doomedCompares.insert(candidate.condId)
+		applied = applied + 1
+	end 'eachCandidate'
+
+	if applied == 0 'nothingApplied'
+		return 0
+	end 'nothingApplied'
+
+	removeOpsDefining(module, func: func, doomed: doomedCompares)
+
+	// BEFORE the unreachable region goes: a rewritten join inside it must still be registered when its
+	// slot is dropped and counted — see the header.
+	dropTestedSlots(module, func: func, candidates: candidates, applied: applied)
+
+	// A Y no reachable predecessor reaches any more may feed a phi from code no path runs, which is the
+	// allocator hazard `dropUnreachableBlocks` states.
+	dropUnreachableBlocks(module, func: func)
+
+	// The `const`s the constant-passing predecessors fed into the dropped slots — retired by the same
+	// narrow rule `foldConstOperands` owns, over the ops the rewrites left live.
+	dceRetiredDefs(module, func: func, opIndices: module.liveOpIndices(func), def: StdFoldableDef.create())
+
+	return applied
+end 'applyAdmitted'
+
+// The rewrite of one join block C and its predecessors. The tree's predecessor list is read AFTER
+// earlier rewrites in the same function and is still exact — see the header for why no rewrite
+// changes an admitted candidate's predecessors.
+function threadOne(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
+	var join = module.getBlock(candidate.blockRef)
+	let dropped = blockAtFuncPosition(module, func: func, position: analysis.positionOf(candidate.droppedTarget))
+	let droppedTakesArgs = dropped.blockArgs.count() != 0
+	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
+
+	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
+		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
+		var pred = blockAtFuncPosition(module, func: func, position: predPosition)
+		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
+
+		if analysis.constMap.contains(incoming) 'decidedAtTheEdge'
+			continue
+		end 'decidedAtTheEdge'
+
+		duplicateTestInto(module, pred: pred, candidate: candidate, index: index, incoming: incoming, argsToDropped: argsToDropped, droppedTakesArgs: droppedTakesArgs, argOwner: argOwner, argSlot: argSlot, minter: minter)
+	end 'eachPred'
+
+	// In place at its own index — `setTerminator` appends and would orphan the old op.
+	try module.ops.set(join.terminatorIndex(), value: StdOp.branch(candidate.keptTarget)) otherwise panic("threadConstantBranches: ops.set OOB at terminator index {join.terminatorIndex()}")
+	join.branchEdges = edgesWithoutTarget(join.branchEdges, droppedTarget: candidate.droppedTarget)
+
+	logTrace(LogCategory.ir, message: function() gives "threadConstantBranches: block_{candidate.blockId} branches to block_{candidate.keptTarget} unconditionally; block_{candidate.droppedTarget} is reached from the non-constant predecessors directly")
+end 'threadOne'
+
+// The args C's edge to `targetId` carries. A target that takes block args MUST have an edge (the
+// phi model records one edge per successor that carries phis); one that takes none has none.
+function edgeArgsTo(join IrBlock, targetId BlockId, takesArgs bool) returns ValueIdArray
+	for edge in join.branchEdges 'eachEdge'
+		if edge.targetBlockId == targetId 'found'
+			return edge.argIds
+		end 'found'
+	end 'eachEdge'
+
+	if takesArgs 'missingEdge'
+		panic("threadConstantBranches: block_{join.id} branches to block_{targetId}, which takes block args, but carries no edge to it")
+	end 'missingEdge'
+
+	return ValueIdArray.create()
+end 'edgeArgsTo'
+
+// Give one non-constant predecessor P the test: the compare on its own incoming value, a `condBranch`
+// in C's then/else orientation with the dropped target's arm pointing there and the other arm at C, and
+// a fresh edge column — the edge to C it had, plus the edge to the dropped target when that takes args.
+function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index CandidateIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
+	var predBlock = pred
+	let argsToJoin = soleEdge(predBlock).argIds
+
+	// The duplicated test answers to the statement the original compare did.
+	module.spans.current = module.spans.at(candidate.compareOpIdx)
+	let condId = minter.mint()
+	module.appendOp(predBlock, op: StdOp.cmpImm(condId, lhs: incoming, imm: candidate.imm, pred: candidate.pred, operandType: candidate.operandType))
+
+	let keptIsThen = candidate.keptTarget == candidate.thenBlockId
+	let thenId = candidate.blockId if keptIsThen else candidate.droppedTarget
+	let elseId = candidate.droppedTarget if keptIsThen else candidate.blockId
+	try module.ops.set(predBlock.terminatorIndex(), value: StdOp.condBranch(condId, thenBlockId: thenId, elseBlockId: elseId)) otherwise panic("threadConstantBranches: ops.set OOB at terminator index {predBlock.terminatorIndex()}")
+
+	var edges = BranchEdgeArray.create()
+	edges.push(BranchEdge.create(candidate.blockId, argIds: argsToJoin))
+	if droppedTakesArgs 'droppedTakesArgs'
+		edges.push(BranchEdge.create(candidate.droppedTarget, argIds: substituteJoinArgs(argsToDropped, incoming: argsToJoin, index: index, argOwner: argOwner, argSlot: argSlot)))
+	end 'droppedTakesArgs'
+	predBlock.branchEdges = edges
+end 'duplicateTestInto'
+
+// C's edge args to the dropped target, as P must pass them: a block arg of C becomes the value P passes
+// to that slot; anything else — including another join's block arg — is defined in a block dominating
+// C, hence P, and passes through.
+function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray) returns ValueIdArray
+	var substituted = ValueIdArray.create()
+
+	for argId in argsToDropped 'eachArg'
+		if not isOwnedByACandidate(argId, argOwner: argOwner) or candidateOwning(argId, argOwner: argOwner) != index 'definedAboveTheJoin'
+			substituted.push(argId)
+			continue
+		end 'definedAboveTheJoin'
+
+		let slot = try argSlot.get(argId) otherwise panic("threadConstantBranches: argSlot.get OOB at {argId}")
+		substituted.push(try incoming.get(slot) otherwise panic("threadConstantBranches: the edge into the join passes {incoming.count()} arg(s) but slot {slot} is one of the join's block args"))
+	end 'eachArg'
+
+	return substituted
+end 'substituteJoinArgs'
+
+// Drop the tested slot of every rewritten join — the block arg and its slot in every incoming edge,
+// through the one dropper both block-arg passes share. The count it answers must be exactly the
+// rewrites: every tested arg lost its only reader with the compare, and no other arg is unmarked.
+function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCandidateArray, applied ThreadedSiteCount)
+	let refByBlockId = buildBlockIdIndex(module, func: func)
+	let bound = blockArgIdBound(module, func: func)
+	var kept = flagColumn(bound)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+		for arg in block.blockArgs 'eachArg'
+			setFlag(kept, v: arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+
+	for candidate in candidates 'eachCandidate'
+		if candidate.admitted 'rewritten'
+			try kept.set(candidate.testedArg, value: false) otherwise panic("threadConstantBranches: tested arg {candidate.testedArg} is outside the block-arg id space")
+		end 'rewritten'
+	end 'eachCandidate'
+
+	let dropped = dropBlockArgs(module, func: func, refByBlockId: refByBlockId, kept: kept)
+	if dropped != applied as ValueId 'countDisagrees'
+		panic("threadConstantBranches: rewrote {applied} join(s) in '{String.from(func.name)}' but dropped {dropped} block arg(s) — a tested slot was not the only one unmarked, or was dropped twice")
+	end 'countDisagrees'
+end 'dropTestedSlots'
+
+// The block at a `func.blockRefs` position — read through `getBlock`, so the borrow of `module` ends
+// at the return (`IrModule.getOp` states why that matters on a mutating path).
+function blockAtFuncPosition(module StdModule, func IrFunction, position BlockRefIndex) returns IrBlock
+	return module.getBlock(try func.blockRefs.get(position) otherwise panic("threadConstantBranches: blockRefs.get OOB at {position}"))
+end 'blockAtFuncPosition'

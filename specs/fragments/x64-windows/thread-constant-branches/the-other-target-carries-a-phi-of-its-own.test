@@ -1,0 +1,97 @@
+// Test: the-other-target-carries-a-phi-of-its-own
+typealias Word = int(i64.min to i64.max)
+
+function bump(p bool, n Word) returns Word
+	var flag = 0
+	var acc = 5
+	if p 'yes'
+		flag = 1
+		acc = n
+	end 'yes' else 'no'
+		flag = n
+		acc = 7
+	end 'no'
+	if flag != 0 'nz'
+		acc = acc + 1
+	end 'nz'
+	return acc
+end 'bump'
+
+function main() returns ExitCode
+	if bump(true, n: 9) != 10 'a'
+		return 1
+	end 'a'
+	if bump(true, n: 0) != 1 'b'
+		return 2
+	end 'b'
+	if bump(false, n: 9) != 8 'c'
+		return 3
+	end 'c'
+	if bump(false, n: 0) != 7 'd'
+		return 4
+	end 'd'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  yes#11:
+    x64.movRegImm32 rax, 9
+  nz#14:
+    x64.leaRegRegImm32 rax, rax, 1
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 10
+    x64.jcc equal, yes#18
+  a:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  yes#18:
+    x64.movRegImm32 rax, 0
+  nz#21:
+    x64.leaRegRegImm32 rax, rax, 1
+  __il_cont#16:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, ifelse#26
+  b:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifelse#26:
+    x64.movRegImm32 rax, 7
+  nz#28:
+    x64.leaRegRegImm32 rax, rax, 1
+  __il_cont#23:
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, ifelse#33
+  c:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifelse#33:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 7
+  ifcont#34:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  nz#35:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.jmp __il_cont#30
+  critsplit:
+    x64.movRegReg rax, rcx
+  __il_cont#30:
+    x64.cmpRegImm32 rax, 7
+    x64.jcc equal, ifcont#8
+  d:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

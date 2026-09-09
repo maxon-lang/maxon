@@ -634,8 +634,7 @@ type RangeCheckEmitter
 	function requireGuardHeadHoldsOnlyParams(site GuardSite)
 		for pos in 0 upto site.position 'eachPrefixOp'
 			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
-
-			match self.opAtIndex(opIdx) 'op'
+			match self.module.getOp(opIdx) 'op'
 				const or
 					binOp or
 					unaryOp or
@@ -756,12 +755,6 @@ type RangeCheckEmitter
 		panic("requireGuardHeadHoldsOnlyParams: op {pos} of '{String.from(self.func.name)}'s entry block stands AHEAD of its parameter guard and is not a `param` op — the guard is anchored at `paramCount` on the premise that the first `paramCount` ops are the incoming-register captures, and `InlineLeaves` drops that whole block when it declines the cascade")
 	end 'refuseNonParamAheadOfAGuard'
 
-	// Every op read on this pass's mutating paths goes through here, for `InlineLeaves.opAtIndex`'s reason:
-	// a `self.module.ops.get(...)` written inline BORROWS `module`, and this pass appends ops and blocks to
-	// it in the next breath — which the self-compile refuses.
-	function opAtIndex(opIdx OpIndex) returns StdOp
-		return try self.module.ops.get(opIdx) otherwise panic("RangeCheckEmitter.opAtIndex: op index {opIdx} named by a block of '{String.from(self.func.name)}' is not in module.ops")
-	end 'opAtIndex'
 
 	// Is this parameter an address or a value? `reassignedParamMask` is the ABI's own answer — the same bit
 	// `LowerMaxonToStd` types the slot from and `transferFuncs` shapes the callee's signature with — so this

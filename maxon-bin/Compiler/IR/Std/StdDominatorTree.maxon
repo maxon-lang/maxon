@@ -280,6 +280,77 @@ export type StdDominatorTree
 	end 'idomOfEachNonEntryReachableBlock'
 end 'StdDominatorTree'
 
+// Dominance as an O(1) query: a preorder and a postorder stamp per block over the dominator tree's
+// child adjacency, so `a` dominates `b` iff `a`'s interval contains `b`'s. The tree hands back one STEP
+// of the chain and says why; a pass that asks "does X dominate this block" once per VALUE READ
+// (`threadConstantBranches`) would pay O(reads × depth) climbing — quadratic in a function whose `try`
+// sites nest one continuation under the last — where one walk of `children` stamps every block.
+export type DominatorStamps
+	var enterAt as BlockPositionColumn
+	var leaveAt as BlockPositionColumn
+
+	export static function build(tree StdDominatorTree) returns DominatorStamps
+		var stamps = Self{enterAt: BlockPositionColumn.create(), leaveAt: BlockPositionColumn.create()}
+		stamps.enterAt.resize(tree.blockCount)
+		stamps.leaveAt.resize(tree.blockCount)
+
+		if tree.blockCount == 0 'noBlocks'
+			return stamps
+		end 'noBlocks'
+
+		// An EXPLICIT STACK, for `StdDominatorTree.buildReversePostorder`'s reason: a block chain can be
+		// tens of thousands long, and a recursive walk over one is a host stack overflow.
+		var stackNode = BlockPositionColumn.create()
+		var stackNextChild = CsrColumn.create()
+		var clock = 0 as BlockRefIndex
+
+		stackNode.push(StdEntryBlockPosition)
+		stackNextChild.push(0)
+		clock = stamps.stampEntry(StdEntryBlockPosition, clock: clock)
+
+		while stackNode.count() > 0 'depthFirst'
+			let top = stackNode.count() - 1
+			let position = try stackNode.get(top) otherwise panic("DominatorStamps.build: stackNode.get OOB at {top}")
+			let nextChild = try stackNextChild.get(top) otherwise panic("DominatorStamps.build: stackNextChild.get OOB at {top}")
+
+			if nextChild >= tree.children.degree(position as CsrIndex) 'everyChildVisited'
+				clock = stamps.stampExit(position, clock: clock)
+				_ = try stackNode.pop() otherwise panic("DominatorStamps.build: stackNode.pop on a non-empty stack failed")
+				_ = try stackNextChild.pop() otherwise panic("DominatorStamps.build: stackNextChild.pop on a non-empty stack failed")
+				continue
+			end 'everyChildVisited'
+
+			try stackNextChild.set(top, value: nextChild + 1) otherwise panic("DominatorStamps.build: stackNextChild.set OOB at {top}")
+			let child = tree.children.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex
+			stackNode.push(child)
+			stackNextChild.push(0)
+			clock = stamps.stampEntry(child, clock: clock)
+		end 'depthFirst'
+
+		return stamps
+	end 'build'
+
+	function stampEntry(position BlockRefIndex, clock BlockRefIndex) returns BlockRefIndex
+		try self.enterAt.set(position, value: clock) otherwise panic("DominatorStamps: enterAt.set OOB at {position}")
+		return clock + 1
+	end 'stampEntry'
+
+	function stampExit(position BlockRefIndex, clock BlockRefIndex) returns BlockRefIndex
+		try self.leaveAt.set(position, value: clock) otherwise panic("DominatorStamps: leaveAt.set OOB at {position}")
+		return clock + 1
+	end 'stampExit'
+
+	// Whether `a` dominates `b`. Both must be reachable — an unreachable block was never stamped, and
+	// its zero interval would read as the entry's; callers ask `StdDominatorTree.canReach` first.
+	export function dominates(a BlockRefIndex, b BlockRefIndex) returns bool
+		let aEnter = try self.enterAt.get(a) otherwise panic("DominatorStamps.dominates: enterAt.get OOB at {a}")
+		let bEnter = try self.enterAt.get(b) otherwise panic("DominatorStamps.dominates: enterAt.get OOB at {b}")
+		let aLeave = try self.leaveAt.get(a) otherwise panic("DominatorStamps.dominates: leaveAt.get OOB at {a}")
+		let bLeave = try self.leaveAt.get(b) otherwise panic("DominatorStamps.dominates: leaveAt.get OOB at {b}")
+		return aEnter <= bEnter and bLeave <= aLeave
+	end 'dominates'
+end 'DominatorStamps'
+
 // The entry block is `func.blockRefs` position 0. Named because it is an INVARIANT of that array
 // (`IrModule.addBlock` appends, and the entry is the first block a function gets) rather than a number
 // that happens to appear here.

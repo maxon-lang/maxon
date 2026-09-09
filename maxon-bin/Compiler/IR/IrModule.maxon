@@ -528,6 +528,14 @@ export type IrModule uses Op
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
+	// ⚠ **ONE OP, READ THROUGH A FUNCTION — AND THAT IS E3070 RATHER THAN TIDINESS.** A `module.ops.get(…)`
+	// written inline borrows the module for as long as the value lives, and a pass that mutates the module
+	// in the next breath (an `appendOp`, an `ops.set`) is refused by the self-compile. Reading through this
+	// ends the borrow at the return, which is why every op read on a mutating path comes here.
+	export function getOp(index OpIndex) returns Op
+		return try self.ops.get(index) otherwise panic("getOp: op index {index} out of bounds")
+	end 'getOp'
+
 	export function pushBlock(block IrBlock)
 		self.blocks.push(block)
 		self.blockSourceInfo.push(BlockSourceInfo.empty())

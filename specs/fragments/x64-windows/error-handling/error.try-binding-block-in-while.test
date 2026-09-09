@@ -14,7 +14,9 @@ function main() returns ExitCode
 	var i = 0 as Code
 	while i < 4 'loop'
 		try risky(i) otherwise (e) 'h'
-			acc = acc + 1
+			match e 'f'
+				broken then acc = acc + 1
+			end 'f'
 		end 'h'
 		i = i + 1
 	end 'loop'
@@ -52,8 +54,12 @@ func @main {
     x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchdead
+  matcharm:
     x64.leaRegRegImm32 rax, rbx, 1
     x64.jmp trycont
+  matchdead:
   tryok:
     x64.movRegReg rax, rbx
   trycont:
@@ -68,7 +74,7 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error.try-binding-block-in-while.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error.try-binding-block-in-while.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

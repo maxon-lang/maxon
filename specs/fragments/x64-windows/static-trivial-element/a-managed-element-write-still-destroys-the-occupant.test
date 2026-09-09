@@ -128,14 +128,6 @@ func @relabel {
     x64.loadRegSlot rdx, slot0
     x64.loadRegSlot rax, slot3
     x64.callDirect __managed_set
-    x64.jmp __im_cont
-  __im_store:
-    x64.loadRegSlot rcx, slot0
-    x64.loadRegSlot rdx, slot3
-    x64.storeBaseIndexScaleReg.word64 [rax + rcx*8 + 0], rdx
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
@@ -149,6 +141,10 @@ func @relabel {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_store:
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rdx, slot3
+    x64.storeBaseIndexScaleReg.word64 [rax + rcx*8 + 0], rdx
   tryok:
     x64.epilogue 72
     x64.popReg r15

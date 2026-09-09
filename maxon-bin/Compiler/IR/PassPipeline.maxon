@@ -141,6 +141,15 @@ union PassKind
 	// `foldConstOperands` moves a const operand into an immediate so the literal never
 	// needs a register.
 	//
+	// `threadConstantBranches` decides a join block's branch at the edges that already know the answer: a
+	// block whose whole body is one `cmpImm` on one of its own block args, where some predecessor passes a
+	// `const` for that arg, becomes an unconditional branch for those predecessors and hands the other
+	// predecessors a copy of the test. It runs AFTER `foldConstOperands`, which is what makes the test a
+	// `cmpImm` — every `try`'s continuation compares its flag against a `const` the operand fold moves into
+	// the immediate — and BEFORE `commonSubexpressionElimination`, so the compares it duplicates into the
+	// predecessors are in place when that pass reads each block, and the compare it removes is not one CSE
+	// has already made canonical for a later read.
+	//
 	// `commonSubexpressionElimination` (EC13) replaces a PURE computation whose operator and operands a
 	// block has already evaluated with a read of that earlier result — `x * 31 + y` written three times
 	// becomes one `imul`/`lea` pair instead of three into three simultaneously-live registers. It runs
@@ -176,6 +185,7 @@ union PassKind
 	foldConstants
 	strengthReduceDivision
 	foldConstOperands
+	threadConstantBranches
 	commonSubexpressionElimination
 	loopInvariantCodeMotion
 
@@ -241,7 +251,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
-
+		// Intra-function by construction: a join block, its predecessors and its two targets are one
+		// function's CFG, and the dominance it asks about is a fact about that CFG alone.
+		threadConstantBranches gives PassClassification.perFunction
 		// Intra-function by construction: an expression is compared only against ones computed in blocks
 		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
 		strengthReduceDivision gives PassClassification.perFunction
@@ -277,6 +289,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
+		threadConstantBranches gives CompilePhase.threadConstantBranches
 		strengthReduceDivision gives CompilePhase.strengthReduceDivision
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
@@ -299,6 +312,7 @@ function passKindToString(pass PassKind) returns String
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
+		threadConstantBranches gives "threadConstantBranches"
 		strengthReduceDivision gives "strengthReduceDivision"
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
@@ -350,6 +364,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.foldConstants)
 	passes.push(PassKind.strengthReduceDivision)
 	passes.push(PassKind.foldConstOperands)
+	passes.push(PassKind.threadConstantBranches)
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.promoteStackRecords)
@@ -528,7 +543,7 @@ export type PassPipeline
 			// which divisions live there and why they are worth a second run.
 			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
-
+			threadConstantBranches then threadConstantBranches(self.stdModule)
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)

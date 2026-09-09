@@ -97,7 +97,7 @@ profile; a closed row keeps its measured delta.
 
 | # | Candidate | What it is | The fannkuch shape it covers | Risk | State |
 |---|---|---|---|---|---|
-| 1 | Jump threading through constant phi inputs | a `condBranch` on a block argument that is a constant on an incoming edge is resolved on that edge | the `try` flag test after every inlined fast arm (`cmp r10,0 / jcc` + the phi copy), −4 per access | low-med | open |
+| 1 | Jump threading through constant phi inputs | a `condBranch` on a block argument that is a constant on an incoming edge is resolved on that edge | the `try` flag test after every inlined fast arm (`cmp r10,0 / jcc` + the phi copy), −4 per access | low-med | **closed, round 2** |
 | 2 | Value-range analysis + redundant-check elimination | ranges for induction variables and loads along dominators; a check implied by a dominating check or the range is deleted | the `ElementIndex >= 0` guard (−2 per access), then the bound itself for loop-bounded indices | med | open |
 | 3 | Alias-aware loop-invariant code motion | memory disambiguation by object + field offset so an element store does not pin the record-header loads; known-effect calls admitted | `length@8` reloaded per access; today LICM refuses any loop with a store or a call | med | open |
 | 4 | Loop unswitching | loop-invariant conditions hoisted by versioning the loop | the remaining shape guards (ownership, buffer, sharing) leave the loop and the hot copy is call-free | high | open |
@@ -112,6 +112,7 @@ Closed:
 | Round | Change | n=11 A/B (control → change) | census | self-compile |
 |---|---|---|---|---|
 | 1 | static trivial-element stamp — the inlined get/set arms omit the `element_destroy@40` guard and the `__im_empty` block where the element type owes no drop (`specs/static-trivial-element.md`) | 7,926 → 7,698 ms (**−2.9%**) | ops 2308 → 2111, im-blocks 209 → 172, mov 266 → 236 | 40,491 → 40,103 ms (−1.0%) |
+| 2 | `threadConstantBranches` — a branch on a block argument that a predecessor passes as a constant is decided on that edge and duplicated into the others; the join keeps its value phi so no SSA is rebuilt (`specs/thread-constant-branches.md`, 12 cases). 37 sites in this program: every inlined get/set's `try` flag test | 7,692 → 5,856 ms (**−23.9%**); n=12 109,655 → 81,949 ms, ratio **3.95** | ops 2111 → 2008, jmp 52 → 23, im-blocks 172 → 138, mov 236 → 199 | 41,606 → 39,575 ms (−4.9%) |
 
 Declined for this program: EC18 (already took the `mod 2`), refcount inlining (no managed elements),
 EC22 rel8 (size only), EC21/EC23 (measured empty by `docs/emitted-code-roadmap.md`).

@@ -1,0 +1,105 @@
+// Test: a-user-phi-of-constants-agreeing-on-one-target
+typealias Word = int(i64.min to i64.max)
+
+function classify(p bool, q bool, n Word) returns Word
+	var flag = 0
+	if p 'first'
+		flag = 0
+	end 'first' else if q 'second'
+		flag = n - 5
+	end 'second' else 'third'
+		flag = 0
+	end 'third'
+	if flag != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 2
+end 'classify'
+
+function main() returns ExitCode
+	if classify(true, q: true, n: 9) != 2 'a'
+		return 1
+	end 'a'
+	if classify(false, q: true, n: 9) != 1 'b'
+		return 2
+	end 'b'
+	if classify(false, q: true, n: 5) != 2 'c'
+		return 3
+	end 'c'
+	if classify(false, q: false, n: 9) != 2 'd'
+		return 4
+	end 'd'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont#18:
+    x64.movRegImm32 rax, 2
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, second#23
+  a:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  second#23:
+    x64.movRegImm32 rax, 4
+  ifcont#26:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#28
+  nonzero#27:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#19
+  ifcont#28:
+    x64.movRegImm32 rax, 2
+  __il_cont#19:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, second#33
+  b:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  second#33:
+    x64.movRegImm32 rax, 0
+  ifcont#36:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#38
+  nonzero#37:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#29
+  ifcont#38:
+    x64.movRegImm32 rax, 2
+  __il_cont#29:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, ifelse
+  c:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 rax, 0
+  ifcont#46:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#48
+  nonzero#47:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#39
+  ifcont#48:
+    x64.movRegImm32 rax, 2
+  __il_cont#39:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, ifcont#8
+  d:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

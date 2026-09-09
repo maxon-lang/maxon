@@ -104,6 +104,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* |
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
+| **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
@@ -1585,6 +1586,33 @@ built from the pre-change commit, runs interleaved, n=11: **7,926 → 7,698 ms (
 2308 → 2111, `im-blocks` 209 → 172, `mov` 266 → 236; the compiler's own self-compile 40,491 → 40,103 ms
 and its binary 43 KB smaller. ⚠ **−8.5% of the ops bought −2.9% of the time** — `EC14`'s lesson again:
 a predictable branch on an L1-hitting load is mostly absorbed by the core.
+
+**`EC24` · Jump threading through constant block arguments.** — ✅ **CLOSED 2026-09-09 (round 2 of
+the fannkuch loop). THE LARGEST TIMED WIN SINCE `A2`: fannkuch −23.9%, and the compiler's own
+self-compile −4.9%.** `IR/Std/ThreadConstantBranches.maxon`, scheduled right after `foldConstOperands`:
+a join block whose body is one `cmpImm` on its own block argument and whose terminator branches on
+it is decided at compile time for every predecessor that passes a `const` for that argument; the
+compare is duplicated into the non-constant predecessors, the join keeps its value phis and ends in an
+unconditional branch, and `BranchCleanup` then threads the empty join at the Target tier. No SSA
+reconstruction, because the join is kept rather than bypassed. The shape it exists for is the `try`
+flag test after every inlined `__managed_get`/`__managed_set` fast arm (`mov 0 / mov r10 / cmp r10,0 /
+jcc` + a `critsplit` copy), which every checked array access in every program paid; the rule is general
+and threads user-level phis of constants too. Refusals, each pinned: the flag read past the compare
+(`otherwise (e)` bindings, rethrows), constants disagreeing on the target, a predecessor arriving by
+`condBranch`/`switch`, a value phi read outside what the kept target dominates, an `X` with a second
+predecessor or the entry. ⛔ **The review found a real panic before it landed**: a second candidate
+inside the region the first orphans was rewritten and then removed, so its slot drop indexed a column
+sized by the survivors — cured by dropping every tested slot before `dropUnreachableBlocks`, and both
+probes are cases. Sabotage (the read-elsewhere refusal deleted) makes every case fail at COMPILE time:
+a stdlib rethrow is admitted and the allocator refuses the function. Timed A/B (control built from the
+round-1 commit, interleaved, n=11): **7,692 → 5,856 ms**; n=12 **109,655 → 81,949 ms (ratio to C
+5.28 → 3.95)**; census ops 2111 → 2008, `jmp` 52 → 23, `im-blocks` 172 → 138, `mov` 236 → 199;
+self-compile **41,606 → 39,575 ms**, the compiler's code 15 KB smaller. 37 sites threaded in fannkuch
+(266 in a scale-test rung 5, with 7,290 refusals for a flag read elsewhere — the rethrow shape is the
+common one in the stdlib). Also landed: `IrModule.getOp` replaces five per-pass copies of
+"read one op through a function so the borrow ends"; `classifyBranch` is now the ONE terminator
+roster (`FoldConstants` lost its 120-line duplicate); `DominatorStamps` (O(1) dominance) lives beside
+`StdDominatorTree`.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

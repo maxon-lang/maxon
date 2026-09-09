@@ -3063,6 +3063,13 @@ export type StdArithOperands
 		return self.shape == StdArithShape.comparison
 	end 'isComparison'
 
+	// The IMMEDIATE comparison shape — `cmpImm`, a `pred` over `lhs` and `imm`. Named beside
+	// `isComparison` for `isBinaryArithImm`'s reason: `hasImmediate()` cannot tell the two immediate
+	// shapes apart, and `pred` is meaningful only in this one.
+	export function isComparisonImm() returns bool
+		return self.shape == StdArithShape.comparisonImm
+	end 'isComparisonImm'
+
 	export function isUnary() returns bool
 		return self.shape == StdArithShape.unary
 	end 'isUnary'
@@ -5223,3 +5230,175 @@ function pushSwitchTargets(out BlockIdArray, denseTargetBlockIds BlockIdArray, d
 
 	out.push(defaultBlockId)
 end 'pushSwitchTargets'
+
+// The two Std terminators a CFG rewrite can RETARGET, read off a block's terminator op into a
+// caller-owned record; every other op — the other terminators, and any body op asked by mistake —
+// answers `other`.
+//
+// A RECORD filled in place rather than a returned union, for `StdFoldableDef`'s measured reason: a
+// payload-bearing union heap-boxes every case, and `threadConstantBranches` asks this of every shaped
+// block and of every predecessor it walks.
+//
+// `classifyBranch` sits beside `collectStdBlockSuccessorIds` because it is the fourth exhaustive `StdOp`
+// roster and answers a question that walk cannot: the successor list of a `condBranch` names its arms
+// but not the CONDITION, and a `switch` with one dense arm has the same two successors a `condBranch`
+// has.
+module enum StdBranchShape
+	other
+	branch
+	condBranch
+end 'StdBranchShape'
+
+module type StdBranchOperands
+	var shape as StdBranchShape
+	// `branch` only.
+	export var targetBlockId as BlockId
+	// `condBranch` only.
+	export var condId as ValueId
+	export var thenBlockId as BlockId
+	export var elseBlockId as BlockId
+
+	export static function create() returns StdBranchOperands
+		return Self{shape: StdBranchShape.other, targetBlockId: 0, condId: 0, thenBlockId: 0, elseBlockId: 0}
+	end 'create'
+
+	function recordOther()
+		self.shape = StdBranchShape.other
+	end 'recordOther'
+
+	function recordBranch(target BlockId)
+		self.shape = StdBranchShape.branch
+		self.targetBlockId = target
+	end 'recordBranch'
+
+	function recordCondBranch(condition ValueId, thenTarget BlockId, elseTarget BlockId)
+		self.shape = StdBranchShape.condBranch
+		self.condId = condition
+		self.thenBlockId = thenTarget
+		self.elseBlockId = elseTarget
+	end 'recordCondBranch'
+
+	export function isBranch() returns bool
+		return self.shape == StdBranchShape.branch
+	end 'isBranch'
+
+	export function isCondBranch() returns bool
+		return self.shape == StdBranchShape.condBranch
+	end 'isCondBranch'
+end 'StdBranchOperands'
+
+module function classifyBranch(op StdOp, out StdBranchOperands)
+	match op 'term'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod then out.recordOther()
+		condBranch(condId, thenBlockId, elseBlockId) then out.recordCondBranch(condId, thenTarget: thenBlockId, elseTarget: elseBlockId)
+		branch(targetBlockId) then out.recordBranch(targetBlockId)
+		ret or
+			param or
+			call or
+			retVoid or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall or
+			errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osSleepMs or
+			osProcessSpawn or
+			osProcessExitCode or
+			osWaitHandles or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osIocpCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample then out.recordOther()
+	end 'term'
+end 'classifyBranch'

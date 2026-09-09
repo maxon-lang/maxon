@@ -34,7 +34,7 @@
 // integer comparison is SIGNED at 64 bits on all three targets, so `foldIntCompare` was the whole
 // answer. X11 made signedness a real distinction carried on the op (`stdTypeIsUnsigned`), and the two
 // readings of one bit pattern disagree: `u64.max` rides as the wrapped `-1`. An unsigned comparison is
-// therefore DECLINED — see `evaluateCmp`, which carries the measurement.
+// therefore DECLINED — see `evaluateIntCompare`, which carries the measurement.
 //
 // FIVE THINGS ARE DELIBERATELY NOT FOLDED, each for its own reason:
 //
@@ -49,7 +49,7 @@
 //     which is three named declines rather than a blanket one. Floats DO fold as of 2026-08-30.
 //   • **SHIFT COUNTS OUTSIDE THE UNGUARDED WINDOW** (`TypeRules.shiftCountIsUnguarded`, 0..63). See
 //     `evaluateIntBinOp` — the window is asked, not restated.
-//   • **AN UNSIGNED COMPARISON** — `stdTypeIsUnsigned(operandType)`. See `evaluateCmp`: one bit
+//   • **AN UNSIGNED COMPARISON** — `stdTypeIsUnsigned(operandType)`. See `evaluateIntCompare`: one bit
 //     pattern, two honest readings, and this compiler's only integer-comparison folder speaks the
 //     signed one.
 //   • **THE SIGN-EXTENSION FAMILY** — the only unary opcodes left that never fold, and there is nothing
@@ -112,12 +112,13 @@
 // fold nothing.
 export function foldConstants(module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "foldConstants: {module.funcCount()} function(s)")
-
+	// ONE terminator record for the whole module, refilled per block — see `StdBranchOperands`.
+	var branch = StdBranchOperands.create()
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		foldConstantsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstants: fnIndex {fnIndex} is below module.functions.count()"))
+		foldConstantsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstants: fnIndex {fnIndex} is below module.functions.count()"), branch: branch)
 	end 'eachFunc'
 end 'foldConstants'
 
@@ -147,7 +148,7 @@ end 'foldConstants'
 // sparse def-use worklist, either of which is a mechanism of its own; `EC13`'s CSE needs the first one
 // anyway, and that is the rung to build it in. Iterating this walk instead would trade a LINEAR pass for
 // one whose worst case is O(blocks x ops), for two ops.
-function foldConstantsInFunc(module StdModule, func IrFunction)
+function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands)
 	let opIndices = module.liveOpIndices(func)
 	var constMap = ConstValueMap.create()
 
@@ -159,7 +160,7 @@ function foldConstantsInFunc(module StdModule, func IrFunction)
 	//
 	// A fold ORPHANS the arm it did not take, and this pass must remove it itself — see
 	// `dropUnreachableBlocks` for the allocator invariant that says so.
-	if foldConstantBranches(module, func: func, constMap: constMap) 'branchesFolded'
+	if foldConstantBranches(module, func: func, constMap: constMap, branch: branch) 'branchesFolded'
 		dropUnreachableBlocks(module, func: func)
 	end 'branchesFolded'
 
@@ -369,24 +370,29 @@ function evaluateCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred 
 		return op
 	end 'notFoldable'
 
-	// ⛔⛔ **AN UNSIGNED ORDERING COMPARISON IS NOT THIS FOLDER'S TO ANSWER, AND THE PREMISE THAT SAID
-	// OTHERWISE WAS FALSIFIED BY A CHANGE IN ANOTHER FILE.** This file's header used to argue that every
-	// integer comparison in the language is SIGNED at 64 bits on all three targets, so the parser's
-	// `foldIntCompare` — which is signed — was the whole answer. X11 made signedness a real distinction
-	// carried on the op's `operandType` (`stdTypeIsUnsigned`, `LowerMaxonToStd.lowerCompare`), and one
-	// bit pattern now has two honest readings: `u64.max` rides as the wrapped `-1`, so folding
-	// `3 > u64.max` signed answers TRUE where the program's answer is FALSE.
-	// MEASURED: `comparison-operators/compared-against-the-unsigned-extreme` returned 1 where it pins 42.
-	// ⇒ Decline, rather than reach for a second comparison evaluator. That is the same rule this pass
-	// already applies to `div`/`mod` and to floats: where one folder cannot speak for the operation, the
-	// operation keeps its instruction.
+	return match evaluateIntCompare(pred, lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs), operandType: operandType) 'e'
+		folded(verdict) gives StdOp.const(resultId, value: verdict, valueType: FoldedComparisonType)
+		notFoldable gives op
+	end 'e'
+end 'evaluateCmp'
+
+// `lhs <pred> rhs` over two integers this compiler holds, at the signedness `operandType` names — the
+// ONE compile-time integer comparison of the Std tier. `threadConstantBranches` asks it of a block-arg
+// constant against a `cmpImm`'s immediate, exactly as `evaluateCmp` asks it of two `const` operands.
+//
+// ⛔⛔ **AN UNSIGNED COMPARISON IS DECLINED.** Signedness is carried on the op's `operandType`
+// (`stdTypeIsUnsigned`, `LowerMaxonToStd.lowerCompare`), and one bit pattern has two honest readings:
+// `u64.max` rides as the wrapped `-1`, so `3 > u64.max` folded signed answers TRUE where the program's
+// answer is FALSE (`comparison-operators/compared-against-the-unsigned-extreme` pins it). `foldIntCompare`
+// speaks the signed reading only, and where one folder cannot speak for the operation, the operation
+// keeps its instruction — the rule this pass applies to `div`/`mod` and to floats as well.
+module function evaluateIntCompare(pred StdCmpPred, lhs ParsedInt, rhs ParsedInt, operandType StdType) returns FoldedInt
 	if stdTypeIsUnsigned(operandType) 'unsignedReading'
-		return op
+		return FoldedInt.notFoldable
 	end 'unsignedReading'
 
-	let verdict = foldIntCompare(maxonCmpOpOfStdPred(pred), lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs))
-	return StdOp.const(resultId, value: verdict, valueType: FoldedComparisonType)
-end 'evaluateCmp'
+	return FoldedInt.folded(foldIntCompare(maxonCmpOpOfStdPred(pred), lhs: lhs, rhs: rhs))
+end 'evaluateIntCompare'
 
 // `resultId = lhs <pred> rhs` over two float constants — and it is THE ONE FLOAT FOLD WITH NO DECLINE AT
 // ALL past the admission rule. `foldFloatCompare` is total and IEEE-correct (unordered is false for
@@ -617,7 +623,7 @@ end 'evaluateIntBinOp'
 // block is already an ordinary state of this IR (the parser mints `Terminator.dead` blocks for code
 // after a fully-terminated `if`/`else`). So a constant `if` costs one branch here and nothing at all by
 // the time the code is encoded.
-function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap) returns bool
+function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns bool
 	var foldedAny = false
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -627,148 +633,20 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 			continue
 		end 'noTerminator'
 
+		// Read through `getOp`, which ends the borrow of `module` before `foldCondBranch` writes it.
 		let termIdx = block.terminatorIndex()
-		let term = terminatorOpAt(module, termIdx: termIdx)
+		classifyBranch(module.getOp(termIdx), out: branch)
+		if not branch.isCondBranch() 'noConditionToKnow'
+			continue
+		end 'noConditionToKnow'
 
-		if foldConstantBranchIn(module, block: block, termIdx: termIdx, term: term, constMap: constMap) 'folded'
+		if foldCondBranch(module, block: block, termIdx: termIdx, condId: branch.condId, thenBlockId: branch.thenBlockId, elseBlockId: branch.elseBlockId, constMap: constMap) 'folded'
 			foldedAny = true
 		end 'folded'
 	end 'eachBlock'
 
 	return foldedAny
 end 'foldConstantBranches'
-
-// ⚠ **READ THROUGH A FUNCTION, NOT INLINE, AND THAT IS E3070 RATHER THAN TIDINESS.** A
-// `module.ops.get(...)` written inline borrows `module` for as long as the value lives, and the fold in
-// the very next breath MUTATES it (`setTerminator`), which the SELF-COMPILE refuses. Reading through a
-// function ends the borrow at the return, the same discipline `LeafInliner.opAtIndex` and
-// `PrimitiveInliner.opAt` state for themselves.
-function terminatorOpAt(module StdModule, termIdx OpIndex) returns StdOp
-	return try module.ops.get(termIdx) otherwise panic("foldConstants: terminator index {termIdx} not in module.ops")
-end 'terminatorOpAt'
-
-// Fold ONE block's terminator, when it is a `condBranch` on a value this pass knows.
-function foldConstantBranchIn(module StdModule, block IrBlock, termIdx OpIndex, term StdOp, constMap ConstValueMap) returns bool
-	return match term 'term'
-		// Everything BEFORE the conditional branch in the union — the arith band. None is a terminator at
-		// all, so none can reach here; the arm exists because the match must be exhaustive.
-		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod gives false
-		condBranch(condId, thenBlockId, elseBlockId) gives foldCondBranch(module, block: block, termIdx: termIdx, condId: condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, constMap: constMap)
-
-		// Every other terminator — `branch`, `ret`, `retVoid`, `errorReturn`, `switch`, `osExit` — carries
-		// no condition to know. ⚠ `switch` is the one with a foldable SUBJECT (a constant index selects a
-		// fixed arm); it is a jump-table fold, not a branch fold, and is left for the rung that takes it.
-		branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osSleepMs or
-			osProcessSpawn or
-			osProcessExitCode or
-			osWaitHandles or
-			osCloseHandle or
-			osWaitHandle or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osIocpCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority gives false
-		osFileOpenWriteExecutable gives false
-		osEnvBlock or
-			osEnvBlockFree gives false
-		loadAcquire or
-			storeRelease gives false
-		osHandleFileType gives false
-		osCreateNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostSample gives false
-	end 'term'
-end 'foldConstantBranchIn'
 
 // ⚠ **A `condBranch` WHOSE TWO TARGETS ARE THE SAME BLOCK IS REFUSED.** Both edges name that block, and
 // after the rewrite exactly one of them must survive — but which one is a question about the ARGUMENTS
@@ -800,8 +678,9 @@ function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId
 end 'foldCondBranch'
 
 // The i1 payload a FALSE condition carries. Named because it is a fact about the bool encoding
-// (`TypeRules.boolPayload`) rather than a number that happens to appear here.
-let ConditionIsFalse = 0 as ParsedInt
+// (`TypeRules.boolPayload`) rather than a number that happens to appear here. `threadConstantBranches`
+// reads a folded verdict against it for the same decision.
+module let ConditionIsFalse = 0 as ParsedInt
 
 // `edges` without the ONE edge to `droppedTarget` — the arm the fold made unreachable from this block.
 //
@@ -811,8 +690,9 @@ let ConditionIsFalse = 0 as ParsedInt
 //
 // It removes at most ONE edge even though `branchEdges` is not keyed — a block records an edge per
 // successor that CARRIES PHIS, so the not-taken target has either one edge here or none (the same-target
-// case, where it could have two, is refused by `foldCondBranch`).
-function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
+// case, where it could have two, is refused by `foldCondBranch` and by `threadConstantBranches` alike,
+// which is the other pass that turns a `condBranch` into a `branch` and drops the arm's edge through here).
+module function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
 	var kept = BranchEdgeArray.create()
 	var alreadyDropped = false
 
@@ -849,7 +729,8 @@ end 'edgesWithoutTarget'
 // It still composes with `EC11` rather than duplicating it: that pass drops what the TARGET tier
 // orphans — its own jump threading, and any block only unreachable once physical branches are elided —
 // which is a different set, discovered at a different time. This one is the Std tier's, and it runs only
-// on a function where a branch actually folded.
+// on a function where a branch actually folded — here, and in `threadConstantBranches`, which orphans a
+// join block's not-taken arm the same way when every predecessor decided the branch.
 //
 // Survivors keep their relative order, so nothing that depends on layout moves.
 //
@@ -857,7 +738,7 @@ end 'edgesWithoutTarget'
 // EDGE** — `EC11`'s finding, restated here because this walk has the same hole and takes the same cure:
 // the physical edge is added explicitly, so dropping the block a live one falls into cannot silently
 // re-point it at whatever survived further down.
-function dropUnreachableBlocks(module StdModule, func IrFunction)
+module function dropUnreachableBlocks(module StdModule, func IrFunction)
 	let blockCount = func.blockRefs.count()
 
 	if blockCount == 0 'noBlocks'
