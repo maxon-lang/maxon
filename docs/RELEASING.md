@@ -259,16 +259,59 @@ asset URL is live. Expect validation plus human review — days, and *after* the
 
 ---
 
+## The changelog
+
+**`CHANGELOG.md` is generated from git history by `scripts/changelog.sh` and is never edited by
+hand.** A correction goes in `docs/changelog-overrides.txt`, which is committed beside it.
+
+⭐ **Inclusion is opt-out: every commit in the range appears.** That is deliberate — a change cannot
+be missed because nobody remembered to mention it, and the cost is that internal churn shows up until
+an override drops it. Reading the whole list once per release is the editorial pass, and it is the
+only one.
+
+There is **no `Changelog:` commit trailer**, on purpose. A trailer is only ever as right as the commit
+carrying it and cannot be fixed after a push — which is exactly the case the overrides file exists to
+serve.
+
+| Override | Means |
+|---|---|
+| `commit: <exact subject>` | which commit this record is about. The key is the **subject**, because a rebase preserves messages and shas it does not. |
+| `text: <line>` | what the entry should say instead. The commit link is still appended. |
+| `drop: <reason>` | why this entry does not belong. The reason is required, never a bare flag. |
+
+⛔ **An override naming no commit, or more than one, is refused.** A key that has gone stale would
+otherwise be an inert line whose failure mode is re-publishing the wording somebody corrected.
+
+Between releases the committed file holds only versions that **have a tag** — regenerate it that way
+with `scripts/changelog.sh --released-only --write`. A `## 0.1.1` heading in a tree where v0.1.1 does
+not exist advertises a release nobody can download.
+
+**One source, three renderings.** `release.sh` puts the matching section at the top of the GitHub
+release notes (reading the committed file, not history, so what ships is byte-for-byte what was
+reviewed); `announce.sh` puts it in the maxon.dev post; and `--scope=extension` writes the extension's
+own `CHANGELOG.md`, which the marketplace renders as a tab.
+
+⚠ **A hand-written `dist/NOTES.md` replaces the whole body**, "What's new" included — that rule is
+unchanged. To alter only the wording of one entry, use the overrides file.
+
+---
+
 ## Repository secrets
 
-Each workflow **skips with a warning** rather than failing when its secret is absent. A red mark on
-every release until someone adds a secret teaches people to ignore red marks.
+A workflow with nothing to do **skips with a warning** rather than failing. A red mark on every
+release until someone adds a secret teaches people to ignore red marks.
 
 | Secret | Used by | Without it |
 |---|---|---|
 | `TAP_TOKEN` | `homebrew.yml` | The formula is generated but not pushed; commit `dist/homebrew/maxon.rb` to the tap by hand. |
-| `VSCE_PAT` | `vscode-extension.yml` | The Marketplace is skipped; publish with `npx @vscode/vsce publish --packagePath extension.vsix`. |
-| `OVSX_PAT` | `vscode-extension.yml` | Open VSX is skipped — VSCodium, Cursor and Windsurf install from there. |
+| `VSCE_PAT` | `vscode-extension.yml` | ⛔ **A hard failure when the release must publish the extension.** |
+| `OVSX_PAT` | `vscode-extension.yml` | ⛔ Likewise — VSCodium, Cursor and Windsurf install from Open VSX. |
+
+⛔ **The two extension secrets are the exception, and only in the case that has already been
+decided.** `scripts/extension-release-gate.sh` answers `skip` when nothing under `vscode-extension/`
+changed, and those steps do not run at all — which is the ordinary case. When it answers `publish`,
+a missing credential is a silent failure of something the gate just asserted: the marketplace would
+stay on an old version of an extension whose install flow points at a release that has moved on.
 
 `GITHUB_TOKEN` covers the release itself and nothing else; it cannot write to another repository,
 which is why the tap needs its own.
@@ -277,12 +320,25 @@ which is why the tap needs its own.
 
 ## Cutting a release
 
-**From v0.1.1 onward** the tag is the whole procedure:
+**From v0.1.1 onward**, regenerate the changelog, commit it, and tag THAT commit:
 
 ```bash
+scripts/changelog.sh --release=0.1.1 --write
+```
+
+Read the diff. Anything that reads wrong, or that has no business in release notes, gets a record in
+`docs/changelog-overrides.txt`; regenerate and read it again. Then:
+
+```bash
+git add CHANGELOG.md docs/changelog-overrides.txt
+git commit -m 'changelog: 0.1.1'
 git tag -a v0.1.1 -m 'Maxon v0.1.1'
 git push origin v0.1.1
 ```
+
+⛔ **The tag goes on the changelog commit, not before it.** The tag then contains the changelog, and
+`guard`'s `--check` — which is what keeps that file generated rather than hand-edited — can
+regenerate at the tag and get the same bytes back.
 
 `release.yml` fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and `ubuntu-24.04-arm`,
 builds and **natively suite-tests** each target, builds the MSI from the x64-windows job's own
@@ -290,7 +346,13 @@ artifact, and publishes. Then, once the assets are live:
 
 ```bash
 wingetcreate update MaxonLang.Maxon --version 0.1.1 --urls <msi-url> --submit
+scripts/announce.sh 0.1.1
 ```
+
+`announce.sh` writes the release post to the `maxon-web` checkout and pushes it, which is what
+deploys maxon.dev. It runs **by hand and last** because that repository needs push credentials this
+one's CI does not have — and because a step that runs after the release is live cannot fail a release
+that has already happened. Preview it first with `--dry-run`.
 
 **For v0.1.0**, the same steps run by hand: package each target on hardware of its own architecture,
 collect the archives into one `dist/`, build the MSI, then `--publish`.
