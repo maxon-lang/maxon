@@ -32,40 +32,64 @@ jobs:
         working-directory: vscode-extension
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ⭐⭐ **A RELEASE THAT DID NOT CHANGE THE EXTENSION PUBLISHES NOTHING.** This workflow fires on
+      # every published release, and `vsce` refuses to republish an existing version — so without this
+      # the ordinary case (measured: 0 of the 21 commits since v0.1.0 touch `vscode-extension/`) is a
+      # red mark on a release that did nothing wrong. The gate refuses the genuinely broken case
+      # instead: changed, but the version was not bumped. `release.yml`'s `guard` asks the same
+      # question before any runner starts, so reaching here with that answer should be impossible.
+      #
+      # ⚠ `fetch-depth: 0` is what lets it compare against the previous tag at all.
+      - name: Does this release publish the extension?
+        id: gate
+        working-directory: .
+        run: echo "decision=$(./scripts/extension-release-gate.sh)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - run: npm ci
+      - if: steps.gate.outputs.decision == 'publish'
+        run: npm ci
 
       # ⚠ PACKAGED ONCE, PUBLISHED TWICE. Both registries get the identical file.
       - name: Package
+        if: steps.gate.outputs.decision == 'publish'
         run: npx @vscode/vsce package --no-dependencies --out extension.vsix
 
       - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.decision == 'publish'
         with:
           name: vsix
           path: vscode-extension/extension.vsix
 
       - name: Publish to the VS Code Marketplace
+        if: steps.gate.outputs.decision == 'publish'
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           set -euo pipefail
+          # ⛔ A MISSING SECRET IS A FAILURE HERE, NOT A WARNING. This step runs only when the gate has
+          # already decided the extension MUST be published, so skipping it would silently leave the
+          # marketplace on an old version of an extension whose install flow points at a release that
+          # has moved on.
           if [ -z "${VSCE_PAT:-}" ]; then
-            echo "::warning::no VSCE_PAT secret — skipping the Marketplace. Set one, or publish by hand with: npx @vscode/vsce publish --azure-credential --packagePath extension.vsix"
-            exit 0
+            echo "::error title=No VSCE_PAT::the extension changed and must be published, but there is no VSCE_PAT secret. Set one, or publish by hand with: npx @vscode/vsce publish --azure-credential --packagePath extension.vsix"
+            exit 1
           fi
           npx @vscode/vsce publish --packagePath extension.vsix
 
       - name: Publish to Open VSX
+        if: steps.gate.outputs.decision == 'publish'
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           set -euo pipefail
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::warning::no OVSX_PAT secret — skipping Open VSX (VSCodium, Cursor and Windsurf install from there)"
-            exit 0
+            echo "::error title=No OVSX_PAT::the extension changed and must be published, but there is no OVSX_PAT secret. VSCodium, Cursor and Windsurf install from Open VSX and would stay on the old version."
+            exit 1
           fi
           npx ovsx publish extension.vsix -p "$OVSX_PAT"

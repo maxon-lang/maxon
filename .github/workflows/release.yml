@@ -72,6 +72,14 @@ jobs:
         if: steps.ref.outputs.publish == 'yes'
         run: ./scripts/changelog.sh --check
 
+      # ⛔ **AN EXTENSION THAT CHANGED WITHOUT ITS VERSION BEING BUMPED FAILS AT THE LAST STEP OF A
+      # RELEASE** — `vsce` refuses to republish a version, and by then the compiler is published and the
+      # tag is public. Asking here means the answer arrives before anything is uploaded. Nothing
+      # changing under `vscode-extension/` is the ordinary case and passes.
+      - name: The extension can be published if it needs to be
+        if: steps.ref.outputs.publish == 'yes'
+        run: ./scripts/extension-release-gate.sh >/dev/null
+
   package:
     needs: guard
     strategy:
