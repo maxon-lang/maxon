@@ -54,10 +54,10 @@ done
 maxon="$(maxon_compiler_path .)"
 [ -x "$maxon" ] || { echo "release.sh: no compiler at $maxon — build one first (see CONTRIBUTING.md)" >&2; exit 1; }
 
-# ⛔ THE VERSION IS READ OFF THE BINARY, NOT OFF THE SOURCE. `Compiler/Version.maxon` is where it is
-# written, but what ships is whatever the BINARY says — and a binary built before a version bump
-# reports the old one. Asking the artifact removes the one disagreement this whole scheme exists to
-# prevent.
+# ⛔ THE VERSION IS READ OFF THE BINARY, NOT OFF THE REF. `build.maxon` derives it from git at build
+# time — a `vX.Y.Z` tag or a `release/X.Y.Z` branch gives the number, anything else is `dev` — so what
+# ships is whatever the BINARY says, and a binary built before the branch was cut still says `dev`.
+# Asking the artifact removes the one disagreement this whole scheme exists to prevent.
 compiler_version() { "$maxon" --version | awk '{print $2}'; }
 version_from_binary="$(compiler_version)"
 
@@ -379,7 +379,7 @@ fi
 # disagreement here becomes a release whose parts name different versions.
 if [ "$version" != "v$version_from_binary" ]; then
 	echo "release.sh: the tag says $version and the compiler says $version_from_binary." >&2
-	echo "  Update Compiler/Version.maxon and rebuild, or tag the version that was built." >&2
+	echo "  Build from a release/X.Y.Z branch or a vX.Y.Z tag and rebuild, or tag the version that was built." >&2
 	exit 1
 fi
 

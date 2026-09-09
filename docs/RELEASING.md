@@ -23,20 +23,26 @@ writes a notice; it becomes real the moment a release is published, with no edit
 
 ## The version lives in the binary
 
-`maxon-bin/Compiler/Version.maxon` is where the version is *written*, but what ships is whatever the
-**built compiler reports**:
+Nothing writes the version down. `build.maxon` derives it from git when it stamps
+`maxon-bin/Compiler/Version.maxon`, which is generated and untracked — a tag `vX.Y.Z` or a branch
+`release/X.Y.Z` gives the number, and anything else is `dev`. What ships is whatever the **built
+compiler reports**:
 
 ```bash
-./maxon-bin/.maxon/maxon --version    # maxon 0.1.0 (x64-windows)
+./maxon-bin/.maxon/maxon --version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
 ```
+
+The shape is rustc's: the release number, then the commit and day it was built from. The last two are
+what make a bug report about "0.1.1" answerable when there have been forty builds of 0.1.1.
 
 `release.sh` reads it from there and from nowhere else, and `--publish` refuses when the tag
 disagrees with it. That single check is what keeps the archives, the MSI's `ProductVersion`, the
 winget manifest and the Homebrew formula from naming different releases — a binary built before a
 version bump reports the old one, and asking the artifact is the only way to notice.
 
-⇒ **Bump `Version.maxon`, then rebuild, then package.** Packaging without the rebuild silently
-publishes the previous version's number.
+⇒ **Cut a `release/X.Y.Z` branch or tag `vX.Y.Z`, then rebuild, then package.** The number follows
+the ref, so there is no file to forget to edit — but packaging without the rebuild still publishes
+whatever the binary already said.
 
 ---
 
