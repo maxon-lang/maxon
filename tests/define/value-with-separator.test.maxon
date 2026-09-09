@@ -1,0 +1,16 @@
+// value-with-separator.test.maxon — a value may contain `=` and the split is at the FIRST one.
+//
+// ⭐ THIS IS THE CASE A NAIVE SPLIT PASSES EVERY OTHER TEST WHILE FAILING. Splitting on every `=` and
+// keeping the second piece truncates a URL at its first query separator, and nothing about the build
+// says so — the binary compiles, runs, and reports a value that is a PREFIX of the one asked for. The
+// version this flag exists for rarely contains one; a description or a URL usually does.
+
+let ValueWithSeparators = "https://example.test/?a=b&c=d"
+
+test 'a defined value may contain the separator it was split on'
+	let staged = stagedProgram("value-with-separator", fixture: BannerFixtureName)
+
+	try requireDefinedBuild(staged, pair: "Banner={ValueWithSeparators}")
+	let printed = try runBuiltProgram(staged)
+	try Expect.equal(printed, expected: ValueWithSeparators, message: "the value was truncated at an `=` it was supposed to keep.")
+end 'a defined value may contain the separator it was split on'

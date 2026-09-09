@@ -1,0 +1,21 @@
+// override.test.maxon — the flag replaces a written-out default, and the CONTROL is the same fixture
+// built without it. Two compiles, which is the budget `tests/README.md` prices against the 5,000 ms
+// deadline; a third case belongs in its own file.
+//
+// ⭐ THE DEFAULT IS ASSERTED FIRST AND NOT ASSUMED. A test that only checked the defined value would
+// pass just as well against a compiler that hardcoded it, and against a fixture whose default had
+// silently become the value under test.
+
+let DefinedValue = "0.1.1"
+
+test 'a define replaces the default, and without one the default stands'
+	let staged = stagedProgram("override", fixture: BannerFixtureName)
+
+	try requirePlainBuild(staged)
+	let byDefault = try runBuiltProgram(staged)
+	try Expect.equal(byDefault, expected: BannerDefault, message: "an undefined build did not print the fixture's own default.")
+
+	try requireDefinedBuild(staged, pair: "Banner={DefinedValue}")
+	let defined = try runBuiltProgram(staged)
+	try Expect.equal(defined, expected: DefinedValue, message: "the built program did not print what `{DefineOption}Banner={DefinedValue}` said.")
+end 'a define replaces the default, and without one the default stands'

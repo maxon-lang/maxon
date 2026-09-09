@@ -1621,6 +1621,22 @@ export enum ErrorCode
 	// NOT E3005, which is about a VALUE outside a range: this is a range that cannot be declared.
 	semanticIllegalBitWidth = "E3148"
 
+	// A `--define` named a top-level constant that no file declares. It is an ERROR and not a shrug
+	// because the flag's whole purpose is to change a value: one that changes nothing is a typo, and
+	// the build it produces looks exactly like the build it was meant to replace.
+	defineNoSuchConstant = "E3149"
+
+	// A `--define` name matched more than one declaration. A namespace is a DIRECTORY, so even a
+	// qualified name is not self-evidently unique — two file-private constants of one name may share
+	// one. Both claimants are named, because the fix is to pick one and there is no picking without
+	// seeing them.
+	defineAmbiguous = "E3150"
+
+	// A `--define` named a constant whose initializer is not a lone string literal. Only a plain
+	// default can be replaced: an expression's value is computed from the source, so overriding it
+	// would mean the binary disagreeing with code a reader can see.
+	defineNotAStringLiteral = "E3151"
+
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
 	// a type definition contains a reference cycle -- it transitively

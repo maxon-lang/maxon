@@ -703,7 +703,7 @@ end 'main'
 0
 ```
 ```stdout
-{  "name": "src",  "output": ".maxon/demo",  "sources": [    "src"  ],  "optimize": false,  "debug_info": true,  "version": ""}
+{  "name": "src",  "output": ".maxon/demo",  "sources": [    "src"  ],  "optimize": false,  "debug_info": true,  "version": "",  "defines": [  ]}
 ```
 
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->

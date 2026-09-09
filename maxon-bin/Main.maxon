@@ -283,10 +283,36 @@ let WithdrawnVersionFlagShort = "-V"
 
 module let MetricsFlagPrefix = "--metrics="
 
+// `--define=<name>=<value>`: replace a top-level `String` constant's written-out default.
+//
+// ⚠ **THE VALUE MAY CONTAIN `=` AND THE NAME MAY NOT**, so the split is at the FIRST one. A version
+// is rarely the case that needs it, but a description or a URL is, and a flag that mangled them would
+// be found only by reading the emitted binary.
+let DefineFlagPrefix = "--define="
+let DefineNameValueSeparator = "="
+
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
 // `<!-- unsupported-targets: … -->` marker, the reference's own `UnsupportedTargetsDirectiveRegex`). One separator, so a
 // reader never has to ask which list is spelled which way.
 let RuntimeNameSeparator = ","
+
+// Everything after the FIRST `=` of a `<name>=<value>` pair already split on it — the pieces from 1
+// onward, rejoined with the separator they were split at.
+//
+// ⚠ **REJOINING IS THE POINT, NOT A ROUND TRIP.** `--define=Url=https://x/?a=b` splits into four
+// pieces, and only the first is the name; keeping piece 1 alone would silently truncate the value at
+// its first `=`. Rejoining exactly the tail restores it, and a `String` index is a GRAPHEME cursor
+// rather than an integer, so slicing at a byte offset is not the simpler alternative it looks like.
+function defineValueAfterName(cut StringArray) returns String
+	var value = ""
+	for i in 1 upto cut.count() 'eachPiece'
+		let piece = try cut.get(i) otherwise ""
+		let separator = "" if i == 1 else DefineNameValueSeparator
+		value = "{value}{separator}{piece}"
+	end 'eachPiece'
+
+	return value
+end 'defineValueAfterName'
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
@@ -436,6 +462,7 @@ let ManifestNameKey = "name"
 let ManifestOutputKey = "output"
 let ManifestSourcesKey = "sources"
 let ManifestVersionKey = "version"
+let ManifestDefinesKey = "defines"
 
 // ⭐⭐ **`maxon build` WITH NO PATH RUNS `build.maxon`, WHICH IS A MAXON PROGRAM AND NOT A CONFIG
 // FILE.** That distinction is the whole design: a project's build is described by CODE, with the
@@ -638,7 +665,16 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	// directory. The binary's product name comes from the OUTPUT, which is what the thing is called.
 	let productVersion = try doc.getString(chosen, key: ManifestVersionKey) otherwise ""
 
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, productVersion: productVersion) otherwise (e) 'buildErr'
+	// ⭐ THE MANIFEST'S DEFINES COME FIRST AND THE COMMAND LINE'S FOLLOW, so a `--define` typed at the
+	// prompt overrides one the manifest computed — the same precedence `-o` has over the manifest's
+	// `output`, for the same reason. Resolution binds a name to one declaration and stamps it, and a
+	// later stamp replaces an earlier one, so ORDER is what expresses that precedence.
+	var defines = manifestDefines(doc, build: chosen)
+	for supplied in args.defines 'eachCommandLineDefine'
+		defines.push(supplied)
+	end 'eachCommandLineDefine'
+
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, productVersion: productVersion, defines: defines) otherwise (e) 'buildErr'
 		reportCompileError(e)
 		return ManifestRun.ran(1)
 	end 'buildErr'
@@ -646,6 +682,32 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	print("Compiled -> {outputPath}\n")
 	return ManifestRun.ran(0)
 end 'buildFromManifestOutput'
+
+// The `defines` a build description carries, as the compiler's own pairs.
+//
+// ⚠ **A MALFORMED ENTRY IS SKIPPED HERE AND REFUSED LATER.** An entry with no `=` names no value, and
+// dropping it silently would be wrong — but the diagnostic that says so belongs to the resolution pass,
+// which reports every define problem at once. What this must not do is invent a name from a string that
+// does not contain one.
+function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray
+	var defines = DefineArray.create()
+	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
+	let count = try doc.arrayLength(listId) otherwise return defines
+
+	for i in 0 upto count 'eachDefine'
+		let elemId = try doc.arrayAt(listId, index: i) otherwise continue
+		let pair = doc.get(elemId).stringValue
+		let cut = pair.split(DefineNameValueSeparator)
+		if cut.count() < 2 'noValueGiven'
+			continue
+		end 'noValueGiven'
+
+		let name = try cut.get(0) otherwise ""
+		defines.push(Define.create(name, value: defineValueAfterName(cut)))
+	end 'eachDefine'
+
+	return defines
+end 'manifestDefines'
 
 // diagnostic about a program the caller never asked for.
 function runBuild(args MaxonArgs) returns ExitCode
@@ -805,7 +867,7 @@ end 'acquireBuildTreeLock'
 // forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
 // correct behaviour covering for a bug.
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, defines: args.defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -1585,6 +1647,7 @@ function printUsage()
 	print("                                <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a\n")
 	print("                                separate build; read it back with `coverage`. It requires the\n")
 	print("                                debug-info sidecar, which carries what each counter counts.\n")
+	print("  --define=<name>=<value>        (build) Replace a top-level String constant's default\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -1747,6 +1810,10 @@ module type MaxonArgs
 	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
 	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
 	// `--log=compiler:debug`, which prints the same numbers as a table.
+	// Every `--define` on this command line, in the order they were written. An ARRAY and not a map:
+	// two defines of one name is a thing to notice, and a map would silently keep the last.
+	export var defines as DefineArray
+
 	export var metricsPath as String
 	// `--emit-corpus=<dir>` (scale-test only): dump the generated scaling corpus to <dir> for
 	// inspection instead of the temp directory it is otherwise built into and thrown away.
@@ -1839,7 +1906,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showHelp: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showHelp: false}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -2030,7 +2097,20 @@ module type MaxonArgs
 				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
 			end 'withdrawnCompilerFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				parsed.metricsPath = try CommandLine.optionValue(arg) otherwise ""
-			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
+			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
+				let pair = try CommandLine.optionValue(arg) otherwise ""
+				let cut = pair.split(DefineNameValueSeparator)
+				// A `--define` with no `=` names no value. Recorded as a BAD OPTION rather than read as
+				// "define it to the empty string": the two are different requests, and `--define=X` is far
+				// more likely a truncated command line than a deliberate empty one — which `--define=X=`
+				// still spells.
+				if cut.count() < 2 'noValueGiven'
+					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'noValueGiven' else 'nameAndValue'
+					let name = try cut.get(0) otherwise ""
+					parsed.defines.push(Define.create(name, value: defineValueAfterName(cut)))
+				end 'nameAndValue'
+			end 'defineFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
 				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
 			end 'emitCorpusFlag' else if arg.startsWith("--rungs=") 'rungsFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""

@@ -1,0 +1,17 @@
+// unknown-name-refused.test.maxon — a define naming nothing is an ERROR, not a shrug.
+//
+// ⛔ THE WHOLE PURPOSE OF THE FLAG IS TO CHANGE A VALUE, so one that changes nothing is a typo — and a
+// build that ignored it would be indistinguishable from the build it was meant to replace. That is the
+// failure mode: a release binary reporting the OLD version, from a command line that asked for the new
+// one, with nothing anywhere saying the request was dropped.
+
+let UnknownCode = "E3149"
+let UnknownName = "NoSuchConstant"
+
+test 'a define naming no declaration is refused'
+	let staged = stagedProgram("unknown-name", fixture: BannerFixtureName)
+
+	let stderr = try requireRefusedBuild(staged, pair: "{UnknownName}=x")
+	try Expect.isTrue(stderr.contains(UnknownCode), message: "the refusal did not carry {UnknownCode}. It said: {stderr}")
+	try Expect.isTrue(stderr.contains(UnknownName), message: "the refusal did not name the define that could not bind. It said: {stderr}")
+end 'a define naming no declaration is refused'

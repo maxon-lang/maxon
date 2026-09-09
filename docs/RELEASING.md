@@ -23,10 +23,17 @@ writes a notice; it becomes real the moment a release is published, with no edit
 
 ## The version lives in the binary
 
-Nothing writes the version down. `build.maxon` derives it from git when it stamps
-`maxon-bin/Compiler/Version.maxon`, which is generated and untracked — a tag `vX.Y.Z` or a branch
-`release/X.Y.Z` gives the number, and anything else is `dev`. What ships is whatever the **built
-compiler reports**:
+Nothing writes the version down. `build.maxon` derives it from git and hands it to the compiler as
+`--define`, the way go's `-ldflags -X` does — a tag `vX.Y.Z` or a branch `release/X.Y.Z` gives the
+number, and anything else is `dev`.
+
+⛔ **`maxon-bin/Compiler/Version.maxon` IS TRACKED SOURCE CARRYING `dev` DEFAULTS, AND GENERATING IT
+INSTEAD CANNOT WORK.** Generating it needs a compiler, and the compiler cannot be built without it, so
+a fresh checkout had no `CompilerVersion` at all and every CI lane failed before reaching the suite.
+A default that is honest makes the file self-sufficient; `--define` is how a build with more to say
+says it, and nothing rewrites the file, so a build never dirties the working tree.
+
+What ships is whatever the **built compiler reports**:
 
 ```bash
 ./maxon-bin/.maxon/maxon version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
@@ -39,6 +46,15 @@ what make a bug report about "0.1.1" answerable when there have been forty build
 disagrees with it. That single check is what keeps the archives, the MSI's `ProductVersion`, the
 winget manifest and the Homebrew formula from naming different releases — a binary built before a
 version bump reports the old one, and asking the artifact is the only way to notice.
+
+⛔ **v0.1.1 IS CUT BY HAND, FOR THE SAME REASON v0.1.0 WAS.** `--define` is a flag the v0.1.0 seed does
+not have, and the workflows build with `-o` — a PATH build, which never runs `build.maxon` and so never
+supplies the version. A workflow release built from that seed reports `dev`, and `--publish` refuses the
+tag: loud, but not a release. Build v0.1.1 locally, where the slot compiler runs the manifest.
+
+⇒ **From v0.1.2 the seed understands both, so `ci.yml` and `release.yml` can drop the `-o` and build
+`maxon build maxon-bin` through the manifest** — which stamps the version itself and needs nothing from
+the workflow. Delete the `-o` and its comment on the day that seed lands.
 
 ⇒ **Cut a `release/X.Y.Z` branch or tag `vX.Y.Z`, then rebuild, then package.** The number follows
 the ref, so there is no file to forget to edit — but packaging without the rebuild still publishes

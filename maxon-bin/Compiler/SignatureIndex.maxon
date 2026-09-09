@@ -1734,6 +1734,11 @@ export type TopLevelDecl
 	export var nameColumn as ColumnNumber
 	// The evaluator's answer, mutated in place as the DFS reaches and leaves this decl.
 	export var outcome as TopLevelConstant
+	// ⭐ **WHAT `--define` PUT HERE INSTEAD OF THE INITIALIZER** (`ProgramSignatures.resolveDefines`).
+	// ⚠ A BOOL AND NOT AN EMPTY-STRING TEST: `--define Banner=` is a person asking for an empty string,
+	// which is a value, and reading "empty" as "absent" would silently ignore them.
+	export var hasDefine as bool = false
+	export var definedValue as String = ""
 	// ⭐ THE `.data` LABEL — this binding's IR IDENTITY, and EMPTY for every binding with no slot.
 	//
 	// ⚠ **WHICH BINDINGS THOSE ARE IS `hasStorage`, NEVER `mutable`.** A `let` takes either storage model
@@ -9564,6 +9569,26 @@ export enum RecordedReturnTypeRule
 	declaredInterface
 end 'RecordedReturnTypeRule'
 
+// ⛔ **ONLY A WRITTEN-OUT DEFAULT MAY BE REPLACED**, which is exactly one `stringLiteral` token
+// spanning the whole initializer. An expression is refused rather than overridden because its value is
+// derived from the source: replacing `let V = base + suffix` would leave a binary saying something no
+// reading of the code produces. `initEnd` is EXCLUSIVE — `requireInitializerConsumed` compares
+// `pos >= initEnd` — so one token is `initStart + 1`.
+//
+// ⚠ An INTERPOLATION does not slip through: the lexer splits `"a{x}b"` into
+// `stringLiteral stringInterpStart …`, so its range is several tokens and the count test refuses it.
+function initializerIsLoneStringLiteral(decl TopLevelDecl) returns bool
+	if decl.initEnd != decl.initStart + 1 'notExactlyOneToken'
+		return false
+	end 'notExactlyOneToken'
+
+	let tok = try decl.tokens.get(decl.initStart) otherwise 'noSuchToken'
+		return false
+	end 'noSuchToken'
+
+	return tok.kind == TokenKind.stringLiteral
+end 'initializerIsLoneStringLiteral'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -10381,6 +10406,10 @@ export type ProgramSignatures
 	// compile AND threaded to every `Parser.create` site, which is exactly the shape the fact has. It is set
 	// before any file is swept, so no reader can see the seeded `false`.
 	export var rootIsUnderStdlibDirectory as bool
+	// ⭐ **THE `--define`s THIS COMPILE WAS GIVEN**, stamped by `Queries.queryProgramSignatures` before any
+	// initializer is folded. They live here for `rootIsUnderStdlibDirectory`'s reason: this index is the one
+	// thing built once per compile that every constant's fold goes through.
+	export var defines as DefineArray = DefineArray.create()
 	// ⭐ **THE TYPE NAMES TOP-LEVEL CONSTANT INITIALIZERS CAST TO** (P1.9) — the one `use` neither export
 	// check can get from the parser, which skips an initializer's tokens wholesale. Written by
 	// `recordConstInitializerTypeName` from inside the constant evaluator. Empty for every program with no
@@ -14598,6 +14627,85 @@ export type ProgramSignatures
 	//
 	// Driving over the ARENA in declaration order is what makes the cycle message deterministic — see
 	// the `decls` field.
+	// ⭐⭐ **BIND EVERY `--define` TO THE DECLARATION IT NAMES, BEFORE ANY INITIALIZER IS FOLDED.**
+	//
+	// It runs over the whole arena rather than at each fold, and that is what makes AMBIGUITY visible at
+	// all: a per-fold check sees one declaration at a time and could only ever ask "is this one mine?",
+	// which answers yes for both of two claimants and overrides both.
+	//
+	// ⚠ **A NAME MATCHES BARE OR NAMESPACE-QUALIFIED, AND NEITHER SPELLING IS TRUSTED TO BE UNIQUE.** A
+	// namespace is a module DIRECTORY, so two file-private constants of one name share one — qualifying
+	// narrows the field without closing it, and only counting the matches can.
+	export function resolveDefines() returns DefineProblemArray
+		var problems = DefineProblemArray.create()
+
+		for define in self.defines 'eachDefine'
+			var claimantCount = 0
+			var claimantList = ""
+			var anyClaimantIsAtTheRoot = false
+			var matchedIndex = 0 as TopLevelDeclIndex
+			for i in 0 upto self.decls.count() 'eachDecl'
+				let decl = self.declAt(i)
+				if not self.declMatchesDefineName(decl, name: define.name) 'notThisOne'
+					continue
+				end 'notThisOne'
+
+				if self.namespaceOf(decl.declFilePath).isEmpty() 'declaredAtTheRoot'
+					anyClaimantIsAtTheRoot = true
+				end 'declaredAtTheRoot'
+
+				let separator = "" if claimantCount == 0 else ", "
+				claimantList = "{claimantList}{separator}{qualifiedCandidateName(self.moduleDirectoryOf(decl.declFilePath), bare: decl.name)} at {decl.declFilePath}:{decl.nameLine}:{decl.nameColumn}"
+				claimantCount = claimantCount + 1
+				matchedIndex = i as TopLevelDeclIndex
+			end 'eachDecl'
+
+			if claimantCount == 0 'namedNothing'
+				problems.push(DefineProblem.create(ErrorCode.defineNoSuchConstant, message: "--define named '{define.name}', which no file declares as a top-level constant. Nothing was overridden."))
+				continue
+			end 'namedNothing'
+
+			if claimantCount > 1 'namedSeveral'
+				// ⛔ **THE REMEDY IS NOT THE SAME ONE IN BOTH CASES, AND OFFERING THE WRONG ONE IS WORSE THAN
+				// OFFERING NONE.** A declaration in a root-level file has an EMPTY namespace and therefore no
+				// qualified spelling — `(root).Banner` is how it is DISPLAYED, not something this flag accepts
+				// — so telling its author to "name it in full" prescribes a fix that cannot be typed. That is
+				// exactly the failure `qualifiedCandidateName`'s header records: a message whose whole content
+				// is a fix, and the fix does not work.
+				let remedy = "Move it into a subdirectory or rename it — a declaration in a root-level file has no qualified spelling to name it by." if anyClaimantIsAtTheRoot else "Name one of them in full."
+				problems.push(DefineProblem.create(ErrorCode.defineAmbiguous, message: "--define '{define.name}' matches {claimantCount} declarations and cannot choose between them: {claimantList}. {remedy}"))
+				continue
+			end 'namedSeveral'
+
+			var decl = self.declAt(matchedIndex)
+			if not initializerIsLoneStringLiteral(decl) 'notAPlainDefault'
+				problems.push(DefineProblem.create(ErrorCode.defineNotAStringLiteral, message: "--define '{define.name}' names a constant at {decl.declFilePath}:{decl.nameLine}:{decl.nameColumn} whose initializer is not a plain string literal. Only a written-out default can be replaced."))
+				continue
+			end 'notAPlainDefault'
+
+			decl.hasDefine = true
+			decl.definedValue = define.value
+		end 'eachDefine'
+
+		return problems
+	end 'resolveDefines'
+
+	// Does this declaration answer to `name`, bare or namespace-qualified? A root-level file has an EMPTY
+	// namespace and therefore no second spelling — its bare name already is its qualified one.
+	function declMatchesDefineName(decl TopLevelDecl, name String) returns bool
+		let bare = String.from(decl.name)
+		if bare == name 'bareSpelling'
+			return true
+		end 'bareSpelling'
+
+		let namespace = self.namespaceOf(decl.declFilePath)
+		if namespace.isEmpty() 'rootHasOneSpelling'
+			return false
+		end 'rootHasOneSpelling'
+
+		return name == "{namespace}.{bare}"
+	end 'declMatchesDefineName'
+
 	export function evaluateInitializers()
 		for i in 0 upto self.decls.count() 'eachDecl'
 			let decl = self.declAt(i)
@@ -14755,6 +14863,14 @@ export type ProgramSignatures
 	// once per declaration, never per reference (the memo above sees to that). Programs with no
 	// top-level constant build no parser here at all.
 	function walkConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
+		// ⭐ **A DEFINED CONSTANT IS SETTLED WITHOUT BEING FOLDED AT ALL.** `resolveDefines` has already
+		// established that this initializer is one string literal, so there is nothing left for the
+		// evaluator to decide — and running it anyway would fold the literal the source carries, only for
+		// the answer to be thrown away.
+		if decl.hasDefine 'suppliedOnTheCommandLine'
+			return self.settleFoldedValue(decl, value: ConstFoldedValue.managed(decl.definedValue.toByteArray(), kind: ManagedConstKind.string))
+		end 'suppliedOnTheCommandLine'
+
 		// `isStdlibSource: false` is exact rather than a default: this walk reads an INITIALIZER, and the
 		// only thing the flag governs is a `typealias` DECLARATION, which an initializer cannot contain.
 		// `declaresCompilerInternalNames: false` is exact for the same reason and its own: an initializer

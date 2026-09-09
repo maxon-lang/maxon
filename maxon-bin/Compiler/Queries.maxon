@@ -148,6 +148,28 @@ end 'activeTokensOrReported'
 // ⚠ This is a whole-program query sitting under a per-file one, so anything O(files) inside it
 // would be O(files²). It is not: the memo makes it run once per build, and the constant evaluation
 // below is O(declarations), not O(files) per file.
+// Bind this compile's `--define`s to the declarations they name, and refuse the ones that cannot bind.
+//
+// ⚠ **EVERY PROBLEM IS REPORTED BEFORE ANY IS FATAL.** Three bad defines on one command line are three
+// facts a person wants at once; stopping at the first would make fixing them a sequence of builds.
+//
+// The diagnostics carry no file position, because a `--define` has none — it was written on a command
+// line, not in a source file. What each message DOES carry is where the declarations it reached are,
+// which is the part a reader cannot look up.
+function applyDefines(project Project, signatures ProgramSignatures)
+	signatures.defines = project.defines
+	let problems = signatures.resolveDefines()
+	if problems.count() == 0 'allBound'
+		return
+	end 'allBound'
+
+	// Reported and not thrown: a recorded diagnostic is what refuses the compile, at the one gate that
+	// already does it for every other check in this file.
+	for problem in problems 'eachProblem'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(problem.code, message: problem.message))
+	end 'eachProblem'
+end 'applyDefines'
+
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
@@ -255,6 +277,10 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// stack and the compiler dies with SIGSEGV and no diagnostic. Depth is what matters, not the number
 	// of constants, and a cycle that long faults before `recordCycle` can raise E2012. Closing it needs
 	// an explicit worklist, or a depth cap with a diagnostic.
+	// ⛔ **STRICTLY BEFORE THE FOLD, AND STRICTLY AFTER THE SWEEP.** Binding a define needs every
+	// declaration to exist — that is what makes two claimants for one name visible rather than one — and
+	// the fold is what would otherwise read the initializer this replaces.
+	applyDefines(project, signatures: signatures)
 	signatures.evaluateInitializers()
 	// Every declared `interface`'s requirements, for the same "the whole program is known now" reason.
 	// Before `deriveInstanceNames`: reading a requirement's parameter types can intern a generic

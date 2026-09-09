@@ -1,0 +1,15 @@
+// non-literal-refused.test.maxon — only a written-out string literal may be replaced.
+//
+// ⛔ A CONSTANT THAT IS NOT A STRING IS REFUSED RATHER THAN RETYPED. `--define Number=9` on
+// `let Number = 7` would otherwise turn an integer binding into a managed string, and every use site was
+// type-checked against the integer — so the refusal is what keeps the flag from changing a program's
+// MEANING rather than one of its values.
+
+let NotALiteralCode = "E3151"
+
+test 'a define naming a constant that is not a string literal is refused'
+	let staged = stagedProgram("non-literal", fixture: NumberFixtureName)
+
+	let stderr = try requireRefusedBuild(staged, pair: "Number=9")
+	try Expect.isTrue(stderr.contains(NotALiteralCode), message: "the refusal did not carry {NotALiteralCode}. It said: {stderr}")
+end 'a define naming a constant that is not a string literal is refused'

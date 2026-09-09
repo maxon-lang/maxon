@@ -160,6 +160,42 @@ export function namespaceForModuleDirectory(moduleDirectory String) returns Stri
 	return moduleDirectory.replace(ModuleDirectorySeparator, with: NamespaceSeparator)
 end 'namespaceForModuleDirectory'
 
+// ⭐⭐ **ONE `--define <name>=<value>`: A TOP-LEVEL `String` CONSTANT'S VALUE, SUPPLIED BY WHOEVER RAN
+// THE BUILD.** The version a compiler reports is the reason this exists. It cannot be a file the build
+// GENERATES, because generating it needs a compiler and the compiler cannot be built without it — so
+// the value arrives beside the sources rather than among them, and a fresh clone compiles with the
+// default the declaration already carries.
+//
+// ⚠ **THE NAME IS AN EXISTING DECLARATION'S, AND `--define` MINTS NOTHING.** It is matched against
+// both the bare name and the namespace-qualified one, so `CompilerVersion` and `Compiler.CompilerVersion`
+// reach the same `let`. A name matching NO declaration is refused, and so is one matching TWO — a
+// namespace is a DIRECTORY, so qualifying is not by itself uniqueness, and silently picking one of two
+// would bake a version into a binary nobody chose.
+export type Define
+	export let name as String
+	export let value as String
+
+	export static function create(name String, value String) returns Define
+		return Self{name: name, value: value}
+	end 'create'
+end 'Define'
+
+export typealias DefineArray = Array with Define
+
+// One reason a `--define` could not be honoured, carrying the wording as well as the code: the facts a
+// message needs — which declarations a name reached, and where they are — are known only where the
+// resolution happens, and a caller handed a code alone could only re-derive them.
+export type DefineProblem
+	export let code as ErrorCode
+	export let message as String
+
+	export static function create(code ErrorCode, message String) returns DefineProblem
+		return Self{code: code, message: message}
+	end 'create'
+end 'DefineProblem'
+
+export typealias DefineProblemArray = Array with DefineProblem
+
 // ⭐ **IS `inner` THE SAME MODULE AS `outer`, OR ONE BENEATH IT?** — the whole of what `Visibility.module`
 // means, asked on module directories rather than on `FilePath`s.
 //
@@ -7588,6 +7624,12 @@ export type Project
 	// ⭐ WHAT THE BUILD MANIFEST SAID THIS PROGRAM IS, for the binary's own metadata: a Windows
 	// `VS_VERSIONINFO` resource and a Mach-O `LC_SOURCE_VERSION`. Empty when nobody said — which is
 	// most programs, and is why the writers default to the output's own name and a zero version.
+	// ⭐ **WHAT `--define` SAID, FOR THE WHOLE COMPILE.** One set per `Project`, exactly as `target` is
+	// one per `Project`: `queryProgramSignatures` hands these to the index that folds every top-level
+	// constant, and its memo lives on `project.db` rather than in any process-wide store — so two
+	// compiles differing only in their defines cannot serve each other a folded value.
+	export var defines as DefineArray = DefineArray.create()
+
 	export var productVersion as String = ""
 	// Where each source file's block of counter slots begins in `covPoints` — the FILE-LOCAL id a
 	// `MaxonOp.covPoint` carries plus this file's base is the whole-program id. Written by `mergeArtifact`

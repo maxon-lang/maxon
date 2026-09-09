@@ -1,0 +1,21 @@
+// ambiguous-name-refused.test.maxon — one name reaching TWO declarations is refused, and BOTH are named.
+//
+// ⛔ CHOOSING BETWEEN THEM WOULD BAKE A VERSION INTO A BINARY NOBODY CHOSE, and which one it picked
+// would depend on arena order — a function of the filesystem. Refusing is the only answer that is the
+// same twice.
+//
+// ⭐ BOTH CLAIMANTS ARE ASSERTED, not just the code. The fix is to pick one, and there is no picking
+// without seeing them; a message that said only "ambiguous" would leave the author grepping.
+
+let AmbiguousCode = "E3150"
+let RootFileName = "main.maxon"
+let SubFileName = "Other.maxon"
+
+test 'a define matching two declarations is refused, naming both'
+	let staged = stagedProgram("ambiguous-name", fixture: TwoBannersFixtureName)
+
+	let stderr = try requireRefusedBuild(staged, pair: "Banner=x")
+	try Expect.isTrue(stderr.contains(AmbiguousCode), message: "the refusal did not carry {AmbiguousCode}. It said: {stderr}")
+	try Expect.isTrue(stderr.contains(RootFileName), message: "the refusal did not name the root-level claimant. It said: {stderr}")
+	try Expect.isTrue(stderr.contains(SubFileName), message: "the refusal did not name the subdirectory claimant. It said: {stderr}")
+end 'a define matching two declarations is refused, naming both'

@@ -1,0 +1,285 @@
+// DefineHarness.maxon — the shared half every case under `tests/define/` reaches for: staging a fixture
+// TREE, spawning the compiler at it with `--define`, and running what came out.
+//
+// `--define <name>=<value>` replaces a top-level `String` constant's written-out default. What makes it
+// worth a corpus rather than a spec case is that it is a DRIVER flag: a spec case is a Maxon program the
+// harness compiles and runs, so it can reach `stdlib/` and nothing else, and it could never see a command
+// line at all. These cases spawn the compiler and read what it says.
+//
+// ⭐⭐ **THE RUNNER AND THE SUBJECT ARE THE SAME BINARY, AND NOTHING OUTSIDE CLOSES THAT.** `maxon test
+// tests/define` both runs these cases and provides the compiler they spawn — named by
+// `TestedCompilerStem` and by nothing else — so a runner broken badly enough to report green having run
+// nothing cannot detect itself. READ THE PASS COUNT.
+//
+// ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006). So the
+// corpus gets ONE shared half, exported from this file, and a case file beside it declares only what that
+// case alone uses.
+//
+// ⛔ **A FIXTURE HERE IS A TREE, NOT A FILE, AND THAT IS THE POINT OF ONE OF THE CASES.** A namespace is a
+// module DIRECTORY, so the only way to put two constants of one name in front of the flag is two
+// directories — which is exactly the ambiguity the flag must refuse. Staging therefore copies
+// recursively, unlike the single-file staging the other spawning corpora do.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
+// missing compiler, an unspellable path, a spawn that never happened. A BUILD that exits non-zero is not
+// in that class — refusing a bad `--define` is the surface under test — so it is asserted.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, which is the working directory a test binary
+// inherits from `maxon test`. Everything handed to a child is made absolute first, because a relative path
+// resolves against the child's directory on POSIX and the parent's on Windows.
+//
+// ⛔ **EVERY CASE STAGES INTO A DIRECTORY NAMED FOR ITSELF**, because `maxon test` runs files concurrently
+// and two cases sharing a staging tree would race over one output path.
+
+// Where the corpus lives and where runnable copies are built, both relative to the checkout root.
+// Staging goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the
+// checkout rewrites.
+let FixturesDirName = "tests/define/fixtures"
+let StagingRootDirName = "temp/define"
+
+// The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
+let StoredFixtureSuffix = ".fixture"
+
+// The binary this directory spawns, relative to the checkout root and without its host suffix. ONE
+// constant, so the SUBJECT axis cannot move when the RUNNER does.
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+// The driver surface under test, spelled as the command line takes it.
+let BuildCommandName = "build"
+let OutputOption = "-o"
+export let DefineOption = "--define="
+
+// What every case builds its program as. One spelling, because a second would be a name two cases could
+// come to disagree about.
+let BuiltStem = "program"
+
+// The fixtures, named once each.
+export let BannerFixtureName = "banner"
+export let TwoBannersFixtureName = "two-banners"
+export let NumberFixtureName = "number"
+
+// The default every `banner` fixture carries, and therefore what an un-defined build must print. Declared
+// here rather than in the one case that asserts it, because the fixture and the expectation are two
+// copies of one fact and this is the half a reader of the case can see.
+export let BannerDefault = "default"
+
+// The separator this corpus's own paths are spelled with, folded into the host's by `stagingDir`.
+let PathSeparator = "/"
+
+// Dropped from a captured stream so a Windows console's line endings do not decide what a line says.
+let CarriageReturn = "\r"
+
+// A list of paths one directory walk produced. Stdlib's own `FilePathArray` is a member of `Directory`
+// and has no file-scope spelling.
+typealias PathArray = Array with FilePath
+
+// ============================================================================================
+// STAGING AND SPAWNING
+// ============================================================================================
+
+// A runnable copy of one fixture TREE under a directory named for the CASE, so concurrent case files
+// never share a staging tree. Absolute, because it is handed to a child as its working directory. The
+// previous run's files go first: a stale executable would let a build that produced none be read as
+// though it had.
+export function stagedProgram(caseLabel String, fixture String) returns FilePath
+	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
+	clearStagedFiles(staged)
+
+	copyFixtureTree(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), destination: staged)
+
+	return staged
+end 'stagedProgram'
+
+// Copy one stored fixture directory into a staging tree, mapping `<name>.fixture` back to `<name>` and
+// recursing into subdirectories.
+//
+// ⚠ **THE SUFFIX IS STRIPPED FROM FILES AND NEVER FROM DIRECTORIES.** A stored tree's directories carry
+// their real names already, and stripping a suffix they do not have would rename nothing while a walk
+// that stripped one they did would put a module under the wrong namespace — which is the one fact the
+// ambiguity case turns on.
+function copyFixtureTree(stored FilePath, destination FilePath)
+	for entry in listing(stored) 'eachEntry'
+		let name = entry.filename()
+		if Directory.isDirectory(entry) 'aSubdirectory'
+			let child = destination.join(name)
+			if not Directory.create(child) 'couldNotCreate'
+				panic("define tests: the gate could not run — could not create {child.toString()} in the staging tree.")
+			end 'couldNotCreate'
+			copyFixtureTree(entry, destination: child)
+			continue
+		end 'aSubdirectory'
+
+		let body = try File.readText(entry) otherwise panic("define tests: the gate could not run — could not read the stored fixture {entry.toString()}.")
+		try File.writeText(destination.join(withoutFixtureSuffix(name)), content: body) otherwise panic("define tests: the gate could not run — could not stage {name} into {destination.toString()}.")
+	end 'eachEntry'
+end 'copyFixtureTree'
+
+// `main.maxon.fixture` -> `main.maxon`. A stored name without the suffix is copied unchanged rather than
+// refused: nothing in the rule says every file must carry one, and inventing a failure here would make
+// adding a plain data file to a fixture a gate error.
+function withoutFixtureSuffix(name String) returns String
+	if not name.endsWith(StoredFixtureSuffix) 'notStored'
+		return name
+	end 'notStored'
+
+	let cut = name.split(StoredFixtureSuffix)
+	return try cut.get(0) otherwise name
+end 'withoutFixtureSuffix'
+
+// Where one build's executable lands.
+function builtExecutable(staged FilePath) returns FilePath
+	return staged.join("{BuiltStem}{executableSuffix()}")
+end 'builtExecutable'
+
+// Compile the staged tree to a named output, with whatever extra options the case is about. `-o` is what
+// keeps a build out of the tree lock, so concurrent case files can compile at once.
+//
+// ⚠ **THE STAGED DIRECTORY IS COMPILED, NOT A FILE IN IT.** A fixture may be several files in several
+// directories, and naming one of them would compile only that one — which for the ambiguity fixture would
+// leave exactly one claimant and quietly turn the case into a different one.
+function spawnBuild(staged FilePath, extraArguments StringArray) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+	arguments.push(staged.toString())
+	arguments.push(OutputOption)
+	arguments.push(builtExecutable(staged).toString())
+	for extra in extraArguments 'eachExtra'
+		arguments.push(extra)
+	end 'eachExtra'
+
+	return spawnCompiler(arguments, staged: staged, what: "the `{BuildCommandName}` of the staged program")
+end 'spawnBuild'
+
+// Build with no `--define` at all — the control every override is measured against.
+export function requirePlainBuild(staged FilePath) throws TestFailure
+	let noArguments = StringArray.create()
+	let build = spawnBuild(staged, extraArguments: noArguments)
+
+	try requireBuiltExecutable(build, staged: staged, what: BuildCommandName, reason: "Every case here rests on an ordinary build of the same fixture succeeding, so a failure at this step is the fixture or the compiler rather than anything about `--define`.")
+end 'requirePlainBuild'
+
+// Build with one `--define`, asserted rather than panicked: accepting the flag and writing a binary for
+// it is the surface this corpus gates.
+export function requireDefinedBuild(staged FilePath, pair String) throws TestFailure
+	var arguments = StringArray.create()
+	arguments.push("{DefineOption}{pair}")
+
+	let build = spawnBuild(staged, extraArguments: arguments)
+	try requireBuiltExecutable(build, staged: staged, what: "{BuildCommandName} {DefineOption}{pair}", reason: "Replacing a written-out default is what this flag is for.")
+end 'requireDefinedBuild'
+
+// Build with one `--define` that must be REFUSED, and hand back what the compiler said.
+//
+// ⛔ **THE ABSENCE OF AN EXECUTABLE IS ASSERTED BESIDE THE EXIT CODE.** A refusal that still wrote a
+// binary is the failure that matters: the next step of any build is to run what came out, and a stale or
+// half-defined image there is worse than an error, because nothing downstream would say so.
+export function requireRefusedBuild(staged FilePath, pair String) returns String throws TestFailure
+	var arguments = StringArray.create()
+	arguments.push("{DefineOption}{pair}")
+
+	let build = spawnBuild(staged, extraArguments: arguments)
+	try Expect.isFalse(build.exitCode() == 0, message: "`{BuildCommandName} {DefineOption}{pair}` exited 0. It was expected to refuse. It wrote to stdout: {build.stdout}")
+	try Expect.isFalse(File.exists(builtExecutable(staged)), message: "`{BuildCommandName} {DefineOption}{pair}` refused the define and wrote an executable to {builtExecutable(staged).toString()} anyway.")
+
+	return withoutCarriageReturns(build.stderr)
+end 'requireRefusedBuild'
+
+// Run what a build produced and hand back its stdout. The program prints the constant and nothing else,
+// so its output IS the answer to "what value did the binary get?".
+export function runBuiltProgram(staged FilePath) returns String throws TestFailure
+	let executable = builtExecutable(staged)
+	var config = Configuration.create(Executable.path(executable))
+	config.workingDirectory = staged
+
+	let run = try config.run() otherwise (e) 'spawnFailed'
+		panic("define tests: the gate could not run — could not spawn the built program at {executable.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "the built program exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+
+	return withoutCarriageReturns(run.stdout).trim()
+end 'runBuiltProgram'
+
+// ============================================================================================
+// PLUMBING
+// ============================================================================================
+
+function requireBuiltExecutable(build CollectedOutput, staged FilePath, what String, reason String) throws TestFailure
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`{what}` exited {build.exitCode()}. {reason} It wrote to stderr: {build.stderr}")
+	try Expect.isTrue(File.exists(builtExecutable(staged)), message: "`{what}` exited 0 and wrote no executable to {builtExecutable(staged).toString()}.")
+end 'requireBuiltExecutable'
+
+function spawnCompiler(arguments StringArray, staged FilePath, what String) returns CollectedOutput
+	let binary = testedCompilerPath()
+	if not File.exists(binary) 'noBinary'
+		panic("define tests: the gate could not run — {what} needs a driver at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("define tests: the gate could not run — could not spawn {what} ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'spawnCompiler'
+
+function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("define tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'testedCompilerPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
+
+function fixtureDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("define tests: the gate could not run — '{spelled}' is not a spellable path")
+	if not Directory.isDirectory(path) 'notThere'
+		panic("define tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'fixtureDir'
+
+function stagingDir(spelled String) returns FilePath
+	var prefix = ""
+	for component in spelled.split(PathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("define tests: the gate could not run — '{prefix}' is not a spellable path")
+		if not Directory.create(ancestor) 'couldNotCreate'
+			panic("define tests: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
+		end 'couldNotCreate'
+	end 'eachComponent'
+
+	let path = try FilePath.from(spelled) otherwise panic("define tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+function clearStagedFiles(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("define tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+function listing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("define tests: the gate could not run — could not list {dir.toString()}")
+end 'listing'
+
+function withoutCarriageReturns(text String) returns String
+	return text.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'

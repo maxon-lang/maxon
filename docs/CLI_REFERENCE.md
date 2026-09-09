@@ -66,10 +66,53 @@ line and exits 1.
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to `<output>.mxcov` as it exits. It **changes the emitted code**, so it is a separate build from the one you ship; read it back with `maxon coverage`. It requires the debug-info sidecar (which carries what each counter counts), so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer, plus the memory-manager events written into it. Use with `maxon monitor`. It also enables the `__DebugStream` builtin: without it, every `__DebugStream` call emits zero instructions. Refused on a target with no shared-memory or uptime-clock facility. |
 | `--async-trace` | Emit the green-thread trace (`spawn #`, `io_yield #`, `io_resume #`, `await #`) to stderr. |
+| `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
 | `--metrics=<path>` | Write this compile's per-phase time and memory attribution to `<path>` as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table. |
 
 `--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**: with the flag off, not one
 instruction of the machinery is emitted — not a branch that is never taken, nothing at all.
+
+#### Defines
+
+`--define=<name>=<value>` replaces the value of a top-level `String` constant whose initializer is a
+written-out string literal. It is Go's `-ldflags -X` for Maxon, and it exists for the same thing: a
+version, a commit, a build channel — facts known to whoever runs the build and not to the source.
+
+```bash
+maxon build myapp --define=Version=1.4.2
+maxon build myapp --define=Compiler.CompilerVersion=0.1.1 --define=Build.Channel=nightly
+```
+
+⭐ **The declaration keeps a real default, and that is the point.** A constant is ordinary source with an
+ordinary value, so a fresh clone builds with no flags at all and reports something honest. `--define`
+replaces the default; it does not supply a missing one.
+
+```maxon
+let Version = "dev"        // what a plain `maxon build` reports
+```
+
+⚠ **The name may be bare or namespace-qualified, and neither is assumed unique.** A namespace is the
+module DIRECTORY, so `Compiler.CompilerVersion` is a constant in `<root>/Compiler/`. Two file-private
+constants of one name can share a directory, so the compiler counts the matches rather than trusting the
+spelling.
+
+⛔ **Three things are refused rather than ignored**, because a define that quietly does nothing produces
+a build indistinguishable from the one it was meant to replace:
+
+| | |
+|---|---|
+| **E3149** | the name matches no declaration |
+| **E3150** | the name matches more than one — both are named, with their files |
+| **E3151** | the initializer is not a plain string literal (an expression, or a constant that is not a `String`) |
+
+Every problem on one command line is reported before any is fatal.
+
+⚠ **The value may contain `=`; the name may not.** The split is at the first one, so
+`--define=Url=https://x/?a=b` sets the whole URL.
+
+A build manifest can supply defines too, which is how a manifest that *computes* something gets it into
+the binary — see [The build manifest](#the-build-manifest). A `--define` on the command line wins over
+one the manifest wrote, exactly as `-o` wins over the manifest's `output`.
 
 **Tree lock.** A build that does *not* pass `-o` and whose project root is a **directory** takes a lock
 on the checkout it writes into, so two such builds cannot race on `<project>/.maxon/`. Everything else

@@ -17,9 +17,15 @@ public type BuildConfig
 	/// resource, a Mach-O `LC_SOURCE_VERSION`. Empty means unversioned, which is what a program whose
 	/// author has not said otherwise should claim.
 	public var version as String
+	/// `<name>=<value>` pairs, each replacing a top-level `String` constant's written-out default —
+	/// the same thing `maxon build --define` does, said by the manifest instead of the command line.
+	/// ⭐ THIS IS HOW A BUILD SUPPLIES A VERSION IT COMPUTED. A manifest is a PROGRAM, so it can derive
+	/// one from git; a constant it wrote to a FILE could not be, because generating that file needs the
+	/// compiler the file is needed to build.
+	public var defines as StringArray
 
-	public static function create(name String, output String, sources StringArray, optimize bool, debug_info bool, version String = "") returns BuildConfig
-		return BuildConfig{name: name, output: output, sources: sources, optimize: optimize, debug_info: debug_info, version: version}
+	public static function create(name String, output String, sources StringArray, optimize bool, debug_info bool, version String = "", defines StringArray = StringArray.create()) returns BuildConfig
+		return BuildConfig{name: name, output: output, sources: sources, optimize: optimize, debug_info: debug_info, version: version, defines: defines}
 	end 'create'
 end 'BuildConfig'
 
@@ -34,10 +40,10 @@ public type Build
 	/// which in a manifest means declaring an `Array with String` typealias to hold it.
 	/// source: the file or directory to compile. output: where the executable goes, extension omitted
 	/// (the compiler appends `.exe` on Windows and nothing elsewhere).
-	public static function build(source String, output String, version String = "")
+	public static function build(source String, output String, version String = "", defines StringArray = StringArray.create())
 		var sources = StringArray.create()
 		sources.push(source)
-		let config = BuildConfig.create(source, output: output, sources: sources, optimize: false, debug_info: true, version: version)
+		let config = BuildConfig.create(source, output: output, sources: sources, optimize: false, debug_info: true, version: version, defines: defines)
 		Build.emitBuildConfig(config)
 	end 'build'
 
@@ -50,10 +56,10 @@ public type Build
 	/// `maxon build <name>` selects; with a single target the name is not needed and `maxon build`
 	/// builds it, and with several `maxon build` lists them rather than guessing.
 	/// source: the file or directory to compile. output: where the executable goes, extension omitted.
-	public static function target(name String, source String, output String, version String = "") returns BuildConfig
+	public static function target(name String, source String, output String, version String = "", defines StringArray = StringArray.create()) returns BuildConfig
 		var sources = StringArray.create()
 		sources.push(source)
-		return BuildConfig.create(name, output: output, sources: sources, optimize: false, debug_info: true, version: version)
+		return BuildConfig.create(name, output: output, sources: sources, optimize: false, debug_info: true, version: version, defines: defines)
 	end 'target'
 
 	/// Emit several named targets as a JSON array. One target is emitted as a bare object by the calls
@@ -104,7 +110,21 @@ public type Build
 			print("  \"debug_info\": false,")
 		end 'emit_debug_false'
 
-		print("  \"version\": \"{config.version}\"")
+		print("  \"version\": \"{config.version}\",")
+		print("  \"defines\": [")
+
+		var d = 0
+		let defineCount = config.defines.count()
+		for pair in config.defines 'emit_defines'
+			if d < defineCount - 1 'define_comma'
+				print("    \"{pair}\",")
+			end 'define_comma' else 'define_last'
+				print("    \"{pair}\"")
+			end 'define_last'
+			d = d + 1
+		end 'emit_defines'
+
+		print("  ]")
 
 		print("\}")
 	end 'emitBuildConfig'
