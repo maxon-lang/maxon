@@ -37,6 +37,11 @@ jobs:
           - target: arm64-linux
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    # ⚠ EVERY MATRIX LEG ANSWERS THE SAME QUESTION ("is there a release to seed from?"), so which leg
+    # writes this is immaterial. The downstream jobs read it rather than re-asking, which keeps one
+    # answer for the whole run.
+    outputs:
+      seeded: ${{ steps.seed.outputs.seeded }}
     defaults:
       run:
         shell: bash
@@ -48,15 +53,25 @@ jobs:
       # leave a RELEASED stdlib one directory above the seed and this checkout's own would never be
       # read. The build would succeed and compile the wrong library, silently.
       - name: Seed from the previous release
+        id: seed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # ⛔ NO RELEASES AT ALL IS THE BOOTSTRAP CASE AND IS NOT A FAILURE. It happens exactly once,
+          # for the first release, whose archives are built by hand — so it SKIPS with a notice rather
+          # than going red. A red mark on the very release that introduces the workflow teaches people
+          # to ignore red marks, which is the reason the tap job skips too.
+          #
+          # ⚠ It is NOT the same as "releases exist but none serves this target" — that IS a failure and
+          # still errors below, because it means the chain broke somewhere it was supposed to hold.
           prev="$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)"
           if [ -z "$prev" ]; then
-            echo "::error::no previous release to seed from — v0.1.0 is published by hand (see this file's header)"
-            exit 1
+            echo "::notice::no published release to seed from yet — v0.1.0's archives are built and published by hand (see this file's header)"
+            echo "seeded=no" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "seeded=yes" >> "$GITHUB_OUTPUT"
           echo "seeding from $prev"
           work="$(mktemp -d)"
           gh release download "$prev" --pattern "*${{ matrix.target }}*" --dir "$work"
@@ -75,6 +90,7 @@ jobs:
       # ⛔ THE SEED IS RUN DIRECTLY, because the slot is empty on a fresh checkout and `maxon build`
       # needs a compiler before it can make one. `build.maxon` at the root says what gets built.
       - name: Build
+        if: steps.seed.outputs.seeded == 'yes'
         run: |
           set -euo pipefail
           # ⚠ AN `if`, NOT `[ … ] && …`. Under `set -e` a trailing test that answers FALSE is the
@@ -88,9 +104,11 @@ jobs:
       # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
       # a claim, and this is the step that makes it a fact.
       - name: Package (runs the suite first)
+        if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/release.sh --package
 
       - uses: actions/upload-artifact@v4
+        if: steps.seed.outputs.seeded == 'yes'
         with:
           name: maxon-${{ matrix.target }}
           path: dist/*
@@ -102,6 +120,7 @@ jobs:
   # say which one a user had.
   msi:
     needs: package
+    if: needs.package.outputs.seeded == 'yes'
     runs-on: windows-latest
     defaults:
       run:
@@ -136,6 +155,7 @@ jobs:
 
   publish:
     needs: [package, msi]
+    if: needs.package.outputs.seeded == 'yes'
     runs-on: ubuntu-latest
     defaults:
       run:
