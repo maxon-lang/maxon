@@ -7586,20 +7586,23 @@ export let SubpSlotErrLimit = 160 as ByteOffset
 // for `durationMs` off the WAIT and a handle may be spawned long before anyone waits on it.
 export let SubpSlotWaitStartMs = 168 as ByteOffset
 
-// ⭐⭐ **THE TICK COUNT BEFORE WHICH `delayed`'s PAYLOAD MAY NOT BE PUSHED, OR 0 FOR "PUSH IT NOW".** Set at
-// spawn to `osTickCountMs() + SubpStdinDelayedFeedMs` for `StdinKind.delayed` and left at the slab's zero for
-// every other kind, so `emitSubpPushStdin`'s guard is a *"is there a deadline, and has it passed?"* pair
-// rather than a kind test repeated a pass later — which is the shape `SubpSlotStdinPend` and
-// `SubpSlotStdinWrite` already have and for the same reason.
+// ⭐⭐ **WHEN `delayed`'s PAYLOAD MAY BE PUSHED — a three-valued word.** `0` is "push now": the slab's zero,
+// which every kind but `delayed` leaves, so `emitSubpPushStdin`'s guard is a word test rather than a kind
+// test repeated a pass later (the shape `SubpSlotStdinPend` and `SubpSlotStdinWrite` have, for the same
+// reason). `SubpStdinFeedUnarmed` is what the spawn stores for `delayed`: hold, with no clock running. A
+// positive value is a tick-count deadline, and `emitSubpArmDelayedFeed` stores one the pass that collects
+// the child's FIRST STDOUT BYTE — the feed is measured from the moment the child is observably running, so
+// a child slow to reach its first print is fed no earlier for it. A child that never writes to stdout is
+// never fed, which is why the stdlib refuses `delayed` without a collected stdout.
 //
-// ⭐ **THE FEED COMES FROM THE DRAIN LOOP, WHICH IS WHY THE DELAY IS A DEADLINE RATHER THAN A SLEEP.** There
-// is no feed thread to `Sleep` on — `__gt_subp_wait_collect` pushes one chunk per pass between drains — so
-// the delay is a time the loop declines to push before, and the
-// loop's own `SubpPollMs` green sleep is what makes the waiting free.
+// The feed is a deadline rather than a sleep because it comes from the drain loop: `__gt_subp_wait_collect`
+// pushes one chunk per pass between drains, and the loop's own `SubpPollMs` green sleep is what makes the
+// waiting free.
 //
-// ⚠ It fits inside the existing `SubpSlotBytes` (184): 176 is the last free word, so the handle table's stride
-// is unchanged and no other slot field moves.
+// ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane, and 176 is the
+// last free word of `SubpSlotBytes` (184): a second word would move the handle table's stride.
 export let SubpSlotStdinFeedAt = 176 as ByteOffset
+let SubpStdinFeedUnarmed = -1 as ParsedInt
 export let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -8047,17 +8050,11 @@ export let SubpOutCollect = 2 as ParsedInt
 // what stops the next reader from concluding that `hold` is unimplemented here because no constant says so.
 export let SubpStdinHold = 4 as ParsedInt
 
-// ⭐⭐ **`delayed` — `hold`'s PIPE, THEN `bytes`'s PAYLOAD.** A kind that falls through to the non-pipe arm
-// below opens the NULL DEVICE, so the child reads an instant EOF where it must get a one-second block and
-// then the data — which silently turns `specs/sched-syscall-handoff.md`'s two ordering cases into programs
-// with nothing to block on.
+// ⭐⭐ **`delayed` — `hold`'s PIPE, THEN `bytes`'s PAYLOAD, fed `SubpStdinDelayedFeedMs` after the child's first
+// stdout byte.** A kind that falls through to the non-pipe arm below opens the NULL DEVICE, so the child reads
+// an instant EOF where it must block and then get the data — which silently turns
+// `specs/sched-syscall-handoff.md`'s ordering cases into programs with nothing to block on.
 let SubpStdinDelayed = 5 as ParsedInt
-
-// ⭐ **HOW LONG `delayed` HOLDS THE PIPE BEFORE FEEDING IT.** Fixed rather than a spawn argument because the
-// spawn contract carries a `limit` slot for stdout and stderr and NONE for stdin — `InputSource.delayed`'s own
-// note states that, and states that a caller-chosen delay is a change to the builtin's arity. One harness
-// drives every lane through this one marker, so the number is the same everywhere.
-let SubpStdinDelayedFeedMs = 1000 as ParsedInt
 
 // ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE, WHICH IS WHAT THE OLD SHAPE COULD NOT DO.**
 // The routing used to be a chain of equality tests, one per kind, ending in *"everything else gets the null
@@ -8395,7 +8392,8 @@ end 'emitSubpNonPipeChildHandle'
 // The three PIPE kinds — `bytes`, `hold` and `delayed` — all need the parent's WRITE end of a synchronous
 // outbound pipe, and differ only in what the drain loop is then told to do with it: push a payload now
 // (`bytes`), push nothing ever (`hold`, which is also what `StreamingSubprocess` asks for, writing by hand),
-// or push a payload after a fixed delay (`delayed`). Everything else is `emitSubpNonPipeChildHandle`'s.
+// or push a payload a fixed delay after the child's first stdout byte (`delayed`). Everything else is
+// `emitSubpNonPipeChildHandle`'s.
 //
 // ⛔⛔ **THE MEMBERSHIP TEST WAS A CHAIN OF EQUALITIES AND THAT IS WHAT LET `delayed` READ AS THE NULL DEVICE.**
 // Two `==` tests routed `bytes` and `hold` to the pipe and sent **everything else** — including the two kinds
@@ -8436,19 +8434,17 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	emitStoreField(module, block: queueArm, record: slotB, offset: SubpSlotStdinPend, value: data)
 	module.setTerminator(queueArm, op: StdOp.branch(delayTest.id))
 
-	// `delayed` is `bytes` plus a not-before time. The deadline is taken HERE rather than at the first drain
-	// pass because the wait the caller asked for starts when the child does, not when somebody gets round to
-	// waiting on it — a handle spawned long before anyone calls `waitCollect` would otherwise feed instantly.
+	// `delayed` is `bytes` plus a feed that is held UNARMED until the drain loop sees the child's first stdout
+	// byte (`SubpSlotStdinFeedAt`); no clock runs at spawn, so nothing between here and the child's first
+	// print can bring the feed forward.
 	let isDelayed = emitSubpKindIs(module, block: delayTest, kind: kind, value: SubpStdinDelayed, ids: ids)
 	let delayZero = emitConst(module, block: delayTest, value: 0, ids: ids)
 	let feedNow = emitCmp(module, block: delayTest, a: isDelayed, b: delayZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(delayTest, op: StdOp.condBranch(feedNow, thenBlockId: pipeArm.id, elseBlockId: delayArm.id))
 
-	let spawnedAtMs = ids.mint()
-	module.appendOp(delayArm, op: StdOp.osTickCountMs(spawnedAtMs))
-	let feedDelay = emitConst(module, block: delayArm, value: SubpStdinDelayedFeedMs, ids: ids)
+	let unarmed = emitConst(module, block: delayArm, value: SubpStdinFeedUnarmed, ids: ids)
 	let slotD = emitSubpSlotAddr(module, block: delayArm, ids: ids, table: table, handle: slotIdx)
-	emitStoreField(module, block: delayArm, record: slotD, offset: SubpSlotStdinFeedAt, value: emitBin(module, block: delayArm, a: spawnedAtMs, b: feedDelay, opcode: StdBinOpcode.add, ids: ids))
+	emitStoreField(module, block: delayArm, record: slotD, offset: SubpSlotStdinFeedAt, value: unarmed)
 	module.setTerminator(delayArm, op: StdOp.branch(pipeArm.id))
 
 	let name = emitSubpAllocPipeName(module, block: pipeArm, ids: ids)

@@ -364,9 +364,11 @@ let ProcsMarker = "<!-- procs:"
 // waits for live green threads, so a program whose reader is parked forever prints its siblings' lines
 // and then simply never exits. ⇒ A `hold` case can only ever end at `SpecSpawnTimeoutMs`, which is a
 // two-minute FAIL that asserts nothing — "it did not finish" is equally what a hang, a crash loop and a
-// deadlock look like. `delayed` ends the wait after about a second (`runStdinFor`), so the blocking read
-// COMPLETES, the program exits on its own, and the observable becomes what it printed and in what ORDER
-// against whatever ran while it was parked.
+// deadlock look like. `delayed` ends the wait about a second after the program's FIRST STDOUT BYTE
+// (`runStdinFor`), so the blocking read COMPLETES, the program exits on its own, and the observable becomes
+// what it printed and in what ORDER against whatever ran while it was parked. Anchoring the feed on the
+// program's own output rather than on its spawn is what keeps a slow start from feeding the read before it
+// is entered; a program that never prints is never fed.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseNetworkValue` and `parseProcsValue`,
 // which this follows exactly. Reading `<!-- stdin: pipe -->` as "leave the default alone" would hand
@@ -851,8 +853,9 @@ export union SpecStdin
 	// `<!-- stdin: hold -->`: a pipe nobody ever writes to, held open for the child's whole life, so a
 	// read BLOCKS in the kernel rather than being answered.
 	held
-	// `<!-- stdin: delayed -->`: the same pipe, written to about a second later with one line and then
-	// closed, so a read BLOCKS and then COMPLETES and the program can still exit on its own.
+	// `<!-- stdin: delayed -->`: the same pipe, written to with one line about a second after the program's
+	// first stdout byte and then closed, so a read BLOCKS and then COMPLETES and the program can still exit
+	// on its own.
 	delayed
 end 'SpecStdin'
 
@@ -2112,7 +2115,7 @@ function parseStdinValue(line String, specPath FilePath, testName String) return
 		return SpecStdin.delayed
 	end 'delayed'
 
-	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second later and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
+	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second after the program's first stdout byte and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
 end 'parseStdinValue'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the

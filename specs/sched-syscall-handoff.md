@@ -68,11 +68,15 @@ why there is no cliff to find.
 ⭐⭐ **THE CALL THAT DOES HOLD ITS M IS `stdin`, AND THAT IS WHERE THIS FILE'S SUBJECT ACTUALLY LIVES.**
 `Console.stdin().readLine()` reaches `__con_read_stdin` (`ConsoleRuntime.maxon:38`), which is a plain
 synchronous `osReadFile` on the standard-input handle — **no overlapped read, no peek, no park**. A green
-thread inside it is a green thread whose OS thread is in the kernel until the user presses return, holding
-the processor with it. ⚠ **MEASURED BY THE PASS THAT IDENTIFIED THIS MECHANISM AND NOT RE-RUN HERE**: the
-same two-service shape reads `reader-got | sibling` at `MAXON_MAX_PROCS=1` — the sibling cannot run until the
-read returns — and flips to `sibling | reader-got` at two or more, where a second processor still has an M to
-run it on. **That ordering, not a wall clock, is what a serialised M looks like when you can see it.**
+thread inside it is a green thread whose OS thread is in the kernel until a line arrives, holding the
+processor with it. The three cases below that carry `<!-- stdin: delayed -->` are ONE program under three
+markers, and its shape is the contract with the harness: the reader prints `R: reading`, pings a sentinel,
+then reads; the harness writes one line about a second after the program's **FIRST STDOUT BYTE** — that
+ready line — and closes the pipe. A scheduler that lets the read keep its processor cannot run the sentinel
+until the read returns, so at one processor `R: read returned` lands above `S: sentinel ran`; at two or more
+a second machine still has an M to carry the sentinel, and the order flips. **That ordering, not a wall
+clock, is what a serialised M looks like when you can see it** — and the reader's `blocked=` witness, described
+at the first of the three cases, is what tells that ordering apart from a line that was already in the pipe.
 
 ⚠ **NONE OF THIS RETIRES THE RUNG, AND THE `stdin` READING IS WHY THAT IS A STATEMENT RATHER THAN A HOPE.**
 The claim at the head of this file — a green thread inside a genuinely blocking kernel call takes its M with
@@ -102,7 +106,7 @@ each of those is a **hang** here — which the harness reports as a clean per-te
 
 ### Targets
 
-Four of the five cases run on **`x64-windows, arm64-macos, arm64-linux`** — every lane that provides a
+Five of the six cases run on **`x64-windows, arm64-macos, arm64-linux`** — every lane that provides a
 green-thread substrate, and therefore every lane that has a processor to hand off. The three differ only in
 WHERE the bracket around a blocking call is emitted: x64-windows puts both steps inline inside its import
 shim, and the arm64 lanes call `__sched_enter_syscall` / `__sched_exit_syscall` from the instruction
@@ -111,7 +115,7 @@ are written once and read the same on all three.
 
 `a-blocking-subprocess-wait-does-not-stall-a-sibling` is the exception and carries `x64-windows` alone. That
 is a property of its PROGRAM and not of the rule: it spawns `cmd /c exit 0`, which exists on no other lane.
-A POSIX twin of that program would run everywhere the other four do.
+A POSIX twin of that program would run everywhere the other five do.
 
 ## Tests
 
@@ -325,17 +329,32 @@ aggregate=8 last=1
 CLOCK.** The reader blocks in `Console.stdin().readLine()` — `__con_read_stdin` (`ConsoleRuntime.maxon`),
 a plain synchronous `osReadFile` with **no park and no overlapped read**, which is the one call in reach
 of a spec case that genuinely holds its OS thread in the kernel. The harness's `stdin: delayed` marker
-delivers one line after **≈1 s**, so the read *completes* and the program exits 0 either way. The
-sentinel touches nothing the reader touches and answers in microseconds.
+writes one line about **a second after the program's FIRST STDOUT BYTE** and then closes the pipe, so the
+read *completes* and the program exits 0 either way; a program that never prints is never fed.
 
-⇒ **`S` must print before `R`.** A green thread with no relationship to a kernel call must not wait a
-full second behind it.
+⇒ **The reader prints `R: reading` immediately before it reads, and that line is what the harness's clock
+starts on.** Between the two it pings the sentinel, so ready line → ping → read is ONE causal sequence on
+one green thread: the sentinel cannot be runnable before the ready line has left the process, and it is
+runnable before the read is entered. That is what makes the order deterministic at four processors as
+well as at one — had `main` dispatched both sends, a spare machine could print `S` before the ready line.
+
+⇒ **`S` must print before `R: read returned`.** A green thread with no relationship to a kernel call must
+not wait a full second behind it.
+
+⚠ **`blocked=yes|no` IS THE WITNESS THAT MAKES A RED SELF-ATTRIBUTING.** The reader times the read alone:
+a line already sitting in the pipe answers in microseconds, the feed lands about a second after the ready
+line, and the 500 ms threshold sits between the two with a margin of hundreds of times on either side. So
+`blocked=no` says the line was there before the read was — the feed's clock started too early, which is
+the harness's or the runtime's defect, and the scheduler was never exercised. `blocked=yes` with
+`R: read returned` above `S: sentinel ran` says the read genuinely held the kernel and the sentinel still
+waited it out — the scheduler's defect, and the one this file gates. Without the witness those two reds
+are one red: a line already in the pipe reads exactly like a sentinel starved of its processor.
 
 ⚠ **MEASURED ON THE PARENT OF THE CHANGE THAT GREENS THIS, 5 RUNS OF 5, `MAXON_MAX_PROCS=1`:**
-`R: read returned` then `S: sentinel ran`, `done sibling=1 read=5`, exit 0 — the sentinel waited out the
-entire read. **The 1 s delay against a microsecond reply is a ~1000× margin**, which is why this is a
-stable wrong ANSWER and not a timing flake; it was deliberately built that way after a `stdin: hold`
-variant was rejected for being able to fail only by timing out.
+`R: read returned` then `S: sentinel ran`, exit 0 — the sentinel waited out the entire read. **A one-second
+feed against a microsecond reply is a ~1000× margin**, which is why this is a stable wrong ANSWER and not a
+timing flake; it was deliberately built that way after a `stdin: hold` variant was rejected for being able
+to fail only by timing out.
 
 ⛔⛔ **A SECOND THING IS ALSO LOST, AND THE PREDICTION THAT THIS CASE NEEDED IT FIXED WAS WRONG.**
 `emitGtRunOne` (`GtRuntime.maxon:5733-5768`) suspends the DRIVER inside `__gt_context_switch` and records
@@ -358,6 +377,9 @@ alive after `main` returns). Curing it means `main` on a real green thread rathe
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+// A line already in the pipe answers in microseconds; the harness feeds about a second after `R: reading`.
+let blockedThresholdMs = 500
+
 type Reader
 	var id as Integer
 
@@ -365,11 +387,23 @@ type Reader
 		return Self{id: 0}
 	end 'create'
 
-	export function read() returns Integer
+	export function read(sentinel Sentinel.handle) returns Integer
+		print("R: reading\n")
+		let tailReply = sentinel.ping()
+		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
+		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		return line.count()
+		let tail = try await tailReply otherwise 0
+		var blocked = "no"
+		if waitedMs >= blockedThresholdMs 'blocked'
+			blocked = "yes"
+		end 'blocked'
+		let n = line.count()
+		print("done sibling={tail} read={n} blocked={blocked}\n")
+
+		return n
 	end 'read'
 end 'Reader'
 
@@ -388,23 +422,22 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	let reader = spawn Reader.create()
 	let sentinel = spawn Sentinel.create()
+	let reader = spawn Reader.create()
 
-	let blocked = reader.read()
-	let tailReply = sentinel.ping()
-
-	let tail = try await tailReply otherwise 0
-	let n = try await blocked otherwise 0
-	print("done sibling={tail} read={n}\n")
+	let n = try await reader.read(sentinel) otherwise 0
+	if n == 0 'unread'
+		return 1 as ExitCode
+	end 'unread'
 
 	return 0 as ExitCode
 end 'main'
 ```
 ```stdout
+R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done sibling=1 read=5 blocked=yes
 ```
 ```exitcode
 0
@@ -415,20 +448,30 @@ done sibling=1 read=5
 <!-- stdin: delayed -->
 ⚠ **THIS CASE WAS ALREADY GREEN BEFORE THE CHANGE THAT GREENS THE ONE ABOVE, AND IT IS HERE TO SAY WHY
 THAT ONE IS RED.** Same program, same expected output, one marker different. **MEASURED on the same
-parent, `MAXON_MAX_PROCS=4`: `S` then `R`** — the required order already, because a second machine picks
-the sentinel up while the first is in the kernel.
+parent, `MAXON_MAX_PROCS=4`: `S` then `R: read returned`** — the required order already, because a second
+machine picks the sentinel up while the first is in the kernel.
 
 ⇒ The pair states the defect exactly: **one processor cannot do what four can, and the reason is that a
 processor is being spent on a thread that is asleep in the kernel.** As a gate this half is a regression
 guard — it is the path that must not break while the other is being fixed — and it is deliberately not
 counted as evidence for the cure.
 
+⚠ **FOUR PROCESSORS IS WHERE THE READER'S CAUSAL CHAIN EARNS ITS KEEP.** The ping leaves the reader only
+after `R: reading` has been written, so a spare machine can run the sentinel no earlier than that line;
+dispatched from `main` beside the read, `S: sentinel ran` and the ready line would leave on two machines
+in whichever order those machines woke, and this case would flake on its first line instead of gating its
+third. The `blocked=` witness reads the same here as at one processor: `blocked=no` is a feed that arrived
+early, never a scheduling result.
+
 ⚠ **It pins an ORDER, not a count.** `MAXON_MAX_PROCS` is clamped to the host's processor count, so on a
-one-core machine this case degenerates into the case above and would read `R` first. That is a real
-limitation of the pair and not a flake to re-run; a host that cannot give the runtime two processors
-cannot exhibit the difference the pair exists to show.
+one-core machine this case degenerates into the case above and would read `R: read returned` first. That
+is a real limitation of the pair and not a flake to re-run; a host that cannot give the runtime two
+processors cannot exhibit the difference the pair exists to show.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+
+// A line already in the pipe answers in microseconds; the harness feeds about a second after `R: reading`.
+let blockedThresholdMs = 500
 
 type Reader
 	var id as Integer
@@ -437,11 +480,23 @@ type Reader
 		return Self{id: 0}
 	end 'create'
 
-	export function read() returns Integer
+	export function read(sentinel Sentinel.handle) returns Integer
+		print("R: reading\n")
+		let tailReply = sentinel.ping()
+		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
+		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		return line.count()
+		let tail = try await tailReply otherwise 0
+		var blocked = "no"
+		if waitedMs >= blockedThresholdMs 'blocked'
+			blocked = "yes"
+		end 'blocked'
+		let n = line.count()
+		print("done sibling={tail} read={n} blocked={blocked}\n")
+
+		return n
 	end 'read'
 end 'Reader'
 
@@ -460,23 +515,22 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	let reader = spawn Reader.create()
 	let sentinel = spawn Sentinel.create()
+	let reader = spawn Reader.create()
 
-	let blocked = reader.read()
-	let tailReply = sentinel.ping()
-
-	let tail = try await tailReply otherwise 0
-	let n = try await blocked otherwise 0
-	print("done sibling={tail} read={n}\n")
+	let n = try await reader.read(sentinel) otherwise 0
+	if n == 0 'unread'
+		return 1 as ExitCode
+	end 'unread'
 
 	return 0 as ExitCode
 end 'main'
 ```
 ```stdout
+R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done sibling=1 read=5 blocked=yes
 ```
 ```exitcode
 0
@@ -494,8 +548,17 @@ many times a `sysmon` actually took a processor away from a machine stuck in the
 ⇒ **`retaken=yes` is the claim that a processor was handed off, not merely that the output came out in a
 better order.** It is a `> 0` test rather than a fixed count deliberately: how many retakes a run needs is
 a scheduling detail, and pinning the number would make the case a hostage to the sysmon polling interval.
+
+⚠ **`retaken=no` READS WITH THE `blocked=` WITNESS, NOT ALONE.** A sysmon retakes a processor from a call
+that has held it for longer than its polling interval; a read that answered in microseconds gave it nothing
+to retake. So `blocked=no retaken=no` is the feed arriving early — the harness's or the runtime's — and only
+`blocked=yes retaken=no` says the sysmon watched a machine sit in the kernel for a second and left it its
+processor.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+
+// A line already in the pipe answers in microseconds; the harness feeds about a second after `R: reading`.
+let blockedThresholdMs = 500
 
 type Reader
 	var id as Integer
@@ -504,11 +567,23 @@ type Reader
 		return Self{id: 0}
 	end 'create'
 
-	export function read() returns Integer
+	export function read(sentinel Sentinel.handle) returns Integer
+		print("R: reading\n")
+		let tailReply = sentinel.ping()
+		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
+		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		return line.count()
+		let tail = try await tailReply otherwise 0
+		var blocked = "no"
+		if waitedMs >= blockedThresholdMs 'blocked'
+			blocked = "yes"
+		end 'blocked'
+		let n = line.count()
+		print("done sibling={tail} read={n} blocked={blocked}\n")
+
+		return n
 	end 'read'
 end 'Reader'
 
@@ -527,28 +602,79 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	let reader = spawn Reader.create()
 	let sentinel = spawn Sentinel.create()
+	let reader = spawn Reader.create()
 
-	let blocked = reader.read()
-	let tailReply = sentinel.ping()
-
-	let tail = try await tailReply otherwise 0
-	let n = try await blocked otherwise 0
+	let n = try await reader.read(sentinel) otherwise 0
+	if n == 0 'unread'
+		return 1 as ExitCode
+	end 'unread'
 
 	var mark = "no"
 	if __Builtins.schedRetakeCount() > 0 'retaken'
 		mark = "yes"
 	end 'retaken'
-	print("done sibling={tail} read={n} retaken={mark}\n")
+	print("retaken={mark}\n")
 
 	return 0 as ExitCode
 end 'main'
 ```
 ```stdout
+R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5 retaken=yes
+done sibling=1 read=5 blocked=yes
+retaken=yes
+```
+```exitcode
+0
+```
+
+<!-- test: the-feed-is-measured-from-the-first-output-not-from-the-start -->
+<!-- procs: 1 -->
+<!-- stdin: delayed -->
+⭐ **THIS CASE PINS THE ANCHOR, AND IT IS THE ONLY ONE OF THE FOUR `stdin: delayed` CASES THAT CAN FAIL ON
+THE FEED ALONE.** No services, no sentinel, nothing for a scheduler to reorder: the program sleeps 1.5 s
+BEFORE it prints anything, prints `ready`, and only then reads. A feed clocked from the SPAWN has already
+written its line and closed the pipe by the time the read is entered, so the read answers at once and the
+witness says `blocked=no`. A feed clocked from the program's first stdout byte cannot start before `ready`
+leaves the process, so the read waits its full second and the witness says `blocked=yes`.
+
+⇒ **A program slow to reach its first print is fed no earlier for it.** That is the whole contract the
+three cases above lean on when they print `R: reading` immediately before their read; here it is stated
+without a scheduler in the way, so a `blocked=no` in this case is the harness's or the runtime's and can
+be nobody else's. The threshold and the timing are the reader's own: a line already in the pipe answers in
+microseconds, the feed lands about a second after `ready`, and 500 ms sits between the two.
+```maxon
+// A line already in the pipe answers in microseconds; the harness feeds about a second after `ready`.
+let blockedThresholdMs = 500
+
+// Longer than the feed's delay, so a feed clocked from the spawn has already landed when the read begins.
+let lateStartMs = 1500
+
+function main() returns ExitCode
+	sleep(lateStartMs)
+	print("ready\n")
+	let start = Clock.nowMs()
+	let line = try Console.stdin().readLine() otherwise ""
+	let waitedMs = Clock.elapsedMs(start)
+
+	var blocked = "no"
+	if waitedMs >= blockedThresholdMs 'blocked'
+		blocked = "yes"
+	end 'blocked'
+	let n = line.count()
+	print("read={n} blocked={blocked}\n")
+	if n == 0 'unread'
+		return 1 as ExitCode
+	end 'unread'
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+ready
+read=5 blocked=yes
 ```
 ```exitcode
 0

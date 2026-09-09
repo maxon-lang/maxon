@@ -236,9 +236,11 @@ end 'SpawnEnvironment'
 ///   reaped. A read in the child therefore BLOCKS IN THE KERNEL instead of
 ///   seeing EOF, which is what `none` and a spent `bytes` payload both give.
 ///
-/// - `delayed(s)` — `hold`'s pipe for about a second, then `s`, then close. A
-///   read in the child BLOCKS for that long and then COMPLETES, so the child
-///   both enters a real kernel wait and still terminates on its own.
+/// - `delayed(s)` — `hold`'s pipe until about a second after the child's FIRST
+///   STDOUT BYTE, then `s`, then close. A read in the child BLOCKS for that
+///   long and then COMPLETES, so the child both enters a real kernel wait and
+///   still terminates on its own. A child that never writes to stdout is never
+///   fed.
 ///
 /// ⭐ `hold` IS THE ONLY ARM THAT LEAVES THE CHILD BLOCKED RATHER THAN ANSWERED,
 /// and it exists because nothing else can express that. `none` opens the null
@@ -255,17 +257,24 @@ end 'SpawnEnvironment'
 /// normally and what it PRINTED, and in what ORDER against whatever ran while it
 /// was parked, becomes the observable.
 ///
-/// ⚠ THE DELAY IS FIXED AND THE CALLER CANNOT NAME IT (`StdinDelayedFeedMs`, one
-/// per emitter, in the runtime that performs the write).
-/// The spawn contract carries a `limit` alongside stdout's and stderr's kinds and
-/// NONE alongside stdin's, so there is no slot to put a per-call duration in; a
-/// caller-chosen delay is a change to the builtin's arity, which is declared in
-/// each compiler's parser as well as in both emitters. The payload rides the
-/// existing `stdinData` slot and IS the caller's, so only the duration is fixed.
+/// ⭐ THE CLOCK STARTS AT THE CHILD'S FIRST STDOUT BYTE, NOT AT THE SPAWN, so a
+/// child slow to reach its first print — an exec stall, a page-in, a deliberate
+/// sleep — is fed no earlier for it and its read still blocks for the full
+/// delay. The parent can only see that byte when it is collecting stdout, so
+/// `delayed` REQUIRES `OutputDestination.collect` on `standardOutput`;
+/// `runConfiguration` refuses any other pairing as `spawnFailed` before any
+/// spawn, because the alternative is a feed that never arms and a child that
+/// sits until `timeoutMs` — for ever at 0.
 ///
-/// Each variant routes its payload through the `subprocessSpawn` stdio
-/// triple; the runtime stubs currently fail spawns with -1 until the real
-/// OS-side implementation lands.
+/// ⚠ THE DELAY IS FIXED AND THE CALLER CANNOT NAME IT (`SubpStdinDelayedFeedMs`,
+/// in the runtime that performs the write). The spawn contract carries a `limit`
+/// alongside stdout's and stderr's kinds and NONE alongside stdin's, so there is
+/// no slot to put a per-call duration in; a caller-chosen delay is a change to
+/// the builtin's arity, which is declared in the parser as well as in the
+/// emitter. The payload rides the existing `stdinData` slot and IS the caller's,
+/// so only the duration is fixed.
+///
+/// Each variant routes its payload through the `subprocessSpawn` stdio triple.
 public union InputSource
 	none
 	inherit
@@ -487,6 +496,7 @@ public type Subprocess
 	/// the `__Builtins.subprocess*` runtime contract: build argv/cwd/stdio
 	/// payloads, spawn, wait-collect, decode the result struct, release.
 	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
+		try requireDelayedFeedObservable(config.standardInput, stdout: config.standardOutput)
 		let exePath = try resolveExecutablePath(config.executable)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
@@ -809,6 +819,31 @@ function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitI
 		timedOut then throw SubprocessError.timeout(durationMs)
 	end 's'
 end 'terminationStatusFromKind'
+
+/// `InputSource.delayed` clocks its feed from the child's first stdout byte, which only a collected stdout
+/// lets the parent see. Every other pairing is refused before any spawn, because it would never arm.
+let delayedFeedNeedsCollectedStdout = "InputSource.delayed needs OutputDestination.collect on stdout: the line is fed after the child's first stdout byte, which no other destination lets the parent observe"
+
+function requireDelayedFeedObservable(stdin InputSource, stdout OutputDestination) throws SubprocessError
+	let feedNeedsStdout = match stdin 'in'
+		delayed gives true
+		none or
+			inherit or
+			bytes or
+			file or
+			hold gives false
+	end 'in'
+	if not feedNeedsStdout 'unaffected'
+		return
+	end 'unaffected'
+
+	match stdout 'out'
+		collect then return
+		discard or
+			inherit or
+			file then throw SubprocessError.spawnFailed(delayedFeedNeedsCollectedStdout)
+	end 'out'
+end 'requireDelayedFeedObservable'
 
 function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'

@@ -186,6 +186,33 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-delayed-stdin-needs-collected-stdout -->
+<!-- unsupported-targets: wasm32-wasi -->
+`InputSource.delayed` writes its line one second after the child's FIRST STDOUT BYTE, and the parent can
+only see that byte when it is collecting stdout. Any other destination would leave the feed with nothing
+to anchor on, so the configuration is refused up front, as `spawnFailed` with the reason below — BEFORE
+any spawn, which the executable name proves: it exists nowhere, and a spawn attempt would have failed on
+it with a different reason.
+```maxon
+function main() returns ExitCode
+	var c = Configuration.create(Executable.name("definitely-not-a-real-binary-xyzzy"))
+	c.standardInput = InputSource.delayed("hello\n")
+	c.standardOutput = OutputDestination.discard
+	try Subprocess.runConfiguration(c) otherwise (e) 'refused'
+		print("{e.displayReason()}\n")
+		return 0
+	end 'refused'
+	print("spawned\n")
+	return 1
+end 'main'
+```
+```stdout
+spawn failed: InputSource.delayed needs OutputDestination.collect on stdout: the line is fed after the child's first stdout byte, which no other destination lets the parent observe
+```
+```exitcode
+0
+```
+
 <!-- test: subprocess-streaming-roundtrip -->
 <!-- unsupported-targets: wasm32-wasi -->
 `StreamingSubprocess` keeps the child's pipes open and drives stdio

@@ -79,14 +79,17 @@ module typealias DecodedEventArray = Array with DecodedEvent
 #else
 	let SegmentMapCallName = "mmap"
 #endif
+
 #if os(Macos)
 	let SegmentCreateCallName = "shm_open"
 #endif
+
 // ⚠ **`shm_open` IS A libc FUNCTION ON LINUX AND THIS COMPILER LINKS NO LIBC**, so the call to look up is
 // the one the runtime actually makes: the open of the path that function would have built.
 #if os(Linux)
 	let SegmentCreateCallName = "openat under /dev/shm"
 #endif
+
 // ⛔ **WASI HAS NO NAMED-SECTION PRIMITIVE AT ALL**, so nothing on this lane can refuse to create one and
 // the sentence below is unreachable there. The name must still RESOLVE — a `#if` arm decides what a file
 // contains, not what a program reaches — and naming the absence is the only spelling that is true.

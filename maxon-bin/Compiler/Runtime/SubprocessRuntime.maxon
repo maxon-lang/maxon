@@ -160,6 +160,12 @@ let SpawnFlagDetachShift = 2 as ParsedInt
 // green threads make progress. One millisecond is the smallest value a Win32 timer resolves at all.
 let SubpPollMs = 1 as ParsedInt
 
+// ⭐ **HOW LONG `delayed` HOLDS THE PIPE AFTER THE CHILD'S FIRST STDOUT BYTE BEFORE FEEDING IT.** Fixed rather
+// than a spawn argument because the spawn contract carries a `limit` slot for stdout and stderr and NONE for
+// stdin — a caller-chosen delay is a change to the builtin's arity. One harness drives every lane through
+// this one marker, so the number is the same everywhere.
+let SubpStdinDelayedFeedMs = 1000 as ParsedInt
+
 // The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
 // needs, exactly as the streaming line buffer does, so a child producing N bytes costs O(log N) reallocations.
 let SubpCollectInitialBytes = 4096 as ParsedInt
@@ -1409,8 +1415,9 @@ end 'buildSubpPollExit'
 // ⚠ **THE SAME STRUCTURE IS WHAT LETS A DEADLINE BE HONOURED AT ALL**: a committed blocking read cannot
 // observe one. `timeoutMs == 0` means "wait for ever", the corpus's convention for the whole family.
 //
-// ⚠⚠ **THE STDIN PAYLOAD IS PUSHED FROM INSIDE THIS LOOP** (`StdinKind.bytes`), between drains, so a child
-// that reads its input while writing its output makes progress on both. The write is a synchronous
+// ⚠⚠ **THE STDIN PAYLOAD IS PUSHED FROM INSIDE THIS LOOP** (`StdinKind.bytes`, and `StdinKind.delayed` once
+// the stdout drain has armed its feed), between drains, so a child that reads its input while writing its
+// output makes progress on both. The write is a synchronous
 // `WriteFile` on the outbound pipe — NOT the yielding read — so if it ever blocks it blocks **the OS THREAD,
 // and therefore the WHOLE SCHEDULER**: every other green thread stops too, and the deadline this function
 // exists to honour cannot fire either. It takes a payload larger than the pipe buffer (64 KiB) handed to a
@@ -1468,12 +1475,15 @@ function buildSubpWaitCollect(module StdModule)
 	emitStoreField(module, block: setDeadline, record: state, offset: WcDeadline, value: deadline)
 	module.setTerminator(setDeadline, op: StdOp.branch(loopHdr.id))
 
-	// One pass: clear the progress counter, push any queued stdin, then drain each output stream.
+	// One pass: clear the progress counter, push any queued stdin, drain stdout, arm a `delayed` feed off what
+	// stdout has collected, then drain stderr. The push runs first, so the pass that collects the first bytes
+	// arms and the next pass's push is the earliest that can see the deadline.
 	let zeroP = emitConst(module, block: loopHdr, value: 0, ids: ids)
 	emitStoreField(module, block: loopHdr, record: state, offset: WcProgress, value: zeroP)
 	var afterStdin = emitSubpPushStdin(module, func: func, ids: ids, cur: loopHdr, state: state)
 	var afterOut = emitSubpDrainStream(module, func: func, ids: ids, cur: afterStdin, state: state, streamBase: SubpStdoutBase, bufOffset: WcOutBuf, lenOffset: WcOutLen, capOffset: WcOutCap, doneOffset: WcOutDone, slotLimitOffset: SubpSlotOutLimit)
-	var afterErr = emitSubpDrainStream(module, func: func, ids: ids, cur: afterOut, state: state, streamBase: SubpStderrBase, bufOffset: WcErrBuf, lenOffset: WcErrLen, capOffset: WcErrCap, doneOffset: WcErrDone, slotLimitOffset: SubpSlotErrLimit)
+	var afterArm = emitSubpArmDelayedFeed(module, func: func, ids: ids, cur: afterOut, state: state)
+	var afterErr = emitSubpDrainStream(module, func: func, ids: ids, cur: afterArm, state: state, streamBase: SubpStderrBase, bufOffset: WcErrBuf, lenOffset: WcErrLen, capOffset: WcErrCap, doneOffset: WcErrDone, slotLimitOffset: SubpSlotErrLimit)
 	module.setTerminator(afterErr, op: StdOp.branch(exitCheck.id))
 
 	// exitCheck: the child is finished ONLY when both streams are drained AND the process object is
@@ -1561,15 +1571,14 @@ function buildSubpWaitCollect(module StdModule)
 	module.functions.push(func)
 end 'buildSubpWaitCollect'
 
-// Push one chunk of a queued `StdinKind.bytes` payload into the child's stdin, and close the pipe once the
-// payload is spent. `stdinPend` is 0 for every stdin kind that carries no payload, which is what makes this a
-// pointer test rather than a kind test repeated a pass later.
+// Push one chunk of a queued `StdinKind.bytes` or `StdinKind.delayed` payload into the child's stdin, and
+// close the pipe once the payload is spent. `stdinPend` is 0 for every stdin kind that carries no payload,
+// which is what makes this a pointer test rather than a kind test repeated a pass later.
 //
-// ⭐⭐ **`StdinKind.delayed` IS THE SAME PUSH BEHIND A NOT-BEFORE TIME**, which is the whole of what this
-// function had to learn: `GtRuntime.SubpSlotStdinFeedAt` carries why the deadline is taken at spawn and why
-// The compiler needs no feed thread to honour it. A pass that declines on the deadline reports NO PROGRESS, so the
-// loop takes its `SubpPollMs` green sleep and comes back — the wait costs this program nothing and the whole
-// scheduler runs through it.
+// ⭐⭐ **`delayed` IS THE SAME PUSH BEHIND `SubpSlotStdinFeedAt`**: unarmed until `emitSubpArmDelayedFeed` sees
+// the child's first stdout byte, then a deadline. A pass that declines reports NO PROGRESS, so the loop takes
+// its `SubpPollMs` green sleep and comes back — the wait costs this program nothing and the whole scheduler
+// runs through it.
 function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
 	var feedDue = module.addBlock(func, label: b"wcfdue")
 	var haveWrite = module.addBlock(func, label: b"wcfeed")
@@ -1585,17 +1594,18 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	let nothingQueued = emitCmp(module, block: cur, a: pend, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(nothingQueued, thenBlockId: cont.id, elseBlockId: feedDue.id))
 
-	// The not-before time. A zero deadline is *"push it now"* — the slab's zero, which is what every kind but
-	// `delayed` leaves — so the pair is one compare against zero and one against the clock, and neither is a
-	// kind test. ⚠ The tick count is read fresh here rather than carried from the loop's own `WcStartMs`,
-	// because that reading is taken when the WAIT began and this deadline is measured from the SPAWN.
+	// The three-valued feed word (`SubpSlotStdinFeedAt`): 0 pushes now, negative holds with no clock running,
+	// positive is a deadline. ⚠ The unarmed test must gate the clock compare — `now >= SubpStdinFeedUnarmed`
+	// is always true — so `due` is "armed AND arrived", and only a real deadline can be past.
 	let feedAt = emitLoadField(module, block: feedDue, record: slot, offset: SubpSlotStdinFeedAt, ids: ids)
 	let feedZero = emitConst(module, block: feedDue, value: 0, ids: ids)
 	let noDeadline = emitCmp(module, block: feedDue, a: feedAt, b: feedZero, pred: StdCmpPred.eq, ids: ids)
+	let armed = emitCmp(module, block: feedDue, a: feedAt, b: feedZero, pred: StdCmpPred.gt, ids: ids)
 	let nowMsF = ids.mint()
 	module.appendOp(feedDue, op: StdOp.osTickCountMs(nowMsF))
 	let arrived = emitCmp(module, block: feedDue, a: nowMsF, b: feedAt, pred: StdCmpPred.ge, ids: ids)
-	let mayPush = emitBin(module, block: feedDue, a: noDeadline, b: arrived, opcode: StdBinOpcode.bitOr, ids: ids)
+	let due = emitBin(module, block: feedDue, a: armed, b: arrived, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let mayPush = emitBin(module, block: feedDue, a: noDeadline, b: due, opcode: StdBinOpcode.bitOr, ids: ids)
 	let stillHolding = emitCmp(module, block: feedDue, a: mayPush, b: feedZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(feedDue, op: StdOp.condBranch(stillHolding, thenBlockId: cont.id, elseBlockId: haveWrite.id))
 
@@ -1657,6 +1667,38 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	module.setTerminator(closeStdin, op: StdOp.branch(cont.id))
 	return cont
 end 'emitSubpPushStdin'
+
+// Start `delayed`'s clock the pass the stdout drain collects the child's first byte: an UNARMED feed word
+// becomes `now + SubpStdinDelayedFeedMs` once `WcOutLen > 0`. That length is exactly "the child has written
+// to stdout" — `emitSubpKeepWithinLimit` keeps at least one byte of the first read under any ceiling, and a
+// ceiling of 0 is uncapped. Every other kind leaves the word 0 or armed and costs one load and one branch.
+function emitSubpArmDelayedFeed(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var haveOutput = module.addBlock(func, label: b"wcfaout")
+	var arm = module.addBlock(func, label: b"wcfarm")
+	let cont = module.addBlock(func, label: b"wcfadone")
+
+	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
+	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let feedAt = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinFeedAt, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let unarmed = emitCmp(module, block: cur, a: feedAt, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(unarmed, thenBlockId: haveOutput.id, elseBlockId: cont.id))
+
+	let outLen = emitLoadField(module, block: haveOutput, record: state, offset: WcOutLen, ids: ids)
+	let zeroO = emitConst(module, block: haveOutput, value: 0, ids: ids)
+	let childWrote = emitCmp(module, block: haveOutput, a: outLen, b: zeroO, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(haveOutput, op: StdOp.condBranch(childWrote, thenBlockId: arm.id, elseBlockId: cont.id))
+
+	let nowMs = ids.mint()
+	module.appendOp(arm, op: StdOp.osTickCountMs(nowMs))
+	let feedDelay = emitConst(module, block: arm, value: SubpStdinDelayedFeedMs, ids: ids)
+	let deadline = emitBin(module, block: arm, a: nowMs, b: feedDelay, opcode: StdBinOpcode.add, ids: ids)
+	let handleA = emitLoadField(module, block: arm, record: state, offset: WcHandle, ids: ids)
+	let slotA = emitSubpSlotOf(module, block: arm, ids: ids, handle: handleA)
+	emitStoreField(module, block: arm, record: slotA, offset: SubpSlotStdinFeedAt, value: deadline)
+	module.setTerminator(arm, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpArmDelayedFeed'
 
 // `state[outOffset] = min(a, limit)`, through memory for this file's stated reason.
 function emitSubpMinInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, outOffset ByteOffset, a ValueId, limit ParsedInt) returns IrBlock
