@@ -83,7 +83,11 @@ jobs:
           if [ -f "$seed.exe" ]; then
             seed="$seed.exe"
           fi
-          "./$seed" build maxon-bin
+          # ⛔ THE OUTPUT IS NAMED EXPLICITLY, because the SEED is the previous release and may predate
+          # named manifest targets. Such a seed reads `maxon-bin` as a PATH and writes the compiler to
+          # its own default location — MEASURED: `maxon-bin/Profile/ProfileSampler`, after which the
+          # suite step cannot find a compiler. `-o` is correct under both readings.
+          "./$seed" build maxon-bin -o maxon-bin/.maxon/maxon
 
       # The formatter's own gate and the duplicate-error-code check both ride inside `spec-test`, so
       # this one command is the whole battery.

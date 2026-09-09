@@ -99,7 +99,11 @@ jobs:
           if [ -f "$seed.exe" ]; then
             seed="$seed.exe"
           fi
-          "./$seed" build maxon-bin
+          # ⛔ THE OUTPUT IS NAMED EXPLICITLY, because the SEED is the previous release and may predate
+          # named manifest targets. Such a seed reads `maxon-bin` as a PATH and writes the compiler to
+          # its own default location — MEASURED: `maxon-bin/Profile/ProfileSampler`, after which the
+          # suite step cannot find a compiler. `-o` is correct under both readings.
+          "./$seed" build maxon-bin -o maxon-bin/.maxon/maxon
 
       # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
       # a claim, and this is the step that makes it a fact.
@@ -113,6 +117,17 @@ jobs:
           name: maxon-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+
+      # ⛔ A RED SUITE IS EXACTLY WHEN THE LOG IS WORTH HAVING, and it is the one case the upload above
+      # never reaches. `release.sh` writes `dist/spec-test-<target>.log` and then FAILS the step, so
+      # without this the only record of which cases went red dies with the runner.
+      - name: Keep the suite log when it fails
+        if: failure() && steps.seed.outputs.seeded == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-test-log-${{ matrix.target }}
+          path: dist/spec-test-*.log
+          if-no-files-found: ignore
 
   # ⭐ THE MSI IS BUILT FROM THE PUBLISHED ARCHIVE, NOT FROM A SECOND BUILD OF THE TREE. It takes the
   # `x64-windows` job's own artifact, so the compiler inside the installer is byte-for-byte the one in

@@ -95,7 +95,7 @@ at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows).
 **Build and run**
 
 ```bash
-./.bootstrap/maxon build maxon-bin            # first build, with the seed
+./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon build maxon-bin      # afterwards, it rebuilds itself
 maxon-bin/.maxon/maxon build examples/basic.maxon
 maxon-bin/.maxon/maxon spec-test              # run the spec-test suite
