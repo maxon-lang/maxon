@@ -62,7 +62,9 @@
 // EVERY ACCESS SITE LOADS ITS OWN COPY OF A FIELD, so the hoisted ops are VALUE-NUMBERED over their
 // operands before they are emitted: a loop with seven accesses to one record hoists one `length@8`
 // and one `buffer@0`, not seven of each, and the register budget counts what the copy reads after
-// that merge.
+// that merge. A field the PREHEADER already loaded is not loaded again either: the chain reads that
+// value (`preheaderLoadOf`), so a `for i in 0 upto a.count()` bounds its counter by the very value the
+// copy's checks compare against, which is what lets `refineValueRanges` relate the two.
 //
 // NESTS: loops are decided outermost first, and a loop is refused when it contains or lies inside a
 // loop already versioned in this run — the outer copy already folds the inner loop's guards on the same
@@ -80,7 +82,40 @@
 // and the two substitution columns. A loop's analysis and rewrite touch only what the loop holds and
 // reads, so a function with many loops costs the sum of its loops, not their product with its size.
 
-typealias VersionedLoopCount = int(0 to u64.max)
+// Loops this pass rewrote — versioned, or hoisted in place.
+typealias RewrittenLoopCount = int(0 to u64.max)
+
+// Per function index of the module: whether this run REWROTE the function — a loop versioned, or a
+// loop's record fields hoisted in place. THE CONTRACT WITH `refineVersionedRanges`: that second run of
+// `refineValueRanges` exists for the shape the rewrite makes, so it visits exactly the functions
+// flagged here and no other. The column is sized by the module's function count as this pass saw it;
+// a reader asking about a function outside it is not reading this pass's answer for its module.
+export type RewrittenFunctions
+	var flags as BoolArray
+	export var rewrittenCount as FuncCount = 0
+
+	static function sized(funcCount FuncCount) returns RewrittenFunctions
+		var flags = BoolArray.create()
+		flags.resize(funcCount)
+		return Self{flags: flags}
+	end 'sized'
+
+	// The pipeline's slot before the pass has answered: a column no function fits, so a run scheduled
+	// ahead of the pass panics on its first question rather than skipping every function.
+	export static function create() returns RewrittenFunctions
+		return Self{flags: BoolArray.create()}
+	end 'create'
+
+	function mark(fnIndex FuncIndex)
+		try self.flags.set(fnIndex, value: true) otherwise panic("unswitchInvariantGuards: function {fnIndex} is outside the {self.flags.count()}-function column")
+		self.rewrittenCount = self.rewrittenCount + 1
+	end 'mark'
+
+	export function includes(fnIndex FuncIndex) returns bool
+		return try self.flags.get(fnIndex) otherwise panic("refineVersionedRanges: function {fnIndex} is outside the {self.flags.count()} function(s) `unswitchInvariantGuards` answered for — the run is not reading that pass's answer for this module")
+	end 'includes'
+end 'RewrittenFunctions'
+
 typealias LoopOpCount = int(0 to u64.max)
 typealias GuardCount = int(0 to u64.max)
 typealias HoistedValueCount = int(0 to u64.max)
@@ -140,28 +175,38 @@ function refusalText(reason UnswitchRefusal) returns String
 	end 'r'
 end 'refusalText'
 
-// Version every admissible natural loop in every function, in place.
-export function unswitchInvariantGuards(module StdModule)
-	var versioned = 0 as VersionedLoopCount
+// Version every admissible natural loop in every function, in place. Answers which functions it rewrote.
+export function unswitchInvariantGuards(module StdModule) returns RewrittenFunctions
+	var rewrittenLoops = 0 as RewrittenLoopCount
 	var scratch = UnswitchScratch.create()
+	var rewritten = RewrittenFunctions.sized(module.funcCount())
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		versioned = versioned + unswitchInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("unswitchInvariantGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+		let rewrittenHere = unswitchInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("unswitchInvariantGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+
+		if rewrittenHere == 0 'leftAlone'
+			continue
+		end 'leftAlone'
+
+		rewrittenLoops = rewrittenLoops + rewrittenHere
+		rewritten.mark(fnIndex)
 	end 'eachFunc'
 
-	let total = versioned
-	logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: versioned {total} loop(s) across {module.funcCount()} function(s); loops left alone: {scratch.refusals.summary(UnswitchRefusal.allCaseNames)}; invariant compares of another shape left in place: {scratch.genericGuardsLeftAlone}")
+	let total = rewrittenLoops
+	logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: rewrote {total} loop(s) — {scratch.versionedLoops} versioned, {scratch.hoistedLoops} hoisted in place — in {rewritten.rewrittenCount} of {module.funcCount()} function(s); loops left alone: {scratch.refusals.summary(UnswitchRefusal.allCaseNames)}; invariant compares of another shape left in place: {scratch.genericGuardsLeftAlone}")
+
+	return rewritten
 end 'unswitchInvariantGuards'
 
 // ══════════════════════════════════════════════════════════════════════════
 // Per-function driver
 // ══════════════════════════════════════════════════════════════════════════
 
-// Version every admissible loop of one function. Returns how many it versioned.
-function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScratch) returns VersionedLoopCount
+// Rewrite every admissible loop of one function — versioned, or hoisted in place. Returns how many.
+function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScratch) returns RewrittenLoopCount
 	let blockCount = func.blockRefs.count()
 
 	if blockCount < 2 or not holdsAManagedCallee(module, func: func, scratch: scratch) 'nothingToVersion'
@@ -210,7 +255,7 @@ function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScrat
 
 	for index in 0 upto plans.count() 'eachCopy'
 		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
-		applyPlan(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+		applyPlan(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 	end 'eachCopy'
 
 	dropUnreachableBlocks(module, func: func)
@@ -693,18 +738,30 @@ end 'classifyBodyOp'
 // A store is admitted only as an element store — anything else, a field or global write among them,
 // refuses the loop. Whether its record is one a callee names is asked once every call has been read.
 function admitStore(op StdOp, position BlockRefIndex, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
-	classifyStoreOperands(op, store: scratch.store)
-	if not scratch.store.isStore() 'notAPlainStore'
-		return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
-	end 'notAPlainStore'
-
-	if not elementStoreCannotAliasARecordField(analysis.reader, addrId: scratch.store.addrId, out: scratch.slot) 'notASlot'
+	if not storeStaysInABuffer(op, analysis: analysis, scratch: scratch) 'notASlot'
 		return refuse(plan, reason: UnswitchRefusal.storeNotAnElementSlot, scratch: scratch)
 	end 'notASlot'
 
 	plan.stores.push(ElementStoreSite.create(position, slot: scratch.slot))
 	return true
 end 'admitStore'
+
+// THE ONE QUESTION EVERY WRITE IN A LOOP OR ITS PREHEADER IS ASKED: may `op` write a header field of any
+// record? A call is asked FIRST — `call`/`tryCall` carry `isStore` too — and may not unless the runtime
+// declares it `writesNothing`; a store may not when it is an element store, which lands in a buffer
+// (`elementStoreCannotAliasARecordField`); nothing else writes memory. `admitCall` and `admitStore`
+// ask the same two halves with a refusal reason attached; the preheader scan asks this.
+function opMayWriteAHeader(op StdOp, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	if op.rawValue.isCall 'aCall'
+		return not calleeWritesNoHeader(op, scratch: scratch)
+	end 'aCall'
+
+	if op.rawValue.isStore 'aStore'
+		return not storeStaysInABuffer(op, analysis: analysis, scratch: scratch)
+	end 'aStore'
+
+	return false
+end 'opMayWriteAHeader'
 
 // A load is invariant when it reads a field of a known record, or the refcount word of a known
 // record's buffer as `emitIsSharedAllocation` reads it; both are hoisted.
@@ -1218,20 +1275,22 @@ end 'RewriteColumns'
 // Rewrite one loop. Versioned: mint the copy's blocks and ids, emit the test chain and build the copy.
 // Hoist-only: emit the chain and make the loop's own blocks read it. The exit phis are already on the
 // exit block (`substituteExitPhis`).
-function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
 	if not plan.versioned 'hoistOnly'
-		emitTestChain(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+		scratch.hoistedLoops = scratch.hoistedLoops + 1
+		emitTestChain(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 		readHoistedInPlace(module, func: func, plan: plan, scratch: scratch, columns: columns)
 		logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — no guard; the fields of {plan.knownRecords.count()} record(s) hoisted in place")
 	end 'hoistOnly' else 'versioned'
-		copyLoop(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+		scratch.versionedLoops = scratch.versionedLoops + 1
+		copyLoop(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 		logDebug(LogCategory.ir, message: function() gives "unswitchInvariantGuards: '{String.from(func.name)}' loop at block position {plan.header} — {plan.guards.count()} guard(s) folded, {plan.members.count()} block(s) copied, {plan.escaping.count()} exit phi(s)")
 	end 'versioned'
 
 	columns.reset()
 end 'applyPlan'
 
-function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
 	var copyRefs = BlockRefArray.create()
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
@@ -1242,7 +1301,7 @@ function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, scratch 
 	end 'eachMember'
 
 	mintCopyValues(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
-	emitTestChain(module, func: func, plan: plan, scratch: scratch, columns: columns, minter: minter)
+	emitTestChain(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 
 	for (iter, position) in plan.members.withIterator() 'eachCopy'
 		copyMember(module, func: func, plan: plan, position: position, copyRef: try copyRefs.get(iter.index()) otherwise panic("unswitchInvariantGuards: copyRefs.get OOB at {iter.index()}"), scratch: scratch, columns: columns)
@@ -1350,7 +1409,7 @@ end 'TestChain'
 // each admitted guard's compare closing a block whose refusal goes to `__us_slow` (which enters the
 // original) and whose pass goes on to the next test, the last pass entering the copy. A writer's
 // record without an `elementManaged` guard gets that test emitted here, after the guards.
-function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
+function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
 	var chain = TestChain.create()
 	var guardCursor = 0 as GuardCount
 	var hoistCursor = 0 as HoistedValueCount
@@ -1370,6 +1429,11 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, scr
 				columns.mapValue(scratch.def.first, fresh: clonedValue(canonical, subst: columns.valueSubst))
 				continue
 			end 'aDuplicateOfAnEarlierOne'
+
+			if preheaderLoadOf(module, func: func, plan: plan, analysis: analysis, valueId: scratch.def.first, scratch: scratch) 'thePreheaderHoldsIt'
+				columns.mapValue(scratch.def.first, fresh: scratch.reusedLoad)
+				continue
+			end 'thePreheaderHoldsIt'
 
 			columns.mapValue(scratch.def.first, fresh: minter.mint())
 			module.spans.current = module.spans.at(opIdx)
@@ -1400,6 +1464,62 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, scr
 	wireTestChain(module, func: func, plan: plan, chain: chain, columns: columns)
 end 'emitTestChain'
 
+// THE REUSE RULE: a hoisted field load whose record and field the PREHEADER already loads, with no op
+// after that load in the preheader that `opMayWriteAHeader` — the preheader's ops after the load are
+// the only code between it and the chain — reads the preheader's value instead of loading again.
+// Answers with the value in `scratch.reusedLoad`. The preheader is read BACKWARDS from the chain, so
+// the scan ends at the nearest load of the field or at the first op that may write a header, whichever
+// comes first, and the ops before that are never classified.
+function preheaderLoadOf(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, valueId ValueId, scratch UnswitchScratch) returns bool
+	if not analysis.reader.loadDefining(valueId) 'notALoad'
+		return false
+	end 'notALoad'
+
+	// Copied out: `reader.load` is refilled by every candidate below.
+	let record = analysis.reader.load.addrId
+	let offset = analysis.reader.load.offset
+	let valueType = analysis.reader.load.valueType
+	let preheader = module.blockAtPosition(func, position: plan.preheader)
+	var k = preheader.opRefs.count()
+
+	while k > 0 'eachOpBackwards'
+		k = k - 1
+		let op = module.getOp(try preheader.opRefs.get(k) otherwise panic("unswitchInvariantGuards: opRefs.get OOB at {k}"))
+
+		if opMayWriteAHeader(op, analysis: analysis, scratch: scratch) 'mayWriteTheHeader'
+			return false
+		end 'mayWriteTheHeader'
+
+		stdOpDefinedValue(op, def: scratch.preheaderDef)
+		if scratch.preheaderDef.definesNothing() or scratch.preheaderDef.definesPair() or not analysis.reader.loadDefining(scratch.preheaderDef.first) 'notAFieldLoad'
+			continue
+		end 'notAFieldLoad'
+
+		if analysis.reader.load.addrId == record and analysis.reader.load.offset == offset and analysis.reader.load.valueType == valueType 'theSameField'
+			scratch.reusedLoad = scratch.preheaderDef.first
+			return true
+		end 'theSameField'
+	end 'eachOpBackwards'
+
+	return false
+end 'preheaderLoadOf'
+
+// Whether a storing op is a plain store through an element slot, which writes a buffer and never a
+// record's header; every other storing op may.
+function storeStaysInABuffer(op StdOp, analysis UnswitchFunction, scratch UnswitchScratch) returns bool
+	classifyStoreOperands(op, store: scratch.store)
+	if not scratch.store.isStore() 'notAPlainStore'
+		return false
+	end 'notAPlainStore'
+
+	return elementStoreCannotAliasARecordField(analysis.reader, addrId: scratch.store.addrId, out: scratch.slot)
+end 'storeStaysInABuffer'
+
+function calleeWritesNoHeader(op StdOp, scratch UnswitchScratch) returns bool
+	classifyCallOperands(op, call: scratch.call)
+	return scratch.call.namesACallee() and managedCalleeHeaderEffect(scratch.call.callee) == ManagedHeaderEffect.writesNothing
+end 'calleeWritesNoHeader'
+
 // `element_destroy@40 == 0` for each writer's record the loop does not already test — the runtime's
 // own spelling of the question, so the fast copy is entered only for elements that owe no drop.
 function emitDestructorTests(module StdModule, func IrFunction, plan UnswitchPlan, chain TestChain, minter ValueMinter)
@@ -1421,7 +1541,13 @@ end 'emitDestructorTests'
 // enters the original header.
 function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, chain TestChain, columns RewriteColumns)
 	if not chain.started 'nothingEmitted'
-		panic("unswitchInvariantGuards: a plan with nothing to hoist and no guard reached the rewrite — `analyzeLoop` refuses both")
+		// Every hoisted load was one the preheader already holds and no guard closes a test: the loop's
+		// reads name the preheader's values and the preheader's exit stays as it is.
+		if plan.versioned 'aVersionedPlanTests'
+			panic("unswitchInvariantGuards: a versioned plan emitted no chain block — its guards close tests, so at least one was owed")
+		end 'aVersionedPlanTests'
+
+		return
 	end 'nothingEmitted'
 
 	let header = module.blockAtPosition(func, position: plan.header)
@@ -1669,9 +1795,16 @@ type UnswitchScratch
 	export var slot as ElementSlotOperands
 	export var refusals as OrdinalTally
 	export var genericGuardsLeftAlone as TallyCount = 0
+	// The two kinds of rewrite, for the summary.
+	export var versionedLoops as RewrittenLoopCount = 0
+	export var hoistedLoops as RewrittenLoopCount = 0
+	// The preheader load `preheaderLoadOf` found, meaningful only when it answered true — and the def
+	// record its scan fills, kept apart from `def`, which its caller is still reading.
+	export var reusedLoad as ValueId = 0
+	export var preheaderDef as StdDefinedValues
 
 	static function create() returns UnswitchScratch
-		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
 	end 'create'
 
 	function beginLoop()

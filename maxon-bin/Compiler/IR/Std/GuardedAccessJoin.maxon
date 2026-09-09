@@ -1,0 +1,151 @@
+// GuardedAccessJoin — the join of the two arms of one inlined element access, read back off the CFG.
+//
+// THE SHAPE is `InlineManagedPrimitives`': a block ending in the bound guard `idx >=u length@8` branches
+// to a SLOW arm that calls the accessor and to a FAST arm that loads or stores, and both rejoin. THE
+// CONTRACT is the runtime's, stated as data in `ManagedMemoryRuntime` (`managedCalleeSucceedsOnlyInBounds`):
+// `__managed_get` and `__managed_set` return without an error only when the index is below the
+// record's `length@8`. Read together they say the join is entered with the guard's predicate FALSE on
+// every edge in — on the fast arm's edge by the branch, on the slow arm's success edge by the contract.
+// The guard's limit is the very field the contract names: `InlineManagedPrimitives` loads it in the
+// guard's own block, and `unswitchInvariantGuards` hoists it under its premise that nothing in the loop
+// writes the header.
+//
+// It is a file of its own because neither owner can hold it: the inliner emits the shape and does not
+// know what a later pass reads off it, and the runtime states its contract in its own words. This is
+// where the two meet, and the one place a consumer looks.
+
+export type GuardedAccessJoinReader
+	var branch as StdBranchOperands
+	var slowBranch as StdBranchOperands
+	var guard as ManagedGuardOperands
+	var call as StdCallOperands
+	// Meaningful once `joins` has answered true: the guard's compare, whose predicate is false on every
+	// edge into the join.
+	export var guardCompareOpIdx as OpIndex
+
+	export static function create() returns GuardedAccessJoinReader
+		return Self{branch: StdBranchOperands.create(), slowBranch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), call: StdCallOperands.create(), guardCompareOpIdx: 0}
+	end 'create'
+
+	// Whether the block at `position` is such a join: exactly two predecessors, the arms of one guard.
+	// Either predecessor may be the slow arm.
+	export function joins(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position BlockRefIndex) returns bool
+		if tree.pred.degree(position as CsrIndex) != 2 'notTwoEdges'
+			return false
+		end 'notTwoEdges'
+
+		let first = tree.pred.neighbour(position as CsrIndex, k: 0) as BlockRefIndex
+		let second = tree.pred.neighbour(position as CsrIndex, k: 1) as BlockRefIndex
+
+		if first == second 'oneBlockTwice'
+			return false
+		end 'oneBlockTwice'
+
+		return self.armsJoin(module, func: func, tree: tree, reader: reader, position: position, slow: first, fast: second) or self.armsJoin(module, func: func, tree: tree, reader: reader, position: position, slow: second, fast: first)
+	end 'joins'
+
+	// Whether `slow` and `fast` are the then and else arms of one bound guard on `length@8`, each with
+	// that guard as its only way in, the slow one calling the accessor and succeeding into the join.
+	function armsJoin(module StdModule, func IrFunction, tree StdDominatorTree, reader StdShapeReader, position BlockRefIndex, slow BlockRefIndex, fast BlockRefIndex) returns bool
+		if tree.pred.degree(slow as CsrIndex) != 1 or tree.pred.degree(fast as CsrIndex) != 1 'anArmHasAnotherWayIn'
+			return false
+		end 'anArmHasAnotherWayIn'
+
+		let guardPosition = tree.pred.neighbour(slow as CsrIndex, k: 0) as BlockRefIndex
+
+		if tree.pred.neighbour(fast as CsrIndex, k: 0) as BlockRefIndex != guardPosition 'differentGuards'
+			return false
+		end 'differentGuards'
+
+		if not closingCompareOf(module, block: module.blockAtPosition(func, position: guardPosition), branch: self.branch, reader: reader) 'noCompareCloses'
+			return false
+		end 'noCompareCloses'
+
+		let slowId = module.blockAtPosition(func, position: slow).id
+		let fastId = module.blockAtPosition(func, position: fast).id
+
+		if self.branch.thenBlockId != slowId or self.branch.elseBlockId != fastId 'notTheGuardsArms'
+			return false
+		end 'notTheGuardsArms'
+
+		if not classifyManagedGuard(reader, condId: self.branch.condId, out: self.guard) or self.guard.kind != ManagedGuardKind.indexOutOfRange 'notABoundGuard'
+			return false
+		end 'notABoundGuard'
+
+		// The contract is stated against `length@8`; a bound on `capacity@16` proves nothing about it.
+		if not self.guard.indexIsVariable or self.guard.limitOffset != ManagedRecordLengthOffset 'notTheContractsBound'
+			return false
+		end 'notTheContractsBound'
+
+		if not self.slowArmSucceedsIntoJoin(module, func: func, reader: reader, position: position, slow: slow) 'notAnAccessorsSuccess'
+			return false
+		end 'notAnAccessorsSuccess'
+
+		self.guardCompareOpIdx = reader.defs.definingOp(self.branch.condId)
+		return true
+	end 'armsJoin'
+
+	// Whether the slow arm exits by testing, against zero, the error flag of a `tryCall` to an accessor
+	// that succeeds only in bounds on the guard's record and index, with the join on the success side.
+	function slowArmSucceedsIntoJoin(module StdModule, func IrFunction, reader StdShapeReader, position BlockRefIndex, slow BlockRefIndex) returns bool
+		let slowBlock = module.blockAtPosition(func, position: slow)
+
+		if not closingCompareOf(module, block: slowBlock, branch: self.slowBranch, reader: reader) 'noTestCloses'
+			return false
+		end 'noTestCloses'
+
+		if not reader.arith.isComparisonImm() or reader.arith.imm as ParsedInt != ConditionIsFalse 'notAFlagTest'
+			return false
+		end 'notAFlagTest'
+
+		if reader.arith.pred != StdCmpPred.eq and reader.arith.pred != StdCmpPred.ne 'notAnEqualityTest'
+			return false
+		end 'notAnEqualityTest'
+
+		// `flag == 0` succeeds on the then arm, `flag != 0` on the else arm.
+		let successArm = self.slowBranch.thenBlockId if reader.arith.pred == StdCmpPred.eq else self.slowBranch.elseBlockId
+
+		if successArm != module.blockAtPosition(func, position: position).id 'joinIsNotTheSuccess'
+			return false
+		end 'joinIsNotTheSuccess'
+
+		return self.accessorCallDefines(module, block: slowBlock, flag: reader.arith.lhs)
+	end 'slowArmSucceedsIntoJoin'
+
+	// Whether `block` holds the `tryCall` defining `flag` with nothing that stores or calls before it —
+	// the accessor must be the arm's first effect, or the length it checks is not the guard's — and
+	// that call names an accessor succeeding only in bounds on the guard's record and index.
+	function accessorCallDefines(module StdModule, block IrBlock, flag ValueId) returns bool
+		for opIdx in block.opRefs 'eachOp'
+			let op = module.getOp(opIdx)
+			classifyCallOperands(op, call: self.call)
+
+			if self.call.throwsToAFlag() and self.call.errorFlagId == flag 'theCall'
+				return managedCalleeSucceedsOnlyInBounds(self.call.callee) and self.call.argCount >= 2 and self.call.firstArg == self.guard.record and self.call.secondArg == self.guard.index
+			end 'theCall'
+
+			if op.rawValue.isStore or op.rawValue.isCall 'anEffectRunsFirst'
+				return false
+			end 'anEffectRunsFirst'
+		end 'eachOp'
+
+		return false
+	end 'accessorCallDefines'
+end 'GuardedAccessJoinReader'
+
+// The compare a block's exit branches on: whether `block` ends in a `condBranch` between two distinct
+// arms whose condition an arithmetic compare defines, filling `branch` with the terminator and
+// `reader.arith` with the compare. Shared by every reader of a block's closing test.
+export function closingCompareOf(module StdModule, block IrBlock, branch StdBranchOperands, reader StdShapeReader) returns bool
+	if not block.hasTerminatorOp() 'noExitOp'
+		return false
+	end 'noExitOp'
+
+	classifyBranch(module.getOp(block.terminatorIndex()), out: branch)
+
+	if not branch.isCondBranch() or branch.thenBlockId == branch.elseBlockId 'notATwoWayBranch'
+		return false
+	end 'notATwoWayBranch'
+
+	return reader.arithDefining(branch.condId) and (reader.arith.isComparison() or reader.arith.isComparisonImm())
+end 'closingCompareOf'

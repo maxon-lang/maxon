@@ -3744,14 +3744,22 @@ module type StdCallOperands
 	// The first argument — meaningful only when `argCount` is non-zero. It is what a callee-effect
 	// table keys on: every runtime entry that takes a record takes it first.
 	export var firstArg as ValueId
+	// The second — meaningful only when `argCount` is at least two. The element accessors take the
+	// index there, which is what a bound-relating reader looks up.
+	export var secondArg as ValueId
 
 	module static function create() returns StdCallOperands
-		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0}
+		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0, secondArg: 0}
 	end 'create'
 
 	export function namesACallee() returns bool
 		return self.shape != StdCallShape.other
 	end 'namesACallee'
+
+	// Whether the call is a `tryCall`, whose `errorFlagId` is meaningful.
+	export function throwsToAFlag() returns bool
+		return self.shape == StdCallShape.throwingCall
+	end 'throwsToAFlag'
 
 	function recordOther()
 		self.shape = StdCallShape.other
@@ -3777,6 +3785,10 @@ module type StdCallOperands
 		if self.argCount != 0 'hasArguments'
 			self.firstArg = try arguments.get(0) otherwise panic("StdCallOperands.takeCallee: arguments.get(0) failed on a non-empty argument list")
 		end 'hasArguments'
+
+		if self.argCount >= 2 'hasASecond'
+			self.secondArg = try arguments.get(1) otherwise panic("StdCallOperands.takeCallee: arguments.get(1) failed on a two-argument list")
+		end 'hasASecond'
 	end 'takeCallee'
 end 'StdCallOperands'
 

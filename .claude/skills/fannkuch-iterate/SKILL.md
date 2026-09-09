@@ -59,6 +59,11 @@ A candidate that names no shape is not a candidate.
   reviewer's, and `/land`'s battery — is `spec-test --filter=<spec>` over the spec files the change
   touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The self-compile stays
   (it is the E3092 gate, not a spec run).
+- ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer
+  builds `examples/fannkuch-redux.maxon` into a scratch directory (`--emit-ir --log=ir:debug`) and
+  runs it at n=10 (73196 / 38, exit 38); a panic or a wrong answer there is a red gate, and the
+  function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that could not
+  compile the example.
 - The git tail is one commit on `fannkuch-loop`. No rebase. No push.
 
 ## 5. A/B

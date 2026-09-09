@@ -506,8 +506,14 @@ module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockC
 		collectStdBlockSuccessorIds(module, block: block, out: successorIds)
 
 		for successorId in successorIds 'eachSuccessor'
+			let successor = try byId.get(successorId) otherwise panic("buildStdSuccessorGraph: in '{String.from(func.name)}', block_{block.id} at position {position} branches to block_{successorId}, which is not in the function's blockRefs")
+
+			if successor >= blockCount 'pastTheFunction'
+				panic("buildStdSuccessorGraph: in '{String.from(func.name)}', block_{block.id} at position {position} branches to block_{successorId}, indexed at position {successor} of a {blockCount}-block function — the block index and blockRefs disagree")
+			end 'pastTheFunction'
+
 			edgeFrom.push(position)
-			edgeTo.push(try byId.get(successorId) otherwise panic("buildStdSuccessorGraph: block {successorId} is a branch target of this function but is not in its blockRefs"))
+			edgeTo.push(successor)
 		end 'eachSuccessor'
 
 		if not block.hasTerminatorOp() and position + 1 < blockCount 'fallsThroughPhysically'

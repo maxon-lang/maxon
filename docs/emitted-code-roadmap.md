@@ -105,7 +105,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* |
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
-| **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25) — intervals, branch refinement, widening; array lengths not yet modelled |
+| **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
@@ -1674,6 +1674,35 @@ interleaved, n=11): **4,440 → 3,860 ms**; n=12 **60,716 → 53,436 ms (ratio t
 set; the self-compile versions 71 loops (1,164 refused for a call with an unknown effect, 251 for no
 preheader). What remains per access is the bound check itself, which needs a SYMBOLIC upper bound
 (`idx < length` with the hoisted length as the bound) in the range analysis.
+
+**`EC27` · Symbolic upper bounds — bounds-check elimination proper.** — ✅ **CLOSED 2026-09-09
+(round 5 of the fannkuch loop): fannkuch −25.5%, self-compile −2.7%.** `refineValueRanges` now
+carries, beside the numeric interval, `v ≤ U(base) + k` for a base whose word reads non-negative:
+the true edge of `a < b` (with `a` non-negative) attaches `b − 1` and COMPOSES through `b`'s own
+bound; `add`/`sub` by a constant move the offset when nothing wraps; a phi keeps a bound only when
+every input names one base whose definition dominates; the unsigned guard `idx <u base` is decided
+when `idx` is numerically non-negative and bounded at `k ≤ −1`. The stated invariant is a TRACE one:
+every source demands a non-negative interval at attachment and joins/widening keep a bound only when
+every live input carries one, so a bounded value is really non-negative even after `lo` widened. Three
+pieces made it reach the loops: (1) a GUARDED-ACCESS JOIN (`IR/Std/GuardedAccessJoin.maxon`): the block
+where an inlined access's fast arm and slow arm rejoin is entered with `index < length` when the slow
+arm's callee `managedCalleeSucceedsOnlyInBounds` (`__managed_get`/`__managed_set`, one table with the
+header-effect column) on the same record, index and `length@8` limit; (2) a SECOND RUN of the pass
+(`refineVersionedRanges`) after `unswitchInvariantGuards`, scoped by the functions that pass reports
+rewriting (46 allocations at every rung — it visits 61 of 12,691 functions in the self-compile); (3) the
+unswitching pass REUSES a preheader load of the same field (a `for` bound's `a.count()`) instead of
+minting a second one, through the one "may this op write a header" predicate `classifyBodyOp` also
+asks. fannkuch's flip loop: `firstValue`'s first access is the bound's source; its second get and set,
+and both ends of the reverse loop (`high = firstValue − 1 ≤ len − 2`, `low < high` composes
+`low ≤ len − 3`) are decided — the reverse loop is **9 instructions per iteration**
+(`cmp/jcc; load; load; store; store; lea; lea; jmp`). Timed A/B (control from the round-4 commit,
+interleaved, n=11): **3,856 → 2,874 ms**; n=12 **53,393 → 39,024 ms (ratio to C 2.57 → 1.88)**;
+census ops 2244 → 2175, `call-direct` 166 → 159. Sabotage: a strict compare accepting offset 0
+deletes the check on `get(i + 1)` under `i < a.count()` (90 for 1090) — ⛔ **and the compiler that
+sabotaged compiler then BUILT panicked inside its own CSE, spec-green**: a sabotage/revert cycle must
+restart from `.bootstrap`, and every rebuild must compile a real program, both now in the skill.
+Not yet: symbolic LOWER bounds, a `mul` step, an element VALUE as a bound source (nothing bounds
+`p[i]` by the length), the inclusive `to` counter (its `i + 1` may wrap).
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

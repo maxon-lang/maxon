@@ -44,7 +44,7 @@ func @lastDoubled {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm rax, 18446744073709551615
@@ -92,7 +92,7 @@ func @lastDoubled {
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#17
-  __im_bounds#18:
+  __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
     x64.jcc aboveEqual, __im_slow#17
@@ -111,8 +111,19 @@ func @lastDoubled {
     x64.movRegReg rax, r14
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#8
-    x64.jmp forstep#3
+    x64.jcc equal, forstep#3
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-loop-defined-value-is-still-live-after-the-loop.test:9: lastDoubled: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_store#21:
     x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r14
   forstep#3:
@@ -123,7 +134,6 @@ func @lastDoubled {
     x64.movRegReg r8, rax
     x64.jmp forexit
   forhdr#22:
-    x64.storeSlotReg slot0, r13
     x64.cmpRegReg r13, r12
     x64.jcc greaterEqual, critsplit#46
   __rc_ok#36:
@@ -139,7 +149,7 @@ func @lastDoubled {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-loop-defined-value-is-still-live-after-the-loop.test:8: lastDoubled: i < n = a.count()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -152,44 +162,15 @@ func @lastDoubled {
     x64.movRegReg r8, rax
   tryok#32:
     x64.imulRegRegImm32 rax, r8, 2
-    x64.storeSlotReg slot1, rax
-  __im_bounds#30:
-    x64.cmpRegReg r13, r14
-    x64.jcc below, __im_store#27
-  __im_slow#26:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.loadRegSlot rax, slot1
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#23
-  tryerr#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-loop-defined-value-is-still-live-after-the-loop.test:9: lastDoubled: i < n = a.count()\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __im_store#27:
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.storeBaseIndexScaleReg.word64 [r15 + rax*8 + 0], rcx
+    x64.storeBaseIndexScaleReg.word64 [r15 + r13*8 + 0], rax
   forstep#23:
-    x64.loadRegSlot rax, slot0
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.loadRegSlot rcx, slot1
-    x64.movRegReg r13, rax
-    x64.movRegReg rax, rcx
+    x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr#22
   critsplit#46:
     x64.movRegReg r8, rax
   forexit:
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

@@ -2892,17 +2892,67 @@ export enum ManagedHeaderEffect
 	unknown
 end 'ManagedHeaderEffect'
 
-export function managedCalleeHeaderEffect(callee ByteArray) returns ManagedHeaderEffect
-	if callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedFirstName) or callee.equals(ManagedByteAtName) 'pureRead'
-		return ManagedHeaderEffect.writesNothing
+// THE ONE ROSTER OF THE ENTRIES WHOSE CONTRACT THIS RUNTIME STATES, by ROLE; the two columns below read
+// off the role. A name this roster does not place — and every callee this runtime does not own — is
+// `other`, so both columns fail closed.
+enum ManagedCalleeRole
+	// `__managed_get`: a pure read that returns without an error only when its index is below `length@8`.
+	boundedRead
+	// The other pure reads.
+	pureRead
+	// `__managed_set`: an in-place writer that returns without an error only when its index is below
+	// `length@8`.
+	boundedWriter
+	// The other in-place writers.
+	inPlaceWriter
+	other
+end 'ManagedCalleeRole'
+
+function managedCalleeRole(callee ByteArray) returns ManagedCalleeRole
+	if callee.equals(ManagedGetName) 'theCheckedGet'
+		return ManagedCalleeRole.boundedRead
+	end 'theCheckedGet'
+
+	if callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedFirstName) or callee.equals(ManagedByteAtName) 'pureRead'
+		return ManagedCalleeRole.pureRead
 	end 'pureRead'
 
-	if callee.equals(ManagedSetName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
-		return ManagedHeaderEffect.detachesUnlessOwnedUnshared
+	if callee.equals(ManagedSetName) 'theCheckedSet'
+		return ManagedCalleeRole.boundedWriter
+	end 'theCheckedSet'
+
+	if callee.equals(ManagedMemSetName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) 'inPlaceWriter'
+		return ManagedCalleeRole.inPlaceWriter
 	end 'inPlaceWriter'
 
-	return ManagedHeaderEffect.unknown
+	return ManagedCalleeRole.other
+end 'managedCalleeRole'
+
+// The header-effect column of the roster.
+export function managedCalleeHeaderEffect(callee ByteArray) returns ManagedHeaderEffect
+	return match managedCalleeRole(callee) 'role'
+		boundedRead or
+			pureRead gives ManagedHeaderEffect.writesNothing
+		boundedWriter or
+			inPlaceWriter gives ManagedHeaderEffect.detachesUnlessOwnedUnshared
+		other gives ManagedHeaderEffect.unknown
+	end 'role'
 end 'managedCalleeHeaderEffect'
+
+// The bound column of the roster: which entries RETURN WITHOUT AN ERROR only when their index argument
+// is below the record's `length@8` — the two element accessors, whose own check is `emitIndexOutOfRange`
+// against that field, so their success proves the predicate an inlined access's bound guard asked before
+// calling them. Read by `GuardedAccessJoinReader`; an entry that could succeed on an index at or past
+// the length must not take a bounded role.
+export function managedCalleeSucceedsOnlyInBounds(callee ByteArray) returns bool
+	return match managedCalleeRole(callee) 'role'
+		boundedRead or
+			boundedWriter gives true
+		pureRead or
+			inPlaceWriter or
+			other gives false
+	end 'role'
+end 'managedCalleeSucceedsOnlyInBounds'
 
 // The guards `InlineManagedPrimitives` asks before an inlined element access, and the bound every
 // checked access asks, each read back off a `condBranch`'s condition. Every kind puts its REFUSAL on
@@ -2926,12 +2976,14 @@ export type ManagedGuardOperands
 	export var kind as ManagedGuardKind
 	// The record every kind tests a field of.
 	export var record as ValueId
-	// `indexOutOfRange` only: whether the index is a value, and which. A constant index is not a value.
+	// `indexOutOfRange` only: whether the index is a value, and which — a constant index is not a value —
+	// and the field the limit was loaded from, `length@8` or `capacity@16`.
 	export var indexIsVariable as bool
 	export var index as ValueId
+	export var limitOffset as ByteOffset
 
 	export static function create() returns ManagedGuardOperands
-		return Self{kind: ManagedGuardKind.bufferNotOwned, record: 0, indexIsVariable: false, index: 0}
+		return Self{kind: ManagedGuardKind.bufferNotOwned, record: 0, indexIsVariable: false, index: 0, limitOffset: ManagedRecordLengthOffset}
 	end 'create'
 
 	function recordShape(shape ManagedGuardKind, tested ValueId)
@@ -2939,17 +2991,19 @@ export type ManagedGuardOperands
 		self.record = tested
 	end 'recordShape'
 
-	function recordVariableBound(tested ValueId, at ValueId)
+	function recordVariableBound(tested ValueId, at ValueId, limit ByteOffset)
 		self.kind = ManagedGuardKind.indexOutOfRange
 		self.record = tested
 		self.indexIsVariable = true
 		self.index = at
+		self.limitOffset = limit
 	end 'recordVariableBound'
 
-	function recordConstantBound(tested ValueId)
+	function recordConstantBound(tested ValueId, limit ByteOffset)
 		self.kind = ManagedGuardKind.indexOutOfRange
 		self.record = tested
 		self.indexIsVariable = false
+		self.limitOffset = limit
 	end 'recordConstantBound'
 end 'ManagedGuardOperands'
 
@@ -3001,20 +3055,21 @@ function classifyIndexOutOfRange(reader StdShapeReader, condId ValueId, out Mana
 	if reader.arith.isComparison() and reader.arith.pred == StdCmpPred.ge 'variableIndex'
 		let index = reader.arith.lhs
 		let record = try limitFieldRecord(reader, limit: reader.arith.rhs) otherwise return false
-		out.recordVariableBound(record, at: index)
+		out.recordVariableBound(record, at: index, limit: reader.load.offset)
 		return true
 	end 'variableIndex'
 
 	if reader.arith.isComparisonImm() and reader.arith.pred == StdCmpPred.le 'constantIndex'
 		let record = try limitFieldRecord(reader, limit: reader.arith.lhs) otherwise return false
-		out.recordConstantBound(record)
+		out.recordConstantBound(record, limit: reader.load.offset)
 		return true
 	end 'constantIndex'
 
 	return false
 end 'classifyIndexOutOfRange'
 
-// The record whose `length@8` or `capacity@16` a bound compares against.
+// The record whose `length@8` or `capacity@16` a bound compares against; `reader.load` is left holding
+// the limit's load, so the caller can read which of the two fields it was.
 function limitFieldRecord(reader StdShapeReader, limit ValueId) returns ValueId throws StdShapeMismatch
 	if not reader.loadDefining(limit) 'notALoad'
 		throw StdShapeMismatch.notTheShape

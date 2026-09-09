@@ -208,6 +208,15 @@ union PassKind
 	// and calls, on the two facts the managed runtime states — and BEFORE `promoteStackRecords`, for
 	// that pass's own reason: it must see the final shape.
 	unswitchInvariantGuards
+	// `refineValueRanges` a SECOND time, over the shape the versioning made: inside a copied loop the
+	// array length is one hoisted value every bound check compares against, and a symbolic bound on an
+	// index — `i ≤ length − 1` below `for i in 0 upto a.count()`, `high ≤ length − 2` for
+	// `high = firstValue − 1` under `firstValue`'s own check — is stated against that one value, so
+	// the checks decide only once it exists. It visits ONLY the functions `unswitchInvariantGuards`
+	// answered it rewrote (`RewrittenFunctions`, held on the pipeline between the two): every other
+	// function is the shape the first run already read. The first run keeps its place before CSE for
+	// its own reason; this one runs BEFORE `promoteStackRecords`, which must see the final shape.
+	refineVersionedRanges
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
 	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
@@ -287,6 +296,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		// Intra-function by construction: a loop, its copy and its exit phis are one function's CFG, and
 		// a callee's effect is read from a table rather than from the callee's body.
 		unswitchInvariantGuards gives PassClassification.perFunction
+		refineVersionedRanges gives PassClassification.perFunction
 		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
 		// convention are all facts about the CALL GRAPH, and a call site cannot be judged without the
 		// callee's row.
@@ -319,6 +329,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
 		unswitchInvariantGuards gives CompilePhase.unswitchInvariantGuards
+		refineVersionedRanges gives CompilePhase.refineVersionedRanges
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 		valueTupleReturn gives CompilePhase.valueTupleReturn
 	end 'phase'
@@ -344,6 +355,7 @@ function passKindToString(pass PassKind) returns String
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
 		unswitchInvariantGuards gives "unswitchInvariantGuards"
+		refineVersionedRanges gives "refineVersionedRanges"
 		promoteStackRecords gives "promoteStackRecords"
 		valueTupleReturn gives "valueTupleReturn"
 	end 'name'
@@ -397,6 +409,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.unswitchInvariantGuards)
+	passes.push(PassKind.refineVersionedRanges)
 	passes.push(PassKind.promoteStackRecords)
 	passes.push(PassKind.valueTupleReturn)
 	return passes
@@ -458,6 +471,8 @@ export type PassPipeline
 	// Written in the seam between the two pipeline stages (`Compiler.compileToCodeResult`), which is where
 	// `scanRuntimeUsage` has just answered it and before any Std pass runs.
 	export var usesGreenThreads as bool
+	// `unswitchInvariantGuards`' answer, which scopes `refineVersionedRanges` (see the PassKind).
+	var unswitchRewrote as RewrittenFunctions
 
 	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
 	// (E4015 / `refuseDuplicateFunctionName`). The gate used to be `run`'s; with two runs it belongs to the
@@ -511,7 +526,8 @@ export type PassPipeline
 			stdModule: StdModule.create(),
 			signatures: signatures,
 			funcNames: funcNames,
-			usesGreenThreads: false
+			usesGreenThreads: false,
+			unswitchRewrote: RewrittenFunctions.create()
 		}
 	end 'create'
 
@@ -574,12 +590,13 @@ export type PassPipeline
 			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
 			threadConstantBranches then threadConstantBranches(self.stdModule)
-			refineValueRanges then refineValueRanges(self.stdModule)
+			refineValueRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.everyFunction)
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
-			unswitchInvariantGuards then unswitchInvariantGuards(self.stdModule)
+			unswitchInvariantGuards then self.unswitchRewrote = unswitchInvariantGuards(self.stdModule)
+			refineVersionedRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.rewrittenBy(self.unswitchRewrote))
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
 		end 'dispatch'

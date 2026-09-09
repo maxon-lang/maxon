@@ -75,7 +75,7 @@ func @firstBigRow {
     x64.jcc less, forhdr#4
   __us_test#45:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.storeSlotReg slot4, rax
+    x64.storeSlotReg slot3, rax
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, forhdr#4
   __us_test#46:
@@ -87,7 +87,7 @@ func @firstBigRow {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.movRegImm32 rcx, 0
     x64.cmpRegReg rax, rcx
-    x64.jcc equal, forhdr#27
+    x64.jcc equal, critsplit#55
   forhdr#4:
     x64.cmpRegReg r14, r12
     x64.jcc greaterEqual, forexit
@@ -113,7 +113,7 @@ func @firstBigRow {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#22
-  __im_bounds#23:
+  __im_bounds:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg r14, rcx
     x64.jcc aboveEqual, __im_slow#22
@@ -131,8 +131,19 @@ func @firstBigRow {
     x64.movRegReg rdx, r14
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#11
-    x64.jmp tryok#10
+    x64.jcc equal, tryok#10
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-value-carried-out-of-two-loops-is-left-alone.test:12: firstBigRow: c < width <= rows.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_store#26:
     x64.storeBaseIndexScaleReg.word64 [rcx + r14*8 + 0], rax
   tryok#10:
@@ -144,19 +155,20 @@ func @firstBigRow {
   forstep#6:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr#4
+  critsplit#55:
+    x64.movRegReg rdx, r14
   forhdr#27:
-    x64.storeSlotReg slot3, r14
-    x64.cmpRegReg r14, r12
+    x64.storeSlotReg slot2, rdx
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, forexit
   __rc_ok#42:
-    x64.cmpRegReg r14, r15
+    x64.cmpRegReg rdx, r15
     x64.jcc below, __im_load#41
   __im_slow#40:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_cont
+    x64.jcc equal, tryok#38
   tryerr#9:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-value-carried-out-of-two-loops-is-left-alone.test:11: firstBigRow: c < width <= rows.count()\x0a"
     x64.callDirect mrt_panic
@@ -170,53 +182,29 @@ func @firstBigRow {
     x64.popReg rbp
     x64.ret
   __im_load#41:
-    x64.loadRegSlot rax, slot4
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegBaseIndexScale.word64 rax, [rcx + rax*8 + 0]
     x64.movRegReg r8, rax
-  __im_cont:
-    x64.storeSlotReg slot2, r8
   tryok#38:
     x64.leaRegRegImm32 rax, r8, 1
-  __im_bounds#36:
-    x64.cmpRegReg r14, r15
-    x64.jcc below, __im_store#33
-  __im_slow#32:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#30
-  tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-value-carried-out-of-two-loops-is-left-alone.test:12: firstBigRow: c < width <= rows.count()\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __im_store#33:
-    x64.loadRegSlot rcx, slot3
-    x64.loadRegSlot rdx, slot4
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot3
     x64.storeBaseIndexScaleReg.word64 [rdx + rcx*8 + 0], rax
   tryok#30:
-    x64.loadRegSlot rax, slot2
-    x64.cmpRegImm32 rax, 25
+    x64.cmpRegImm32 r8, 25
     x64.jcc lessEqual, forstep#28
   critsplit#53:
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot2
   hit:
     x64.loadRegSlot rcx, slot1
     x64.imulRegRegImm32 rcx, rcx, 100
     x64.leaRegRegReg r8, rcx, rax
     x64.jmp whileexit
   forstep#28:
-    x64.loadRegSlot rax, slot3
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.movRegReg r14, rax
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegImm32 rdx, rax, 1
     x64.jmp forhdr#27
   forexit:
     x64.loadRegSlot rax, slot1
