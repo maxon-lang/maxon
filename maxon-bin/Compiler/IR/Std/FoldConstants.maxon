@@ -160,7 +160,7 @@ function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranch
 	//
 	// A fold ORPHANS the arm it did not take, and this pass must remove it itself — see
 	// `dropUnreachableBlocks` for the allocator invariant that says so.
-	if foldConstantBranches(module, func: func, constMap: constMap, branch: branch) 'branchesFolded'
+	if foldConstantBranches(module, func: func, constMap: constMap, branch: branch) > 0 'branchesFolded'
 		dropUnreachableBlocks(module, func: func)
 	end 'branchesFolded'
 
@@ -536,7 +536,7 @@ let FoldedArithType = StdType.i64
 
 // A comparison's result is the i1 the `cmp` it replaces declared, which is what keeps its wasm local an
 // i32 (`recordDefValtype` types every `cmp` result i32, and `wasmValTypeOf(i1)` is i32).
-let FoldedComparisonType = StdType.i1
+module let FoldedComparisonType = StdType.i1
 
 // ⭐⭐ **THE FLOAT MEMBER OF THE SAME RULE — "the RESULT's domain at its machine word" — AND THE ONE
 // PLACE THE `f64`-ONLY-NESS OF THIS PASS'S FLOAT PATH IS WRITTEN DOWN.** Read it in both directions:
@@ -623,11 +623,13 @@ end 'evaluateIntBinOp'
 // block is already an ordinary state of this IR (the parser mints `Terminator.dead` blocks for code
 // after a fully-terminated `if`/`else`). So a constant `if` costs one branch here and nothing at all by
 // the time the code is encoded.
-function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns bool
-	var foldedAny = false
+//
+// Answers how many branches folded — `refineValueRanges` reports the count it made this fold.
+module function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns TallyCount
+	var folded = 0 as TallyCount
 
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("foldConstants: blockRef from func.blockRefs not in module.blocks")
+	for position in 0 upto func.blockRefs.count() 'eachBlock'
+		var block = module.blockAtPosition(func, position: position)
 
 		if not block.hasTerminatorOp() 'noTerminator'
 			continue
@@ -641,11 +643,11 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 		end 'noConditionToKnow'
 
 		if foldCondBranch(module, block: block, termIdx: termIdx, condId: branch.condId, thenBlockId: branch.thenBlockId, elseBlockId: branch.elseBlockId, constMap: constMap) 'folded'
-			foldedAny = true
+			folded = folded + 1
 		end 'folded'
 	end 'eachBlock'
 
-	return foldedAny
+	return folded
 end 'foldConstantBranches'
 
 // ⚠ **A `condBranch` WHOSE TWO TARGETS ARE THE SAME BLOCK IS REFUSED.** Both edges name that block, and
@@ -758,8 +760,7 @@ module function dropUnreachableBlocks(module StdModule, func IrFunction)
 
 	while stack.count() > 0 'walk'
 		let position = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on a non-empty stack failed")
-		let blockRef = try func.blockRefs.get(position) otherwise panic("dropUnreachableBlocks: blockRefs.get OOB at {position}")
-		let block = try module.blocks.get(blockRef) otherwise panic("dropUnreachableBlocks: blockRef from func.blockRefs not in module.blocks")
+		let block = module.blockAtPosition(func, position: position)
 
 		successors.clear()
 		collectStdBlockSuccessorIds(module, block: block, out: successors)

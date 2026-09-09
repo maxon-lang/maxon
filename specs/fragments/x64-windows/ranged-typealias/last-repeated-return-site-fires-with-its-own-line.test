@@ -35,7 +35,7 @@ func @pick {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#6
-  __rc_chk#7:
+  __rc_chk:
     x64.cmpRegImm32 rcx, 100000
     x64.jcc lessEqual, __rc_ok#5
   __rc_panic#6:
@@ -48,12 +48,6 @@ func @pick {
   __rc_ok#5:
     x64.cmpRegImm32 rcx, 1000
     x64.jcc lessEqual, ifcont#2
-  high:
-    x64.cmpRegImm32 rcx, 10
-    x64.jcc less, __rc_panic#9
-  __rc_chk#10:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok#8
   __rc_panic#9:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at last-repeated-return-site-fires-with-its-own-line.test:7: Range check failed: value outside typealias 'Narrow'\x0a"
     x64.callDirect mrt_panic
@@ -61,21 +55,9 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#8:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   ifcont#2:
     x64.cmpRegImm32 rcx, 100
-    x64.setccReg greater, rax
     x64.jcc lessEqual, ifcont#4
-  mid:
-    x64.cmpRegImm32 rcx, 10
-    x64.jcc less, __rc_panic#12
-  __rc_chk#13:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rc_ok#11
   __rc_panic#12:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at last-repeated-return-site-fires-with-its-own-line.test:11: Range check failed: value outside typealias 'Narrow'\x0a"
     x64.callDirect mrt_panic
@@ -83,17 +65,9 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#11:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   ifcont#4:
     x64.cmpRegImm32 rcx, 10
-    x64.jcc less, __rc_panic#15
-  __rc_chk#16:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __rc_ok#14
+    x64.jcc greaterEqual, __rc_ok#14
   __rc_panic#15:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at last-repeated-return-site-fires-with-its-own-line.test:14: Range check failed: value outside typealias 'Narrow'\x0a"
     x64.callDirect mrt_panic

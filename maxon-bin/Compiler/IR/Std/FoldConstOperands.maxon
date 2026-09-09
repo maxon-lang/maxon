@@ -133,32 +133,32 @@ export type StdFoldableDef
 	// classification FILLED** — the discipline the union enforced by construction, and the one thing a
 	// record has to state rather than enforce. Every reader asks a `kind` predicate first, and none of
 	// them may be read as a sentinel: ValueId 0 and constant 0 are both REAL values here
-	// (`DefinedValueLookup`'s header carries the incident that taught this compiler so).
+	// (`StdDefinedValues` states the same rule for the same reason).
 	var kind as StdFoldableDefKind
 
 	// The value the classified op defines — its result. Set by BOTH retirable kinds, which is what lets
 	// the prune ask one question of either.
 	export var definedId as ValueId
-
-	// `constDef` only: the constant the `const` op materializes.
+	// `constDef` only: the constant the `const` op materializes, and the type it is materialized at.
 	export var constant as ParsedInt
-
+	export var constType as StdType
 	// `identityDef` only: the operand the identity `binOpImm` computes, and so the value every read of
 	// `definedId` may read instead.
 	export var identityOperand as ValueId
 
 	export static function create() returns StdFoldableDef
-		return Self{kind: StdFoldableDefKind.neither, definedId: 0, constant: 0, identityOperand: 0}
+		return Self{kind: StdFoldableDefKind.neither, definedId: 0, constant: 0, constType: StdType.i64, identityOperand: 0}
 	end 'create'
 
 	function recordNeither()
 		self.kind = StdFoldableDefKind.neither
 	end 'recordNeither'
 
-	function recordConst(resultId ValueId, value ParsedInt)
+	function recordConst(resultId ValueId, value ParsedInt, valueType StdType)
 		self.kind = StdFoldableDefKind.constDef
 		self.definedId = resultId
 		self.constant = value
+		self.constType = valueType
 	end 'recordConst'
 
 	// A `binOpImm` is an IDENTITY only when its immediate is its opcode's identity element. The test
@@ -205,7 +205,7 @@ end 'StdFoldableDef'
 // silently-missed classification.
 export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 	match op 'c'
-		const(resultId, value, _) then def.recordConst(resultId, value: value)
+		const(resultId, value, valueType) then def.recordConst(resultId, value: value, valueType: valueType)
 		binOp or
 			unaryOp or
 			cmp then def.recordNeither()

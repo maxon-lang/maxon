@@ -1,0 +1,46 @@
+// ReasonTally — one count per case of an enum, for a pass summary that says how often each reason kept a
+// site alone or a value unknown. The enum's ordinals index the column and its `allCaseNames` label the
+// summary, so two passes with different reason enums share one tally and one renderer.
+
+export typealias TallyCount = int(0 to u64.max)
+typealias TallyCountColumn = Array with TallyCount
+typealias CaseNameArray = Array with String
+
+export type OrdinalTally
+	var counts as TallyCountColumn
+
+	// One zeroed slot per case of the enum whose ordinals index it.
+	export static function create(caseCount ElementIndex) returns OrdinalTally
+		var counts = TallyCountColumn.create()
+		counts.resize(caseCount)
+		return Self{counts: counts}
+	end 'create'
+
+	export function add(ordinal ElementIndex, count TallyCount)
+		let before = self.countAt(ordinal)
+		try self.counts.set(ordinal, value: before + count) otherwise panic("OrdinalTally.add: ordinal {ordinal} is outside the {self.counts.count()} cases this tally was created for")
+	end 'add'
+
+	export function countAt(ordinal ElementIndex) returns TallyCount
+		return try self.counts.get(ordinal) otherwise panic("OrdinalTally.countAt: ordinal {ordinal} is outside the {self.counts.count()} cases this tally was created for")
+	end 'countAt'
+
+	// `count x name` for every case with a count, or `none`. `names` is the enum's `allCaseNames`, in the
+	// same order as the ordinals.
+	export function summary(names CaseNameArray) returns String
+		var text = ""
+		var any = false
+
+		for (iter, name) in names.withIterator() 'eachCase'
+			let count = self.countAt(iter.index())
+			if count == 0 'nothingTallied'
+				continue
+			end 'nothingTallied'
+
+			text.append("{", " if any else ""}{count} x {name}")
+			any = true
+		end 'eachCase'
+
+		return text if any else "none"
+	end 'summary'
+end 'OrdinalTally'

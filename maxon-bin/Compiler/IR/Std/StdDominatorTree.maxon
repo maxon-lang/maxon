@@ -294,37 +294,15 @@ export type DominatorStamps
 		stamps.enterAt.resize(tree.blockCount)
 		stamps.leaveAt.resize(tree.blockCount)
 
-		if tree.blockCount == 0 'noBlocks'
-			return stamps
-		end 'noBlocks'
-
-		// An EXPLICIT STACK, for `StdDominatorTree.buildReversePostorder`'s reason: a block chain can be
-		// tens of thousands long, and a recursive walk over one is a host stack overflow.
-		var stackNode = BlockPositionColumn.create()
-		var stackNextChild = CsrColumn.create()
+		var walk = StdDominatorWalk.create()
+		walk.begin(tree)
 		var clock = 0 as BlockRefIndex
 
-		stackNode.push(StdEntryBlockPosition)
-		stackNextChild.push(0)
-		clock = stamps.stampEntry(StdEntryBlockPosition, clock: clock)
-
-		while stackNode.count() > 0 'depthFirst'
-			let top = stackNode.count() - 1
-			let position = try stackNode.get(top) otherwise panic("DominatorStamps.build: stackNode.get OOB at {top}")
-			let nextChild = try stackNextChild.get(top) otherwise panic("DominatorStamps.build: stackNextChild.get OOB at {top}")
-
-			if nextChild >= tree.children.degree(position as CsrIndex) 'everyChildVisited'
-				clock = stamps.stampExit(position, clock: clock)
-				_ = try stackNode.pop() otherwise panic("DominatorStamps.build: stackNode.pop on a non-empty stack failed")
-				_ = try stackNextChild.pop() otherwise panic("DominatorStamps.build: stackNextChild.pop on a non-empty stack failed")
-				continue
-			end 'everyChildVisited'
-
-			try stackNextChild.set(top, value: nextChild + 1) otherwise panic("DominatorStamps.build: stackNextChild.set OOB at {top}")
-			let child = tree.children.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex
-			stackNode.push(child)
-			stackNextChild.push(0)
-			clock = stamps.stampEntry(child, clock: clock)
+		while walk.advance(tree) 'depthFirst'
+			match walk.step 'step'
+				enter then clock = stamps.stampEntry(walk.position, clock: clock)
+				leave then clock = stamps.stampExit(walk.position, clock: clock)
+			end 'step'
 		end 'depthFirst'
 
 		return stamps
@@ -350,6 +328,103 @@ export type DominatorStamps
 		return aEnter <= bEnter and bLeave <= aLeave
 	end 'dominates'
 end 'DominatorStamps'
+
+// One step of a dominator-tree walk: a block is ENTERED before any block it dominates and LEFT after
+// every one of them.
+export enum StdDominatorStep
+	enter
+	leave
+end 'StdDominatorStep'
+
+// The dominator-tree DFS every scoped analysis shares — `DominatorStamps`, CSE's expression table and
+// `refineValueRanges`' refinement trail each push on `enter` and restore on `leave`. It visits the
+// reachable blocks in dominator preorder with a block's children in REVERSE POSTORDER:
+// `buildFromSuccessors` pushes them in that order and `buildCsr` keeps it, which is what puts every
+// forward-edge predecessor of a block before the block itself. `advance` CHECKS that premise at every
+// sibling rather than resting on it, because a consumer that reads a predecessor's value before the
+// predecessor is visited gets a stale one silently.
+//
+// An EXPLICIT STACK rather than recursion, for `buildReversePostorder`'s reason: a dominator chain can
+// be as long as the function has blocks.
+export type StdDominatorWalk
+	var open as BlockPositionColumn
+	var nextChild as CsrColumn
+	// Block position -> its reverse-postorder index, for the sibling-order check.
+	var rpoIndex as BlockPositionColumn
+	var entryPending as bool
+	// The step `advance` last yielded, and the block it concerns.
+	export var step as StdDominatorStep
+	export var position as BlockRefIndex
+
+	export static function create() returns StdDominatorWalk
+		return Self{open: BlockPositionColumn.create(), nextChild: CsrColumn.create(), rpoIndex: BlockPositionColumn.create(), entryPending: false, step: StdDominatorStep.enter, position: StdEntryBlockPosition}
+	end 'create'
+
+	// Start over `tree`, keeping the columns' capacity; the first `advance` enters the entry block. An
+	// empty tree yields nothing.
+	export function begin(tree StdDominatorTree)
+		self.open.clear()
+		self.nextChild.clear()
+		self.rpoIndex.clear()
+		self.rpoIndex.resize(tree.blockCount)
+
+		for orderIndex in 0 upto tree.reverseOrder.count() 'eachReachable'
+			let reachable = try tree.reverseOrder.get(orderIndex) otherwise panic("StdDominatorWalk.begin: reverseOrder.get OOB at {orderIndex}")
+			try self.rpoIndex.set(reachable, value: orderIndex) otherwise panic("StdDominatorWalk.begin: rpoIndex.set OOB at {reachable}")
+		end 'eachReachable'
+
+		self.entryPending = tree.blockCount > 0
+	end 'begin'
+
+	// Yield the next step into `step`/`position`; false once every reachable block has been left.
+	export function advance(tree StdDominatorTree) returns bool
+		if self.entryPending 'enterTheEntry'
+			self.entryPending = false
+			self.openBlock(StdEntryBlockPosition)
+			return true
+		end 'enterTheEntry'
+
+		if self.open.count() == 0 'finished'
+			return false
+		end 'finished'
+
+		let top = self.open.count() - 1
+		let parent = try self.open.get(top) otherwise panic("StdDominatorWalk.advance: open.get OOB at {top}")
+		let slot = try self.nextChild.get(top) otherwise panic("StdDominatorWalk.advance: nextChild.get OOB at {top}")
+
+		if slot >= tree.children.degree(parent as CsrIndex) 'everyChildVisited'
+			_ = try self.open.pop() otherwise panic("StdDominatorWalk.advance: open.pop on a non-empty walk failed")
+			_ = try self.nextChild.pop() otherwise panic("StdDominatorWalk.advance: nextChild.pop on a non-empty walk failed")
+			self.step = StdDominatorStep.leave
+			self.position = parent
+			return true
+		end 'everyChildVisited'
+
+		try self.nextChild.set(top, value: slot + 1) otherwise panic("StdDominatorWalk.advance: nextChild.set OOB at {top}")
+		let child = tree.children.neighbour(parent as CsrIndex, k: slot) as BlockRefIndex
+
+		if slot > 0 'hasAnElderSibling'
+			let sibling = tree.children.neighbour(parent as CsrIndex, k: slot - 1) as BlockRefIndex
+			if self.rpoIndexOf(sibling) >= self.rpoIndexOf(child) 'outOfOrder'
+				panic("StdDominatorWalk.advance: the dominator tree lists block position {child} after {sibling} under {parent}, which is not reverse postorder")
+			end 'outOfOrder'
+		end 'hasAnElderSibling'
+
+		self.openBlock(child)
+		return true
+	end 'advance'
+
+	function openBlock(block BlockRefIndex)
+		self.open.push(block)
+		self.nextChild.push(0)
+		self.step = StdDominatorStep.enter
+		self.position = block
+	end 'openBlock'
+
+	function rpoIndexOf(block BlockRefIndex) returns BlockRefIndex
+		return try self.rpoIndex.get(block) otherwise panic("StdDominatorWalk.rpoIndexOf: rpoIndex.get OOB at {block}")
+	end 'rpoIndexOf'
+end 'StdDominatorWalk'
 
 // The entry block is `func.blockRefs` position 0. Named because it is an INVARIANT of that array
 // (`IrModule.addBlock` appends, and the entry is the first block a function gets) rather than a number
@@ -425,8 +500,7 @@ module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockC
 	var successorIds = BlockIdArray.create()
 
 	for position in 0 upto blockCount 'eachBlock'
-		let blockRef = try func.blockRefs.get(position) otherwise panic("buildStdSuccessorGraph: blockRefs.get OOB at {position}")
-		let block = try module.blocks.get(blockRef) otherwise panic("buildStdSuccessorGraph: blockRef from func.blockRefs not in module.blocks")
+		let block = module.blockAtPosition(func, position: position)
 
 		successorIds.clear()
 		collectStdBlockSuccessorIds(module, block: block, out: successorIds)

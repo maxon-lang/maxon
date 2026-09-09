@@ -1,0 +1,55 @@
+// Test: a-user-compare-decided-by-a-counter-folds
+typealias Word = int(i64.min to i64.max)
+
+function countNonNegative(n Word) returns Word
+	var c = 0
+	for i in 0 upto n 'each'
+		if i >= 0 'yes'
+			c = c + 1
+		end 'yes'
+	end 'each'
+	return c
+end 'countNonNegative'
+
+function main() returns ExitCode
+	if countNonNegative(5) != 5 'five'
+		return 1
+	end 'five'
+	if countNonNegative(0) != 0 'none'
+		return 2
+	end 'none'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#6:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc greaterEqual, __il_cont
+  yes:
+    x64.leaRegRegImm32 rax, rax, 1
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  __il_cont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc equal, __il_body#14
+  five:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#14:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

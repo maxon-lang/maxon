@@ -105,6 +105,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* |
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
+| **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25) — intervals, branch refinement, widening; array lengths not yet modelled |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
@@ -1613,6 +1614,34 @@ common one in the stdlib). Also landed: `IrModule.getOp` replaces five per-pass 
 "read one op through a function so the borrow ends"; `classifyBranch` is now the ONE terminator
 roster (`FoldConstants` lost its 120-line duplicate); `DominatorStamps` (O(1) dominance) lives beside
 `StdDominatorTree`.
+
+**`EC25` · Value-range analysis with branch refinement.** — ✅ **CLOSED 2026-09-09 (round 3 of the
+fannkuch loop): fannkuch −24.2%, self-compile −3.2%.** `IR/Std/RefineValueRanges.maxon`, after
+`threadConstantBranches` and before CSE (which would otherwise cache the doomed compares): a signed
+i64 interval per value — consts, `add`/`sub`/`mul` to the whole range on any possible wrap (the
+language wraps), `bitAnd`/right shifts by a constant bounded, everything else top — block args as the
+join of their edges with widening from round 2, a dominator-tree walk (`StdDominatorWalk`, now the ONE
+walker CSE and `DominatorStamps` drive too) with a refinement trail pushed under a sole-predecessor
+branch target and narrowing operands relationally through each other's intervals; an empty refinement
+marks its subtree dead so a loop body a decided guard never enters cannot widen the counter. A decided
+compare is rewritten in place to `const i1` and folded by `foldConstantBranches`. The shape it exists
+for: `InsertRangeChecks`' `__rc_` cascade on every `ElementIndex` — dead on a loop counter (the
+header's `i < n` refinement is what keeps `i + 1` from wrapping), on a value one check already proved,
+and on `high` inside `while low < high` (`high ≥ low + 1 ≥ 2`). With the checks went CSE's `setcc`
+materialisations into callee-saved registers and the in-loop spill they forced. ⛔ **Two soundness bugs
+were caught before landing**: an unmodelled phi input (a `tryCall` flag, a parameter) treated like a
+not-yet-computed back-edge input joined `__im_cont(value, flag)` to `[0, 0]` and every `try … otherwise`
+lost its error path — the first self-compile CRASHED — cured by a `modelled` column; and a fail-open
+phi join that skipped a reachable predecessor with no edge, cured by a panic. Sabotage (`add`
+saturating instead of widening) moves exactly the wrap control. Timed A/B (control from the round-2
+commit, interleaved, n=11): **5,860 → 4,442 ms**; n=12 **82,132 → 60,762 ms (ratio to C 3.96 →
+2.93)**; census ops 2008 → 1712, `call-direct` 166 → 144, `__rc_panic` blocks 31 → 9; self-compile
+**43,305 → 41,920 ms**. On the self-compile: 1,178 compares decided, 1,151 branches folded in 594 of
+12,521 functions, 0 at the round cap. Also: `stdOpDefinedValue` returned a boxed union on the per-op
+walk of eight passes and is now a caller-owned record (whole-compile allocations −4.2% at rung 5,
+emitted binary byte-identical); `IrModule.blockAtPosition` replaced five copies. Not yet modelled:
+array lengths (`loadIndirect` at +8 is any struct field at the Std tier), so the unsigned bound itself
+survives; inclusive `to` loops with a runtime top (`i + 1` may wrap).
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

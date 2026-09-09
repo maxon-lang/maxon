@@ -528,6 +528,12 @@ export type IrModule uses Op
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
+	// The block at a `func.blockRefs` POSITION — the key space `StdDominatorTree` answers in. Read through
+	// a function so the borrow of the module ends at the return, as `getOp` explains.
+	export function blockAtPosition(func IrFunction, position BlockRefIndex) returns IrBlock
+		return self.getBlock(try func.blockRefs.get(position) otherwise panic("blockAtPosition: position {position} is outside func.blockRefs, which holds {func.blockRefs.count()} block(s)"))
+	end 'blockAtPosition'
+
 	// ⚠ **ONE OP, READ THROUGH A FUNCTION — AND THAT IS E3070 RATHER THAN TIDINESS.** A `module.ops.get(…)`
 	// written inline borrows the module for as long as the value lives, and a pass that mutates the module
 	// in the next breath (an `appendOp`, an `ops.set`) is refused by the self-compile. Reading through this

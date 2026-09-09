@@ -188,83 +188,47 @@ function analyzeFunc(module StdModule, func IrFunction, subst ValueIdArray, scra
 	end 'oneBlock'
 
 	let tree = StdDominatorTree.build(module, func: func)
-	var walk = CseDominatorWalk.create()
+	var walk = StdDominatorWalk.create()
+	var scopes = CseScopeStack.create()
+	walk.begin(tree)
 
-	walk.enter(module, func: func, position: StdEntryBlockPosition, subst: subst, scratch: scratch)
-
-	while walk.hasOpenScope() 'depthFirst'
-		let position = walk.currentBlock()
-		let nextChild = walk.takeNextChildSlot()
-
-		if nextChild >= tree.children.degree(position as CsrIndex) 'everyChildVisited'
-			walk.leave(scratch)
-			continue
-		end 'everyChildVisited'
-
-		walk.enter(module, func: func, position: tree.children.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex, subst: subst, scratch: scratch)
+	while walk.advance(tree) 'depthFirst'
+		match walk.step 'step'
+			enter then scopes.open(module, func: func, position: walk.position, subst: subst, scratch: scratch)
+			leave then scopes.close(scratch)
+		end 'step'
 	end 'depthFirst'
 end 'analyzeFunc'
 
-// The dominator-tree walk's own stack: which block each open scope is, which of its children comes
-// next, and the two things a scope has to RESTORE on the way out — the table's entry mark and the
-// number of calls the path had walked when the scope opened.
-//
-// One record rather than four columns threaded through two functions, for `CseScratch`'s reason: they
-// are pushed together, popped together, and a walk that took them separately would name all four at
-// every call site.
-type CseDominatorWalk
-	var block as BlockPositionColumn
-	var nextChild as CsrColumn
+// What each open scope has to RESTORE on the way out of the shared dominator walk — the table's entry
+// mark and the number of calls the path had walked when the scope opened. One record rather than two
+// columns threaded through two functions, for `CseScratch`'s reason: they are pushed together and popped
+// together.
+type CseScopeStack
 	var entryMark as CseEntryIndexColumn
 	var callsOnEntry as CallBarrierCountColumn
 
-	static function create() returns CseDominatorWalk
-		return Self{block: BlockPositionColumn.create(), nextChild: CsrColumn.create(), entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
+	static function create() returns CseScopeStack
+		return Self{entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
 	end 'create'
 
-	// Whether any block's scope is still open — the walk's termination test.
-	function hasOpenScope() returns bool
-		return self.block.count() > 0
-	end 'hasOpenScope'
-
-	function currentBlock() returns BlockRefIndex
-		return try self.block.get(self.block.count() - 1) otherwise panic("CseDominatorWalk.currentBlock: the walk is empty")
-	end 'currentBlock'
-
-	// Which child of the open scope's block comes next, ADVANCING the cursor as it answers — the two
-	// were never useful apart, and reading without advancing is how a DFS loops forever.
-	function takeNextChildSlot() returns CsrIndex
-		let top = self.block.count() - 1
-		let slot = try self.nextChild.get(top) otherwise panic("CseDominatorWalk.takeNextChildSlot: the walk is empty")
-		try self.nextChild.set(top, value: slot + 1) otherwise panic("CseDominatorWalk.takeNextChildSlot: nextChild.set OOB at {top}")
-		return slot
-	end 'takeNextChildSlot'
-
-	// Open a scope for one block: remember what leaving it must restore, analyse it, and push it.
-	// Both marks are taken BEFORE the block is analysed, so `leave` undoes exactly what this block and
-	// its whole subtree added.
-	function enter(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
+	// Open a scope for one block: remember what leaving it must restore, then analyse it. Both marks
+	// are taken BEFORE the block is analysed, so `close` undoes exactly what this block and its whole
+	// subtree added.
+	function open(module StdModule, func IrFunction, position BlockRefIndex, subst ValueIdArray, scratch CseScratch)
 		self.entryMark.push(scratch.table.mark())
 		self.callsOnEntry.push(scratch.table.callsOnPath)
 
 		analyzeBlock(module, func: func, position: position, subst: subst, scratch: scratch)
-
-		self.block.push(position)
-		self.nextChild.push(0)
-	end 'enter'
+	end 'open'
 
 	// Close the innermost scope, restoring the table to what the dominator path held before it.
-	function leave(scratch CseScratch)
-		let top = self.block.count() - 1
-		scratch.table.rollbackTo(try self.entryMark.get(top) otherwise panic("CseDominatorWalk.leave: the walk is empty"))
-		scratch.table.callsOnPath = try self.callsOnEntry.get(top) otherwise panic("CseDominatorWalk.leave: callsOnEntry.get OOB at {top}")
-
-		_ = try self.block.pop() otherwise panic("CseDominatorWalk.leave: block.pop on a non-empty walk failed")
-		_ = try self.nextChild.pop() otherwise panic("CseDominatorWalk.leave: nextChild.pop on a non-empty walk failed")
-		_ = try self.entryMark.pop() otherwise panic("CseDominatorWalk.leave: entryMark.pop on a non-empty walk failed")
-		_ = try self.callsOnEntry.pop() otherwise panic("CseDominatorWalk.leave: callsOnEntry.pop on a non-empty walk failed")
-	end 'leave'
-end 'CseDominatorWalk'
+	function close(scratch CseScratch)
+		let mark = try self.entryMark.pop() otherwise panic("CseScopeStack.close: entryMark.pop on a non-empty stack failed")
+		scratch.table.rollbackTo(mark)
+		scratch.table.callsOnPath = try self.callsOnEntry.pop() otherwise panic("CseScopeStack.close: callsOnEntry.pop on a non-empty stack failed")
+	end 'close'
+end 'CseScopeStack'
 
 // Analyse every op of one block, in execution order.
 //

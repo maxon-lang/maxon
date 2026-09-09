@@ -10,11 +10,17 @@ function takes(code ExitCode) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-  return takes(opaque(0) - 5)
+  base = opaque(0)
+  return takes(base - 5)
 end 'main'
+var base = 0
 ---
 ExitCode: 1
 ---
+data {
+  __data_base@0 = i64 0
+}
+
 func @takes {
   entry:
     x64.pushReg rbp
@@ -45,10 +51,25 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.movRegImm32 rax, 0
   __il_cont#2:
-    x64.movRegImm rcx, 18446744073709551611
+    x64.leaRegGlobal rcx, __data_base
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_base
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rcx, rax, -5
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rcx, rax
+    x64.jcc lessEqual, __rc_ok
   __il_slow:
     x64.callDirect takes
+    x64.jmp __il_cont#1
+  __rc_ok:
+    x64.movRegReg r8, rcx
   __il_cont#1:
     x64.epilogue 32
     x64.popReg rbp

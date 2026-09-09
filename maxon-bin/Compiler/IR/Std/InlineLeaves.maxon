@@ -759,7 +759,7 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	// value-producing op in the program.
 	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount() as FuncIndex)
 	var stats = InlineLeafStats.create()
-
+	var def = StdDefinedValues.create()
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
@@ -771,7 +771,7 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 			continue
 		end 'notInTheProgram'
 
-		var inliner = LeafInliner.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, plan: plan, origins: origins, stats: stats)
+		var inliner = LeafInliner.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, plan: plan, origins: origins, stats: stats, def: def)
 		inliner.run()
 	end 'eachFunc'
 
@@ -812,8 +812,10 @@ type LeafInliner
 	var sitePositions as BlockOpPosArray
 	var siteCallees as FuncIndexArray
 	var siteBuffersSeeded as bool
+	// The clone check's sink, shared by every function's splices: this type is constructed per function.
+	var def as StdDefinedValues
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, byName FunctionNameIndex, plan LeafPlan, origins ValueOriginRowIndex, stats InlineLeafStats) returns LeafInliner
+	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, byName FunctionNameIndex, plan LeafPlan, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues) returns LeafInliner
 		return Self{
 			project: project,
 			module: module,
@@ -827,7 +829,8 @@ type LeafInliner
 			seeded: false,
 			sitePositions: sharedEmptySitePositions,
 			siteCallees: sharedEmptySiteCallees,
-			siteBuffersSeeded: false
+			siteBuffersSeeded: false,
+			def: def
 		}
 	end 'create'
 
@@ -1575,7 +1578,7 @@ type LeafInliner
 			// A span carried per-FUNCTION would report the caller's file for every inlined body, so a
 			// debugger could never step into one. Read before the append, for the borrow reason above.
 			let calleeSpan = self.module.spans.at(opIdx)
-			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst, def: self.def)
 			self.module.spans.current = calleeSpan
 			self.module.appendOp(self.blockAt(freshRef), op: cloned)
 		end 'eachOp'
@@ -1743,7 +1746,7 @@ type LeafInliner
 	// redirected: the slow arm declares no block args, and `branchEdges` is not a successor list, so an
 	// edge exists only where phis are carried.
 	function cloneExit(calleeBlock IrBlock, freshRef BlockRef, term StdOp, subst ValueIdArray, blocks SpliceBlocks)
-		let cloned = remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst)
+		let cloned = remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst, def: self.def)
 		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
 
 		var edges = BranchEdgeArray.create()

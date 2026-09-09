@@ -482,27 +482,28 @@ function collectLoopDefs(module StdModule, func IrFunction, scratch LicmScratch)
 		end 'eachPhi'
 
 		for opIdx in block.opRefs 'eachOp'
-			recordDefsOf(module, opIdx: opIdx, definedInLoop: scratch.definedInLoop)
+			recordDefsOf(module, opIdx: opIdx, scratch: scratch)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			recordDefsOf(module, opIdx: block.terminatorIndex(), definedInLoop: scratch.definedInLoop)
+			recordDefsOf(module, opIdx: block.terminatorIndex(), scratch: scratch)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'collectLoopDefs'
 
-function recordDefsOf(module StdModule, opIdx OpIndex, definedInLoop LoopValueStamps)
-	match stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("recordDefsOf: op index {opIdx} not in module.ops")) 'defines'
-		none then break 'defines'
-		defines(definedId) then definedInLoop.insert(definedId)
-		definesPair(first, second) then insertBothDefs(definedInLoop, first: first, second: second)
-	end 'defines'
-end 'recordDefsOf'
+function recordDefsOf(module StdModule, opIdx OpIndex, scratch LicmScratch)
+	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("recordDefsOf: op index {opIdx} not in module.ops"), def: scratch.def)
 
-function insertBothDefs(definedInLoop LoopValueStamps, first ValueId, second ValueId)
-	definedInLoop.insert(first)
-	definedInLoop.insert(second)
-end 'insertBothDefs'
+	if scratch.def.definesNothing() 'noDef'
+		return
+	end 'noDef'
+
+	scratch.definedInLoop.insert(scratch.def.first)
+
+	if scratch.def.definesPair() 'twoDefs'
+		scratch.definedInLoop.insert(scratch.def.second)
+	end 'twoDefs'
+end 'recordDefsOf'
 
 // Whether one operand is loop-invariant: either the loop does not define it at all, or this pass has
 // already decided to hoist the op that does.
@@ -937,9 +938,10 @@ type LicmScratch
 	// re-created — the shape `StdArithOperands` states.
 	export var arith as StdArithOperands
 	export var load as StdLoadOperands
+	export var def as StdDefinedValues
 
 	static function create() returns LicmScratch
-		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create()}
+		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
 	end 'create'
 
 	// Empty every per-loop column, keeping capacity. ⛔ **A LEAKED ENTRY IS A MISCOMPILE, NOT A MISSED

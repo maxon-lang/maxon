@@ -87,9 +87,6 @@ function refusalText(reason ThreadRefusal) returns String
 	end 'r'
 end 'refusalText'
 
-// One tally per reason, indexed by `ThreadRefusal` ordinal, for the whole module.
-typealias RefusalTally = Array with ThreadedSiteCount
-
 // What every function's scan refills, created ONCE for the module: the candidate list (`Array.clear`
 // keeps its capacity), the two classification records the scan reads ops into, and the refusal tally.
 // Per function these would be three allocations paid by the many functions that hold no candidate.
@@ -97,12 +94,11 @@ type ThreadScratch
 	export var candidates as ThreadCandidateArray
 	export var arith as StdArithOperands
 	export var branch as StdBranchOperands
-	export var refusals as RefusalTally
+	// One count per `ThreadRefusal`, for the whole module.
+	export var refusals as OrdinalTally
 
 	static function create() returns ThreadScratch
-		var refusals = RefusalTally.create()
-		refusals.resize(ThreadRefusal.allCases.count())
-		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), refusals: refusals}
+		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), refusals: OrdinalTally.create(ThreadRefusal.allCases.count())}
 	end 'create'
 end 'ThreadScratch'
 
@@ -119,26 +115,8 @@ export function threadConstantBranches(module StdModule)
 	end 'eachFunc'
 
 	let total = threaded
-	logDebug(LogCategory.ir, message: function() gives "threadConstantBranches: threaded {total} site(s) across {module.funcCount()} function(s); shaped blocks left alone: {refusalSummary(scratch.refusals)}")
+	logDebug(LogCategory.ir, message: function() gives "threadConstantBranches: threaded {total} site(s) across {module.funcCount()} function(s); shaped blocks left alone: {scratch.refusals.summary(ThreadRefusal.allCaseNames)}")
 end 'threadConstantBranches'
-
-// `count × reason` for every reason that refused a block, or `none`.
-function refusalSummary(refusals RefusalTally) returns String
-	var summary = ""
-	var any = false
-
-	for reason in ThreadRefusal.allCases 'eachReason'
-		let count = try refusals.get(reason.ordinal) otherwise panic("threadConstantBranches: refusals.get OOB at ordinal {reason.ordinal}")
-		if count == 0 'nothingRefused'
-			continue
-		end 'nothingRefused'
-
-		summary.append("{", " if any else ""}{count} x {reason.name}")
-		any = true
-	end 'eachReason'
-
-	return summary if any else "none"
-end 'refusalSummary'
 
 // One join block that has the SHAPE, and — once `admit` has run — whether the rule admits it and
 // which target it keeps. Positions are `func.blockRefs` positions, the key space `StdDominatorTree`
@@ -263,7 +241,7 @@ type FunctionAnalysis
 	export var positionById as BlockIndexById
 	// The pass's refusal tally and terminator record, aliased in from `ThreadScratch`: every clause
 	// that refuses, and every predecessor read, already holds this record.
-	export var refusals as RefusalTally
+	export var refusals as OrdinalTally
 	export var branch as StdBranchOperands
 
 	static function gather(module StdModule, func IrFunction, scratch ThreadScratch) returns FunctionAnalysis
@@ -311,8 +289,7 @@ end 'admit'
 
 // Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
 function refuse(candidate ThreadCandidate, reason ThreadRefusal, analysis FunctionAnalysis) returns bool
-	let count = try analysis.refusals.get(reason.ordinal) otherwise panic("threadConstantBranches: refusals.get OOB at ordinal {reason.ordinal}")
-	try analysis.refusals.set(reason.ordinal, value: count + 1) otherwise panic("threadConstantBranches: refusals.set OOB at ordinal {reason.ordinal}")
+	analysis.refusals.add(reason.ordinal, count: 1)
 	logTrace(LogCategory.ir, message: function() gives "threadConstantBranches: block_{candidate.blockId} left alone — {refusalText(reason)}")
 	return false
 end 'refuse'
@@ -326,7 +303,7 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
 		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
-		let pred = blockAtFuncPosition(module, func: func, position: predPosition)
+		let pred = module.blockAtPosition(func, position: predPosition)
 
 		if not predecessorBranchesOnlyTo(module, pred: pred, targetId: candidate.blockId, branch: analysis.branch) 'notABranchPredecessor'
 			return refuse(candidate, reason: ThreadRefusal.predecessorNotALoneBranch, analysis: analysis)
@@ -427,7 +404,7 @@ function refuseEscapingReads(module StdModule, func IrFunction, analysis Functio
 	var reads = StdValueUseSet.createRecordingIds()
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
-		let block = blockAtFuncPosition(module, func: func, position: position)
+		let block = module.blockAtPosition(func, position: position)
 
 		for opIdx in block.opRefs 'eachOp'
 			refuseEscapingOpReads(module, opIdx: opIdx, position: position, analysis: analysis, candidates: candidates, argOwner: argOwner, reads: reads)
@@ -528,13 +505,13 @@ end 'applyAdmitted'
 // changes an admitted candidate's predecessors.
 function threadOne(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
 	var join = module.getBlock(candidate.blockRef)
-	let dropped = blockAtFuncPosition(module, func: func, position: analysis.positionOf(candidate.droppedTarget))
+	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
 	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
 		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k) as BlockRefIndex
-		var pred = blockAtFuncPosition(module, func: func, position: predPosition)
+		var pred = module.blockAtPosition(func, position: predPosition)
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
 
 		if analysis.constMap.contains(incoming) 'decidedAtTheEdge'
@@ -637,9 +614,3 @@ function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCan
 		panic("threadConstantBranches: rewrote {applied} join(s) in '{String.from(func.name)}' but dropped {dropped} block arg(s) — a tested slot was not the only one unmarked, or was dropped twice")
 	end 'countDisagrees'
 end 'dropTestedSlots'
-
-// The block at a `func.blockRefs` position — read through `getBlock`, so the borrow of `module` ends
-// at the return (`IrModule.getOp` states why that matters on a mutating path).
-function blockAtFuncPosition(module StdModule, func IrFunction, position BlockRefIndex) returns IrBlock
-	return module.getBlock(try func.blockRefs.get(position) otherwise panic("threadConstantBranches: blockRefs.get OOB at {position}"))
-end 'blockAtFuncPosition'

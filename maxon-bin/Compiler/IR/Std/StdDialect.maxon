@@ -4049,8 +4049,8 @@ end 'collectStdOpUses'
 // reason.** `nextFreeValueId` is the SHARED one: it began as `InsertRangeChecks`' private helper and
 // `promoteStackRecords` needs the same answer, and a second "one past the highest id in this function"
 // would be a second chance to hand out an id something already defines. `stdOpDefinedValue` below is
-// still read only by `nextFreeValueId` — it is not exported, and it is here because the answer it gives
-// belongs beside `collectStdOpUses`' rather than inside one pass that happens to have needed it first.
+// not exported, and it is here because the answer it gives belongs beside `collectStdOpUses`' rather
+// than inside one pass that happens to have needed it first.
 // The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
 // carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the
 // maximum def id is the maximum id, and a use can only name an id that some def already introduced.
@@ -4064,15 +4064,10 @@ export function nextFreeValueId(module StdModule, func IrFunction) returns Value
 			maxId = maxValueId(maxId, other: arg.valueId)
 		end 'eachArg'
 	end 'eachBlock'
-
+	var def = StdDefinedValues.create()
 	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
-
-		match stdOpDefinedValue(op) 'defines'
-			none then break 'defines'
-			defines(definedId) then maxId = maxValueId(maxId, other: definedId)
-			definesPair(first, second) then maxId = maxValueId(maxId, other: maxValueId(first, other: second))
-		end 'defines'
+		stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops"), def: def)
+		maxId = def.maxDefinedId(maxId)
 	end 'eachOp'
 
 	return maxId + 1
@@ -4082,229 +4077,233 @@ function maxValueId(a ValueId, other ValueId) returns ValueId
 	return a if a >= other else other
 end 'maxValueId'
 
-// Whether `op` DEFINES a value, and WHICH — ONE exhaustive `StdOp` match answering both halves.
+// Whether `op` DEFINES a value, and WHICH — ONE exhaustive `StdOp` match answering both halves, so an
+// op cannot be "defining" by one roster and id-less by another (`nextFreeValueId` would under-count and
+// the next pass to mint from it would define a value some op already defines, with no diagnostic).
 //
-// ⚠⚠ **IT WAS TWO, AND WHAT KEPT THEM AGREEING WAS NOTHING** (P1.9 review). `stdOpDefinesValue`
-// answered "does it define?" over a range-arm partition of the union and `stdOpDefinedIdOrZero`
-// answered "which id?" over a destructured one — ~105 lines of parallel arms a reader had to diff by
-// eye. A new `StdOp` variant is a compile error in BOTH, which is what the exhaustive match buys; but
-// adding it as `true` in the first and `0` in the second COMPILES, and the consequence is not a
-// diagnostic: `nextFreeValueId` under-counts, this pass mints a ValueId some op already defines, and
-// two values collide in a function nothing about the guard being emitted names. A wrong answer one
-// arm's worth of inattention away — the shape the duplication rule exists for.
-//
-// It also retires a SENTINEL: the id half returned `0` for a non-defining op and was safe only
-// because every caller asked the boolean first — and ValueId 0 is a REAL id in this compiler (a
-// zero-user-parameter generic method's layout-descriptor slot legitimately holds it, which is why
-// `MaxonToStdLowering` carries a separate `hasImplicitLayout` bit rather than testing for 0). The
-// union says "no value" in a way no ValueId can spell.
-module union DefinedValueLookup
+// A CALLER-OWNED RECORD filled in place, never a returned union, for `StdFoldableDef`'s measured reason:
+// a payload-bearing union heap-boxes every case, and this is asked of every live op of a function by
+// `nextFreeValueId` (three passes), by every def-removing pass's `removeOpsDefining`, by LICM's loop-def
+// collect and by the inliner's clone check.
+module enum StdDefinedValueKind
+	// A terminator, a store or an effect op.
 	none
-	defines(valueId ValueId)
+	// `first` is the one value defined.
+	one
+	// `first` AND `second`: `tryCall`/`witnessTryCall` write a result and an error flag. Reported by the
+	// result alone, `nextFreeValueId` can hand out the flag's id. WHICH of the two is higher is not a
+	// rule: one emission site spells `errorFlagId = resultId + 1`, others take both from the parser's
+	// mint or a `try await` desugar, so a reader takes the maximum rather than assuming an order.
+	pair
+end 'StdDefinedValueKind'
 
-	// ⭐⭐ **TWO DEFS, AND THE SECOND ONE IS WHY THIS ARM EXISTS — IT CLOSED A LATENT MISCOMPILE.**
-	// `tryCall`/`witnessTryCall` write a PRIMARY result AND an ERROR FLAG. Reported by the primary alone —
-	// which is what this reader used to do, in as many words — `nextFreeValueId` can return an id that a
-	// two-result op already defines, and the next pass to mint from it then defines a value some `tryCall`
-	// also defines. Two live values share one id, in a function nothing about the minting site names, with
-	// no diagnostic anywhere. `InsertRangeChecks` mints from exactly that number.
-	//
-	// ⚠ **WHICH OF THE TWO IS HIGHER IS NOT WRITTEN DOWN HERE, AND MUST NOT BE.** One emission site spells
-	// `errorFlagId = resultId + 1` (LowerMaxonToStd's builtin-conformance call); the others take both ids
-	// from the parser's own mint, from a reserved pairing, or from a `try await` desugar, and nothing holds
-	// them in an order. So this reports BOTH and the walk takes the maximum — which is right whichever way
-	// round they came, where a rule about their order would be right only until the next producer.
-	definesPair(first ValueId, second ValueId)
-end 'DefinedValueLookup'
+module type StdDefinedValues
+	// ⚠ `first`/`second` are meaningless until `kind` says the last classification filled them, and
+	// neither may be read as a sentinel: ValueId 0 is a real id (a zero-user-parameter generic method's
+	// layout-descriptor slot holds it).
+	var kind as StdDefinedValueKind
+	export var first as ValueId
+	export var second as ValueId
+
+	export static function create() returns StdDefinedValues
+		return Self{kind: StdDefinedValueKind.none, first: 0, second: 0}
+	end 'create'
+
+	function recordNone()
+		self.kind = StdDefinedValueKind.none
+	end 'recordNone'
+
+	function recordOne(valueId ValueId)
+		self.kind = StdDefinedValueKind.one
+		self.first = valueId
+	end 'recordOne'
+
+	function recordPair(resultId ValueId, errorFlagId ValueId)
+		self.kind = StdDefinedValueKind.pair
+		self.first = resultId
+		self.second = errorFlagId
+	end 'recordPair'
+
+	export function definesNothing() returns bool
+		return self.kind == StdDefinedValueKind.none
+	end 'definesNothing'
+
+	export function definesPair() returns bool
+		return self.kind == StdDefinedValueKind.pair
+	end 'definesPair'
+
+	// The larger of `atLeast` and every id the last classification recorded.
+	export function maxDefinedId(atLeast ValueId) returns ValueId
+		return match self.kind 'k'
+			none gives atLeast
+			one gives maxValueId(atLeast, other: self.first)
+			pair gives maxValueId(atLeast, other: maxValueId(self.first, other: self.second))
+		end 'k'
+	end 'maxDefinedId'
+end 'StdDefinedValues'
 
 // The `none` set is the terminators / stores / effect ops that define nothing. Exhaustive over StdOp,
 // matching `collectStdOpUses`'s discipline — a new variant is a compile error here rather than a
 // silently-missed def.
-module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
-	return match op 'r'
-		const(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		binOp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		unaryOp(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		cmp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		binOpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		cmpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		div(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		mod(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
+	match op 'r'
+		const(resultId, _, _) then def.recordOne(resultId)
+		binOp(resultId, _, _, _, _) then def.recordOne(resultId)
+		unaryOp(resultId, _, _, _) then def.recordOne(resultId)
+		cmp(resultId, _, _, _, _) then def.recordOne(resultId)
+		binOpImm(resultId, _, _, _, _) then def.recordOne(resultId)
+		cmpImm(resultId, _, _, _, _) then def.recordOne(resultId)
+		div(resultId, _, _, _) then def.recordOne(resultId)
+		mod(resultId, _, _, _) then def.recordOne(resultId)
 		condBranch or
-			branch gives DefinedValueLookup.none
-		ret gives DefinedValueLookup.none
-		param(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		call(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		retVoid gives DefinedValueLookup.none
-		globalAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		loadIndirect(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		storeIndirect gives DefinedValueLookup.none
-		rdataAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		tryCall(resultId, errorFlagId, _, _) gives DefinedValueLookup.definesPair(resultId, second: errorFlagId)
+			branch then def.recordNone()
+		ret then def.recordNone()
+		param(resultId, _, _) then def.recordOne(resultId)
+		call(resultId, _, _) then def.recordOne(resultId)
+		retVoid then def.recordNone()
+		globalAddr(resultId, _) then def.recordOne(resultId)
+		loadIndirect(resultId, _, _, _) then def.recordOne(resultId)
+		storeIndirect then def.recordNone()
+		rdataAddr(resultId, _) then def.recordOne(resultId)
+		tryCall(resultId, errorFlagId, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 		errorReturn or
-			osExit gives DefinedValueLookup.none
-		osAllocPages(resultId, _) gives DefinedValueLookup.defines(resultId)
-
+			osExit then def.recordNone()
+		osAllocPages(resultId, _) then def.recordOne(resultId)
 		// W35: a stream write DEFINES the byte count the OS reports — it used to define nothing, back when
 		// its one consumer was a void `print`.
-		osWriteStdout(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		funcAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		callIndirect(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-
+		osWriteStdout(resultId, _, _) then def.recordOne(resultId)
+		funcAddr(resultId, _) then def.recordOne(resultId)
+		callIndirect(resultId, _, _, _, _) then def.recordOne(resultId)
 		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
-		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osWaitHandle(resultId, _, _) then def.recordOne(resultId)
 		osPanic or
 			osReadClock or
 			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
-			osCloseHandle gives DefinedValueLookup.none
-
+			osCloseHandle then def.recordNone()
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
-		osFreePages gives DefinedValueLookup.none
-
+		osFreePages then def.recordNone()
 		// The jump table defines no value — a terminator branches, it does not produce a result.
-		switch gives DefinedValueLookup.none
-
+		switch then def.recordNone()
 		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
-		// throwing form defines that result AND an error flag, and reports BOTH — see `definesPair`.
-		witnessCall(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) gives DefinedValueLookup.definesPair(resultId, second: errorFlagId)
-
+		// throwing form defines that result AND an error flag, and reports BOTH — see `StdDefinedValueKind.pair`.
+		witnessCall(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
 		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
-		osPipeCreate gives DefinedValueLookup.none
-		osIocpCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osEventCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osThreadCreate(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osPipeCreate then def.recordNone()
+		osIocpCreate(resultId) then def.recordOne(resultId)
+		osEventCreate(resultId) then def.recordOne(resultId)
+		osThreadCreate(resultId, _, _) then def.recordOne(resultId)
 		osLockInit or
 			osLockEnter or
-			osLockLeave gives DefinedValueLookup.none
-		osReadOverlapped(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osLastError(resultId) gives DefinedValueLookup.defines(resultId)
-		osProcessSpawnInherit gives DefinedValueLookup.none
-		osCancelIo gives DefinedValueLookup.none
-		osGetPid(resultId) gives DefinedValueLookup.defines(resultId)
-
+			osLockLeave then def.recordNone()
+		osReadOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		osLastError(resultId) then def.recordOne(resultId)
+		osProcessSpawnInherit then def.recordNone()
+		osCancelIo then def.recordNone()
+		osGetPid(resultId) then def.recordOne(resultId)
 		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
-		osPipeCreateOutbound gives DefinedValueLookup.none
-		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-
+		osPipeCreateOutbound then def.recordNone()
+		osWriteFile(resultId, _, _, _, _) then def.recordOne(resultId)
 		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
-		osReadWallClock gives DefinedValueLookup.none
-
+		osReadWallClock then def.recordNone()
 		// R4.1: the file OPEN captures `CreateFileA`'s HANDLE out of RAX, so unlike the two reads above it
 		// DOES define a value — the direct-return shape, not the out-param one.
-		osFileOpenRead(resultId, _) gives DefinedValueLookup.defines(resultId)
-
+		osFileOpenRead(resultId, _) then def.recordOne(resultId)
 		// The close defines NOTHING — `CloseHandle`'s BOOL is ignored, so there is no result to capture.
-		osFileClose gives DefinedValueLookup.none
-
+		osFileClose then def.recordNone()
 		// R4.2. Split exactly as R4.1's pair is: the five ops whose Win32 entry point answers in RAX — a
 		// BOOL verdict or a search HANDLE — capture it; `osFileFindClose` discards `FindClose`'s BOOL for
 		// the reason `osFileClose` discards `CloseHandle`'s. The 64-bit answers of `osReadFile`/`osFileSize`
 		// land in the caller's out-param word, not in a result.
-		osReadFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileOpenWrite(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osFileOpenWriteExecutable(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osEnvBlock(resultId) gives DefinedValueLookup.defines(resultId)
-		osEnvBlockFree gives DefinedValueLookup.none
-		osHandleFileType(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osCreateNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osReadFile(resultId, _, _, _, _) then def.recordOne(resultId)
+		osFileOpenWrite(resultId, _) then def.recordOne(resultId)
+		osFileOpenWriteExecutable(resultId, _) then def.recordOne(resultId)
+		osEnvBlock(resultId) then def.recordOne(resultId)
+		osEnvBlockFree then def.recordNone()
+		osHandleFileType(resultId, _) then def.recordOne(resultId)
+		osCreateNamedSegment(resultId, _, _) then def.recordOne(resultId)
 		osUnmapNamedSegment or
 			osUnpublishNamedSegment or
-			covPoint gives DefinedValueLookup.none
-		osHostSample(resultId, _, _, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileFindFirst(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileFindClose gives DefinedValueLookup.none
-
+			covPoint then def.recordNone()
+		osHostSample(resultId, _, _, _, _, _, _, _) then def.recordOne(resultId)
+		osFileSize(resultId, _, _) then def.recordOne(resultId)
+		osFileDelete(resultId, _) then def.recordOne(resultId)
+		osFileRename(resultId, _, _) then def.recordOne(resultId)
+		osFileFindFirst(resultId, _, _) then def.recordOne(resultId)
+		osFileFindClose then def.recordNone()
 		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
 		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
 		// attribute mask. None has a void twin, so none takes `none`.
-		osFileFindNext(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
-
+		osFileFindNext(resultId, _, _) then def.recordOne(resultId)
+		osDirCreate(resultId, _) then def.recordOne(resultId)
+		osDirCurrentPath(resultId, _, _) then def.recordOne(resultId)
+		osFileAttributes(resultId, _) then def.recordOne(resultId)
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives DefinedValueLookup.none
-		osCommandLine(resultId) gives DefinedValueLookup.defines(resultId)
-
+		osPanicValue then def.recordNone()
+		osCommandLine(resultId) then def.recordOne(resultId)
 		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
 		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
 		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
-		osStdHandle(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-
+		osStdHandle(resultId, _) then def.recordOne(resultId)
+		osExecutablePath(resultId, _, _) then def.recordOne(resultId)
 		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
-		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-
+		osWriteStderr(resultId, _, _) then def.recordOne(resultId)
 		// A promoted record's address is a def like `globalAddr`'s.
-		stackRecordAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-
+		stackRecordAddr(resultId, _) then def.recordOne(resultId)
 		// O3: each of the three defines the OS answer it captures from RAX.
-		osOpenNamedSegment(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osMapNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osTickCountMs(resultId) gives DefinedValueLookup.defines(resultId)
-
+		osOpenNamedSegment(resultId, _, _, _) then def.recordOne(resultId)
+		osMapNamedSegment(resultId, _, _) then def.recordOne(resultId)
+		osTickCountMs(resultId) then def.recordOne(resultId)
 		// The four attached-subprocess host primitives: the two whose Win32 entry point answers in RAX capture
 		// it; the two whose BOOL is ignored define nothing, exactly as `osCloseHandle` does.
-		osHandleSetInherit gives DefinedValueLookup.none
-		osPipePeek(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osEnvRead(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osProcessTerminate gives DefinedValueLookup.none
-
+		osHandleSetInherit then def.recordNone()
+		osPipePeek(resultId, _, _) then def.recordOne(resultId)
+		osEnvRead(resultId, _, _, _) then def.recordOne(resultId)
+		osProcessTerminate then def.recordNone()
 		// The eight socket host primitives: the six whose ws2_32 entry point answers in RAX capture it; the two
 		// whose answer is discarded define nothing, exactly as `osCloseHandle` does.
-		osSocketStartup(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osSocketResolve(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osSocketFreeAddrInfo gives DefinedValueLookup.none
-		osSocketCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osSocketConnect(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osSocketSend(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osSocketRecv(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osSocketClose gives DefinedValueLookup.none
-		osCpuCount(resultId) gives DefinedValueLookup.defines(resultId)
-
+		osSocketStartup(resultId, _) then def.recordOne(resultId)
+		osSocketResolve(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketFreeAddrInfo then def.recordNone()
+		osSocketCreate(resultId) then def.recordOne(resultId)
+		osSocketConnect(resultId, _, _) then def.recordOne(resultId)
+		osSocketSend(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
+		osSocketClose then def.recordNone()
+		osCpuCount(resultId) then def.recordOne(resultId)
 		// The thread-CPU read defines nothing — its answer lands in the caller's out-param word, exactly as
 		// the wall-clock read's does.
-		osThreadCpuTicks gives DefinedValueLookup.none
-
+		osThreadCpuTicks then def.recordNone()
 		// F1a: the decommit defines no value. `VirtualFree`'s BOOL is discarded exactly as `osFreePages`
 		// discards it — a failed decommit leaves a caller nothing to do.
-		osDecommitPages gives DefinedValueLookup.none
-
+		osDecommitPages then def.recordNone()
 		// F1b: a fill defines no value — it is a store, and a store answers nothing.
-		memFill gives DefinedValueLookup.none
-
+		memFill then def.recordNone()
 		// F1c: both DO define one, and the definition is what makes the failure checkable — see the ops.
-		osCommitPages(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osReservePages(resultId, _) gives DefinedValueLookup.defines(resultId)
-
+		osCommitPages(resultId, _, _) then def.recordOne(resultId)
+		osReservePages(resultId, _) then def.recordOne(resultId)
 		// F2: all three define their result — the CAS its SUCCESS BOOLEAN, the RMW the PRIOR value, the token
 		// the identity word. The two atomics carry OPPOSITE conventions; see each op for which and why.
-		atomicCas(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		atomicRmw(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		currentThreadToken(resultId) gives DefinedValueLookup.defines(resultId)
-
+		atomicCas(resultId, _, _, _) then def.recordOne(resultId)
+		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
+		currentThreadToken(resultId) then def.recordOne(resultId)
 		// G1: the two READING ops define their answer (the slot index, the stored word); the two WRITING ones
 		// define nothing — `tlsSetValue` publishes into the OS thread's slot and `osSetEvent` into a kernel
 		// object, exactly as `osLockEnter`/`osLockLeave` do.
-		tlsAlloc(resultId) gives DefinedValueLookup.defines(resultId)
-		tlsSetValue gives DefinedValueLookup.none
-		tlsSlotLoad(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osSetEvent gives DefinedValueLookup.none
-		osEnterBackgroundPriority(resultId) gives DefinedValueLookup.defines(resultId)
-
+		tlsAlloc(resultId) then def.recordOne(resultId)
+		tlsSetValue then def.recordNone()
+		tlsSlotLoad(resultId, _) then def.recordOne(resultId)
+		osSetEvent then def.recordNone()
+		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
 		// G3: the ordered load defines the word it read; the ordered store defines nothing — `loadIndirect`
 		// and `storeIndirect` exactly.
-		loadAcquire(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		storeRelease gives DefinedValueLookup.none
+		loadAcquire(resultId, _, _, _) then def.recordOne(resultId)
+		storeRelease then def.recordNone()
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -4664,9 +4663,9 @@ end 'remappedArgs'
 // looks like, instead of a silently mis-cloned body. Every non-clonable variant is covered by a RANGE
 // arm ending at the union's last member, so a variant appended past it fails to compile here until it
 // is consciously placed.
-module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, def StdDefinedValues) returns StdOp
 	let cloned = remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
-	requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst)
+	requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst, def: def)
 	return cloned
 end 'remapStdOpForClone'
 
@@ -4684,46 +4683,50 @@ end 'remapStdOpForClone'
 // reports of the original must come back as its image under the column. Two extra jump-table matches per
 // copied op, against a splice budget of 24 ops — the price of the two walks not being able to drift apart
 // unnoticed.
-function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray)
-	match stdOpDefinedValue(op) 'before'
-		none then requireClonedDefines(cloned, expected: DefinedValueLookup.none)
-		defines(v) then requireClonedDefines(cloned, expected: DefinedValueLookup.defines(clonedValue(v, subst: valueSubst)))
+function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray, def StdDefinedValues)
+	stdOpDefinedValue(op, def: def)
 
-		// A `tryCall`/`witnessTryCall` is the only two-def shape and `scanLeafBody` refuses a callee holding
-		// one, so the cloner never sees it — which is why it has no arm there and none here either.
-		definesPair then panic("remapStdOpForClone: a two-def op reached the cloner — only `tryCall` and `witnessTryCall` define a pair, and both are calls, which `scanLeafBody` refuses a callee for")
-	end 'before'
+	// A `tryCall`/`witnessTryCall` is the only two-def shape and `scanLeafBody` refuses a callee holding
+	// one, so the cloner never sees it.
+	if def.definesPair() 'twoDefs'
+		panic("remapStdOpForClone: a two-def op reached the cloner — only `tryCall` and `witnessTryCall` define a pair, and both are calls, which `scanLeafBody` refuses a callee for")
+	end 'twoDefs'
+
+	if def.definesNothing() 'noDef'
+		requireClonedDefinesNothing(cloned, def: def)
+		return
+	end 'noDef'
+
+	requireClonedDefIs(cloned, want: clonedValue(def.first, subst: valueSubst), def: def)
 end 'requireClonedDefAgreesWithTheDefEnumerator'
 
-function requireClonedDefines(cloned StdOp, expected DefinedValueLookup)
-	match stdOpDefinedValue(cloned) 'after'
-		none then requireNoDefExpected(cloned, expected: expected)
-		defines(actual) then requireDefIs(cloned, actual: actual, expected: expected)
-		definesPair then panic("remapStdOpForClone: cloning produced a two-def op from one that is not — the two def walks in this file disagree about `{stdOpCloneRefusalName(cloned)}`")
-	end 'after'
-end 'requireClonedDefines'
+function requireClonedDefinesNothing(cloned StdOp, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+	requireClonedIsNotAPair(cloned, def: def)
 
-function requireNoDefExpected(cloned StdOp, expected DefinedValueLookup)
-	match expected 'want'
-		none then break 'want'
-		defines(want) then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` DEFINES value {want} by `stdOpDefinedValue` but `remapClonedDefsAndTargets` handed it back with no def rewritten — the clone would keep the callee's id and the caller would hold two definitions of one value")
-		definesPair then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a PAIR by `stdOpDefinedValue` and none by the cloner")
-	end 'want'
-end 'requireNoDefExpected'
+	if not def.definesNothing() 'cloneDefines'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines nothing by `stdOpDefinedValue` yet the clone defines value {def.first} — the two def walks in this file disagree")
+	end 'cloneDefines'
+end 'requireClonedDefinesNothing'
 
-function requireDefIs(cloned StdOp, actual ValueId, expected DefinedValueLookup)
-	match expected 'want'
-		none then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines nothing by `stdOpDefinedValue` yet the clone defines value {actual} — the two def walks in this file disagree")
-		defines(want) then requireDefEquals(cloned, actual: actual, want: want)
-		definesPair then panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a PAIR by `stdOpDefinedValue` and one value by the cloner")
-	end 'want'
-end 'requireDefIs'
+function requireClonedDefIs(cloned StdOp, want ValueId, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+	requireClonedIsNotAPair(cloned, def: def)
 
-function requireDefEquals(cloned StdOp, actual ValueId, want ValueId)
-	if actual != want 'defNotRemapped'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining value {actual} where the splice's column maps the original's def to {want} — the def rewrite and `stdOpDefinedValue` name different fields")
+	if def.definesNothing() 'noDefRewritten'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` DEFINES value {want} by `stdOpDefinedValue` but `remapClonedDefsAndTargets` handed it back with no def rewritten — the clone would keep the callee's id and the caller would hold two definitions of one value")
+	end 'noDefRewritten'
+
+	if def.first != want 'defNotRemapped'
+		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining value {def.first} where the splice's column maps the original's def to {want} — the def rewrite and `stdOpDefinedValue` name different fields")
 	end 'defNotRemapped'
-end 'requireDefEquals'
+end 'requireClonedDefIs'
+
+function requireClonedIsNotAPair(cloned StdOp, def StdDefinedValues)
+	if def.definesPair() 'twoDefs'
+		panic("remapStdOpForClone: cloning produced a two-def op from one that is not — the two def walks in this file disagree about `{stdOpCloneRefusalName(cloned)}`")
+	end 'twoDefs'
+end 'requireClonedIsNotAPair'
 
 // The half `remapStdOpUses` does not do: the result ids an op DEFINES, and the block ids a terminator
 // names. Its operand fields arrive already rewritten, so they are bound and handed straight back.
@@ -4980,17 +4983,18 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 		return
 	end 'nothingDoomed'
 
+	var def = StdDefinedValues.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("removeOpsDefining: blockRef from func.blockRefs not in module.blocks")
 
-		if not blockDefinesADoomedValue(module, block: block, doomed: doomed) 'nothingToRemove'
+		if not blockDefinesADoomedValue(module, block: block, doomed: doomed, def: def) 'nothingToRemove'
 			continue
 		end 'nothingToRemove'
 
 		var kept = OpIndexArray.create()
 
 		for opIdx in block.opRefs 'eachRef'
-			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed) 'removed'
+			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'removed'
 				continue
 			end 'removed'
 
@@ -5003,9 +5007,9 @@ end 'removeOpsDefining'
 
 // Whether `block` holds any op the removal would drop — the question that decides whether its `opRefs`
 // column has to be rebuilt at all.
-function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdValueUseSet) returns bool
+function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdValueUseSet, def StdDefinedValues) returns bool
 	for opIdx in block.opRefs 'eachRef'
-		if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed) 'found'
+		if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'found'
 			return true
 		end 'found'
 	end 'eachRef'
@@ -5013,19 +5017,23 @@ function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdVal
 	return false
 end 'blockDefinesADoomedValue'
 
-function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueUseSet) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.opRefs not in module.ops")
-	return match stdOpDefinedValue(op) 'defines'
-		none gives false
-		defines(valueId) gives doomed.contains(valueId)
+function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueUseSet, def StdDefinedValues) returns bool
+	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.opRefs not in module.ops"), def: def)
 
-		// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which no caller
-		// can doom (a const DCE retires `const`s and identity `binOpImm`s; CSE's roster answers `neither`
-		// for every call). It is CHECKED rather than assumed, because dooming ONE half of a pair would
-		// delete the op that defines the OTHER, and the survivor's readers would be left naming a value
-		// nothing writes.
-		definesPair(first, second) gives requireNeitherHalfIsDoomed(doomed, first: first, second: second)
-	end 'defines'
+	if def.definesNothing() 'noDef'
+		return false
+	end 'noDef'
+
+	// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which no caller
+	// can doom (a const DCE retires `const`s and identity `binOpImm`s; CSE's roster answers `neither`
+	// for every call). It is CHECKED rather than assumed, because dooming ONE half of a pair would
+	// delete the op that defines the OTHER, and the survivor's readers would be left naming a value
+	// nothing writes.
+	if def.definesPair() 'twoDefs'
+		return requireNeitherHalfIsDoomed(doomed, first: def.first, second: def.second)
+	end 'twoDefs'
+
+	return doomed.contains(def.first)
 end 'opDefinesADoomedValue'
 
 function requireNeitherHalfIsDoomed(doomed StdValueUseSet, first ValueId, second ValueId) returns bool

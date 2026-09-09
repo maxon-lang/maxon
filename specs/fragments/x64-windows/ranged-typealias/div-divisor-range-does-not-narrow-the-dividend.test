@@ -2,29 +2,33 @@
 typealias Integer = int(i64.min to i64.max)
 typealias HalfRadix = int(1 to 8)
 
+// A global initialised from a literal has no alias, so `bits shr 1` carries no ranged type of its
+// own and the divisor's `int(1 to 8)` is the only range in the division.
+var bits = 0
+
 function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function quotient(bits Integer, halfRadix HalfRadix) returns Integer
-	// `bits shr 1` carries no ranged type of its own, which is the whole of how the divisor's
-	// `int(1 to 8)` came to supply the division's width.
+function quotient(halfRadix HalfRadix) returns Integer
 	let half = bits shr 1
 	return half / halfRadix
 end 'quotient'
 
 function main() returns ExitCode
-	print("{quotient(ident(i64.max), halfRadix: 8)}\n")
+	bits = ident(i64.max)
+	print("{quotient(8)}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __data_bits@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @quotient {
@@ -32,24 +36,24 @@ func @quotient {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, 1
+    x64.cmpRegImm32 rcx, 1
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 8
+    x64.cmpRegImm32 rcx, 8
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at div-divisor-range-does-not-narrow-the-dividend.test:9: Range check failed: value outside typealias 'HalfRadix'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at div-divisor-range-does-not-narrow-the-dividend.test:13: Range check failed: value outside typealias 'HalfRadix'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.sarRegImm8 rax, rcx, 1
+    x64.leaRegGlobal rax, __data_bits
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.sarRegImm8 rax, rax, 1
     x64.cqo
-    x64.idivReg rsi
+    x64.idivReg rcx
     x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
@@ -66,9 +70,11 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.movRegImm rcx, 9223372036854775807
+    x64.movRegImm rax, 9223372036854775807
   __il_cont:
-    x64.movRegImm32 rdx, 8
+    x64.leaRegGlobal rcx, __data_bits
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rcx, 8
     x64.callDirect quotient
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21

@@ -18,7 +18,7 @@ function wide(n Integer) returns Integer
 end 'wide'
 
 function pick(b bool) returns Num
-	let w = wide(5000)
+	w = wide(5000)
 	return try mk(b) otherwise w
 end 'pick'
 
@@ -27,14 +27,16 @@ function main() returns ExitCode
 	print("v={v}")
 	return 7
 end 'main'
+var w = 0
 ---
 ExitCode: 1
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __data_w@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @mk {
@@ -59,15 +61,17 @@ func @pick {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 5000
+    x64.prologue 32
+    x64.movRegImm32 rax, 5000
   __il_cont:
+    x64.leaRegGlobal rdx, __data_w
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
     x64.callDirect mk
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont
   tryerr:
-    x64.movRegReg r8, rbx
+    x64.leaRegGlobal rax, __data_w
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
   trycont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -78,13 +82,11 @@ func @pick {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at try-otherwise-nonliteral-fallback-is-guarded.test:22: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

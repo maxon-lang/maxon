@@ -21,17 +21,27 @@ func @pick {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics.test:9: Range check failed: value outside typealias 'Wide'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.leaRegRegImm32 r8, rcx, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#7
   __rc_chk:
     x64.cmpRegImm32 r8, 100
     x64.jcc lessEqual, matchcont
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics.test:10: Range check failed: value outside typealias 'Small'\x0a"
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics.test:10: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -50,10 +60,12 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-  __il_body:
+  __rc_ok:
     x64.movRegImm32 rcx, 500
   __il_cont#2:
     x64.movRegImm32 rdx, 1
+  ternarytrue:
+    x64.leaRegRegImm32 rax, rcx, 1
   __il_slow:
     x64.callDirect pick
   __il_cont#1:

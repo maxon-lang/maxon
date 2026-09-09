@@ -1,6 +1,6 @@
 // Test: div-both-operands-non-negative-stays-unsigned
 typealias Integer = int(i64.min to i64.max)
-typealias MachineWord = int(0 to u64.max)
+typealias MachineWord = bits(64)
 typealias HalfRadix = int(1 to 8)
 
 function ident(v Integer) returns Integer
@@ -8,7 +8,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function quotient(w MachineWord, halfRadix HalfRadix) returns MachineWord
-	return w / halfRadix
+	return try (w / (halfRadix as MachineWord)) otherwise panic("halfRadix is never zero")
 end 'quotient'
 
 function main() returns ExitCode
@@ -31,23 +31,26 @@ func @quotient {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, 1
+    x64.cmpRegImm32 rdx, 1
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rsi, 8
+    x64.cmpRegImm32 rdx, 8
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at div-both-operands-non-negative-stays-unsigned.test:10: Range check failed: value outside typealias 'HalfRadix'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at div-both-operands-non-negative-stays-unsigned.test:10: Range check failed: value outside typealias 'HalfRadix'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rsi, rdx
+    x64.orRegReg rsi, rdx, rax
     x64.movRegReg rax, rcx
     x64.movRegImm32 rdx, 0
     x64.divReg rsi
+  tryok:
     x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
@@ -79,20 +82,20 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __uint_to_string
     x64.movRegReg r12, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]  ; " "
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; " "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.shrRegImm8 rbx, rbx, 3
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.storeSlotReg slot5, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]

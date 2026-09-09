@@ -1,0 +1,1096 @@
+// RefineValueRanges — a Std→Std pass that computes a signed 64-bit INTERVAL for every integer value of a
+// function and deletes every compare whose outcome the intervals decide, together with the branch that
+// read it and the arm the branch can no longer take.
+//
+// THE DOMAIN. One interval `[lo, hi]` per value id over the value's 64-bit word read as signed; the whole
+// range is "unknown". A `const` is a point where its `value` IS the word its result holds: a 64-bit word
+// type, an UNSIGNED narrow type (the native lowerings materialize the value with a 64-bit move, and wasm
+// widens a narrow local unsigned — `StdToWasm.coerceOnStack`) or an i1. A signed narrow or float const is
+// unknown. `add`/`sub`/`mul` are interval arithmetic that go to the whole range whenever any corner could
+// wrap: the language's integers WRAP (`FoldConstants`' header), so a clamped bound would prove a wrapped
+// index non-negative. `bitAnd` with a non-negative side is bounded above by it; a right shift by an
+// immediate shifts the bounds. A block arg joins its incoming edges. Everything else is unknown — a load,
+// a call, a parameter, a division, a unary, a shift by a value — and so is an arithmetic op or block arg
+// whose type is not a 64-bit word (a float is not an integer; a narrow op computes at a width the
+// interval does not model).
+//
+// BRANCH REFINEMENT is the flow sensitivity, and it is what proves a loop counter. Under a `condBranch`
+// on a compare, the target reached by exactly ONE predecessor edge sees the compare's operands narrowed
+// by the predicate (the true target) or its negation (the false target), and so does every block that
+// target dominates. The narrowing is RELATIONAL through the other operand's own interval: below
+// `while low < high` with `low ≥ 1`, `high ≥ low + 1 ≥ 2`. `for i in 1 upto n` works because of it: the
+// body is dominated by the true edge of `i < n`, so there `i ≤ n.hi − 1 ≤ i64.max − 1` and `i + 1`
+// cannot wrap; the latch contributes `[2, i64.max]`, the header phi joins to `[1, i64.max]`, and the
+// `i < 0` range check the body's element access carries is decided false.
+//
+// A DEAD SUBTREE. A narrowing whose intersection is EMPTY says the edge cannot be taken, so the target
+// and every block it dominates are DEAD for the round: their ops write nothing, their compares decide
+// nothing, and their edges contribute nothing to any join — a block arg whose every reaching input is
+// dead keeps its current interval. Without that rule an untaken loop body still ran its arithmetic on
+// unrefined intervals and its latch fed the header, which is how `for i in 0 upto n` lost `i ≥ 0` once the
+// body's `i < 0` arm had been decided. Deadness is recomputed every round from that round's intervals,
+// and a flip counts as a change, so the last round's flags are consistent with its intervals.
+//
+// EVALUATION ORDER. `StdDominatorWalk` with a refinement TRAIL: a block's refinements are applied on
+// entry and undone on leaving its subtree, so a sibling never sees them. The walk enters every forward
+// predecessor of a block before the block, so every operand is evaluated before its use except a
+// loop-carried phi input, and the whole walk is iterated to a fixpoint: round 1 sees no back-edge
+// contribution; from round 2 a block arg is WIDENED against its own previous interval (a bound that moved
+// jumps to the range's end on that side), which bounds the rounds; a round that changes nothing is the
+// last, and only its decisions are applied — every earlier round's were computed with contributions
+// missing. The refinements a round pushes are valid at every predecessor of the block they are read in:
+// they come from that block's strict dominators, which dominate each of its predecessors.
+//
+// THE REWRITE. A decided compare is overwritten IN PLACE by the `const` it evaluates to, at its own
+// index and keeping its result id, so every reader — the branch, a second branch, a stored bool — reads
+// the constant. The branches are then folded exactly as `foldConstants` folds a branch on a `const`, the
+// arm they drop is removed with everything only it reached, and the constants nothing reads any more are
+// retired. The `__rc_panic` block `InsertRangeChecks` hangs off a proven index dies that way.
+//
+// SCHEDULING: after `threadConstantBranches` and BEFORE `commonSubexpressionElimination` — CSE caches a
+// compare's result across blocks, and isel then materializes a `setcc` for it, so a compare this pass
+// would have deleted must not first become one CSE has made canonical.
+//
+// GUARDRAILS, each applied where the code says so:
+//   • a refinement is pushed only under a target with exactly one predecessor edge (`refineOnEntry`);
+//   • arithmetic goes to the whole range on any possible wrap (`addIntervals`, `subIntervals`,
+//     `mulIntervals`);
+//   • a compare is decided or refined only at a signed 64-bit operand type, or at an unsigned one whose
+//     two operands both lie within `[0, i64.max]`, where the two orders agree (`compareIsOrderable`);
+//   • a decided compare is rewritten only at its own definition (`applyDecisions`).
+
+typealias FixpointRound = int(0 to u64.max)
+typealias TrailMark = int(0 to u64.max)
+typealias TrailMarkColumn = Array with TrailMark
+
+// One past the op index that defines a compare's result, per value id; `NoCompareOp` where the value is
+// not a compare this pass can read.
+typealias CompareOpColumn = Array with OpIndex
+
+let NoCompareOp = 0 as OpIndex
+
+// The rounds a function may take before every block arg is forced to the whole range. Widening moves
+// each side of a block arg at most once, so a chain of loops that hands a widened bound from one header
+// to the next through back edges is what a late round means; past this many, precision is given up
+// rather than iterated for.
+let WideningRoundCap = 8 as FixpointRound
+
+// With every block arg forced to the whole range, one round recomputes the rest and the next reads no
+// change; a third would be a bug in the transfer functions.
+let ForcedRoundAllowance = 2 as FixpointRound
+
+// What kept an interval, a compare or a block arg at the whole range. Tallied for the pass summary so a
+// reader can tell what a wider model would buy before building it.
+enum UnboundedReason
+	// A binary op or block arg whose type is not `i64`/`u64`.
+	narrowType
+	// A unary op, or a const whose type is neither a 64-bit word, an unsigned narrow int nor i1.
+	unmodelledOp
+	// An operand of an arithmetic op that nothing this pass models defines.
+	unmodelledOperand
+	// `add`/`sub`/`mul` with a corner outside the signed range.
+	mayWrap
+	// An unsigned compare with an operand not proven within `[0, i64.max]`.
+	unsignedOutsideSignedRange
+	// A compare whose intervals decide nothing.
+	undecidedCompare
+	// A function that reached `WideningRoundCap`.
+	forcedByRoundCap
+end 'UnboundedReason'
+
+function wordTyped(t StdType) returns bool
+	return t == StdType.i64 or t == StdType.u64
+end 'wordTyped'
+
+// Whether a `const` of type `t` materializes exactly its `value` in the word its readers see — see the
+// header's domain paragraph. A signed narrow const would be sign-extended by one target and not by
+// another, and a float's bits are not a number.
+function constIsItsWord(t StdType) returns bool
+	return match t 'type'
+		i1 or
+			i64 or
+			u8 or
+			u16 or
+			u32 or
+			u64 gives true
+		i8 or
+			i16 or
+			i32 or
+			f32 or
+			f64 gives false
+	end 'type'
+end 'constIsItsWord'
+
+// A signed 64-bit interval, held in a CALLER-OWNED record and refilled in place: the hot path reads two
+// of these per arithmetic op, and a returned struct is a heap allocation per op.
+type Interval
+	export var lo as ParsedInt
+	export var hi as ParsedInt
+
+	static function create() returns Interval
+		return Self{lo: i64.min, hi: i64.max}
+	end 'create'
+
+	function setTop()
+		self.lo = i64.min
+		self.hi = i64.max
+	end 'setTop'
+
+	function setBounds(low ParsedInt, high ParsedInt)
+		self.lo = low
+		self.hi = high
+	end 'setBounds'
+
+	function setPoint(value ParsedInt)
+		self.lo = value
+		self.hi = value
+	end 'setPoint'
+
+	function copyFrom(other Interval)
+		self.lo = other.lo
+		self.hi = other.hi
+	end 'copyFrom'
+
+	function isPoint() returns bool
+		return self.lo == self.hi
+	end 'isPoint'
+
+	function isNonNegative() returns bool
+		return self.lo >= 0
+	end 'isNonNegative'
+
+	function joinWith(other Interval)
+		self.lo = lesser(self.lo, b: other.lo)
+		self.hi = greater(self.hi, b: other.hi)
+	end 'joinWith'
+
+	// `self ∇ other`: a side `other` moves past jumps to the range's end, a side it does not keeps its
+	// bound — the result is never narrower than `self`, which is what keeps the rounds monotone.
+	function widenTo(other Interval)
+		if other.lo < self.lo 'lowerMoved'
+			self.lo = i64.min
+		end 'lowerMoved'
+
+		if other.hi > self.hi 'upperMoved'
+			self.hi = i64.max
+		end 'upperMoved'
+	end 'widenTo'
+end 'Interval'
+
+function lesser(a ParsedInt, b ParsedInt) returns ParsedInt
+	return a if a <= b else b
+end 'lesser'
+
+function greater(a ParsedInt, b ParsedInt) returns ParsedInt
+	return a if a >= b else b
+end 'greater'
+
+// Whether `a + b` leaves the signed range: the operands agree in sign and the wrapped sum does not.
+function addWraps(a ParsedInt, b ParsedInt) returns bool
+	let sum = a + b
+	return (a >= 0) == (b >= 0) and (sum >= 0) != (a >= 0)
+end 'addWraps'
+
+// Whether `a - b` leaves the signed range: the operands differ in sign and the wrapped difference does
+// not take `a`'s.
+function subWraps(a ParsedInt, b ParsedInt) returns bool
+	let difference = a - b
+	return (a >= 0) != (b >= 0) and (difference >= 0) != (a >= 0)
+end 'subWraps'
+
+// Whether `a * b` leaves the signed range. The divisor is neither 0 nor -1 by the time the quotient is
+// taken, so the division cannot trap; a wrapped product is at least 2^64 from the true one, further
+// than any divisor could move the quotient back onto `a`.
+function mulWraps(a ParsedInt, b ParsedInt) returns bool
+	if a == 0 or b == 0 'zeroFactor'
+		return false
+	end 'zeroFactor'
+
+	if a == -1 'negatedB'
+		return b == i64.min
+	end 'negatedB'
+
+	if b == -1 'negatedA'
+		return a == i64.min
+	end 'negatedA'
+
+	let product = a * b
+	let recovered = try (product / b) otherwise panic("refineValueRanges: the divisor is neither 0 nor -1")
+	return recovered != a
+end 'mulWraps'
+
+// One compare the last round decided, and what it decided.
+type CompareDecision
+	export var opIdx as OpIndex
+	export var resultId as ValueId
+	export var holds as bool
+
+	static function create(opIdx OpIndex, resultId ValueId, holds bool) returns CompareDecision
+		return Self{opIdx: opIdx, resultId: resultId, holds: holds}
+	end 'create'
+end 'CompareDecision'
+
+typealias CompareDecisionArray = Array with CompareDecision
+
+// Everything a function's analysis writes into, created ONCE for the module: the interval columns, the
+// refinement trail, the walk and its per-block scopes, the decision list and the classification
+// records. `Array.clear` keeps capacity, so the second function's columns reuse the first's buffers.
+type RangeScratch
+	// Per value id: the interval; whether this round or an earlier one has written it; and whether the
+	// pass MODELS it at all. A value that is modelled but not yet written is a loop-carried input this
+	// round has not reached, which contributes nothing to a join until it is; a value that is not
+	// modelled is the whole range wherever it is read, joins included.
+	export var lo as ParsedIntArray
+	export var hi as ParsedIntArray
+	export var computed as BoolArray
+	export var modelled as BoolArray
+	export var compareOpOf as CompareOpColumn
+	// The refinement trail: what a narrowing overwrote, restored in reverse on leaving the subtree.
+	export var trailValue as ValueIdArray
+	export var trailLo as ParsedIntArray
+	export var trailHi as ParsedIntArray
+	export var trailComputed as BoolArray
+	// The walk, and per open block: the trail height on entry, and whether entering it opened a dead
+	// subtree. `deadDepth` counts the open dead subtrees, so any block under one is dead.
+	export var walk as StdDominatorWalk
+	export var walkTrailMark as TrailMarkColumn
+	export var walkOpenedDead as BoolArray
+	export var deadDepth as TallyCount = 0
+	// Per block position: whether the round found it dead — read for its edges by the joins.
+	export var blockDead as BoolArray
+	// Set by `narrow` when an intersection comes out empty; read once per block entry.
+	export var entryIsDead = false
+	export var decisions as CompareDecisionArray
+	export var arith as StdArithOperands
+	export var branch as StdBranchOperands
+	export var def as StdFoldableDef
+	export var left as Interval
+	export var right as Interval
+	export var result as Interval
+	export var incoming as Interval
+	export var reasons as OrdinalTally
+	// The round in progress: whether any interval or dead flag moved, whether block args are forced to
+	// the whole range, and the tallies of which only the last round's reading is kept.
+	export var changed = false
+	export var forceTop = false
+	export var wrapsThisRound as TallyCount = 0
+	export var unmodelledThisRound as TallyCount = 0
+	export var unsignedRefusedThisRound as TallyCount = 0
+	export var undecidedThisRound as TallyCount = 0
+
+	static function create() returns RangeScratch
+		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), compareOpOf: CompareOpColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), def: StdFoldableDef.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), reasons: OrdinalTally.create(UnboundedReason.allCases.count())}
+	end 'create'
+
+	function isComputed(valueId ValueId) returns bool
+		return try self.computed.get(valueId) otherwise panic("refineValueRanges: computed.get OOB at {valueId} against a column sized by nextFreeValueId")
+	end 'isComputed'
+
+	function isModelled(valueId ValueId) returns bool
+		return try self.modelled.get(valueId) otherwise panic("refineValueRanges: modelled.get OOB at {valueId} against a column sized by nextFreeValueId")
+	end 'isModelled'
+
+	function markModelled(valueId ValueId)
+		try self.modelled.set(valueId, value: true) otherwise panic("refineValueRanges: modelled.set OOB at {valueId} against a column sized by nextFreeValueId")
+	end 'markModelled'
+
+	// The interval `valueId` currently holds — its definition's, narrowed by every refinement on the
+	// trail — or the whole range where nothing this pass models defines it, or where its definition is
+	// a block arg no edge has fed yet.
+	function readInterval(valueId ValueId, into Interval)
+		if not self.isComputed(valueId) 'unbounded'
+			if not self.isModelled(valueId) 'unmodelled'
+				self.unmodelledThisRound = self.unmodelledThisRound + 1
+			end 'unmodelled'
+
+			into.setTop()
+			return
+		end 'unbounded'
+
+		self.readComputedInterval(valueId, into: into)
+	end 'readInterval'
+
+	function readComputedInterval(valueId ValueId, into Interval)
+		into.setBounds(try self.lo.get(valueId) otherwise panic("refineValueRanges: lo.get OOB at {valueId}"), high: try self.hi.get(valueId) otherwise panic("refineValueRanges: hi.get OOB at {valueId}"))
+	end 'readComputedInterval'
+
+	function storeInterval(valueId ValueId, interval Interval)
+		try self.lo.set(valueId, value: interval.lo) otherwise panic("refineValueRanges: lo.set OOB at {valueId}")
+		try self.hi.set(valueId, value: interval.hi) otherwise panic("refineValueRanges: hi.set OOB at {valueId}")
+		try self.computed.set(valueId, value: true) otherwise panic("refineValueRanges: computed.set OOB at {valueId}")
+	end 'storeInterval'
+
+	// A definition's interval for this round. Unchanged from the previous round's is what the fixpoint
+	// loop waits for.
+	function writeDef(valueId ValueId, interval Interval)
+		if self.isComputed(valueId) 'hasPrevious'
+			self.readComputedInterval(valueId, into: self.incoming)
+			if self.incoming.lo == interval.lo and self.incoming.hi == interval.hi 'unchanged'
+				return
+			end 'unchanged'
+		end 'hasPrevious'
+
+		self.storeInterval(valueId, interval: interval)
+		self.changed = true
+	end 'writeDef'
+
+	// Narrow `valueId` to its intersection with `[low, high]` for the subtree being entered, recording
+	// what it held so `restoreTrailTo` can put it back. An EMPTY intersection marks the entry dead — the
+	// edge cannot be taken — and narrows nothing.
+	function narrow(valueId ValueId, low ParsedInt, high ParsedInt)
+		let wasComputed = self.isComputed(valueId)
+		if wasComputed 'hasABound'
+			self.readComputedInterval(valueId, into: self.incoming)
+		end 'hasABound' else 'unbounded'
+			self.incoming.setTop()
+		end 'unbounded'
+
+		let narrowedLo = greater(self.incoming.lo, b: low)
+		let narrowedHi = lesser(self.incoming.hi, b: high)
+
+		if narrowedLo > narrowedHi 'empty'
+			self.entryIsDead = true
+			return
+		end 'empty'
+
+		if narrowedLo == self.incoming.lo and narrowedHi == self.incoming.hi 'nothingToNarrow'
+			return
+		end 'nothingToNarrow'
+
+		self.trailValue.push(valueId)
+		self.trailLo.push(self.incoming.lo)
+		self.trailHi.push(self.incoming.hi)
+		self.trailComputed.push(wasComputed)
+		self.incoming.setBounds(narrowedLo, high: narrowedHi)
+		self.storeInterval(valueId, interval: self.incoming)
+	end 'narrow'
+
+	function restoreTrailTo(mark TrailMark)
+		while self.trailValue.count() > mark 'eachEntry'
+			let valueId = try self.trailValue.pop() otherwise panic("refineValueRanges: trailValue.pop on a non-empty trail failed")
+			let savedLo = try self.trailLo.pop() otherwise panic("refineValueRanges: trailLo.pop on a non-empty trail failed")
+			let savedHi = try self.trailHi.pop() otherwise panic("refineValueRanges: trailHi.pop on a non-empty trail failed")
+			let wasComputed = try self.trailComputed.pop() otherwise panic("refineValueRanges: trailComputed.pop on a non-empty trail failed")
+			try self.lo.set(valueId, value: savedLo) otherwise panic("refineValueRanges: lo.set OOB at {valueId}")
+			try self.hi.set(valueId, value: savedHi) otherwise panic("refineValueRanges: hi.set OOB at {valueId}")
+			try self.computed.set(valueId, value: wasComputed) otherwise panic("refineValueRanges: computed.set OOB at {valueId}")
+		end 'eachEntry'
+	end 'restoreTrailTo'
+
+	function compareOpDefining(valueId ValueId) returns OpIndex
+		if valueId >= self.compareOpOf.count() 'notADef'
+			return NoCompareOp
+		end 'notADef'
+
+		return try self.compareOpOf.get(valueId) otherwise panic("refineValueRanges: compareOpOf.get OOB at {valueId}")
+	end 'compareOpDefining'
+
+	function isBlockDead(position BlockRefIndex) returns bool
+		return try self.blockDead.get(position) otherwise panic("refineValueRanges: blockDead.get OOB at {position}")
+	end 'isBlockDead'
+
+	// Record this round's verdict on a block; a flip is a change the fixpoint must run out.
+	function recordBlockDead(position BlockRefIndex, dead bool)
+		if self.isBlockDead(position) == dead 'unchanged'
+			return
+		end 'unchanged'
+
+		try self.blockDead.set(position, value: dead) otherwise panic("refineValueRanges: blockDead.set OOB at {position}")
+		self.changed = true
+	end 'recordBlockDead'
+end 'RangeScratch'
+
+// Refine every function of `module` in place.
+export function refineValueRanges(module StdModule)
+	var scratch = RangeScratch.create()
+	var decided = 0 as TallyCount
+	var folded = 0 as TallyCount
+	var touched = 0 as TallyCount
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		let foldedHere = refineValueRangesInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("refineValueRanges: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+
+		if scratch.decisions.count() == 0 'nothingDecided'
+			continue
+		end 'nothingDecided'
+
+		touched = touched + 1
+		decided = decided + scratch.decisions.count()
+		folded = folded + foldedHere
+	end 'eachFunc'
+
+	let decidedTotal = decided
+	let foldedTotal = folded
+	let touchedTotal = touched
+	logDebug(LogCategory.ir, message: function() gives "refineValueRanges: decided {decidedTotal} compare(s) and folded {foldedTotal} branch(es) in {touchedTotal} of {module.funcCount()} function(s); unbounded: {scratch.reasons.summary(UnboundedReason.allCaseNames)}")
+end 'refineValueRanges'
+
+// Analyse and rewrite one function. Answers how many branches folded; `scratch.decisions` holds the
+// compares that were decided.
+function refineValueRangesInFunc(module StdModule, func IrFunction, scratch RangeScratch) returns TallyCount
+	scratch.decisions.clear()
+
+	// A compare feeds a branch only across blocks, and without a branch there is no refinement to
+	// decide one with.
+	if func.blockRefs.count() < 2 'noBranchToFold'
+		return 0
+	end 'noBranchToFold'
+
+	if not prepareFunction(module, func: func, scratch: scratch) 'noCompare'
+		return 0
+	end 'noCompare'
+
+	let tree = StdDominatorTree.build(module, func: func)
+	scratch.forceTop = false
+
+	var round = 0 as FixpointRound
+	var stable = false
+	while not stable 'untilStable'
+		round = round + 1
+
+		if round > WideningRoundCap + ForcedRoundAllowance 'transferFunctionsOscillate'
+			panic("refineValueRanges: '{String.from(func.name)}' did not converge in {round - 1} rounds with every block arg forced to the whole range — a transfer function is not monotone")
+		end 'transferFunctionsOscillate'
+
+		if round > WideningRoundCap and not scratch.forceTop 'giveUpPrecision'
+			scratch.forceTop = true
+			scratch.reasons.add(UnboundedReason.forcedByRoundCap.ordinal, count: 1)
+		end 'giveUpPrecision'
+
+		beginRound(scratch)
+		walkDominatorTree(module, func: func, tree: tree, scratch: scratch)
+		stable = not scratch.changed
+	end 'untilStable'
+
+	scratch.reasons.add(UnboundedReason.mayWrap.ordinal, count: scratch.wrapsThisRound)
+	scratch.reasons.add(UnboundedReason.unmodelledOperand.ordinal, count: scratch.unmodelledThisRound)
+	scratch.reasons.add(UnboundedReason.unsignedOutsideSignedRange.ordinal, count: scratch.unsignedRefusedThisRound)
+	scratch.reasons.add(UnboundedReason.undecidedCompare.ordinal, count: scratch.undecidedThisRound)
+
+	if scratch.decisions.count() == 0 'nothingDecided'
+		return 0
+	end 'nothingDecided'
+
+	logTrace(LogCategory.ir, message: function() gives "refineValueRanges: '{String.from(func.name)}' decided {scratch.decisions.count()} compare(s) after {round} round(s)")
+
+	return applyDecisions(module, func: func, scratch: scratch)
+end 'refineValueRangesInFunc'
+
+function beginRound(scratch RangeScratch)
+	scratch.changed = false
+	scratch.decisions.clear()
+	scratch.wrapsThisRound = 0
+	scratch.unmodelledThisRound = 0
+	scratch.unsignedRefusedThisRound = 0
+	scratch.undecidedThisRound = 0
+end 'beginRound'
+
+// Size the columns by the function's value space and block count, seed every `const` that is its own
+// word, and index every compare this pass can read. Answers whether there is such a compare at all — the
+// whole cost most functions pay.
+function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch) returns bool
+	let bound = nextFreeValueId(module, func: func)
+	scratch.lo.clear()
+	scratch.lo.resize(bound)
+	scratch.hi.clear()
+	scratch.hi.resize(bound)
+	scratch.computed.clear()
+	scratch.computed.resize(bound)
+	scratch.modelled.clear()
+	scratch.modelled.resize(bound)
+	scratch.compareOpOf.clear()
+	scratch.compareOpOf.resize(bound)
+	scratch.blockDead.clear()
+	scratch.blockDead.resize(func.blockRefs.count())
+
+	var anyCompare = false
+	var narrowCount = 0 as TallyCount
+	var unmodelledCount = 0 as TallyCount
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for arg in block.blockArgs 'eachArg'
+			if wordTyped(arg.argType) 'wordArg'
+				scratch.markModelled(arg.valueId)
+			end 'wordArg' else 'narrowArg'
+				narrowCount = narrowCount + 1
+			end 'narrowArg'
+		end 'eachArg'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = module.getOp(opIdx)
+			classifyArithOperands(op, operands: scratch.arith)
+
+			if scratch.arith.isArithmetic() 'arithmetic'
+				// Exactly the ops `evaluateArithOp` writes: every compare, and the word-typed binary ops.
+				if scratch.arith.isComparison() or scratch.arith.isComparisonImm() 'compare'
+					scratch.markModelled(scratch.arith.resultId)
+					if wordTyped(scratch.arith.operandType) 'orderable'
+						try scratch.compareOpOf.set(scratch.arith.resultId, value: opIdx + 1) otherwise panic("refineValueRanges: compare result {scratch.arith.resultId} is outside the value space")
+						anyCompare = true
+					end 'orderable'
+
+					continue
+				end 'compare'
+
+				if scratch.arith.isUnary() 'unary'
+					unmodelledCount = unmodelledCount + 1
+					continue
+				end 'unary'
+
+				if not wordTyped(scratch.arith.operandType) 'narrowOp'
+					narrowCount = narrowCount + 1
+					continue
+				end 'narrowOp'
+
+				scratch.markModelled(scratch.arith.resultId)
+				continue
+			end 'arithmetic'
+
+			classifyFoldableDef(op, def: scratch.def)
+			if not scratch.def.isConstDef() 'notAConst'
+				continue
+			end 'notAConst'
+
+			if not constIsItsWord(scratch.def.constType) 'notItsWord'
+				unmodelledCount = unmodelledCount + 1
+				continue
+			end 'notItsWord'
+
+			scratch.markModelled(scratch.def.definedId)
+			scratch.result.setPoint(scratch.def.constant)
+			scratch.storeInterval(scratch.def.definedId, interval: scratch.result)
+		end 'eachOp'
+	end 'eachBlock'
+
+	scratch.reasons.add(UnboundedReason.narrowType.ordinal, count: narrowCount)
+	scratch.reasons.add(UnboundedReason.unmodelledOp.ordinal, count: unmodelledCount)
+
+	return anyCompare
+end 'prepareFunction'
+
+// One round: every reachable block, entered in the shared walk's order.
+function walkDominatorTree(module StdModule, func IrFunction, tree StdDominatorTree, scratch RangeScratch)
+	scratch.walk.begin(tree)
+
+	while scratch.walk.advance(tree) 'depthFirst'
+		match scratch.walk.step 'step'
+			enter then enterBlock(module, func: func, tree: tree, position: scratch.walk.position, scratch: scratch)
+			leave then leaveBlock(scratch)
+		end 'step'
+	end 'depthFirst'
+end 'walkDominatorTree'
+
+// Open one block: apply the refinement its entry edge carries, and unless that or an enclosing subtree
+// is dead, evaluate its block args and then its ops.
+function enterBlock(module StdModule, func IrFunction, tree StdDominatorTree, position BlockRefIndex, scratch RangeScratch)
+	scratch.walkTrailMark.push(scratch.trailValue.count())
+	scratch.entryIsDead = false
+
+	// Inside a dead subtree nothing is evaluated, so nothing needs narrowing.
+	if scratch.deadDepth == 0 'live'
+		refineOnEntry(module, func: func, tree: tree, position: position, scratch: scratch)
+	end 'live'
+
+	scratch.walkOpenedDead.push(scratch.entryIsDead)
+	if scratch.entryIsDead 'opensADeadSubtree'
+		scratch.deadDepth = scratch.deadDepth + 1
+	end 'opensADeadSubtree'
+
+	let dead = scratch.deadDepth > 0
+	scratch.recordBlockDead(position, dead: dead)
+
+	if dead 'nothingRuns'
+		return
+	end 'nothingRuns'
+
+	let block = module.blockAtPosition(func, position: position)
+	evaluateBlockArgs(module, func: func, tree: tree, position: position, block: block, scratch: scratch)
+
+	for opIdx in block.opRefs 'eachOp'
+		classifyArithOperands(module.getOp(opIdx), operands: scratch.arith)
+		if scratch.arith.isArithmetic() 'arithmetic'
+			evaluateArithOp(opIdx, scratch: scratch)
+		end 'arithmetic'
+	end 'eachOp'
+end 'enterBlock'
+
+function leaveBlock(scratch RangeScratch)
+	let mark = try scratch.walkTrailMark.pop() otherwise panic("refineValueRanges: walkTrailMark.pop on a non-empty walk failed")
+	scratch.restoreTrailTo(mark)
+
+	let openedDead = try scratch.walkOpenedDead.pop() otherwise panic("refineValueRanges: walkOpenedDead.pop on a non-empty walk failed")
+	if openedDead 'closesADeadSubtree'
+		scratch.deadDepth = scratch.deadDepth - 1
+	end 'closesADeadSubtree'
+end 'leaveBlock'
+
+// The first guardrail: a block reached by exactly ONE predecessor edge, from a `condBranch` on a compare,
+// sees that compare's operands narrowed. A second edge in would carry values the predicate says nothing
+// about, and a physical fall-through has no compare deciding it.
+function refineOnEntry(module StdModule, func IrFunction, tree StdDominatorTree, position BlockRefIndex, scratch RangeScratch)
+	if position == StdEntryBlockPosition or tree.pred.degree(position as CsrIndex) != 1 'notASoleEdge'
+		return
+	end 'notASoleEdge'
+
+	let pred = module.blockAtPosition(func, position: tree.pred.neighbour(position as CsrIndex, k: 0) as BlockRefIndex)
+
+	if not pred.hasTerminatorOp() 'fallsThrough'
+		return
+	end 'fallsThrough'
+
+	classifyBranch(module.getOp(pred.terminatorIndex()), out: scratch.branch)
+	if not scratch.branch.isCondBranch() or scratch.branch.thenBlockId == scratch.branch.elseBlockId 'notATwoWayBranch'
+		return
+	end 'notATwoWayBranch'
+
+	let compareOpPlusOne = scratch.compareOpDefining(scratch.branch.condId)
+
+	if compareOpPlusOne == NoCompareOp 'conditionIsNotACompare'
+		return
+	end 'conditionIsNotACompare'
+
+	let blockId = module.blockAtPosition(func, position: position).id
+
+	if blockId != scratch.branch.thenBlockId and blockId != scratch.branch.elseBlockId 'notItsTarget'
+		panic("refineValueRanges: block_{blockId}'s only predecessor branches to block_{scratch.branch.thenBlockId} and block_{scratch.branch.elseBlockId}, neither of which it is")
+	end 'notItsTarget'
+
+	classifyArithOperands(module.getOp(compareOpPlusOne - 1), operands: scratch.arith)
+	refineByCompare(scratch, onThenEdge: blockId == scratch.branch.thenBlockId)
+end 'refineOnEntry'
+
+// Narrow the compare in `scratch.arith`'s operands by the predicate that holds on this edge. Every new
+// bound is computed from `left`/`right`, the operands' intervals BEFORE either is narrowed.
+function refineByCompare(scratch RangeScratch, onThenEdge bool)
+	readOperands(scratch)
+	if not compareIsOrderable(scratch) 'notOrderable'
+		return
+	end 'notOrderable'
+
+	let holdsOnThisEdge = scratch.arith.pred if onThenEdge else negatedPred(scratch.arith.pred)
+
+	match holdsOnThisEdge 'narrowBy'
+		lt then narrowStrictlyBelow(scratch, lower: scratch.left, upper: scratch.right, lowerIsLhs: true)
+		gt then narrowStrictlyBelow(scratch, lower: scratch.right, upper: scratch.left, lowerIsLhs: false)
+		le then narrowBelow(scratch, lower: scratch.left, upper: scratch.right, lowerIsLhs: true)
+		ge then narrowBelow(scratch, lower: scratch.right, upper: scratch.left, lowerIsLhs: false)
+		eq then narrowToEachOther(scratch)
+		ne then narrowAwayFromEachOthersPoint(scratch)
+	end 'narrowBy'
+end 'refineByCompare'
+
+// Narrow the compare's lhs, or its rhs where that is a value rather than an immediate.
+function narrowOperand(scratch RangeScratch, isLhs bool, low ParsedInt, high ParsedInt)
+	if isLhs 'lhs'
+		scratch.narrow(scratch.arith.lhs, low: low, high: high)
+		return
+	end 'lhs'
+
+	if scratch.arith.hasSecondValueOperand() 'rhsIsAValue'
+		scratch.narrow(scratch.arith.rhs, low: low, high: high)
+	end 'rhsIsAValue'
+end 'narrowOperand'
+
+// `lower < upper` holds: `lower ≤ upper.hi − 1` and `upper ≥ lower.lo + 1`. A bound already at the
+// range's end cannot move past it — the edge is then untaken — so that side is left alone.
+function narrowStrictlyBelow(scratch RangeScratch, lower Interval, upper Interval, lowerIsLhs bool)
+	if upper.hi > i64.min 'upperBoundMoves'
+		narrowOperand(scratch, isLhs: lowerIsLhs, low: lower.lo, high: upper.hi - 1)
+	end 'upperBoundMoves'
+
+	if lower.lo < i64.max 'lowerBoundMoves'
+		narrowOperand(scratch, isLhs: not lowerIsLhs, low: lower.lo + 1, high: upper.hi)
+	end 'lowerBoundMoves'
+end 'narrowStrictlyBelow'
+
+// `lower <= upper` holds: both lie within `[lower.lo, upper.hi]`.
+function narrowBelow(scratch RangeScratch, lower Interval, upper Interval, lowerIsLhs bool)
+	narrowOperand(scratch, isLhs: lowerIsLhs, low: lower.lo, high: upper.hi)
+	narrowOperand(scratch, isLhs: not lowerIsLhs, low: lower.lo, high: upper.hi)
+end 'narrowBelow'
+
+// `lhs == rhs` holds: each lies within the other.
+function narrowToEachOther(scratch RangeScratch)
+	narrowOperand(scratch, isLhs: true, low: scratch.right.lo, high: scratch.right.hi)
+	narrowOperand(scratch, isLhs: false, low: scratch.left.lo, high: scratch.left.hi)
+end 'narrowToEachOther'
+
+// `lhs != rhs` holds: a POINT on one side excludes itself from the other side's endpoints, which is the
+// only shape an interval can express.
+function narrowAwayFromEachOthersPoint(scratch RangeScratch)
+	if scratch.right.isPoint() 'rhsIsAPoint'
+		narrowAwayFrom(scratch, isLhs: true, interval: scratch.left, point: scratch.right.lo)
+	end 'rhsIsAPoint'
+
+	if scratch.left.isPoint() 'lhsIsAPoint'
+		narrowAwayFrom(scratch, isLhs: false, interval: scratch.right, point: scratch.left.lo)
+	end 'lhsIsAPoint'
+end 'narrowAwayFromEachOthersPoint'
+
+function narrowAwayFrom(scratch RangeScratch, isLhs bool, interval Interval, point ParsedInt)
+	if interval.lo == point and point < i64.max 'atTheLowEnd'
+		narrowOperand(scratch, isLhs: isLhs, low: point + 1, high: interval.hi)
+		return
+	end 'atTheLowEnd'
+
+	if interval.hi == point and point > i64.min 'atTheHighEnd'
+		narrowOperand(scratch, isLhs: isLhs, low: interval.lo, high: point - 1)
+	end 'atTheHighEnd'
+end 'narrowAwayFrom'
+
+function negatedPred(pred StdCmpPred) returns StdCmpPred
+	return match pred 'n'
+		eq gives StdCmpPred.ne
+		ne gives StdCmpPred.eq
+		lt gives StdCmpPred.ge
+		ge gives StdCmpPred.lt
+		gt gives StdCmpPred.le
+		le gives StdCmpPred.gt
+	end 'n'
+end 'negatedPred'
+
+// Read the two operands of the arithmetic op or compare in `scratch.arith` into `left` and `right`; an
+// immediate is a point.
+function readOperands(scratch RangeScratch)
+	scratch.readInterval(scratch.arith.lhs, into: scratch.left)
+
+	if scratch.arith.hasSecondValueOperand() 'rhsIsAValue'
+		scratch.readInterval(scratch.arith.rhs, into: scratch.right)
+	end 'rhsIsAValue' else 'rhsIsAnImmediate'
+		scratch.right.setPoint(scratch.arith.imm as ParsedInt)
+	end 'rhsIsAnImmediate'
+end 'readOperands'
+
+// The third guardrail. A signed 64-bit compare is the interval's own order. An unsigned one agrees with
+// it only where both operands are within `[0, i64.max]` — `u64.max` rides as `-1` and would sort below
+// everything. Any narrower or float operand type is not modelled at all, and `prepareFunction` has
+// already refused to index such a compare.
+function compareIsOrderable(scratch RangeScratch) returns bool
+	if scratch.arith.operandType == StdType.i64 'signed'
+		return true
+	end 'signed'
+
+	if scratch.arith.operandType != StdType.u64 'narrowOrFloat'
+		return false
+	end 'narrowOrFloat'
+
+	if scratch.left.isNonNegative() and scratch.right.isNonNegative() 'bothWithinTheSignedRange'
+		return true
+	end 'bothWithinTheSignedRange'
+
+	scratch.unsignedRefusedThisRound = scratch.unsignedRefusedThisRound + 1
+	return false
+end 'compareIsOrderable'
+
+// Join the incoming edges of every block arg of `block`, widening against the previous round from the
+// second round on. A block arg with no contribution keeps what it holds — unwritten until a later round
+// feeds it, or its last live value where every reaching predecessor is dead.
+function evaluateBlockArgs(module StdModule, func IrFunction, tree StdDominatorTree, position BlockRefIndex, block IrBlock, scratch RangeScratch)
+	for slot in 0 upto block.blockArgs.count() 'eachArg'
+		let arg = try block.blockArgs.get(slot) otherwise panic("refineValueRanges: blockArgs.get OOB at {slot}")
+
+		if not wordTyped(arg.argType) 'narrowArg'
+			continue
+		end 'narrowArg'
+
+		if scratch.forceTop 'forced'
+			scratch.result.setTop()
+			scratch.writeDef(arg.valueId, interval: scratch.result)
+			continue
+		end 'forced'
+
+		if not joinIncomingEdges(module, func: func, tree: tree, position: position, block: block, slot: slot, scratch: scratch) 'noContribution'
+			continue
+		end 'noContribution'
+
+		if scratch.isComputed(arg.valueId) 'hasPrevious'
+			scratch.readComputedInterval(arg.valueId, into: scratch.incoming)
+			scratch.incoming.widenTo(scratch.result)
+			scratch.result.copyFrom(scratch.incoming)
+		end 'hasPrevious'
+
+		scratch.writeDef(arg.valueId, interval: scratch.result)
+	end 'eachArg'
+end 'evaluateBlockArgs'
+
+// The join of what every reachable, live predecessor passes for `slot`, into `scratch.result`. Answers
+// whether any edge contributed. An input the pass does not model makes the join the whole range; a
+// modelled input no round has written yet — a back edge on the first round — contributes nothing until
+// it is; a dead predecessor's edge contributes nothing.
+//
+// The phi model records one edge per predecessor of a block that takes args, so a reachable predecessor
+// with no edge here is a broken invariant, never a missing contribution — except a `dead` block, which
+// the CFG connects to its physical successor by the fall-through edge it adds for every block without a
+// terminator op: no execution takes that edge, and the phi model records none for it.
+function joinIncomingEdges(module StdModule, func IrFunction, tree StdDominatorTree, position BlockRefIndex, block IrBlock, slot ElementIndex, scratch RangeScratch) returns bool
+	var any = false
+
+	for k in 0 upto tree.pred.degree(position as CsrIndex) 'eachPred'
+		let predPosition = tree.pred.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+
+		if not tree.canReach(predPosition) 'deadPredecessor'
+			continue
+		end 'deadPredecessor'
+
+		let pred = module.blockAtPosition(func, position: predPosition)
+		var edgesIn = 0 as TallyCount
+
+		for edge in pred.branchEdges 'eachEdge'
+			if edge.targetBlockId != block.id 'elsewhere'
+				continue
+			end 'elsewhere'
+
+			edgesIn = edgesIn + 1
+			if scratch.isBlockDead(predPosition) 'deadThisRound'
+				continue
+			end 'deadThisRound'
+
+			let incomingId = try edge.argIds.get(slot) otherwise panic("refineValueRanges: the edge from block_{pred.id} into block_{block.id} passes {edge.argIds.count()} arg(s) but slot {slot} is one of the target's block args")
+
+			if not scratch.isComputed(incomingId) 'notWritten'
+				if scratch.isModelled(incomingId) 'notYetThisRound'
+					continue
+				end 'notYetThisRound'
+
+				scratch.result.setTop()
+				return true
+			end 'notWritten'
+
+			scratch.readComputedInterval(incomingId, into: scratch.incoming)
+			if any 'joinIn'
+				scratch.result.joinWith(scratch.incoming)
+			end 'joinIn' else 'first'
+				scratch.result.copyFrom(scratch.incoming)
+				any = true
+			end 'first'
+		end 'eachEdge'
+
+		if edgesIn == 0 and not blockCarriesNoFlow(pred) 'edgeMissing'
+			panic("refineValueRanges: in '{String.from(func.name)}', block_{block.id} '{String.from(block.label)}' (position {position}) takes {block.blockArgs.count()} block arg(s) but its predecessor block_{pred.id} '{String.from(pred.label)}' (position {predPosition}, {"with" if pred.hasTerminatorOp() else "without"} a terminator op, {pred.branchEdges.count()} edge(s)) carries no edge to it")
+		end 'edgeMissing'
+	end 'eachPred'
+
+	return any
+end 'joinIncomingEdges'
+
+// Whether `block` is the parser's `dead` continuation — code after a fully-terminated construct, which
+// no path enters and which reaches nothing but through the CFG's conservative fall-through edge.
+function blockCarriesNoFlow(block IrBlock) returns bool
+	return match block.terminator 'kind'
+		dead gives true
+		unset or
+			fallthrough or
+			opIndex gives false
+	end 'kind'
+end 'blockCarriesNoFlow'
+
+// The interval one arithmetic op defines, written for its result. A compare additionally records a
+// decision when the intervals settle it.
+function evaluateArithOp(opIdx OpIndex, scratch RangeScratch)
+	if scratch.arith.isComparison() or scratch.arith.isComparisonImm() 'compare'
+		evaluateCompare(opIdx, scratch: scratch)
+		return
+	end 'compare'
+
+	if scratch.arith.isUnary() or not wordTyped(scratch.arith.operandType) 'notModelled'
+		return
+	end 'notModelled'
+
+	readOperands(scratch)
+
+	match scratch.arith.opcode 'op'
+		add then addIntervals(scratch)
+		sub then subIntervals(scratch)
+		mul then mulIntervals(scratch)
+		bitAnd then andIntervals(scratch)
+		shr then shiftRightIntervals(scratch, logical: false)
+		shrLogical then shiftRightIntervals(scratch, logical: true)
+		// A left shift and the `or`/`xor` of two intervals have no bound cheaper than the whole range;
+		// the three float-only opcodes and the high multiply are not integers this pass computes with.
+		bitOr or
+			bitXor or
+			shl or
+			div or
+			min or
+			max or
+			mulHighSigned then scratch.result.setTop()
+	end 'op'
+
+	scratch.writeDef(scratch.arith.resultId, interval: scratch.result)
+end 'evaluateArithOp'
+
+// The second guardrail, for `add`: the sum of the two low corners and of the two high corners, or the
+// whole range where either wraps.
+function addIntervals(scratch RangeScratch)
+	if addWraps(scratch.left.lo, b: scratch.right.lo) or addWraps(scratch.left.hi, b: scratch.right.hi) 'wraps'
+		scratch.wrapsThisRound = scratch.wrapsThisRound + 1
+		scratch.result.setTop()
+		return
+	end 'wraps'
+
+	scratch.result.setBounds(scratch.left.lo + scratch.right.lo, high: scratch.left.hi + scratch.right.hi)
+end 'addIntervals'
+
+function subIntervals(scratch RangeScratch)
+	if subWraps(scratch.left.lo, b: scratch.right.hi) or subWraps(scratch.left.hi, b: scratch.right.lo) 'wraps'
+		scratch.wrapsThisRound = scratch.wrapsThisRound + 1
+		scratch.result.setTop()
+		return
+	end 'wraps'
+
+	scratch.result.setBounds(scratch.left.lo - scratch.right.hi, high: scratch.left.hi - scratch.right.lo)
+end 'subIntervals'
+
+// The four corner products, or the whole range where any of them wraps.
+function mulIntervals(scratch RangeScratch)
+	let a = scratch.left
+	let b = scratch.right
+
+	if mulWraps(a.lo, b: b.lo) or mulWraps(a.lo, b: b.hi) or mulWraps(a.hi, b: b.lo) or mulWraps(a.hi, b: b.hi) 'wraps'
+		scratch.wrapsThisRound = scratch.wrapsThisRound + 1
+		scratch.result.setTop()
+		return
+	end 'wraps'
+
+	let lowLow = a.lo * b.lo
+	let lowHigh = a.lo * b.hi
+	let highLow = a.hi * b.lo
+	let highHigh = a.hi * b.hi
+	scratch.result.setBounds(lesser(lesser(lowLow, b: lowHigh), b: lesser(highLow, b: highHigh)), high: greater(greater(lowLow, b: lowHigh), b: greater(highLow, b: highHigh)))
+end 'mulIntervals'
+
+// `a and b` is non-negative and no larger than either NON-NEGATIVE side: a clear sign bit stays clear,
+// and no bit is set that the side did not have.
+function andIntervals(scratch RangeScratch)
+	if not scratch.left.isNonNegative() and not scratch.right.isNonNegative() 'eitherMayBeNegative'
+		scratch.result.setTop()
+		return
+	end 'eitherMayBeNegative'
+
+	var high = i64.max
+	if scratch.left.isNonNegative() 'boundedByLeft'
+		high = scratch.left.hi
+	end 'boundedByLeft'
+
+	if scratch.right.isNonNegative() 'boundedByRight'
+		high = lesser(high, b: scratch.right.hi)
+	end 'boundedByRight'
+
+	scratch.result.setBounds(0, high: high)
+end 'andIntervals'
+
+// A right shift by a COUNT the immediate window admits (`shiftCountIsUnguarded`, 0..63; a shift by a
+// value is the whole range). Arithmetic shifts each bound; logical clears the sign, so the result is
+// bounded by the largest word that many bits can hold, and by the arithmetic bounds where the operand
+// is already non-negative.
+function shiftRightIntervals(scratch RangeScratch, logical bool)
+	if scratch.arith.hasSecondValueOperand() or not shiftCountIsUnguarded(scratch.right.lo) 'countIsNotAnImmediate'
+		scratch.result.setTop()
+		return
+	end 'countIsNotAnImmediate'
+
+	let count = scratch.right.lo
+
+	if not logical or scratch.left.isNonNegative() 'orderPreserved'
+		scratch.result.setBounds(scratch.left.lo shr count, high: scratch.left.hi shr count)
+		return
+	end 'orderPreserved'
+
+	if count == 0 'identity'
+		scratch.result.copyFrom(scratch.left)
+		return
+	end 'identity'
+
+	scratch.result.setBounds(0, high: i64.max shr (count - 1))
+end 'shiftRightIntervals'
+
+// A compare's result is an i1; the intervals decide it where one operand's whole interval sits on one
+// side of the other's.
+function evaluateCompare(opIdx OpIndex, scratch RangeScratch)
+	readOperands(scratch)
+
+	if compareIsOrderable(scratch) 'orderable'
+		match decideCompare(scratch.arith.pred, left: scratch.left, right: scratch.right) 'verdict'
+			holds then recordDecision(opIdx, holds: true, scratch: scratch)
+			fails then recordDecision(opIdx, holds: false, scratch: scratch)
+			undecided then recordUndecided(scratch)
+		end 'verdict'
+	end 'orderable' else 'notOrderable'
+		recordUndecided(scratch)
+	end 'notOrderable'
+
+	scratch.writeDef(scratch.arith.resultId, interval: scratch.result)
+end 'evaluateCompare'
+
+function recordDecision(opIdx OpIndex, holds bool, scratch RangeScratch)
+	scratch.decisions.push(CompareDecision.create(opIdx, resultId: scratch.arith.resultId, holds: holds))
+	scratch.result.setPoint(boolPayload(holds))
+end 'recordDecision'
+
+function recordUndecided(scratch RangeScratch)
+	scratch.undecidedThisRound = scratch.undecidedThisRound + 1
+	scratch.result.setBounds(boolPayload(false), high: boolPayload(true))
+end 'recordUndecided'
+
+enum CompareVerdict
+	holds
+	fails
+	undecided
+end 'CompareVerdict'
+
+function decideCompare(pred StdCmpPred, left Interval, right Interval) returns CompareVerdict
+	let entirelyBelow = left.hi < right.lo
+	let entirelyAbove = left.lo > right.hi
+	let disjoint = entirelyBelow or entirelyAbove
+	let samePoint = left.isPoint() and right.isPoint() and left.lo == right.lo
+
+	return match pred 'p'
+		lt gives verdictOf(entirelyBelow, fails: left.lo >= right.hi)
+		le gives verdictOf(left.hi <= right.lo, fails: entirelyAbove)
+		gt gives verdictOf(entirelyAbove, fails: left.hi <= right.lo)
+		ge gives verdictOf(left.lo >= right.hi, fails: entirelyBelow)
+		eq gives verdictOf(samePoint, fails: disjoint)
+		ne gives verdictOf(disjoint, fails: samePoint)
+	end 'p'
+end 'decideCompare'
+
+function verdictOf(holds bool, fails bool) returns CompareVerdict
+	if holds 'holds'
+		return CompareVerdict.holds
+	end 'holds'
+
+	if fails 'fails'
+		return CompareVerdict.fails
+	end 'fails'
+
+	return CompareVerdict.undecided
+end 'verdictOf'
+
+// The fourth guardrail and the rewrite: each decided compare becomes the `const` it evaluates to, at its
+// own index; the branches on those constants fold as `foldConstants` folds them; the arm a fold dropped
+// goes with everything only it reached; the constants nothing reads any more are retired. Answers how
+// many branches folded.
+function applyDecisions(module StdModule, func IrFunction, scratch RangeScratch) returns TallyCount
+	var constMap = ConstValueMap.create()
+
+	for decision in scratch.decisions 'eachDecision'
+		let payload = boolPayload(decision.holds)
+		try module.ops.set(decision.opIdx, value: StdOp.const(decision.resultId, value: payload, valueType: FoldedComparisonType)) otherwise panic("refineValueRanges: ops.set OOB at {decision.opIdx}")
+		constMap.upsert(decision.resultId, value: payload)
+	end 'eachDecision'
+
+	let folded = foldConstantBranches(module, func: func, constMap: constMap, branch: scratch.branch)
+
+	if folded > 0 'branchesFolded'
+		dropUnreachableBlocks(module, func: func)
+	end 'branchesFolded'
+
+	dceRetiredDefs(module, func: func, opIndices: module.liveOpIndices(func), def: scratch.def)
+
+	return folded
+end 'applyDecisions'

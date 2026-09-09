@@ -8,11 +8,11 @@ function opaque(n Integer) returns Integer
 end 'opaque'
 
 function divide(a Integer, b NonZero) returns Integer
-  return a / b
+  return ((a as NonZero) / b) as Integer
 end 'divide'
 
 function apply(f DivFn, a Integer, b Integer) returns Integer
-  return f(a, b)
+  return f(a, b as NonZero)
 end 'apply'
 
 function main() returns ExitCode
@@ -29,18 +29,28 @@ func @divide {
     x64.prologue 32
     x64.movRegReg rsi, rdx
     x64.cmpRegImm32 rsi, 1
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
+    x64.jcc greaterEqual, __rc_ok#1
+  __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:10: Range check failed: value outside typealias 'NonZero'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc greaterEqual, __rc_ok#3
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:11: Range check failed: value outside typealias 'NonZero'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#3:
     x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
     x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
@@ -54,6 +64,17 @@ func @apply {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rax, 1
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:15: Range check failed: value outside typealias 'NonZero'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.movRegReg rax, r9
@@ -82,7 +103,7 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

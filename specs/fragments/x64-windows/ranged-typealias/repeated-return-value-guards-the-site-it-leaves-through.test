@@ -35,9 +35,8 @@ func @pick {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.setccReg less, rax
     x64.jcc less, __rc_panic#6
-  __rc_chk#7:
+  __rc_chk:
     x64.cmpRegImm32 rcx, 100000
     x64.jcc lessEqual, __rc_ok#5
   __rc_panic#6:
@@ -49,13 +48,7 @@ func @pick {
     x64.ret
   __rc_ok#5:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc lessEqual, ifcont#2
-  high:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#9
-  __rc_chk#10:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok#8
+    x64.jcc lessEqual, ifcont
   __rc_panic#9:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at repeated-return-value-guards-the-site-it-leaves-through.test:7: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
@@ -63,41 +56,11 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#8:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont#2:
+  ifcont:
     x64.cmpRegImm32 rcx, 100
-    x64.setccReg greater, rdx
-    x64.jcc lessEqual, ifcont#4
-  mid:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#12
-  __rc_chk#13:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rc_ok#11
+    x64.jcc lessEqual, __rc_ok#14
   __rc_panic#12:
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at repeated-return-value-guards-the-site-it-leaves-through.test:11: Range check failed: value outside typealias 'Small'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#11:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont#4:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#15
-  __rc_chk#16:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __rc_ok#14
-  __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at repeated-return-value-guards-the-site-it-leaves-through.test:14: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -150,6 +150,16 @@ union PassKind
 	// predecessors are in place when that pass reads each block, and the compare it removes is not one CSE
 	// has already made canonical for a later read.
 	//
+	// `refineValueRanges` computes a signed 64-bit interval for every integer value — constants, wrap-aware
+	// `add`/`sub`/`mul`, block args as the join of their edges — narrowed below each compare's branch by the
+	// predicate that holds there, and deletes every compare-and-branch the intervals decide: the `__rc_`
+	// cascade `insertRangeChecks` puts before a checked element access is dead on a loop counter, on a
+	// value a dominating check already proved, and on `high` inside `while low < high`. It runs AFTER
+	// `threadConstantBranches`, which has already settled the flag tests, and BEFORE
+	// `commonSubexpressionElimination`: CSE caches a compare's result across blocks and isel then
+	// materializes a `setcc` for it, so a compare this pass deletes must not first become one CSE has made
+	// canonical.
+	//
 	// `commonSubexpressionElimination` (EC13) replaces a PURE computation whose operator and operands a
 	// block has already evaluated with a read of that earlier result — `x * 31 + y` written three times
 	// becomes one `imul`/`lea` pair instead of three into three simultaneously-live registers. It runs
@@ -186,6 +196,7 @@ union PassKind
 	strengthReduceDivision
 	foldConstOperands
 	threadConstantBranches
+	refineValueRanges
 	commonSubexpressionElimination
 	loopInvariantCodeMotion
 
@@ -254,6 +265,9 @@ function classifyPass(pass PassKind) returns PassClassification
 		// Intra-function by construction: a join block, its predecessors and its two targets are one
 		// function's CFG, and the dominance it asks about is a fact about that CFG alone.
 		threadConstantBranches gives PassClassification.perFunction
+		// Intra-function by construction: the intervals are a fact about one function's values and the
+		// refinement about its own CFG's dominance; nothing about a callee is consulted.
+		refineValueRanges gives PassClassification.perFunction
 		// Intra-function by construction: an expression is compared only against ones computed in blocks
 		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
 		strengthReduceDivision gives PassClassification.perFunction
@@ -290,6 +304,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		foldConstants gives CompilePhase.foldConstants
 		foldConstOperands gives CompilePhase.foldConstOperands
 		threadConstantBranches gives CompilePhase.threadConstantBranches
+		refineValueRanges gives CompilePhase.refineValueRanges
 		strengthReduceDivision gives CompilePhase.strengthReduceDivision
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
@@ -313,6 +328,7 @@ function passKindToString(pass PassKind) returns String
 		foldConstants gives "foldConstants"
 		foldConstOperands gives "foldConstOperands"
 		threadConstantBranches gives "threadConstantBranches"
+		refineValueRanges gives "refineValueRanges"
 		strengthReduceDivision gives "strengthReduceDivision"
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
@@ -365,6 +381,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.strengthReduceDivision)
 	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.threadConstantBranches)
+	passes.push(PassKind.refineValueRanges)
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.promoteStackRecords)
@@ -544,6 +561,7 @@ export type PassPipeline
 			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
 			threadConstantBranches then threadConstantBranches(self.stdModule)
+			refineValueRanges then refineValueRanges(self.stdModule)
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
