@@ -1194,6 +1194,237 @@ function buildSectionList(codeSize BytePos, hasRdata bool, rdataSize BytePos, ha
 	return sections
 end 'buildSectionList'
 
+// What goes into a produced binary's `VS_VERSIONINFO`.
+//
+// ⚠ **THE VERSION DESCRIBES THE PROGRAM BEING BUILT, NOT THE COMPILER THAT BUILT IT.** Those are
+// different facts and conflating them would tell every user's binary it was version 0.1.0 of
+// something. The compiler's own identity goes in `FileDescription`, where it is true of any output;
+// the version fields default to zero and are set by `--product-version`.
+type PeVersionInfo
+	export let major as VersionField
+	export let minor as VersionField
+	export let patch as VersionField
+	export let build as VersionField
+	export let product as String
+	export let originalFilename as String
+	export let company as String
+	export let description as String
+	export let tableName as String
+
+	export static function create(major VersionField, minor VersionField, patch VersionField, build VersionField, product String, originalFilename String, company String, description String, tableName String) returns PeVersionInfo
+		return Self{major: major, minor: minor, patch: patch, build: build, product: product, originalFilename: originalFilename, company: company, description: description, tableName: tableName}
+	end 'create'
+end 'PeVersionInfo'
+
+typealias VersionField = int(0 to 65535)
+
+// ⚠ A NON-ASCII STEM IS DROPPED RATHER THAN MANGLED. `verUtf16` widens bytes, which is only correct
+// for ASCII; a UTF-8 stem widened byte-by-byte would produce mojibake in Explorer. The resource is
+// still emitted — with the name omitted — because a binary with a version and no product name is
+// more useful than one with neither.
+function peAsciiOrEmpty(text String) returns String
+	for b in text.toByteArray() 'eachByte'
+		if b > 127 'nonAscii'
+			return ""
+		end 'nonAscii'
+	end 'eachByte'
+	return text
+end 'peAsciiOrEmpty'
+
+
+// The version resource for one output.
+//
+// ⚠ **THE VERSION FIELDS ARE ZERO UNTIL SOMETHING SETS THEM, AND THAT IS THE HONEST DEFAULT.** The
+// compiler knows its OWN version and nothing about the version of the program it is compiling;
+// stamping the former onto the latter would tell every user's binary it was 0.1.0 of something. What
+// IS true of any output is which compiler produced it, and that goes in `FileDescription`.
+function peVersionInfoFor(outputPath FilePath) returns PeVersionInfo
+	let stem = peAsciiOrEmpty(outputPath.stem())
+	let suffix = outputPath.fileExtension()
+	return PeVersionInfo.create(0, minor: 0, patch: 0, build: 0, product: stem, originalFilename: "{stem}{suffix}", company: "", description: "Built with Maxon {CompilerVersion}", tableName: "040904B0")
+end 'peVersionInfoFor'
+
+// --- VS_VERSIONINFO (RT_VERSION) ---
+//
+// ⭐⭐ **WHAT WINDOWS READS OFF A BINARY WHEN IT IS ASKED WHO MADE IT** — Explorer's Details tab,
+// `(Get-Item x.exe).VersionInfo`, and every code-signing service that requires product metadata. A
+// binary without it answers EMPTY to all three.
+//
+// ⛔ **EVERY STRUCTURE IS BUILT BOTTOM-UP SO A LENGTH IS NEVER BACK-PATCHED.** `wLength` counts the
+// structure INCLUDING its children, so writing top-down means reserving a word and returning to it
+// once the children are known — and a missed patch produces a resource Windows silently IGNORES
+// rather than one it rejects. Building each child first makes every length a count of bytes that
+// already exist.
+//
+// ⚠ **THE PADDING RULE IS "EACH MEMBER STARTS 32-BIT ALIGNED", AND IT IS WHERE THIS FORMAT IS MOST
+// OFTEN GOT WRONG.** Padding after a key belongs to the structure and counts in its length; padding
+// after the structure is the NEXT one's problem and does not.
+
+let VerFixedFileInfoSignature = 0xFEEF04BD
+let VerFixedFileInfoStrucVersion = 0x00010000
+let VerFileFlagsMask = 0x3F
+let VerFileOsNtWindows32 = 0x00040004
+let VerFileTypeApp = 0x1
+// US English (0x0409) and the UTF-16 code page (0x04B0 = 1200) — the pair the string table's name and
+// the `Translation` value both spell, in opposite word orders, as the format requires.
+let VerLangIdEnUs = 0x0409
+let VerCodePageUtf16 = 0x04B0
+let VerTypeBinary = 0
+let VerTypeText = 1
+// The three words every structure in this format opens with.
+let VerHeaderBytes = 6
+
+// A `String` as UTF-16LE with its terminator. Every key and value here is ASCII by construction — the
+// keys are format constants, the values a file stem and a dotted version — so widening each byte IS
+// the conversion. `peVersionInfoFor` refuses a non-ASCII stem rather than letting it be mangled here.
+function verUtf16(text String) returns ByteArray
+	var out = ByteArray.create()
+	for b in text.toByteArray() 'eachByte'
+		writeWord(out, value: b as MachineWord)
+	end 'eachByte'
+	writeWord(out, value: 0)
+	return out
+end 'verUtf16'
+
+// The bytes needed to reach the next 32-bit boundary, returned rather than appended so each caller
+// decides whether they count toward its own length.
+function verPadding(length BytePos) returns ByteArray
+	var pad = ByteArray.create()
+	var n = length
+	while n mod 4 != 0 'align'
+		pad.push(0)
+		n = n + 1
+	end 'align'
+	return pad
+end 'verPadding'
+
+// ⛔ **A SIBLING STARTS 32-BIT ALIGNED TOO, AND THAT PADDING BELONGS TO NEITHER STRUCTURE.** A child's
+// `wLength` covers itself and its own children — never the gap before the NEXT sibling — so appending
+// two children back to back leaves the second one misaligned and `VerQueryValue` walks into the
+// middle of it. MEASURED: `VarFileInfo` landed 2 bytes early and Windows read every field as empty.
+//
+// `base` is the offset the buffer's own zero sits at inside the enclosing structure, because
+// alignment is a property of the position in the RESOURCE, not in this array.
+function verAppendChild(buf ByteArray, base BytePos, child ByteArray)
+	buf.append(verPadding(base + buf.count()))
+	buf.append(child)
+end 'verAppendChild'
+
+// One `String` entry. ⚠ `wValueLength` counts the value in WCHARs INCLUDING its terminator — the one
+// field in this format measured in characters rather than bytes.
+function verStringEntry(key String, value String) returns ByteArray
+	let keyBytes = verUtf16(key)
+	let valueBytes = verUtf16(value)
+
+	var body = ByteArray.create()
+	body.append(keyBytes)
+	body.append(verPadding(VerHeaderBytes + body.count()))
+	body.append(valueBytes)
+
+	var out = ByteArray.create()
+	writeWord(out, value: (VerHeaderBytes + body.count()) as MachineWord)
+	writeWord(out, value: (valueBytes.count() / 2) as MachineWord)
+	writeWord(out, value: VerTypeText)
+	out.append(body)
+	return out
+end 'verStringEntry'
+
+// A container — `StringFileInfo`, a string table, `VarFileInfo` — whose value length is 0 and whose
+// payload is its children.
+function verContainer(key String, children ByteArray) returns ByteArray
+	let keyBytes = verUtf16(key)
+
+	var body = ByteArray.create()
+	body.append(keyBytes)
+	body.append(verPadding(VerHeaderBytes + body.count()))
+	body.append(children)
+
+	var out = ByteArray.create()
+	writeWord(out, value: (VerHeaderBytes + body.count()) as MachineWord)
+	writeWord(out, value: 0)
+	writeWord(out, value: VerTypeText)
+	out.append(body)
+	return out
+end 'verContainer'
+
+// `VS_FIXEDFILEINFO` — the BINARY half, which is what most tools read for a version number. The
+// dotted string below is what a human sees; both come from the same four fields so they cannot
+// disagree.
+function verFixedFileInfo(version PeVersionInfo) returns ByteArray
+	let high = ((version.major * 65536) + version.minor) as MachineWord
+	let low = ((version.patch * 65536) + version.build) as MachineWord
+
+	var out = ByteArray.create()
+	writeDword(out, value: VerFixedFileInfoSignature)
+	writeDword(out, value: VerFixedFileInfoStrucVersion)
+	writeDword(out, value: high)
+	writeDword(out, value: low)
+	writeDword(out, value: high)
+	writeDword(out, value: low)
+	writeDword(out, value: VerFileFlagsMask)
+	writeDword(out, value: 0)
+	writeDword(out, value: VerFileOsNtWindows32)
+	writeDword(out, value: VerFileTypeApp)
+	writeDword(out, value: 0)
+	writeDword(out, value: 0)
+	writeDword(out, value: 0)
+	return out
+end 'verFixedFileInfo'
+
+// The whole `VS_VERSIONINFO` resource.
+function buildVersionResource(version PeVersionInfo) returns ByteArray
+	let dotted = "{version.major}.{version.minor}.{version.patch}.{version.build}"
+
+	var strings = ByteArray.create()
+	verAppendChild(strings, base: 0, child: verStringEntry("CompanyName", value: version.company))
+	verAppendChild(strings, base: 0, child: verStringEntry("FileDescription", value: version.description))
+	verAppendChild(strings, base: 0, child: verStringEntry("FileVersion", value: dotted))
+	verAppendChild(strings, base: 0, child: verStringEntry("InternalName", value: version.product))
+	verAppendChild(strings, base: 0, child: verStringEntry("OriginalFilename", value: version.originalFilename))
+	verAppendChild(strings, base: 0, child: verStringEntry("ProductName", value: version.product))
+	verAppendChild(strings, base: 0, child: verStringEntry("ProductVersion", value: dotted))
+
+	let stringTable = verContainer(version.tableName, children: strings)
+	let stringFileInfo = verContainer("StringFileInfo", children: stringTable)
+
+	// ⚠ `Translation` IS THE ONE BINARY VALUE HERE, and its two words are in the OPPOSITE order to
+	// the string table's name: the language first, then the code page.
+	var translation = ByteArray.create()
+	writeWord(translation, value: VerLangIdEnUs)
+	writeWord(translation, value: VerCodePageUtf16)
+
+	let translationKey = verUtf16("Translation")
+	var varBody = ByteArray.create()
+	varBody.append(translationKey)
+	varBody.append(verPadding(VerHeaderBytes + varBody.count()))
+	varBody.append(translation)
+
+	var varEntry = ByteArray.create()
+	writeWord(varEntry, value: (VerHeaderBytes + varBody.count()) as MachineWord)
+	writeWord(varEntry, value: translation.count() as MachineWord)
+	writeWord(varEntry, value: VerTypeBinary)
+	varEntry.append(varBody)
+	let varFileInfo = verContainer("VarFileInfo", children: varEntry)
+
+	let rootKey = verUtf16("VS_VERSION_INFO")
+	let fixed = verFixedFileInfo(version)
+
+	var rootBody = ByteArray.create()
+	rootBody.append(rootKey)
+	rootBody.append(verPadding(VerHeaderBytes + rootBody.count()))
+	rootBody.append(fixed)
+	rootBody.append(verPadding(VerHeaderBytes + rootBody.count()))
+	verAppendChild(rootBody, base: VerHeaderBytes, child: stringFileInfo)
+	verAppendChild(rootBody, base: VerHeaderBytes, child: varFileInfo)
+
+	var out = ByteArray.create()
+	writeWord(out, value: (VerHeaderBytes + rootBody.count()) as MachineWord)
+	writeWord(out, value: fixed.count() as MachineWord)
+	writeWord(out, value: VerTypeBinary)
+	out.append(rootBody)
+	return out
+end 'buildVersionResource'
+
 // --- Resource section (.rsrc): embedded application manifest ---
 
 // Windows' Installer Detection heuristic treats an exe whose NAME contains an
@@ -1205,15 +1436,31 @@ end 'buildSectionList'
 // `myapp-update.exe` hits the same wall. Embedding the standard `asInvoker` manifest
 // opts every produced binary out of the heuristic.
 //
-// The section holds the minimal single-resource tree:
-//   root IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → type dir   @24
-//   type IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → lang dir   @48
-//   lang IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → data entry @72
-//   IMAGE_RESOURCE_DATA_ENTRY (16)                     → manifest   @88
-let RsrcTypeDirOffset = 24
-let RsrcLangDirOffset = 48
-let RsrcDataEntryOffset = 72
-let RsrcManifestOffset = 88
+// The section holds TWO resource types, and the tree is laid out by hand because every offset in it
+// is relative to the section start and must be known before a byte is written:
+//
+//   @0    root dir (16) + 2 entries (16)          → the two type subdirectories
+//   @32   RT_VERSION type dir (16) + entry (8)
+//   @56   RT_MANIFEST type dir (16) + entry (8)
+//   @80   RT_VERSION lang dir (16) + entry (8)
+//   @104  RT_MANIFEST lang dir (16) + entry (8)
+//   @128  RT_VERSION data entry (16)
+//   @144  RT_MANIFEST data entry (16)
+//   @160  the version blob, then the manifest
+//
+// ⛔ **ID ENTRIES MUST BE SORTED ASCENDING AND WINDOWS BINARY-SEARCHES THEM.** RT_VERSION is 16 and
+// RT_MANIFEST is 24, so version comes FIRST — an unsorted directory is not rejected, it is silently
+// half-searched, which is the failure mode this note exists to prevent.
+let RtVersionTypeId = 16
+let VersionResourceId = 1
+let RsrcRootBytes = 32
+let RsrcVersionTypeDirOffset = 32
+let RsrcManifestTypeDirOffset = 56
+let RsrcVersionLangDirOffset = 80
+let RsrcManifestLangDirOffset = 104
+let RsrcVersionDataEntryOffset = 128
+let RsrcManifestDataEntryOffset = 144
+let RsrcFirstBlobOffset = 160
 
 // High bit of a directory entry's offset field marks "points at a subdirectory".
 let RsrcSubdirBit = 0x80000000
@@ -1238,35 +1485,55 @@ function writeResourceDirHeader(buf ByteArray, idEntries ResourceEntryCount)
 	writeWord(buf, value: idEntries as MachineWord)
 end 'writeResourceDirHeader'
 
-// Build the minimal 3-level resource tree carrying the single RT_MANIFEST resource.
-// `rsrcRva` is the `.rsrc` section's own RVA, needed because the data entry's manifest
-// pointer is IMAGE-relative (not section-relative like the directory-entry offsets).
-function buildRsrcSection(rsrcRva Rva) returns ByteArray
+// Build the 3-level resource tree carrying RT_VERSION and RT_MANIFEST.
+//
+// `rsrcRva` is the section's own RVA: a data entry's pointer is IMAGE-relative, unlike every
+// directory-entry offset here, which is section-relative. Getting that one field wrong produces a
+// binary that loads and whose resources cannot be read.
+function buildRsrcSection(rsrcRva Rva, version PeVersionInfo) returns ByteArray
 	var rsrc = ByteArray.create()
 	let manifest = manifestXml()
+	let versionBlob = buildVersionResource(version)
 
-	// Root directory: one ID entry (the RT_MANIFEST type) → type subdirectory.
-	writeResourceDirHeader(rsrc, idEntries: 1)
+	// The version blob is padded so the manifest that follows starts 32-bit aligned.
+	let versionPad = verPadding(versionBlob.count())
+	let manifestOffset = RsrcFirstBlobOffset + versionBlob.count() + versionPad.count()
+
+	// Root: two ID entries, ascending.
+	writeResourceDirHeader(rsrc, idEntries: 2)
+	writeDword(rsrc, value: RtVersionTypeId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcVersionTypeDirOffset)
 	writeDword(rsrc, value: RtManifestTypeId)
-	writeDword(rsrc, value: RsrcSubdirBit or RsrcTypeDirOffset)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcManifestTypeDirOffset)
 
-	// Type-level directory: one entry (resource ID 1) → language subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: VersionResourceId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcVersionLangDirOffset)
+
 	writeResourceDirHeader(rsrc, idEntries: 1)
 	writeDword(rsrc, value: CreateProcessManifestResourceId)
-	writeDword(rsrc, value: RsrcSubdirBit or RsrcLangDirOffset)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcManifestLangDirOffset)
 
-	// Language-level directory: one entry (en-US) → data entry (leaf: no subdir bit).
 	writeResourceDirHeader(rsrc, idEntries: 1)
 	writeDword(rsrc, value: RsrcLangIdEnUs)
-	writeDword(rsrc, value: RsrcDataEntryOffset)
+	writeDword(rsrc, value: RsrcVersionDataEntryOffset)
 
-	// IMAGE_RESOURCE_DATA_ENTRY: the manifest's RVA is image-relative (NOT
-	// section-relative, unlike the directory-entry offsets above).
-	writeDword(rsrc, value: ((rsrcRva + RsrcManifestOffset) as MachineWord))
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RsrcLangIdEnUs)
+	writeDword(rsrc, value: RsrcManifestDataEntryOffset)
+
+	writeDword(rsrc, value: ((rsrcRva + RsrcFirstBlobOffset) as MachineWord))
+	writeDword(rsrc, value: versionBlob.count())
+	writeDword(rsrc, value: 0)
+	writeDword(rsrc, value: 0)
+
+	writeDword(rsrc, value: ((rsrcRva + manifestOffset) as MachineWord))
 	writeDword(rsrc, value: manifest.count())
-	writeDword(rsrc, value: 0)  // CodePage
-	writeDword(rsrc, value: 0)  // Reserved
+	writeDword(rsrc, value: 0)
+	writeDword(rsrc, value: 0)
 
+	rsrc.append(versionBlob)
+	rsrc.append(versionPad)
 	rsrc.append(manifest)
 	return rsrc
 end 'buildRsrcSection'
@@ -1357,12 +1624,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
 
-	// .rsrc — the embedded `asInvoker` manifest, ALWAYS emitted. Placed LAST so no
+	// .rsrc — the version resource and the embedded `asInvoker` manifest, ALWAYS emitted. Placed LAST so no
 	// existing section RVA shifts (the IAT relocations are RVA-sensitive). The manifest's
 	// data-entry pointer is image-relative, so `.rsrc`'s own RVA must be fixed before the
 	// section is built.
 	let rsrcRva = idataRva + idataSizeVirtual
-	let rsrcData = buildRsrcSection(rsrcRva as Rva)
+	let rsrcData = buildRsrcSection(rsrcRva as Rva, version: peVersionInfoFor(outputPath))
 	let rsrcSize = rsrcData.count()
 	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
 	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)
