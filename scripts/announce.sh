@@ -8,16 +8,21 @@
 # cannot fail a release that has already happened — which is a stronger guarantee than a `|| true`
 # inside `release.sh` burying a warning in a log nobody reads.
 #
-# ⭐ **THE CHANGES COME FROM `CHANGELOG.md`, THROUGH `changelog.sh --section`.** The post, the GitHub
-# release notes and the marketplace tab are then three renderings of one source, and cannot come to
-# disagree about what shipped.
+# ⭐ **THE CHANGES COME FROM `CHANGELOG.md`.** The post, the site's changelog page, the GitHub release
+# notes and the marketplace tab are then four renderings of one source, and cannot come to disagree
+# about what shipped.
+#
+# ⚠ **IT WRITES TWO FILES IN ONE COMMIT.** The blog post announces THIS release and is never touched
+# again; the changelog page carries EVERY release and is rewritten each time. One is a dated feed
+# entry, the other is a reference — a reader wanting "what changed in 0.1.1" and a reader wanting "has
+# the thing I need landed yet" are asking different questions.
 #
 # Usage:
 #   scripts/announce.sh <version> [--web-dir=<path>] [--dry-run]
 #
 #   <version>     the released version, without a leading `v` — e.g. 0.1.1
 #   --web-dir=    the maxon-web checkout. Defaults to $MAXON_WEB_DIR, else ../maxon-web
-#   --dry-run     print the post to stdout, write and push nothing
+#   --dry-run     print both files to stdout, write and push nothing
 
 set -euo pipefail
 
@@ -26,6 +31,9 @@ cd "$repo_root"
 
 ReleasesUrl="https://github.com/maxon-lang/maxon/releases"
 BlogSubdir="src/content/docs/blog"
+ChangelogPagePath="src/content/docs/docs/changelog.md"
+ChangelogFile="CHANGELOG.md"
+WebDefaultBranch="main"
 
 version=""
 web_dir="${MAXON_WEB_DIR:-../maxon-web}"
@@ -91,8 +99,39 @@ EOF
 # entry is dated by the history it describes; a blog post is dated by the day it was published, which
 # is what a reader of a feed expects.
 
+# ⭐⭐ **THE SITE'S CHANGELOG PAGE — EVERY RELEASE, REWRITTEN WHOLE EACH TIME.** The blog post answers
+# *"what changed in 0.1.1"*; this answers *"has the thing I need landed yet"*, which is the question a
+# reader arrives with when they are deciding whether to upgrade. Both are renderings of the same
+# `CHANGELOG.md`, so neither can drift from what shipped.
+#
+# ⚠ THE GENERATED FILE'S OWN HEADER IS DROPPED AND REPLACED. `CHANGELOG.md` opens with an instruction
+# to contributors — do not edit this, corrections go in the overrides file — which is addressed to
+# somebody working in the compiler repository and means nothing to a reader of the website.
+changelog_page() {
+	cat <<EOF
+---
+title: Changelog
+description: Every released version of the Maxon compiler and standard library, and what changed in it.
+---
+
+Every released version, newest first. Each entry links to the commit that made the change.
+
+Downloads for each release are on the
+[GitHub releases page]($ReleasesUrl), and the install instructions are in
+[Installation](/docs/getting-started/installation/).
+
+EOF
+	# From the first version heading to the end: the headings and bullets, without the contributor
+	# preamble above them.
+	sed -n '/^## /,$p' "$ChangelogFile"
+}
+
 if [ "$dry_run" -eq 1 ]; then
 	post_markdown
+	echo
+	echo "───────────────────────── $ChangelogPagePath ─────────────────────────"
+	echo
+	changelog_page
 	exit 0
 fi
 
@@ -101,6 +140,17 @@ fi
 blog_dir="$web_dir/$BlogSubdir"
 [ -d "$blog_dir" ] || { warn "'$blog_dir' does not exist; nothing announced"; exit 1; }
 
+# ⛔ **PUSHING TO WHATEVER BRANCH HAPPENED TO BE CHECKED OUT IS HOW AN ANNOUNCEMENT NEVER DEPLOYS.**
+# Cloudflare builds `main`; a release announced onto somebody's half-finished feature branch is
+# committed, pushed, reported as done, and invisible. MEASURED: the checkout this was written against
+# was sitting on `upgrade-astro-7`.
+web_branch="$(git -C "$web_dir" branch --show-current)"
+if [ "$web_branch" != "$WebDefaultBranch" ]; then
+	warn "'$web_dir' is on '$web_branch', not '$WebDefaultBranch' — the site deploys from '$WebDefaultBranch'"
+	warn "nothing announced. Switch that checkout and run this again."
+	exit 1
+fi
+
 # Slug `maxon-0-1-1`, so the URL is /blog/maxon-0-1-1.
 post="$blog_dir/maxon-${version//./-}.md"
 
@@ -108,15 +158,25 @@ post="$blog_dir/maxon-${version//./-}.md"
 # regenerating over it would silently discard that.
 [ ! -e "$post" ] || { warn "$post already exists; not overwriting"; exit 1; }
 
+page="$web_dir/$ChangelogPagePath"
+[ -d "$(dirname "$page")" ] || { warn "'$(dirname "$page")' does not exist; nothing announced"; exit 1; }
+
 post_markdown > "$post"
 echo "announce.sh: wrote $post"
 
-# ⚠ ONLY THE NEW POST IS STAGED, so an unrelated change sitting in that repository's working tree is
-# never swept into this commit.
-git -C "$web_dir" add "$post" || { warn "could not stage $post"; exit 1; }
-git -C "$web_dir" commit -q -m "blog: announce Maxon $version" || { warn "could not commit $post"; exit 1; }
+# ⚠ THE PAGE IS REWRITTEN, NOT APPENDED TO — unlike the post, which is refused if it exists. It is
+# generated in full from `CHANGELOG.md` every time, so there is nothing hand-written in it to lose.
+changelog_page > "$page"
+echo "announce.sh: wrote $page"
 
-web_branch="$(git -C "$web_dir" branch --show-current)"
+# ⚠ ONLY THESE TWO FILES ARE STAGED, so an unrelated change sitting in that repository's working tree
+# is never swept into this commit.
+git -C "$web_dir" add "$post" "$page" || { warn "could not stage the post and the changelog page"; exit 1; }
+git -C "$web_dir" commit -q -m "blog: announce Maxon $version, and update the changelog" || {
+	warn "could not commit in $web_dir"
+	exit 1
+}
+
 echo "announce.sh: pushing to maxon.dev ($web_branch) — Cloudflare deploys on push"
 git -C "$web_dir" push origin "$web_branch" || {
 	warn "committed the post but could not push it"
