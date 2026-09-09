@@ -3,8 +3,8 @@
 > ### *You* Aren't Going To Write It.
 > Maxon makes a bet: the AI writes the code, and you read it.
 
-Maxon is a statically-typed, compiled programming language with a from-scratch native
-**x86-64 backend** — **written by AI, for AI**. The compiler, standard library, and
+Maxon is a statically-typed, compiled programming language with a from-scratch
+**native backend** — **written by AI, for AI**. The compiler, standard library, and
 documentation were all authored by AI coding agents.
 
 Because the AI writes the code and a human reads it, Maxon optimizes for the **reader, not
@@ -54,8 +54,8 @@ end 'iterate'
 The AI story only holds up because the compiler does. Maxon is a real, fast,
 statically-typed, compiled language:
 
-- **Native x86-64 backend** — compiles straight to PE and ELF executables. No LLVM, no VM,
-  no external runtime.
+- **Native backend** — compiles straight to standalone executables, writing the object format
+  itself. No LLVM, no VM, no assembler or linker, no external runtime.
 - **Reference-counted memory** — deterministic cleanup the moment a value is no longer
   referenced. No garbage collector, no pauses.
 - **Strong inference + ranged types** — static typing that stays terse, with ranged type
@@ -69,8 +69,8 @@ statically-typed, compiled language:
 ## Project components
 
 - **Compiler (`maxon-bin`)** — the Maxon compiler, written in Maxon, which builds to
-  `maxon-bin/.maxon/maxon`. It has a native backend and emits standalone PE, ELF, Mach-O and
-  WebAssembly executables with no external runtime.
+  `maxon-bin/.maxon/maxon`. It emits standalone executables for every target it supports, with no
+  external runtime — see [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the current list.
 - **Language Server (LSP)** — `maxon lsp-server`, for IDE integration.
 - **VS Code extension** — syntax highlighting and language features.
 

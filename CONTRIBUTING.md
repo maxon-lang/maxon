@@ -25,7 +25,7 @@ The smaller the reproduction, the faster it can be fixed.
 
 ### Improve the compiler or standard library
 
-The compiler (a native x86-64 backend), the language server, and the standard library are all
+The compiler (a native backend, with no LLVM), the language server, and the standard library are all
 open. Patches that fix bugs, improve diagnostics, or extend the standard library are welcome.
 For anything non-trivial, open an issue first so the approach can be discussed before you invest
 the work, then send a pull request.

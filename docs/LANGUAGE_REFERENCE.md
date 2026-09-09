@@ -635,7 +635,7 @@ and a guard would have nothing to reject. It is the one silent numeric change th
 
 **Storage:**
 
-The compiler automatically selects the smallest x86-optimal integer width that can represent the declared range for storage in arrays and global variables. All arithmetic still uses 64-bit operations.
+The compiler automatically selects the smallest natural integer width that can represent the declared range for storage in arrays and global variables. All arithmetic still uses 64-bit operations.
 
 | Range fits in | Storage used |
 |---------------|-------------|
@@ -5538,19 +5538,22 @@ clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while
 
 ## Code Generation
 
-### Native x86-64 Backend
-- Maxon uses a custom x86-64 backend (no LLVM dependency)
-- Generates native Windows PE executables directly
+### Native Backend
+- Maxon has its own code generator: no LLVM, and no assembler or linker step
+- It writes each target's object format itself, so a build produces a standalone executable directly
+- ⚠ The set of targets grows. `maxon --help` and
+  [CLI_REFERENCE.md](CLI_REFERENCE.md)'s `--target` table are the current list; naming them here
+  would be a second copy free to go stale.
 
 ### Optimizations
 - Constant folding
 - Dead code elimination
 
 ### Runtime Library
-- Located in `maxon-runtime/runtime-windows.obj`
-- Provides implementations for intrinsic functions
-- Auto-linked with all programs
-- No C runtime dependency
+- Written in Maxon, under `maxon-bin/Compiler/Runtime/`, and COMPILED IN rather than linked
+- Provides the implementations behind the intrinsics — memory management, the scheduler, string and
+  arithmetic helpers
+- No C runtime dependency, and nothing to ship beside the executable
 
 ---
 

@@ -370,6 +370,22 @@ module function supportedTargets() returns TargetArray
 	return [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
 end 'supportedTargets'
 
+// ⭐ **THE TARGET LIST AS PROSE, SPELLED FROM `supportedTargets()` RATHER THAN BY HAND.** Two messages
+// each named a partial list and BOTH had already gone stale: the usage text omitted `arm64-linux`, and
+// the unknown-target error omitted `arm64-linux` and `wasm32-wasi`. A list a reader is told is the set
+// has to come from the set, or the next backend that lands is missing from both the moment it lands.
+function supportedTargetList() returns String
+	var out = ""
+	for candidate in supportedTargets() 'each'
+		if out.isEmpty() 'first'
+			out = targetToString(candidate)
+		end 'first' else 'rest'
+			out = "{out}, {targetToString(candidate)}"
+		end 'rest'
+	end 'each'
+	return out
+end 'supportedTargetList'
+
 // Resolve the optional `--target` flag shared by `build` and `spec-test`: the host target
 // (`detectHostTarget`) when the flag is empty, otherwise whatever `parseBuildTarget` makes of the
 // spelling (`unrecognized` when it names no known target). Folding the host default into one place
@@ -385,7 +401,7 @@ end 'resolveTargetFlag'
 // build command returns directly. Separate from the match arm because a match arm
 // is one statement, and this one both prints and yields the code.
 module function reportUnknownTarget(spec String) returns ExitCode
-	printError("error: unknown --target '{spec}' (expected e.g. x64-windows, x64-linux or arm64-macos)\n")
+	printError("error: unknown --target '{spec}' (expected one of: {supportedTargetList()})\n")
 	return 1
 end 'reportUnknownTarget'
 
@@ -1434,7 +1450,7 @@ function printUsage()
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
 	print("  --emit-ir-runtime=<a>,<b>     Render these compiler-emitted functions in that IR too (implies --emit-ir)\n")
 	print("  --target=<cpu>-<os>           (build, spec-test, test) Use this target instead of the host,\n")
-	print("                                e.g. x64-windows, x64-linux, arm64-macos or wasm32-wasi (default:\n")
+	print("                                one of: {supportedTargetList()} (default:\n")
 	print("                                the host target). For spec-test a cross target cross-compiles each\n")
 	print("                                selected test and runs it under the vendored runtime. For test it\n")
 	print("                                builds the test binary for that target and then SPAWNS it, so a\n")

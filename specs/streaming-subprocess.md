@@ -9,20 +9,27 @@ category: concurrency
 
 ## Documentation
 
-The streaming subprocess builtins expose a long-lived Windows child whose stdin / stdout / stderr the
-caller drives by hand, one line at a time. They generalize the one-shot `spawnReadLine` probe (slice 1a)
-into a real handle-table API: a spawn creates THREE pipes (a synchronous outbound stdin pipe the parent
-writes, and two overlapped IOCP-registered pipes the parent reads for stdout and stderr), hands back a
-non-negative integer handle indexing a runtime table, and every later call names that handle.
+The streaming subprocess builtins expose a long-lived child whose stdin / stdout / stderr the caller
+drives by hand, one line at a time. They generalize the one-shot `spawnReadLine` probe (slice 1a) into a
+real handle-table API: a spawn creates THREE pipes — one outbound for stdin that the parent writes, two
+inbound that the parent reads — hands back a non-negative integer handle indexing a runtime table, and
+every later call names that handle.
+
+⚠ **WHICH LANES RUN THESE, AND WHERE THE TWO GENUINELY PART, IS THE *Targets* SECTION BELOW.** The
+mechanism differs — Windows registers the two inbound pipes with IOCP and parks the reader on an
+OVERLAPPED; the POSIX lane blocks its machine in the read — and that difference is a measured property
+with cases pinning it, not an aside.
 
 - `subpSpawn(cmd)` spawns the child named by the command `String` with all three std streams redirected to
-  pipes, and returns the handle (or `-1` on spawn failure). x64-windows only.
+  pipes, and returns the handle (or `-1` on spawn failure). The command reaches `CreateProcessA` on
+  Windows and `/bin/sh -c` on the POSIX lane, which is why each subject carries a `posix-…` sibling.
 - `subpReadLine(h)` reads one line from the child's stdout, INCLUDING the trailing `\n` (so a caller can
-  distinguish a blank line from EOF by length). It YIELDS the green thread while the read is in flight
-  (parking on the calling GT's OVERLAPPED, resumed by the IOCP completion thread), so other green threads
-  make progress. Returns an empty `String` on EOF, and the EOF is latched. `subpReadErrLine(h)` is the
+  distinguish a blank line from EOF by length). ⛔ Whether it YIELDS is the lane difference above: on Windows the
+  read is in flight and the green thread parks on its OVERLAPPED, resumed by the IOCP completion thread,
+  so other green threads make progress; on the POSIX lane there is no netpoll a pipe read can park on, so
+  the read blocks its machine instead. Returns an empty `String` on EOF, and the EOF is latched. `subpReadErrLine(h)` is the
   stderr twin (post-exit use only in the harness).
-- `subpWriteLine(h, line: s)` writes `s + "\n"` to the child's stdin (a synchronous `WriteFile`), returning
+- `subpWriteLine(h, line: s)` writes `s + "\n"` to the child's stdin, synchronously, returning
   `0` on success or non-zero on a broken pipe.
 - `subpCloseStdin(h)` closes the parent's write end of stdin, so the child sees EOF.
 - `subpWait(h)` blocks until the child exits and returns its exit code.
