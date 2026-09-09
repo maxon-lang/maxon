@@ -407,9 +407,12 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let symdataSize = codeResult.symdata.count()
 	let hasSymbols = symbolCount > 0
 	let hasSymdata = symdataSize > 0
-	if not hasSymbols and not hasSymdata 'nothingToDescribe'
-		return
-	end 'nothingToDescribe'
+
+	// ⛔ **THE SECTION HEADER TABLE IS NO LONGER CONDITIONAL, AND THAT IS WHAT MAKES `.comment` WORTH
+	// EMITTING.** It used to be written only when there were debug symbols to describe, so a RELEASE
+	// build — the one that ships — carried no section headers at all and any producer string in it
+	// would have been invisible to `readelf`. A few hundred bytes of headers is the price of a binary
+	// that can say what built it.
 
 	let hasRodata = rdataSize > 0
 
@@ -427,6 +430,9 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	if hasSymbols 'countSymbolTables'
 		sectionCount = sectionCount + 2
 	end 'countSymbolTables'
+	// `.comment` needs no index of its own: nothing links to it, so only its POSITION among the headers
+	// matters, and that is fixed by the write order below.
+	sectionCount = sectionCount + 1
 	let shstrtabShndx = sectionCount
 	sectionCount = sectionCount + 1
 
@@ -447,6 +453,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let symdataNameOffset = appendElfStringTableName(shstrtab, name: b".symdata") if hasSymdata else 0
 	let symtabNameOffset = appendElfStringTableName(shstrtab, name: b".symtab") if hasSymbols else 0
 	let strtabNameOffset = appendElfStringTableName(shstrtab, name: b".strtab") if hasSymbols else 0
+	let commentNameOffset = appendElfStringTableName(shstrtab, name: b".comment")
 	let shstrtabNameOffset = appendElfStringTableName(shstrtab, name: b".shstrtab")
 
 	// The interned name tables, first in the tail because they are the only part of it a RUNNING tool
@@ -465,7 +472,19 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let symtabSize = (symbolCount + 1) * ElfSymbolSize if hasSymbols else 0  // + the leading STN_UNDEF
 	let strtabFileOffset = symtabFileOffset + symtabSize
 	let strtabSize = strtab.count() if hasSymbols else 0
-	let shstrtabFileOffset = strtabFileOffset + strtabSize
+	// ⭐ **THE PRODUCER STRING, IN THE SECTION EVERY OTHER COMPILER USES FOR IT.** `readelf -p .comment`
+	// is where a reader looks to find out what built a binary, and GCC has written `GCC: (GNU) …` there
+	// for decades. ELF has no version RECORD — this is a convention, not a structure — so the string is
+	// all there is to say.
+	//
+	// ⚠ NOT `SHF_ALLOC`: it is metadata for tools, not something the loader maps.
+	var comment = ByteArray.create()
+	comment.append("Maxon {CompilerVersion}".toByteArray())
+	comment.push(0)
+
+	let commentFileOffset = strtabFileOffset + strtabSize
+	let commentSize = comment.count()
+	let shstrtabFileOffset = commentFileOffset + commentSize
 	let shstrtabSize = shstrtab.count()
 	let sectionHeaderTableOffset = alignUp(shstrtabFileOffset + shstrtabSize, alignment: ElfSectionAlign)
 
@@ -482,6 +501,9 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 
 		elf.append(strtab)
 	end 'symbolTables'
+
+	padTo(elf, size: commentFileOffset)
+	elf.append(comment)
 
 	padTo(elf, size: shstrtabFileOffset)
 	elf.append(shstrtab)
@@ -504,6 +526,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 		writeElfSectionHeader(elf, nameOffset: symtabNameOffset as MachineWord, sectionType: ElfShtSymtab, flags: 0, addr: 0, fileOffset: symtabFileOffset as MachineWord, size: symtabSize, link: strtabShndx, info: ElfSymtabFirstGlobal, addralign: ElfSectionAlign, entsize: ElfSymbolSize)
 		writeElfSectionHeader(elf, nameOffset: strtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: strtabFileOffset as MachineWord, size: strtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 	end 'symbolShdrs'
+	writeElfSectionHeader(elf, nameOffset: commentNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: 0, addr: 0, fileOffset: commentFileOffset as MachineWord, size: commentSize as MachineWord, link: 0, info: 0, addralign: 1, entsize: 0)
 	writeElfSectionHeader(elf, nameOffset: shstrtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: shstrtabFileOffset as MachineWord, size: shstrtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 
 	patchQword(elf, offset: shoffFieldOffset, value: sectionHeaderTableOffset as MachineWord)
