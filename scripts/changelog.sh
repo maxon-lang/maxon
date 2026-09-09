@@ -276,10 +276,7 @@ render_file() {
 	if [ -n "$upper_release" ]; then
 		lower="$(previous_tag HEAD)"
 		[ -n "$lower" ] || lower="$(root_commit)"
-		echo
-		echo "## $upper_release — $(range_date "$lower" HEAD)"
-		echo
-		render_entries "$lower" HEAD
+		render_section "$upper_release" "$lower" HEAD
 	fi
 
 	# Then every tag already cut, newest first.
@@ -287,11 +284,24 @@ render_file() {
 	for tag in $tags; do
 		prior="$(previous_tag "$tag")"
 		[ -n "$prior" ] || prior="$(root_commit)"
-		echo
-		echo "## ${tag#v} — $(range_date "$prior" "$tag")"
-		echo
-		render_entries "$prior" "$tag"
+		render_section "${tag#v}" "$prior" "$tag"
 	done
+}
+
+# ⛔ **A SECTION WITH NO ENTRIES IS NOT WRITTEN AT ALL.** Under `--scope=extension` this is the common
+# case rather than an edge one — most compiler releases change nothing under `vscode-extension/` — and
+# a bare `## 0.1.1` with nothing beneath it reads, on the marketplace's Changelog tab, as a release
+# that shipped and did nothing. The heading is therefore rendered only once its entries exist.
+render_section() {
+	local heading="$1" lower="$2" upper="$3" entries
+
+	entries="$(render_entries "$lower" "$upper")"
+	[ -n "$entries" ] || return 0
+
+	echo
+	echo "## $heading — $(range_date "$lower" "$upper")"
+	echo
+	printf '%s\n' "$entries"
 }
 
 # ── modes ─────────────────────────────────────────────────────────────────────────────────────────
