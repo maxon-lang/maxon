@@ -45,7 +45,7 @@ fi
 }
 
 # ⛔ THE VERSION COMES OUT OF THE ARCHIVE'S NAME, which `release.sh` built from the COMPILER's own
-# `--version`. Reading it from anywhere else — the source, a tag, a variable here — reintroduces the
+# `version` command. Reading it from anywhere else — the source, a tag, a variable here — reintroduces the
 # disagreement the whole scheme exists to prevent: an installer whose ProductVersion names a release
 # its payload is not.
 base="$(basename "$archive" .zip)"

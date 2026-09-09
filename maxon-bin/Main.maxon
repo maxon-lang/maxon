@@ -260,14 +260,26 @@ let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 // rule written down twice.
 module let OptionPrefix = "-"
 
-// ⭐ `--version` AND `--help` ARE THE TWO FLAGS THAT ANSWER WITHOUT A COMMAND, and the only ones a
-// caller types before knowing anything else about this binary. Both carry the one-letter spelling every
-// other CLI has taught people to try. `-V` is capital because `-v` is what a reader expects to mean
-// "verbose" — answering the version to it would be a small lie told at the worst moment.
-let VersionFlag = "--version"
-let VersionFlagShort = "-V"
+// ⭐ `--help` IS THE ONE FLAG THAT ANSWERS WITHOUT A COMMAND — the only question a caller can ask
+// before knowing anything else about this binary, so it cannot be spelled as a command word without
+// requiring them to know one. It carries the one-letter form every other CLI has taught people to try.
 let HelpFlag = "--help"
 let HelpFlagShort = "-h"
+
+// `maxon version` — which binary is this. A COMMAND, so the driver has one door onto the answer and a
+// reader learns it from the same list every other thing this binary does is listed in.
+let VersionCommandName = "version"
+
+// ⛔⛔ **`--version` / `-V` ARE WITHDRAWN, AND THE SPELLINGS ARE KEPT SO THE REFUSAL CAN NAME THEM.**
+// A flag spelling left beside `maxon version` would be a second door onto one answer, and the two would
+// drift the day either grew a qualifier.
+//
+// ⚠ **REFUSED BY NAME, NOT LEFT TO THE ANONYMOUS `badOption` PATH.** These are the spellings a
+// packager, a CI step and a bug-report template reach for first, so a reader who types one is following
+// a convention rather than making a typo; "unknown option: --version" would tell them this driver never
+// heard of it and send them hunting for one. See `withdrawnOptionMessage`.
+let WithdrawnVersionFlag = "--version"
+let WithdrawnVersionFlagShort = "-V"
 
 module let MetricsFlagPrefix = "--metrics="
 
@@ -279,17 +291,11 @@ let RuntimeNameSeparator = ","
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
 
-	// ⭐⭐ **BOTH ANSWER BEFORE EVERY REFUSAL BELOW, AND BEFORE THE COMMAND MATCH.** `maxon --version`
-	// carries no command, so a version asked for after the option gates would fall through to
-	// `unknownCommand()` and exit 1 — the one question every packaging tool asks first, answered with a
-	// usage dump and a failure. Asked WITH a command (`maxon build --version`) it still answers the
-	// version and runs nothing, which is what every other compiler does and what a caller who typed it
-	// meant. `--version` outranks `--help` because it is the narrower question.
-	if args.showVersion 'versionAsked'
-		printVersion()
-		return 0
-	end 'versionAsked'
-
+	// ⭐⭐ **IT ANSWERS BEFORE EVERY REFUSAL BELOW, AND BEFORE THE COMMAND MATCH.** `maxon --help`
+	// carries no command, so a help asked for after the option gates would fall through to
+	// `unknownCommand()` and exit 1 — the one question a caller with nothing else to go on can ask,
+	// answered with a usage dump and a failure. Asked WITH a command (`maxon build --help`) it prints
+	// the usage and runs nothing, which is what a caller who typed it meant.
 	if args.showHelp 'helpAsked'
 		printUsage()
 		return 0
@@ -329,6 +335,7 @@ function main() returns ExitCode
 		debug gives runDebugCommand(args)
 		coverage gives runCoverage(args)
 		profile gives runProfile(args)
+		version gives runVersion(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -1313,12 +1320,15 @@ typealias PositionalCount = int(0 to 1)
 // understood and is now structurally impossible. Only the second owes an explanation, and a script
 // carrying the flag needs to be edited rather than re-read.
 //
-// There is exactly ONE today, so this is a check and a sentence rather than a table. A second would
-// make it a table; a second spelled inline would make it two answers to one question.
+// ⛔ **ONE ARM PER WITHDRAWN SPELLING, AND THE `panic` IS WHAT HOLDS THIS LIST TO `MaxonArgs.parse`'s.**
+// A spelling recorded there and unnamed here would be refused with an empty sentence — less than the
+// anonymous `badOption` path says, from the door that exists to say more.
 function withdrawnOptionMessage(option String) returns String
 	if option.startsWith(WithdrawnCompilerFlagPrefix) 'theCompilerFlag'
 		return "error: {WithdrawnCompilerFlagPrefix}= was REMOVED. spec-test compiles every selected test IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one. Run the suite with the binary you mean to test: `<compiler> {SpecTestCommandName}`."
-	end 'theCompilerFlag'
+	end 'theCompilerFlag' else if option == WithdrawnVersionFlag or option == WithdrawnVersionFlagShort 'theVersionFlag'
+		return "error: {option} was REMOVED. The version is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {VersionCommandName}`."
+	end 'theVersionFlag'
 
 	panic("withdrawnOptionMessage: '{option}' was recorded as a withdrawn option by `MaxonArgs.parse`, and this is the one place that says what replaced one — a flag recorded there and unnamed here would be refused with an empty sentence")
 end 'withdrawnOptionMessage'
@@ -1472,6 +1482,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		debug gives 1
 		coverage gives 1
 		profile gives 1
+		version gives 1
 		unknown gives 1
 	end 'whichCommand'
 end 'refusedCommandLineExit'
@@ -1485,9 +1496,17 @@ end 'unknownCommand'
 // the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
 // where a pipe can reach it, and carries the host triple because "which maxon is this" is not fully
 // answered by a number when four targets ship under one name.
-function printVersion()
+//
+// ⚠ It reads NO positional, so the FIRST one is already the typo `refusedPositionalBeyond` exists to
+// name — `maxon version 1.2.3` must not print an answer that ignores half of what was typed.
+function runVersion(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {VersionCommandName}") 'unexpectedArgument'
+		return 1
+	end 'unexpectedArgument'
+
 	print("maxon {CompilerVersion} ({CompilerCommit} {CompilerCommitDate}) ({targetToString(detectHostTarget())})\n")
-end 'printVersion'
+	return 0
+end 'runVersion'
 
 function printUsage()
 	print("Usage: maxon <command> [options]\n")
@@ -1535,6 +1554,8 @@ function printUsage()
 	print("  coverage <run|report> <exe>   Run a {CoverageFlag} binary and report line + branch coverage\n")
 	print("  profile run <exe>             Launch a program and sample where its CPU time goes. Needs no\n")
 	print("                                instrumentation and no rebuild: only the `.mxdbg` sidecar is read\n")
+	print("  version                       Print the version, the commit it was built from and the\n")
+	print("                                host target, and run nothing\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -1610,7 +1631,6 @@ function printUsage()
 	print("                                {DefaultTestTimeoutMs}). A whole file shares one process, so --isolate is what\n")
 	print("                                gives each test the full budget to itself.\n")
 	print("  --no-timing                   (test) Omit durations, making stdout byte-reproducible\n")
-	print("  --version, -V                 Print the version and the host target, and run nothing\n")
 	print("  --help, -h                    Print this text and run nothing\n")
 	// ⚠ THE ONLY LINE IN THIS BLOCK WHOSE LEFT COLUMN IS DERIVED RATHER THAN TYPED, because its width
 	// depends on `reportColorChoices()` — hand-padded, it would go ragged the day a colour mode is added
@@ -1650,6 +1670,9 @@ enum MaxonCommand
 	// `maxon profile run <exe>` — sample a running program and report where its CPU time went. Tail-stopping
 	// like `coverage`, and for exactly its reason: the tail is a CHILD's command line.
 	profile
+	// `maxon version` — which binary is this. See `runVersion`; the withdrawn flag spellings for the same
+	// question are refused by name at `WithdrawnVersionFlag`.
+	version
 	unknown
 end 'MaxonCommand'
 
@@ -1793,10 +1816,9 @@ module type MaxonArgs
 	// prints them in different words: an unknown option was never understood, a withdrawn one was and
 	// is now structurally impossible. See `withdrawnOptionMessage`.
 	export var withdrawnOption as String
-	// ⭐ `--version` / `-V` and `--help` / `-h`. FIELDS rather than locals, for the reason this whole
-	// record exists: `parse`'s loop already carries more live values than x64 has general-purpose
-	// registers, and one more `var` in it is an E5001 away. See `parse`.
-	export var showVersion as bool
+	// ⭐ `--help` / `-h`. A FIELD rather than a local, for the reason this whole record exists: `parse`'s
+	// loop already carries more live values than x64 has general-purpose registers, and one more `var` in
+	// it is an E5001 away. See `parse`.
 	export var showHelp as bool
 
 	// ⭐ **THE COMMAND LINE WITH NOTHING ON IT** — every field at the value an absent flag leaves it.
@@ -1808,7 +1830,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showVersion: false, showHelp: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: "", showHelp: false}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1923,7 +1945,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.test
 			end 'testCmd' else if arg == FmtCommandName 'fmtCmd'
 				parsed.command = MaxonCommand.fmt
-			end 'fmtCmd' else if arg == OutputFlagName 'dashOutput'
+			end 'fmtCmd' else if arg == VersionCommandName 'versionCmd'
+				parsed.command = MaxonCommand.version
+			end 'versionCmd' else if arg == OutputFlagName 'dashOutput'
 				i = i + 1
 				parsed.outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
@@ -2076,9 +2100,13 @@ module type MaxonArgs
 					// `TestCommand.quietTheBuildChatter`.
 					parsed.logOverridden = true
 				end 'goodSpec'
-			end 'logFlag' else if arg == VersionFlag or arg == VersionFlagShort 'versionFlag'
-				parsed.showVersion = true
-			end 'versionFlag' else if arg == HelpFlag or arg == HelpFlagShort 'helpFlag'
+			end 'logFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
+				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnVersionFlag` and
+				// `withdrawnOptionMessage`. Both spellings are matched EXACTLY: anything longer that merely
+				// starts with one of them names no option this driver ever had, and belongs on the anonymous
+				// path with every other typo.
+				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
+			end 'withdrawnVersionFlag' else if arg == HelpFlag or arg == HelpFlagShort 'helpFlag'
 				parsed.showHelp = true
 			end 'helpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)

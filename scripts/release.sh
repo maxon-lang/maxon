@@ -58,7 +58,7 @@ maxon="$(maxon_compiler_path .)"
 # time — a `vX.Y.Z` tag or a `release/X.Y.Z` branch gives the number, anything else is `dev` — so what
 # ships is whatever the BINARY says, and a binary built before the branch was cut still says `dev`.
 # Asking the artifact removes the one disagreement this whole scheme exists to prevent.
-compiler_version() { "$maxon" --version | awk '{print $2}'; }
+compiler_version() { "$maxon" version | awk '{print $2}'; }
 version_from_binary="$(compiler_version)"
 
 package_one() {
@@ -246,7 +246,7 @@ whole directory, or put it on your PATH as it is.
 
 Extract the archive somewhere permanent and add that directory to your PATH. Then:
 
-    maxon --version
+    maxon version
     maxon build examples/basic.maxon -o hello
     ./hello
 

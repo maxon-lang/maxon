@@ -25,6 +25,7 @@ that listing disagree, the listing is the compiler and this is a copy.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went |
 | `maxon verify-warm-rebuild <file>` | Assert the query spine is deterministic and incremental |
 | `maxon verify-recheck <file\|dir>` | Assert one project survives being re-checked |
+| `maxon version` | Print the version, the commit it was built from, and the host target |
 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
 argument, so `maxon fmt fmt` formats the directory `fmt/` rather than selecting `fmt` twice.
@@ -542,6 +543,26 @@ holds; the failures print their own reasons.
 - **`maxon verify-recheck <file|dir>`** asserts one project can be re-checked: two checks over
   unchanged input agree, and a diagnostic introduced by an edit CLEARS when the edit is undone. That is
   what an editor holding one project open for hours actually does.
+
+---
+
+### `maxon version`
+
+Prints one line to stdout and exits 0:
+
+```bash
+maxon version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
+```
+
+The shape is rustc's: the release number, then the commit and the day it was built from, then the host
+target. The last three are what make a report about "0.1.1" answerable when there have been forty
+builds of 0.1.1, and what tell four targets shipping under one name apart.
+
+It takes no arguments — a positional is refused rather than ignored, because a `maxon version` that
+printed an answer while dropping half of what was typed is the one outcome a caller cannot see.
+
+**`--version` and `-V` were withdrawn.** They are refused by name, naming this command, so a script
+still carrying one is told what to write rather than that the driver never heard of it.
 
 ---
 

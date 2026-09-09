@@ -29,7 +29,7 @@ Nothing writes the version down. `build.maxon` derives it from git when it stamp
 compiler reports**:
 
 ```bash
-./maxon-bin/.maxon/maxon --version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
+./maxon-bin/.maxon/maxon version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
 ```
 
 The shape is rustc's: the release number, then the commit and day it was built from. The last two are
@@ -202,7 +202,7 @@ Re-download from the release page — not the local `dist/` copy, which is the t
   executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
   above either the compiler or the source.
 - `winget install MaxonLang.Maxon`, then `winget uninstall`, on a clean VM.
-- `brew install maxon-lang/tap/maxon`, then `maxon --version` in the same shell — Homebrew's symlink
+- `brew install maxon-lang/tap/maxon`, then `maxon version` in the same shell — Homebrew's symlink
   is the point, and the compiler resolves it.
 - Install the published VS Code extension on a machine with **no** compiler, and confirm the
   not-found flow offers to install one rather than dead-ending.
