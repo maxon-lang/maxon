@@ -105,9 +105,9 @@ EOF
 # reader arrives with when they are deciding whether to upgrade. Both are renderings of the same
 # `CHANGELOG.md`, so neither can drift from what shipped.
 #
-# ⚠ THE GENERATED FILE'S OWN HEADER IS DROPPED AND REPLACED. `CHANGELOG.md` opens with an instruction
-# to contributors — do not edit this, corrections go in the overrides file — which is addressed to
-# somebody working in the compiler repository and means nothing to a reader of the website.
+# ⚠ THE SOURCE FILE'S OWN HEADER IS DROPPED AND REPLACED. `CHANGELOG.md` opens with a note to whoever
+# writes the next entry — where the reference listing is, where the release order is written down —
+# which is addressed to a contributor and means nothing to a reader of the website.
 changelog_page() {
 	cat <<EOF
 ---
@@ -115,7 +115,7 @@ title: Changelog
 description: Every released version of the Maxon compiler and standard library, and what changed in it.
 ---
 
-Every released version, newest first. Each entry links to the commit that made the change.
+Every released version, newest first.
 
 Downloads for each release are on the
 [GitHub releases page]($ReleasesUrl), and the install instructions are in
