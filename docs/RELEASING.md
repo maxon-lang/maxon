@@ -194,16 +194,24 @@ days later.
    ```
 6. Set the six repository variables above.
 
-Everything except steps 3 and 4 is provisioned: the account is `maxonlang` in `maxon-signing`
-(East US, `https://eus.codesigning.azure.net`), the app registration's federated credential names the
+All of it is provisioned and signing is ON. The account is `maxonlang` in `maxon-signing` (East US),
+the profile is `maxon-public-trust`, and the app registration's federated credential names the
 `release` GitHub environment — which is why the `msi` job carries an `environment:` line, and why
-renaming it revokes signing — and the ids are in repository variables.
-**`AZURE_SIGNING_ENDPOINT` is deliberately unset**, which is what keeps releases building while
-identity validation is outstanding: it is the switch, and the ids beside it are inert without it.
+renaming that line revokes signing rather than moving it. The signer role is scoped to the
+certificate profile, not the account or the subscription.
+
+The certificate subject is **`CN=Eric Stern, O=Eric Stern, L=El Cajon, S=ca, C=US`** — an individual
+identity validation, so it names a person and not "Maxon Language". That is what a UAC prompt shows
+and what winget reports as the publisher. Changing it means a new identity validation and a new
+profile; it cannot be edited.
 
 ⚠ **Identity Verifier is not implied by Owner.** The role table grants "manage identity validation"
 to that role alone, so a subscription owner finds the portal's **New identity** button dimmed with
 nothing explaining why.
+
+⚠ **Identity validation is not an ARM resource**, so nothing outside the portal can read it — not the
+`artifact-signing` CLI extension, and not the REST API at any version the provider advertises. Its id
+is needed to create a certificate profile, and copying it out of the portal is the only way to get it.
 
 ⛔ **Artifact Signing refuses free, trial and sponsored subscriptions**, so a subscription still on
 a free-trial offer must be upgraded to pay-as-you-go before the account can be created at all. The
