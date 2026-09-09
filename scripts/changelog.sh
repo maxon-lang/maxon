@@ -14,11 +14,15 @@
 #
 # Usage:
 #   scripts/changelog.sh --release=<X.Y.Z> [--write]
+#   scripts/changelog.sh --released-only [--write]
 #   scripts/changelog.sh --check
 #   scripts/changelog.sh --section=<X.Y.Z>
 #   scripts/changelog.sh --scope=extension --release=<X.Y.Z> [--write]
 #
-#   --release=       the version being cut. Required to generate; never derived.
+#   --release=       the version being cut. Never derived — the number arrives from the caller.
+#   --released-only  every version that HAS a tag, and no pending section. ⭐ THIS IS THE COMMITTED
+#                    STATE BETWEEN RELEASES: a `## 0.1.1` heading in a tree where v0.1.1 does not
+#                    exist advertises a release nobody can download.
 #   --write          write the file. WITHOUT IT NOTHING IS WRITTEN — the default IS the dry run,
 #                    so there is no separate flag to forget.
 #   --check          regenerate at HEAD's tag and byte-compare the committed file. This is what
@@ -50,9 +54,10 @@ write=0
 
 for arg in "$@"; do
 	case "$arg" in
-		--release=*) mode="generate"; release="${arg#--release=}" ;;
-		--section=*) mode="section";  section="${arg#--section=}" ;;
-		--check)     mode="check" ;;
+		--release=*)     mode="generate"; release="${arg#--release=}" ;;
+		--released-only) mode="generate"; release="" ;;
+		--section=*)     mode="section";  section="${arg#--section=}" ;;
+		--check)         mode="check" ;;
 		--scope=*)   scope="${arg#--scope=}" ;;
 		--write)     write=1 ;;
 		--help|-h)   sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
