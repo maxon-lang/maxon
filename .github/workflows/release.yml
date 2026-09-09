@@ -56,6 +56,22 @@ jobs:
             exit 1
           fi
 
+      # ⭐⭐ **THIS IS WHAT KEEPS `CHANGELOG.md` GENERATED.** "Do not edit by hand" enforces nothing on
+      # its own and would be violated within two releases; `--check` regenerates from history and
+      # byte-compares, so a hand-edit or a stale file fails here — before four runners spend twenty
+      # minutes each, which is the same reason the ref check above runs in this job.
+      #
+      # ⚠ `fetch-depth: 0` IS LOAD-BEARING. The default checkout is depth-1 and fetches no tags, and
+      # every question this asks is about tag topology.
+      - uses: actions/checkout@v4
+        if: steps.ref.outputs.publish == 'yes'
+        with:
+          fetch-depth: 0
+
+      - name: The committed changelog matches history
+        if: steps.ref.outputs.publish == 'yes'
+        run: ./scripts/changelog.sh --check
+
   package:
     needs: guard
     strategy:

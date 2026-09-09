@@ -313,7 +313,31 @@ msi_is_signed() {
 write_default_notes() {
 	local out="$1"
 
+	# ⛔ **WRITTEN ASIDE AND MOVED INTO PLACE, because a half-written file here is indistinguishable
+	# from a hand-written one.** The caller regenerates only when `NOTES.md` is ABSENT, so a run that
+	# died partway — `--section` refusing a changelog that was never regenerated is exactly that —
+	# leaves a stub the next run adopts, and the release ships notes reading `## What's new` and
+	# nothing else. MEASURED: 15 bytes, and the second run reported no regeneration at all.
+	#
+	# ⚠ THE STALE ONE IS CLEARED ON ENTRY RATHER THAN ON EXIT. Under `set -e` a failure inside the
+	# block below exits the whole script, so no `RETURN` trap runs — clearing here makes the state
+	# deterministic however the previous run died.
+	local partial="$out.partial"
+	rm -f "$partial"
+
 	{
+		# ⭐⭐ **WHAT CHANGED COMES FIRST, AND IT COMES OUT OF THE COMMITTED `CHANGELOG.md`.** Install
+		# instructions also live in every archive's `INSTALL.md` and on the website; what changed lives
+		# only here, and a page that opens with `winget install` buries the reason to upgrade.
+		#
+		# ⛔ **READ FROM THE FILE, NOT FROM HISTORY.** The publish job's checkout is shallow and
+		# tagless, and — more to the point — the notes that ship are then byte-for-byte the ones
+		# somebody reviewed before the tag. `--section` REFUSES a version the file has no heading for,
+		# so a release whose changelog was never regenerated cannot publish silently without notes.
+		echo "## What's new"
+		echo
+		scripts/changelog.sh --section="$version_from_binary"
+		echo
 		echo "## Install"
 		echo
 		if ls "$DIST"/*.msi >/dev/null 2>&1; then
@@ -365,7 +389,9 @@ write_default_notes() {
 		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -printf '%f\n' | sort); do
 			echo "- \`$f\`"
 		done
-	} > "$out"
+	} > "$partial"
+
+	mv "$partial" "$out"
 }
 
 if [ "$mode" = "package" ]; then
