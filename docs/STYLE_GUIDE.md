@@ -289,6 +289,12 @@ Remove trailing spaces at the end of lines. The VSCode formatter will do this au
 
 Avoid more than one blank line in a row. The formatter will consolidate multiple blank lines into one.
 
+### The Formatter Enforces All Of This
+
+`maxon fmt` inserts the blank lines described above rather than merely preserving yours: one between
+adjacent groups at every nesting depth, none within a group. `docs/CLI_REFERENCE.md#maxon-fmt` states
+which lines form a group in each kind of scope.
+
 ---
 
 ## Formatting

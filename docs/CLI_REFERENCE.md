@@ -295,6 +295,24 @@ is refused the same way.
 uses for a file that was already canonical. A file that is already canonical is not rewritten at all,
 so a run over a clean tree leaves every mtime alone.
 
+**It is opinionated about BLANK LINES, at every nesting depth.** Exactly one blank line separates
+adjacent logical groups within a scope, and none appears within a group. What counts as one group is
+the enclosing scope's business:
+
+| Inside | These pack together | These stand alone |
+|---|---|---|
+| a file, a `type` or `extension` body | `let`/`var` lines; `typealias` lines | every declaration that opens a body |
+| an `enum` or `union` body | the cases | a nested declaration |
+| an `interface` body | the bodyless signatures | anything else |
+| a function or labeled block body | the statements, `let`/`var` included | every nested block |
+| a `match` body | the arms | — |
+| a multi-line `[`/`{` literal | *(never grouped — your own blanks are kept, capped at one)* | — |
+
+A `///` block fuses to the declaration below it; a whole-line `//` fuses the same way, but only when
+you left no blank between the two — a blank there is what makes it a section heading instead. A blank
+you put inside one group survives, capped at one, so a deliberate grouping is never flattened. An
+enum whose cases carry no comments is therefore left exactly as written.
+
 The run prints one `formatted: <path>` line per rewritten file and a
 `fmt: N file(s) changed, M unchanged.` summary. `maxon fmt` is gated byte-for-byte by `tests/fmt/`.
 

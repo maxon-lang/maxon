@@ -45,7 +45,7 @@ typealias NewlineRun = int(0 to u64.max)
 // reformat of a formatted file a fixed point rather than an accretion.
 typealias BlankLineCount = int(0 to 1)
 
-// The counter behind a `unique:<n>` group key. Monotonic for one `format` call; two lines that must
+// The counter behind a `unique` group key. Monotonic for one `format` call; two lines that must
 // never be treated as one group get two different keys from it.
 typealias GroupKeyOrdinal = int(0 to u64.max)
 
@@ -54,23 +54,86 @@ typealias GroupKeyOrdinal = int(0 to u64.max)
 // comment index is keyed by the second, and the raw scan walks the first.
 typealias LineIndex = int(0 to u64.max)
 
-// The group key of a line whose first token is a `///`. `forcedBlanksBefore` returns 0 after it, which
-// is what FUSES a doc block to the declaration below it even across a blank line the author left.
-let DocGroupKey = "doc"
+// What a line's group key IS. Two lines belong to one group when their keys are equal, and exactly one
+// blank line separates adjacent groups.
+enum GroupKeyKind
+	// Nothing has been emitted in this scope yet, so there is nothing to separate from.
+	none
+	// A `///` line. `forcedBlanksBefore` returns 0 after it, which FUSES a doc block to the declaration
+	// below it even across a blank line the author left.
+	doc
+	// A whole-line `//`. It attaches to the line below the same way, but only when the author left NO
+	// blank between them: Maxon has no `///` convention in practice, so a `//` serves as both a section
+	// heading and an attached doc, and the blank is what tells them apart.
+	comment
+	// The four families that PACK where a scope declares things — `let`/`var` lines, `typealias` lines,
+	// `enum`/`union` cases, and an interface's bodyless signatures. Adjacent members of one family keep
+	// whatever blank separation the author gave them instead of being forced apart.
+	binding
+	alias
+	dataCase
+	signature
+	// The two that pack where a scope holds CODE: consecutive statements are prose, and a match's arms
+	// are one table.
+	statement
+	arm
+	// A key no other line can share. Every line that opens or closes a block takes one, so whatever sits
+	// beside it is always forced onto its own group.
+	unique
+end 'GroupKeyKind'
 
-// The group key of a whole-line `//` comment. It attaches to the line below it the same way, but only
-// when the author left NO blank between them: Maxon has no `///` convention in practice, so a `//`
-// serves as both a section heading and an attached doc, and the blank is what tells them apart.
-let CommentGroupKey = "comment"
+// A line's group key. `unique` carries the ordinal that tells two of them apart; every other kind is
+// the whole key and leaves the ordinal at zero.
+type GroupKey
+	export let kind as GroupKeyKind
+	let ordinal as GroupKeyOrdinal
 
-// The group keys of the two declaration families that PACK — adjacent `let`/`var` lines, and adjacent
-// `typealias` lines, keep whatever blank separation the author gave them instead of being forced apart.
-let BindingGroupKey = "let"
-let AliasGroupKey = "typealias"
+	static function of(kind GroupKeyKind) returns GroupKey
+		return Self{kind: kind, ordinal: 0}
+	end 'of'
 
-// The prefix of a key no other line can share. A line that OPENS A BLOCK takes one at line-end, so the
-// next line is always forced onto its own group.
-let UniqueGroupKeyPrefix = "unique:"
+	static function uniqueTo(ordinal GroupKeyOrdinal) returns GroupKey
+		return Self{kind: GroupKeyKind.unique, ordinal: ordinal}
+	end 'uniqueTo'
+
+	export function equals(other GroupKey) returns bool
+		return self.kind == other.kind and self.ordinal == other.ordinal
+	end 'equals'
+end 'GroupKey'
+
+// ⭐ **HOW THE LINES DIRECTLY INSIDE A SCOPE ARE GROUPED.** The vertical rhythm is a property of the
+// enclosing block rather than of the indent depth, which is what lets one rule serve a file, an enum
+// body and a function body at once.
+enum ScopeGrouping
+	// File scope, and a `type` or `extension` body: fields pack, aliases pack, everything else stands
+	// alone.
+	memberList
+	// An `enum` or `union` body: cases pack, a nested declaration stands alone.
+	caseList
+	// An `interface` body, where a `function` is a bodyless signature and a run of them is one roster.
+	signatureList
+	// A function body, and the body of any labeled block: statements pack, a nested block stands alone.
+	statements
+	// A `match` body. Every arm is ONE LINE by the grammar, so the arms are a table and pack; a blank
+	// there comes from a comment block or the closing line, never from between two arms.
+	matchArms
+	// The interior of a multi-line `[`/`{` literal. NOT grouped: its lines are elements, and forcing
+	// them apart would invent a structure the author did not write. Preserve-with-cap applies instead.
+	literal
+end 'ScopeGrouping'
+
+// One entry per open indent level. It carries the PARENT scope's last key, so a body cannot disturb
+// the rhythm of the declaration it sits inside.
+type GroupFrame
+	export let grouping as ScopeGrouping
+	export let savedPrevKey as GroupKey
+
+	static function create(grouping ScopeGrouping, savedPrevKey GroupKey) returns GroupFrame
+		return Self{grouping: grouping, savedPrevKey: savedPrevKey}
+	end 'create'
+end 'GroupFrame'
+
+typealias GroupFrameArray = Array with GroupFrame
 
 // A directory holding this entry is a SEPARATE CHECKOUT — a nested clone (a directory) or a git
 // worktree (a file holding a gitdir pointer). Both spellings are probed; see `prunedSubdirectory`.
@@ -564,10 +627,19 @@ type FormatState
 	let lineCount as LineNumber
 	var consumed as ConsumedLineSet
 	var blocks as FormatBlockKindArray
+	// ⭐ **PUSHED AND POPPED IN LOCKSTEP WITH `indentLevel`** — one frame per open level, and that
+	// lockstep is what makes "which scope is this line in" a single fact. DISTINCT from `blocks`, which
+	// answers the three LAYOUT questions and is pushed at the opener TOKEN rather than at the line
+	// boundary: `#if` and a multi-line literal indent without pushing a block at all.
+	var groupFrames as GroupFrameArray
 	var indentLevel as IndentDepth
 	var atLineStart as bool
 	var newlineRun as NewlineRun
 	var pendingIndentIncrease as bool
+	// How the body this line opens groups ITS lines. Set with `pendingIndentIncrease` and never apart
+	// from it, so a body cannot inherit whatever grouping the previous opener left behind — see
+	// `beginBodyAfterThisLine`.
+	var pendingScopeGrouping as ScopeGrouping
 	// The token before this one, ignoring newlines — kind and source bytes. The bytes are read by
 	// exactly one rule: `module` is a CONTEXTUAL keyword with no `TokenKind` of its own, so
 	// `module function f()` can only be recognized by the word.
@@ -594,10 +666,10 @@ type FormatState
 	var lineStartedWithEnd as bool
 	var lineHasLabeledOpener as bool
 	var lineHasMatch as bool
-	// The group keys of the last fully-emitted top-level line and of the line being emitted. EMPTY
-	// means "none" — every key this file mints is non-empty, so the two cannot be confused.
-	var prevGroupKey as String
-	var pendingGroupKey as String
+	// The group keys of the CURRENT scope's last fully-emitted line and of the line being emitted. A
+	// `none` kind is the absence of such a line; entering a body parks the parent's key on its frame.
+	var prevGroupKey as GroupKey
+	var pendingGroupKey as GroupKey
 	var currentLineOpenedBlock as bool
 	var uniqueGroupCounter as GroupKeyOrdinal
 	// True from a line terminator until the next real line-start token decides whether a blank goes
@@ -605,7 +677,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, source ByteArray, comments SourceCommentMap, lineCount LineNumber) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: "", pendingGroupKey: "", currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file always ends with exactly one
@@ -666,8 +738,17 @@ type FormatState
 		end 'nothingEmittedYet'
 
 		self.newlineRun = self.newlineRun + 1
+
+		// ⭐ **THE LINE'S KEY IS PROMOTED BEFORE THE BODY IT OPENS IS PUSHED**, and both happen here so
+		// the order cannot drift. The key belongs to the scope the line SAT IN; the frame below it is a
+		// different scope, and promoting after the push would file an opener's key inside its own body.
+		if self.newlineRun == 1 'terminatesTheLine'
+			self.closeCurrentLine()
+		end 'terminatesTheLine'
+
 		if self.pendingIndentIncrease 'blockBodyBegins'
 			self.indentLevel = self.indentLevel + 1
+			self.pushGroupFrame(self.pendingScopeGrouping)
 			self.pendingIndentIncrease = false
 		end 'blockBodyBegins'
 
@@ -687,11 +768,11 @@ type FormatState
 
 		// The first newline terminates the content line; any further consecutive one is a blank the
 		// author wrote, whose effect the forced-blank rule decides later.
-		if self.newlineRun == 1 'terminatesTheLine'
-			self.closeCurrentLine()
+		if self.newlineRun == 1 'writesTheTerminator'
 			self.blankDecisionPending = true
 			self.out.append("\n")
-		end 'terminatesTheLine'
+		end 'writesTheTerminator'
+
 		self.atLineStart = true
 	end 'emitNewline'
 
@@ -709,12 +790,14 @@ type FormatState
 
 		if (tok.kind == TokenKind.rightBracket or tok.kind == TokenKind.rightBrace) and self.atLineStart and self.indentLevel > 0 'closesMultiLineLiteral'
 			self.indentLevel = self.indentLevel - 1
+			self.popGroupFrame()
 			lineIsBlockCloser = true
 		end 'closesMultiLineLiteral'
 
 		// `#else` closes the previous branch AND opens the next, so it is not a group of its own either.
 		if (tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif) and self.indentLevel > 0 'closesDirectiveBranch'
 			self.indentLevel = self.indentLevel - 1
+			self.popGroupFrame()
 			lineIsBlockCloser = true
 		end 'closesDirectiveBranch'
 
@@ -725,6 +808,7 @@ type FormatState
 		if endLabelFollows and self.atLineStart 'closesBlock'
 			if self.indentLevel > 0 'dedent'
 				self.indentLevel = self.indentLevel - 1
+				self.popGroupFrame()
 			end 'dedent'
 			self.popBlock()
 			lineIsBlockCloser = true
@@ -850,14 +934,15 @@ type FormatState
 		// A `[` or `{` whose matching closer is on a different line opens an indent level.
 		if tok.kind == TokenKind.leftBracket or tok.kind == TokenKind.leftBrace 'maybeMultiLineLiteral'
 			if self.closerIsOnAnotherLine(index, tok: tok) 'spansLines'
-				self.pendingIndentIncrease = true
-				self.currentLineOpenedBlock = true
+				self.beginBodyAfterThisLine(ScopeGrouping.literal)
 			end 'spansLines'
 		end 'maybeMultiLineLiteral'
 
+		// A conditional branch holds whatever its surroundings hold, so it INHERITS their grouping: a
+		// conditionally-compiled member list is still a member list, a conditionally-compiled statement
+		// list still statements.
 		if tok.kind == TokenKind.hashIf or tok.kind == TokenKind.hashElse 'directiveOpensBranch'
-			self.pendingIndentIncrease = true
-			self.currentLineOpenedBlock = true
+			self.beginBodyAfterThisLine(self.currentGrouping())
 		end 'directiveOpensBranch'
 
 		// `end 'X' else` / `end 'X' otherwise` stay on one line: the chain's next keyword is pulled up
@@ -878,24 +963,11 @@ type FormatState
 		let priorValue = self.prevValue
 		self.notePrevToken(tok.kind, value: tok.value, wasAtLineStart: wasAtLineStart)
 
-		// Inside an enum/union body the same keyword can be a bare CASE NAME (`function`, `type`,
-		// `match` as `TokenKind` variants) or a real nested declaration (an instance method
-		// `function toString(…)`). A real declaration is followed by the name it declares.
-		if self.inDataBlock() 'insideACaseList'
-			if not (kindOpensADeclarationBlock(tok.kind) or labeledBlockOpener(tok.kind)) 'notAKeywordCase'
-				// Case names, arguments and raw values never affect block-level indent; only
-				// `end 'label'`, handled above, does.
-				return index + 1
-			end 'notAKeywordCase'
-
-			// ⚠ **THE LOOKAHEAD MUST NOT SKIP NEWLINES.** The declared name sits on the SAME line as the
-			// keyword, so skipping them makes a bare case named `function` borrow the NEXT case's name,
-			// read as a declaration, and open a block that never closes — thousands of lines re-indented
-			// across the tree.
-			if self.kindAt(index + 1) != TokenKind.identifier 'bareCaseName'
-				return index + 1
-			end 'bareCaseName'
-		end 'insideACaseList'
+		// Case names, arguments and raw values never affect block-level indent; only `end 'label'`,
+		// handled above, does.
+		if self.inDataBlock() and not self.caseListKeywordDeclaresABody(index, kind: tok.kind) 'bareCaseName'
+			return index + 1
+		end 'bareCaseName'
 
 		// A labelless opener pushes a block and indents the next line — at line start, or after a
 		// visibility/`static`/`module` modifier. `module` is a contextual keyword lexed as an identifier,
@@ -907,8 +979,7 @@ type FormatState
 			let bodylessSignature = self.inInterfaceBlock() and tok.kind == TokenKind.function
 			if not bodylessSignature 'opensABody'
 				self.blocks.push(blockKindOpenedBy(tok.kind))
-				self.pendingIndentIncrease = true
-				self.currentLineOpenedBlock = true
+				self.beginBodyAfterThisLine(bodyGroupingOpenedBy(tok.kind))
 			end 'opensABody'
 		end 'labellessOpener'
 
@@ -919,8 +990,7 @@ type FormatState
 			let chains = self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise
 			if not chains 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
-				self.pendingIndentIncrease = true
-				self.currentLineOpenedBlock = true
+				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
 			end 'opensABlock'
 		end 'maybeBlockLabel'
 
@@ -959,13 +1029,13 @@ type FormatState
 
 	// Write every unconsumed whole-line comment between the last emitted line and `untilLine`.
 	function emitGapComments(untilLine LineNumber)
+		// The line above was closed by `emitNewline`, this function's only caller.
 		if self.newlineRun == 1 'previousLineEnds'
-			self.closeCurrentLine()
 			self.blankDecisionPending = true
 			self.out.append("\n")
 		end 'previousLineEnds'
 
-		let topLevel = self.atTopLevel()
+		let groups = self.currentGrouping() != ScopeGrouping.literal
 		var sawFirst = false
 		var lastCommentLine = self.lastEmittedSourceLine
 		var probe = self.lastEmittedSourceLine + 1
@@ -980,11 +1050,11 @@ type FormatState
 					// author's blanks between themselves.
 					let userHadBlank = probe >= self.lastEmittedSourceLine + 2
 					if self.blankDecisionPending 'decide'
-						if topLevel 'atTopLevel'
-							self.appendBlanks(self.forcedBlanksBefore(CommentGroupKey, userHadBlank: userHadBlank))
-						end 'atTopLevel' else if userHadBlank 'nestedKeepsOne'
+						if groups 'scopeGroups'
+							self.appendBlanks(self.forcedBlanksBefore(GroupKey.of(GroupKeyKind.comment), userHadBlank: userHadBlank))
+						end 'scopeGroups' else if userHadBlank 'literalKeepsOne'
 							self.out.append("\n")
-						end 'nestedKeepsOne'
+						end 'literalKeepsOne'
 						self.blankDecisionPending = false
 					end 'decide'
 					sawFirst = true
@@ -1003,10 +1073,11 @@ type FormatState
 			probe = probe + 1
 		end 'eachLine'
 
-		if topLevel 'topLevelGroup'
-			self.prevGroupKey = CommentGroupKey
-		end 'topLevelGroup'
-		self.pendingGroupKey = ""
+		if groups 'commentIsTheGroup'
+			self.prevGroupKey = GroupKey.of(GroupKeyKind.comment)
+		end 'commentIsTheGroup'
+
+		self.pendingGroupKey = GroupKey.of(GroupKeyKind.none)
 		self.currentLineOpenedBlock = false
 		self.blankDecisionPending = true
 		// The emission ended with the comment line's own terminator, so the run stands at one.
@@ -1017,19 +1088,23 @@ type FormatState
 
 	// Decide the blank line before this line's first token, then write the indent.
 	function openLine(tok Token, index TokenIndex, lineIsBlockCloser bool)
-		let topLevel = self.atTopLevel()
+		let grouping = self.currentGrouping()
 		let userHadBlankBeforeLine = self.hasEmitted and tok.line >= self.lastEmittedSourceLine + 2
 
-		if topLevel 'atTopLevel'
-			let thisKey = self.deriveGroupKey(tok.kind, index: index)
-			if self.blankDecisionPending and not lineIsBlockCloser 'decide'
+		if grouping == ScopeGrouping.literal 'literalKeepsOne'
+			// A literal's interior is preserve-with-cap: at most one of the author's blank lines survives.
+			if self.blankDecisionPending and userHadBlankBeforeLine 'hadOne'
+				self.out.append("\n")
+			end 'hadOne'
+		end 'literalKeepsOne' else 'scopeGroups'
+			let thisKey = self.deriveGroupKey(index, grouping: grouping, lineIsBlockCloser: lineIsBlockCloser)
+			// A continuation line of an `or` pattern chain sits INSIDE the arm it continues, so it is
+			// never a group of its own however the author broke the chain.
+			if self.blankDecisionPending and not lineIsBlockCloser and not self.armContinuation 'decide'
 				self.appendBlanks(self.forcedBlanksBefore(thisKey, userHadBlank: userHadBlankBeforeLine))
 			end 'decide'
 			self.pendingGroupKey = thisKey
-		end 'atTopLevel' else if self.blankDecisionPending and userHadBlankBeforeLine 'nestedKeepsOne'
-			// Nested contexts are preserve-with-cap: at most one of the author's blank lines survives.
-			self.out.append("\n")
-		end 'nestedKeepsOne'
+		end 'scopeGroups'
 
 		self.blankDecisionPending = false
 		self.appendIndent()
@@ -1042,64 +1117,144 @@ type FormatState
 		self.atLineStart = false
 	end 'openLine'
 
-	// ⭐ **THE OPINIONATED BLANK-LINE RULE, AND IT APPLIES AT TOP LEVEL ONLY.** Exactly one blank line
-	// separates adjacent top-level logical GROUPS, where a group is a run of adjacent lines sharing a
-	// key. Inside a nested context the author's blanks are preserved with a cap of one instead.
-	function forcedBlanksBefore(thisKey String, userHadBlank bool) returns BlankLineCount
-		if self.prevGroupKey.isEmpty() 'noPreviousLine'
+	// ⭐ **THE OPINIONATED BLANK-LINE RULE, AT EVERY NESTING DEPTH.** Exactly one blank line separates
+	// adjacent logical GROUPS within a scope, where a group is a run of adjacent lines sharing a key.
+	// Which lines share one is the scope's business (`ScopeGrouping`); the interior of a multi-line
+	// literal is the one scope that does not group at all, and is preserve-with-cap instead.
+	function forcedBlanksBefore(thisKey GroupKey, userHadBlank bool) returns BlankLineCount
+		if self.prevGroupKey.kind == GroupKeyKind.none 'noPreviousLine'
 			return 0
 		end 'noPreviousLine'
-		if self.prevGroupKey == DocGroupKey 'docAttachesBelow'
+		if self.prevGroupKey.kind == GroupKeyKind.doc 'docAttachesBelow'
 			return 0
 		end 'docAttachesBelow'
-		if self.prevGroupKey == CommentGroupKey and not userHadBlank 'commentAttachesBelow'
+		if self.prevGroupKey.kind == GroupKeyKind.comment and not userHadBlank 'commentAttachesBelow'
 			return 0
 		end 'commentAttachesBelow'
-		if self.prevGroupKey == thisKey 'sameGroupPacks'
+		if self.prevGroupKey.equals(thisKey) 'sameGroupPacks'
 			return 1 if userHadBlank else 0
 		end 'sameGroupPacks'
 		return 1
 	end 'forcedBlanksBefore'
 
-	// The tentative group key of a line whose first meaningful token is `first`. A line that turns out to
-	// OPEN a block has this overwritten at line end, so the next line is always forced onto its own group.
-	function deriveGroupKey(first TokenKind, index TokenIndex) returns String
-		if first == TokenKind.docComment 'docBlock'
-			return DocGroupKey
+	// The tentative group key of the line beginning at `index`. A line that turns out to OPEN a block has
+	// this overwritten at line end, so the next line is always forced onto its own group.
+	function deriveGroupKey(index TokenIndex, grouping ScopeGrouping, lineIsBlockCloser bool) returns GroupKey
+		if self.kindAt(index) == TokenKind.docComment 'docBlock'
+			return GroupKey.of(GroupKeyKind.doc)
 		end 'docBlock'
 
-		// A whole-line `//` is not a token and never reaches here; the gap path assigns its key.
-		var kind = first
-		if first == TokenKind.export or first == TokenKind.public 'visibilityPrefix'
-			kind = self.lookaheadKind(index)
-		end 'visibilityPrefix'
+		// A line that CLOSES a block is the tail of what it closes and shares a key with nothing, so
+		// whatever follows it is forced onto a group of its own.
+		if lineIsBlockCloser 'closesABlock'
+			return self.nextUniqueGroupKey()
+		end 'closesABlock'
 
+		// A whole-line `//` is not a token and never reaches here; the gap path assigns its key.
+		let declared = self.firstDeclaredIndexOnLine(index)
+		let kind = self.kindAt(declared)
+
+		if grouping == ScopeGrouping.literal 'notGrouped'
+			panic("FormatState.deriveGroupKey: a literal's interior is not grouped — `openLine` answers that scope without asking here")
+		end 'notGrouped'
+
+		if grouping == ScopeGrouping.caseList 'cases'
+			return self.nextUniqueGroupKey() if self.caseListKeywordDeclaresABody(declared, kind: kind) else GroupKey.of(GroupKeyKind.dataCase)
+		end 'cases'
+		if grouping == ScopeGrouping.matchArms 'arms'
+			// Every arm is one line by the grammar, so an arm never opens a body and the roster packs.
+			return GroupKey.of(GroupKeyKind.arm)
+		end 'arms'
+		if grouping == ScopeGrouping.statements 'code'
+			if kindOpensADeclarationBlock(kind) or lineStartAlwaysOpensABody(kind) 'opensABody'
+				return self.nextUniqueGroupKey()
+			end 'opensABody'
+			return GroupKey.of(GroupKeyKind.statement)
+		end 'code'
+		if grouping == ScopeGrouping.signatureList and kind == TokenKind.function 'signature'
+			return GroupKey.of(GroupKeyKind.signature)
+		end 'signature'
+
+		// `memberList`, and an interface's non-signature members.
 		if kind == TokenKind.let or kind == TokenKind.var 'binding'
-			return BindingGroupKey
+			return GroupKey.of(GroupKeyKind.binding)
 		end 'binding'
 		if kind == TokenKind.typealias 'alias'
-			return AliasGroupKey
+			return GroupKey.of(GroupKeyKind.alias)
 		end 'alias'
 		return self.nextUniqueGroupKey()
 	end 'deriveGroupKey'
 
+	// Is the keyword at `index` a real nested DECLARATION rather than a bare case name? Asked only of an
+	// `enum`/`union` body, where both readings exist for the same token.
+	//
+	// ⚠ **THE LOOKAHEAD MUST NOT SKIP NEWLINES.** The declared name sits on the SAME line as the keyword,
+	// so skipping them makes a bare case named `function` borrow the NEXT case's name, read as a
+	// declaration, and open a block that never closes — thousands of lines re-indented across the tree.
+	function caseListKeywordDeclaresABody(index TokenIndex, kind TokenKind) returns bool
+		if not (kindOpensADeclarationBlock(kind) or labeledBlockOpener(kind)) 'notAKeywordCase'
+			return false
+		end 'notAKeywordCase'
+		return self.kindAt(index + 1) == TokenKind.identifier
+	end 'caseListKeywordDeclaresABody'
+
+	// Where the line holding `index` stops being visibility and storage modifiers and says WHAT it
+	// declares. Walks the LINE and stops at its newline, whose index is the answer when the line declares
+	// nothing: `static` alone on a line is a bare enum case NAME, and a walk that stepped over the
+	// newline would take the next case's keyword for it.
+	function firstDeclaredIndexOnLine(index TokenIndex) returns TokenIndex
+		var at = index
+		while at < tokens.count() 'eachToken'
+			let kind = self.kindAt(at)
+			if kind == TokenKind.newline or kind == TokenKind.eof 'endOfLine'
+				return at
+			end 'endOfLine'
+
+			let isModifier = kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.static
+			if not isModifier 'saysWhatItDeclares'
+				// `module` is a contextual keyword lexed as an identifier, so it is matched by its WORD —
+				// and the token is fetched only here, where that word is what decides.
+				if kind != TokenKind.identifier 'notTheModuleWord'
+					return at
+				end 'notTheModuleWord'
+
+				let tok = self.tokenAt(at)
+				if not tok.value.equals(ModuleModifierName) 'anOrdinaryName'
+					return at
+				end 'anOrdinaryName'
+			end 'saysWhatItDeclares'
+
+			at = at + 1
+		end 'eachToken'
+		return at
+	end 'firstDeclaredIndexOnLine'
+
 	// Promote the line's key at line end.
 	function closeCurrentLine()
-		if not self.pendingGroupKey.isEmpty() 'hasAKey'
+		if self.pendingGroupKey.kind != GroupKeyKind.none 'hasAKey'
 			if self.currentLineOpenedBlock 'opensABlock'
 				self.pendingGroupKey = self.nextUniqueGroupKey()
 			end 'opensABlock'
 			self.prevGroupKey = self.pendingGroupKey
-			self.pendingGroupKey = ""
+			self.pendingGroupKey = GroupKey.of(GroupKeyKind.none)
 		end 'hasAKey'
 		self.currentLineOpenedBlock = false
 	end 'closeCurrentLine'
 
-	function nextUniqueGroupKey() returns String
-		let key = "{UniqueGroupKeyPrefix}{self.uniqueGroupCounter}"
+	function nextUniqueGroupKey() returns GroupKey
+		let key = GroupKey.uniqueTo(self.uniqueGroupCounter)
 		self.uniqueGroupCounter = self.uniqueGroupCounter + 1
 		return key
 	end 'nextUniqueGroupKey'
+
+	// This line opens a body: the next line is indented, this line takes a unique key at its end, and the
+	// body's own lines group as `grouping`. ⭐ **THE THREE MOVE TOGETHER** — a body whose grouping went
+	// unnamed would take whatever the previous opener left behind.
+	function beginBodyAfterThisLine(grouping ScopeGrouping)
+		self.pendingIndentIncrease = true
+		self.currentLineOpenedBlock = true
+		self.pendingScopeGrouping = grouping
+	end 'beginBodyAfterThisLine'
 
 	// --- Left context ---
 
@@ -1169,9 +1324,30 @@ type FormatState
 		return self.innermostBlock() == FormatBlockKind.matchBody
 	end 'inMatchBlock'
 
-	function atTopLevel() returns bool
-		return self.indentLevel == 0 and self.blocks.count() == 0 and not self.pendingIndentIncrease
-	end 'atTopLevel'
+	// --- Group frames ---
+
+	// How the lines directly inside the scope being emitted are grouped. File scope is a member list:
+	// its declarations are exactly what a `type` body holds, one level out.
+	function currentGrouping() returns ScopeGrouping
+		if self.groupFrames.count() == 0 'atFileScope'
+			return ScopeGrouping.memberList
+		end 'atFileScope'
+
+		let frame = try self.groupFrames.get(self.groupFrames.count() - 1) otherwise panic("FormatState.currentGrouping: the count is non-zero on the line above")
+		return frame.grouping
+	end 'currentGrouping'
+
+	function pushGroupFrame(grouping ScopeGrouping)
+		self.groupFrames.push(GroupFrame.create(grouping, savedPrevKey: self.prevGroupKey))
+		self.prevGroupKey = GroupKey.of(GroupKeyKind.none)
+	end 'pushGroupFrame'
+
+	// Restores the enclosing scope's last key, so a body leaves the rhythm around its own declaration
+	// exactly as it found it.
+	function popGroupFrame()
+		let frame = try self.groupFrames.pop() otherwise panic("FormatState.popGroupFrame: no frame is open — every pop sits under the same `indentLevel > 0` guard as the dedent beside it")
+		self.prevGroupKey = frame.savedPrevKey
+	end 'popGroupFrame'
 
 	// --- Token-stream lookahead ---
 
@@ -1208,11 +1384,6 @@ type FormatState
 		end 'skip'
 		return at
 	end 'indexPastNewlinesFrom'
-
-	// The kind of the first non-newline token after `index`, or `eof` when there is none.
-	function lookaheadKind(index TokenIndex) returns TokenKind
-		return self.kindAt(self.indexPastNewlinesFrom(index + 1))
-	end 'lookaheadKind'
 
 	// Where a run of `_` bindings separated by commas stops, starting at `index`.
 	function allDiscardedBindingsEndAt(index TokenIndex) returns TokenIndex
@@ -1353,6 +1524,32 @@ end 'FormatState'
 
 // The binding a match arm writes when it wants none of a case's associated values.
 let DiscardBindingName = b"_"
+
+// The labeled openers a line can BEGIN with that always open a body. `try` and `otherwise` are the two
+// `labeledBlockOpener` admits that can begin a line and open NOTHING — `try f() otherwise panic("…")` is
+// a whole statement — and `else`/`then` never begin one at all, being pulled up beside the `end` label
+// they follow.
+function lineStartAlwaysOpensABody(kind TokenKind) returns bool
+	return kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match
+end 'lineStartAlwaysOpensABody'
+
+// How the body of a labelless declaration opener groups its lines.
+function bodyGroupingOpenedBy(kind TokenKind) returns ScopeGrouping
+	if kind == TokenKind.enum or kind == TokenKind.union 'caseList'
+		return ScopeGrouping.caseList
+	end 'caseList'
+	if kind == TokenKind.interface 'signatures'
+		return ScopeGrouping.signatureList
+	end 'signatures'
+	if kind == TokenKind.type or kind == TokenKind.extension 'members'
+		return ScopeGrouping.memberList
+	end 'members'
+	if kind == TokenKind.function 'code'
+		return ScopeGrouping.statements
+	end 'code'
+
+	panic("bodyGroupingOpenedBy: a kind that opens no declaration body — every caller asks kindOpensADeclarationBlock first")
+end 'bodyGroupingOpenedBy'
 
 // Which kind of block a labelless opener starts.
 function blockKindOpenedBy(kind TokenKind) returns FormatBlockKind

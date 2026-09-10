@@ -1,0 +1,139 @@
+// One instance of every case in the blank-line rule's scope table, written with the blanks left OUT
+// where the rule should put them in and doubled where the cap should take one away. The `.expected`
+// beside this file is the whole rule's before/after on one screen.
+/// A doc block fuses to the declaration below it even across the blank line here.
+
+let PackedOne = 1
+let PackedTwo = 2
+typealias AliasesPackToo = int(0 to 100)
+typealias AndTheNextOne = int(0 to 10)
+// A section heading with no blank below it stays attached to what it heads.
+let HeadedBinding = 3
+
+
+let TheAuthorsBlankInsideAGroupSurvivesCappedAtOne = 4
+// --- an enum whose cases carry comment blocks -------------------------------------------------
+enum StageOfCompilation
+	// The first stage, and the comment block above it is what makes this case its own group.
+	lexing
+	// A second block, several lines long, so the wall-of-text case is really exercised: the reader
+	// should see one blank above this comment and none between it and the case it documents.
+	parsing
+	checking
+	lowering
+	/// A doc comment fuses downward here exactly as it does at file scope.
+	emitting
+end 'StageOfCompilation'
+// --- an enum of bare cases: NOTHING may be inserted between these ------------------------------
+enum BareCasesStayPacked
+	alpha
+	beta
+	gamma
+	delta
+end 'BareCasesStayPacked'
+// --- an enum holding a keyword case name and a nested declaration ------------------------------
+enum KeywordCaseAndNestedDeclaration
+	function
+	type
+	end
+	match
+	// A real nested declaration is a group of its own, unlike the four case names above it.
+	static function first() returns KeywordCaseAndNestedDeclaration
+		return Self.function
+	end 'first'
+	// A conditional branch inside a case list still groups as a case list.
+	#if os(Windows)
+	windowsOnly
+	#else
+	elsewhereOnly
+	#endif
+end 'KeywordCaseAndNestedDeclaration'
+// --- a type: fields pack, every method stands alone --------------------------------------------
+type Reading
+	export let label as String
+	let value as int(0 to 100)
+	// The comment heading this field is what separates it from the two above.
+	let weight as int(0 to 100)
+	typealias Score = int(0 to 1000)
+	static function create(label String, value int(0 to 100)) returns Reading
+		return Self{label: label, value: value, weight: 1}
+	end 'create'
+	export function scaled() returns Score
+		return (self.value * self.weight) as Score
+	end 'scaled'
+end 'Reading'
+// --- an interface: adjacent signatures are one roster ------------------------------------------
+interface Measurable
+	function magnitude() returns int(0 to 100)
+	function label() returns String
+	// A heading separates the roster above from the one below it.
+	function reset()
+end 'Measurable'
+// --- an extension groups exactly as a type body does -------------------------------------------
+extension Reading implements Measurable
+	export function magnitude() returns int(0 to 100)
+		return self.value
+	end 'magnitude'
+	export function label() returns String
+		return self.label
+	end 'label'
+end 'Reading'
+// --- statements: locals pack, every nested block stands alone ----------------------------------
+function scan(values Array with int(0 to 100)) returns int(0 to u64.max)
+	var total = 0 as int(0 to u64.max)
+	var seen = 0 as int(0 to u64.max)
+	let limit = values.count()
+	while seen < limit 'eachValue'
+		let value = try values.get(seen) otherwise panic("scan: index below the count")
+		if value > 50 'aboveHalf'
+			total = total + value
+		end 'aboveHalf' else 'belowHalf'
+			total = total + 1
+		end 'belowHalf'
+		seen = seen + 1
+	end 'eachValue'
+	// A comment block between two statements is separated from the one above it and attached below.
+	let doubled = total * 2
+	return doubled
+end 'scan'
+// --- a multi-line literal: its elements are NEVER forced apart ----------------------------------
+function corpus() returns Array with String
+	let rows = [
+		"alpha",
+		"beta",
+		// A comment inside a literal keeps only the author's own blank, capped at one.
+		"gamma",
+
+
+		"delta",
+	]
+	return rows
+end 'corpus'
+// --- match arms are a table, and an `or` chain is one arm however it was broken -----------------
+function classify(kind int(0 to 100)) returns int(0 to 100)
+	match kind 'kind'
+		0 then return 10
+		1 then return 20
+		// The two literal families, headed rather than spaced apart.
+		2 or 3 then return 30
+		4 or
+			5 or
+			6 then return 40
+		default then return 0
+	end 'kind'
+end 'classify'
+// --- a conditional branch inside a function body groups as statements ---------------------------
+function platformWidth() returns int(0 to 100)
+	#if os(Windows)
+	let width = 8
+	let other = 9
+	#else
+	let width = 4
+	let other = 5
+	#endif
+	return width + other
+end 'platformWidth'
+function main() returns ExitCode
+	let readings = corpus()
+	return classify(readings.count() as int(0 to 100)) as ExitCode
+end 'main'
