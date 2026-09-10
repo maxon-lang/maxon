@@ -365,7 +365,7 @@ end 'augmentWithRuntime'
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
 function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var block = module.addBlock(func, label: b"entry")
+	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
 	module.appendOp(block, op: framePointerSetupOp())
@@ -438,7 +438,7 @@ end 'appendMainCall'
 // prints.
 function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var block = module.addBlock(func, label: b"entry")
+	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
 	appendMainCall(module, block: block, initGlobals: initGlobals, entryFunction: entryFunction)
@@ -592,7 +592,7 @@ end 'appendExitCodePassThroughCall'
 // terminates cleanly without this stub setting one up.
 function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var block = module.addBlock(func, label: b"entry")
+	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// Install the SIGFPE fault handler (rt_sigaction) before any user code runs, exactly as the Windows
 	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init

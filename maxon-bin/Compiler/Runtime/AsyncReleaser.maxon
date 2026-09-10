@@ -602,8 +602,8 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let gt = 0 as ValueId
@@ -621,7 +621,7 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	end 'argsOnly'
 
 	// `resultConsumed != 0` ⇒ an await already took the result's reference; stop here.
-	var releaseResult = module.addBlock(func, label: b"releaseresult")
+	var releaseResult = module.addBlock(func, label: b"releaseresult", heat: BlockHeat.normal)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let notConsumed = emitCmp(module, block: cur, a: resultConsumed, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(notConsumed, thenBlockId: releaseResult.id, elseBlockId: done.id))
@@ -652,8 +652,8 @@ function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMi
 		return
 	end 'nonThrowing'
 
-	var releaseSuccess = module.addBlock(func, label: b"releasesuccess")
-	var releaseError = module.addBlock(func, label: b"releaseerror")
+	var releaseSuccess = module.addBlock(func, label: b"releasesuccess", heat: BlockHeat.normal)
+	var releaseError = module.addBlock(func, label: b"releaseerror", heat: BlockHeat.normal)
 	let threw = ids.mint()
 	module.appendOp(start, op: StdOp.loadIndirect(threw, addrId: gt, offset: GtOffThrew, valueType: StdType.i64))
 	let noError = emitCmp(module, block: start, a: threw, b: emitConst(module, block: start, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)

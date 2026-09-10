@@ -795,11 +795,11 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkMagic = module.addBlock(func, label: b"checkMagic")
-	var checkVersion = module.addBlock(func, label: b"checkVersion")
-	var attach = module.addBlock(func, label: b"attach")
-	var dark = module.addBlock(func, label: b"dark")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkMagic = module.addBlock(func, label: b"checkMagic", heat: BlockHeat.normal)
+	var checkVersion = module.addBlock(func, label: b"checkVersion", heat: BlockHeat.normal)
+	var attach = module.addBlock(func, label: b"attach", heat: BlockHeat.normal)
+	var dark = module.addBlock(func, label: b"dark", heat: BlockHeat.normal)
 
 	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
@@ -877,9 +877,9 @@ function buildDsShutdown(module StdModule)
 	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var clear = module.addBlock(func, label: b"clear")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var clear = module.addBlock(func, label: b"clear", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
 	let attached = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
@@ -965,14 +965,14 @@ function buildDsReserve(module StdModule)
 	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var raisePeak = module.addBlock(func, label: b"raisePeak")
-	var checkSpace = module.addBlock(func, label: b"checkSpace")
-	var checkWrap = module.addBlock(func, label: b"checkWrap")
-	var pad = module.addBlock(func, label: b"pad")
-	var recheck = module.addBlock(func, label: b"recheck")
-	var place = module.addBlock(func, label: b"place")
-	var full = module.addBlock(func, label: b"full")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var raisePeak = module.addBlock(func, label: b"raisePeak", heat: BlockHeat.normal)
+	var checkSpace = module.addBlock(func, label: b"checkSpace", heat: BlockHeat.normal)
+	var checkWrap = module.addBlock(func, label: b"checkWrap", heat: BlockHeat.normal)
+	var pad = module.addBlock(func, label: b"pad", heat: BlockHeat.normal)
+	var recheck = module.addBlock(func, label: b"recheck", heat: BlockHeat.normal)
+	var place = module.addBlock(func, label: b"place", heat: BlockHeat.normal)
+	var full = module.addBlock(func, label: b"full", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let eventType = 0 as ValueId
@@ -1078,7 +1078,7 @@ function buildDsCommit(module StdModule)
 	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let entryPtr = 0 as ValueId
 
@@ -1107,9 +1107,9 @@ function buildDsEmitMm(module StdModule)
 	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var write = module.addBlock(func, label: b"write")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let eventType = 0 as ValueId
@@ -1264,7 +1264,7 @@ end 'emitPackedLogFields'
 // be a `var` to be appended to and a field read is not one. It also keeps the caller's `done` terminator
 // where the caller can see it.
 function emitLogEntryOpen(module StdModule, func IrFunction, entry IrBlock, eventType ValueId, entryBytes ValueId, write IrBlock, done IrBlock, ids ValueMinter) returns ValueId
-	var reserve = module.addBlock(func, label: b"reserve")
+	var reserve = module.addBlock(func, label: b"reserve", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
 	let detached = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1303,14 +1303,14 @@ function buildDsEmitLogPhase(module StdModule, usesGt bool)
 	var func = IrFunction.createFromStd(DsEmitLogPhaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let eventType = 0 as ValueId
 	let nameId = 1 as ValueId
 	let unitId = 2 as ValueId
 
-	var write = module.addBlock(func, label: b"write")
-	var done = module.addBlock(func, label: b"done")
+	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let entryBytes = emitConst(module, block: entry, value: DsLogPhaseEntryBytes, ids: ids)
 	let entryPtr = emitLogEntryOpen(module, func: func, entry: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
@@ -1337,7 +1337,7 @@ function buildDsEmitLogEvent(module StdModule, usesGt bool)
 	var func = IrFunction.createFromStd(DsEmitLogEventName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(6)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 6)
 	let nameId = 0 as ValueId
 	let category = 1 as ValueId
@@ -1346,8 +1346,8 @@ function buildDsEmitLogEvent(module StdModule, usesGt bool)
 	let arg0 = 4 as ValueId
 	let arg1 = 5 as ValueId
 
-	var write = module.addBlock(func, label: b"write")
-	var done = module.addBlock(func, label: b"done")
+	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let eventType = emitConst(module, block: entry, value: DsEvLogEvent, ids: ids)
 	let entryBytes = emitConst(module, block: entry, value: DsLogEventEntryBytes, ids: ids)
@@ -1388,17 +1388,17 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	var func = IrFunction.createFromStd(DsEmitLogTextName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 4)
 	let category = 0 as ValueId
 	let level = 1 as ValueId
 	let unitId = 2 as ValueId
 	let record = 3 as ValueId
 
-	var write = module.addBlock(func, label: b"write")
-	var zeroPad = module.addBlock(func, label: b"zeroPad")
-	var copy = module.addBlock(func, label: b"copy")
-	var done = module.addBlock(func, label: b"done")
+	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	var zeroPad = module.addBlock(func, label: b"zeroPad", heat: BlockHeat.normal)
+	var copy = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	// Sized in the ENTRY block because `emitLogEntryOpen` needs the size to reserve with. A detached build
 	// pays these arithmetic ops and no call, which is the same order of cost its `__ds_base` test is.
@@ -1479,8 +1479,8 @@ end 'buildDsEmitLogText'
 // It SPLITS `block` — the caller continues in the block this returns, exactly as `emitPackedElementZero`
 // (`ManagedMemoryRuntime`) does.
 export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
-	var emit = module.addBlock(func, label: b"dsEmit")
-	let resume = module.addBlock(func, label: b"dsResume")
+	var emit = module.addBlock(func, label: b"dsEmit", heat: BlockHeat.normal)
+	let resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: block, label: DsBaseLabel, ids: ids)
 	let detached = emitConst(module, block: block, value: 0, ids: ids)

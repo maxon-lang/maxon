@@ -80,8 +80,8 @@ func @main {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#30
   __im_slow#26:
-    x64.movRegReg rcx, r12
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_mem_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -118,9 +118,9 @@ func @main {
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __im_store#36
   __im_slow#32:
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
-    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_mem_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -137,7 +137,7 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchdefault#8
   matcharm#7:
-    x64.movRegImm32 rsi, 1
+    x64.movRegImm32 rax, 1
     x64.jmp trycont#10
   matchdefault#8:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:10: set at the capacity must report indexOutOfBounds\x0a"
@@ -149,10 +149,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#5:
-    x64.movRegReg rsi, rbx
+    x64.movRegReg rax, rbx
   trycont#10:
     x64.leaRegRegImm32 rdx, r8, 1
-    x64.movRegImm32 rax, 7
+    x64.movRegImm32 rsi, 7
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#38
@@ -170,24 +170,25 @@ func @main {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_store#42
   __im_slow#38:
+    x64.storeSlotReg slot1, rax
     x64.movRegReg rcx, r12
-    x64.storeSlotReg slot1, rsi
+    x64.movRegReg rax, rsi
     x64.callDirect __managed_mem_set
-    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rax, slot1
     x64.jmp __im_cont#37
   __im_store#42:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg r10, rcx
   __im_cont#37:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont#16
   tryerr#12:
-    x64.leaRegRegImm32 rax, r10, -1
-    x64.cmpRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, r10, -1
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchdefault#14
   matcharm#13:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp trycont#16
   matchdefault#14:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:16: set past the capacity must report indexOutOfBounds\x0a"
@@ -200,7 +201,7 @@ func @main {
     x64.ret
   trycont#16:
     x64.movRegImm rdx, 18446744073709551615
-    x64.movRegImm32 rax, 7
+    x64.movRegImm32 rsi, 7
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#44
@@ -218,25 +219,26 @@ func @main {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_store#48
   __im_slow#44:
+    x64.storeSlotReg slot1, rax
     x64.movRegReg rcx, r12
-    x64.storeSlotReg slot1, rsi
+    x64.movRegReg rax, rsi
     x64.callDirect __managed_mem_set
-    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rax, slot1
     x64.jmp __im_cont#43
   __im_store#48:
     x64.leaRegRegImm32 rcx, rcx, -8
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
+    x64.storeBaseDispReg.word64 [rcx + 0], rsi
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg r10, rcx
   __im_cont#43:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#17
+    x64.jcc equal, trycont#22
   tryerr#18:
-    x64.leaRegRegImm32 rax, r10, -1
-    x64.cmpRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, r10, -1
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchdefault#20
   matcharm#19:
-    x64.leaRegRegImm32 rax, rsi, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp trycont#22
   matchdefault#20:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at set-at-the-capacity-and-below-zero-is-refused.test:22: set at a negative index must report indexOutOfBounds\x0a"
@@ -247,8 +249,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#17:
-    x64.movRegReg rax, rsi
   trycont#22:
     x64.cmpRegImm32 rax, 3
     x64.jcc notEqual, ifcont

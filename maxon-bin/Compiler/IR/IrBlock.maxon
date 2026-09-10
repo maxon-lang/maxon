@@ -189,12 +189,20 @@ end 'CondBranch'
 // (`ColdCallBracketPlan`). A block is `normal` unless a pass knows otherwise.
 //
 // A separate field rather than a label spelling, because a label is a debug aid and must not carry a
-// semantic fact. Distinct from the splitter's `SpillPlacement.cold`, which names a spill placed at loop
-// depth 0.
+// semantic fact. Distinct from the splitter's `SpillPlacement.cold`, which is a PLACEMENT — a spill op
+// landing off every loop's hot path: at depth 0, or in a block of this heat.
 export enum BlockHeat
 	normal
 	cold
 end 'BlockHeat'
+
+export typealias BlockHeatArray = Array with BlockHeat
+
+// The heat of a block that runs only when BOTH `a`'s block and `b`'s do — a split edge's block — which
+// is the colder of the two.
+export function colderHeat(a BlockHeat, b BlockHeat) returns BlockHeat
+	return BlockHeat.cold if a == BlockHeat.cold or b == BlockHeat.cold else BlockHeat.normal
+end 'colderHeat'
 
 export type IrBlock
 	export var id as BlockId
@@ -220,11 +228,13 @@ export type IrBlock
 	// silently drop every non-phi edge — which is why successors come from the ops.
 	export var branchEdges as BranchEdgeArray
 
-	export static function create(id BlockId, label ByteArray) returns IrBlock
+	// The heat is REQUIRED: a block minted without saying how often it runs is the omission that leaves a
+	// cold arm's call confined, so no creator may default it.
+	export static function create(id BlockId, label ByteArray, heat BlockHeat) returns IrBlock
 		return Self{
 			id: id,
 			label: label,
-			heat: BlockHeat.normal,
+			heat: heat,
 			opRefs: OpIndexArray.create(),
 			terminator: Terminator.unset,
 			condBranch: CondBranch.none,
@@ -232,6 +242,12 @@ export type IrBlock
 			branchEdges: BranchEdgeArray.create()
 		}
 	end 'create'
+
+	// An empty block carrying `src`'s identity — id, label and heat — for every tier boundary and copier
+	// that rebuilds a block's body but keeps what the block IS.
+	export static function createLike(src IrBlock) returns IrBlock
+		return IrBlock.create(src.id, label: src.label, heat: src.heat)
+	end 'createLike'
 
 	// True when the block has a real terminator op (returns / branches).
 	// Dead and fallthrough blocks return false — they have no op to

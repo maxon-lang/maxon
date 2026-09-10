@@ -1250,7 +1250,7 @@ type LeafInliner
 		// `panic(…)`'s own block), so this cannot mint an arm nothing branches to; and were it ever to,
 		// the cost is a dead block holding the call, not a wrong answer.
 		if blocks.hasPanicBlock 'redirectPanics'
-			self.mintSlowArm(contRef, callee: callee, args: args, calleeFunc: calleeFunc, blocks: blocks)
+			self.mintSlowArm(contRef, callee: callee, args: args, resultId: resultId, calleeFunc: calleeFunc, blocks: blocks)
 		end 'redirectPanics'
 
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
@@ -1415,8 +1415,7 @@ type LeafInliner
 			// The label marks the block the splice ENTERS, which is the callee's entry only while no cascade
 			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
 			// it follows the entry rather than position 0.
-			var fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label)
-			fresh.heat = calleeBlock.heat
+			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label, heat: calleeBlock.heat)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
@@ -1466,15 +1465,16 @@ type LeafInliner
 	//
 	// ⚠ The argument array is SHARED with the dropped call op rather than copied — the op is an orphan
 	// and nothing rewrites either. `InlineManagedPrimitives.openPlain` shares the same way.
-	function mintSlowArm(contRef BlockRef, callee ByteArray, args ValueIdArray, calleeFunc IrFunction, blocks SpliceBlocks)
+	function mintSlowArm(contRef BlockRef, callee ByteArray, args ValueIdArray, resultId ValueId, calleeFunc IrFunction, blocks SpliceBlocks)
 		let contId = self.blockAt(contRef).id
 
 		// The slow arm re-runs the call this site inlined, so it belongs to the CALLER's statement — which
-		// is where `spliceCallAtTailOf` left the cursor, the body clone not having started.
-		var slow = self.module.addBlock(self.func, label: InlineSlowLabel)
-		// Reached only where the inlined body would have panicked.
-		slow.heat = BlockHeat.cold
+		// is where `spliceCallAtTailOf` left the cursor, the body clone not having started. Reached only
+		// where the inlined body would have panicked, so it is cold.
+		let slow = self.module.addBlock(self.func, label: InlineSlowLabel, heat: BlockHeat.cold)
 		let slowResult = self.valueIds().mint()
+		// The re-issued call's result stands in for the site's own.
+		self.project.valueOrigins.recordDerived(self.funcIndex, valueId: slowResult, sourceId: resultId)
 		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
 		self.module.setTerminator(slow, op: StdOp.branch(contId))
 		attachEdge(slow, targetId: contId, argIds: self.returnedValues(calleeFunc, valueId: slowResult))

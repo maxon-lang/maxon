@@ -291,12 +291,12 @@ end 'applyAllocation'
 // copies and cold-call brackets under, so a copy is spliced before exactly the op that could not
 // coalesce into its input, and a bracket around exactly the call it was planned for.
 //
-// ⭐ **A BRACKET'S SAVES GO IMMEDIATELY BEFORE THE CALL; ITS RELOADS GO AFTER THE CALL'S RESULT
-// CAPTURES** — the moves that read the registers the call answers through (`isCaptureMove`), which
-// follow the call directly. A value live across a cold call may hold one of those registers, and a
-// reload placed before the capture would overwrite the answer; placed after it, every caller-saved
-// register is the hot path's to use. The captures read a register no bracketed value holds only
-// because the colorer keeps the bracketed registers in use across them.
+// ⭐ **A BRACKET'S SAVES GO BEFORE THE RUN'S FIRST OP; ITS RELOADS GO AFTER THE RUN'S LAST** — the last
+// capture of the run's call, the move that reads the register the call answers through
+// (`isCaptureMove`). A value live across a cold run may hold one of those registers, and a reload placed
+// before the capture would overwrite the answer; placed after it, every caller-saved register is the hot
+// path's to use. The plan's two sequences per run are the colorer's reading of `ColdBlockRuns`, so the
+// rewrite re-derives no run of its own.
 function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan)
 	var seq = 0 as OpSeq
 
@@ -304,7 +304,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 		let bodyCount = block.opRefs.count()
 
-		// Whether the plan's open bracket has had its call emitted and its reloads not yet spliced.
+		// Whether the plan's open bracket has had its saves spliced and its reloads not yet.
 		var owesReloads = false
 
 		var newRefs = OpIndexArray.create()
@@ -327,8 +327,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				continue
 			end 'flagCaptureHandled'
 
-			owesReloads = spliceBracketReloadsUnlessCapturing(module, block: block, pos: pos, brackets: brackets, owesReloads: owesReloads, newRefs: newRefs)
-
+			let atSeq = seq + pos
 			// ⚠⚠ **THE PAIR IS SETTLED AND EMITTED BEFORE THE OP IS BOUND, AND THE ORDER IS THE WHOLE POINT.**
 			// An op read out of `module.ops` is a BORROW of `module` (E3070), the sequencer PUSHES its moves
 			// onto that same array, and a borrow's liveness is its last use in SOURCE order — so a single
@@ -342,6 +341,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				emitResequencedCaptureAt(module, block: block, pos: pos, alloc: alloc, newRefs: newRefs)
 				skipNext = true
 				prevWasCall = false
+				owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, lastSeq: atSeq + 1, lastPos: pos + 1, owesReloads: owesReloads, newRefs: newRefs)
 				continue
 			end 'isPair'
 
@@ -349,20 +349,20 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 			prevWasCall = colored.rawValue.isCall
-
-			if isPhysicalSelfMove(colored) 'selfMove'
-				continue
-			end 'selfMove'
-
-			spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: seq + pos, newRefs: newRefs)
-			owesReloads = spliceBracketSavesBefore(module, brackets: brackets, seq: seq + pos, owesReloads: owesReloads, newRefs: newRefs)
-			newRefs.push(opIdx)
+			// A run's saves go before its first op whether or not that op is emitted: a dropped self-move
+			// (`mov rdx, rdx` for an argument already in place) still opens the run it begins.
+			owesReloads = spliceBracketSavesBefore(module, brackets: brackets, seq: atSeq, owesReloads: owesReloads, newRefs: newRefs)
+			if not isPhysicalSelfMove(colored) 'emitted'
+				spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: atSeq, newRefs: newRefs)
+				newRefs.push(opIdx)
+			end 'emitted'
+			owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, lastSeq: atSeq, lastPos: pos, owesReloads: owesReloads, newRefs: newRefs)
 		end 'eachOp'
 
-		// A call last in the body owes its reloads before the terminator.
-		if owesReloads 'callLastInBody'
-			appendBracketReloads(module, brackets: brackets, newRefs: newRefs)
-		end 'callLastInBody'
+		// A run is a stretch of ONE block's body, so its reload point is met before the body ends.
+		if owesReloads 'runLeftOpen'
+			panic("colorAndDropSelfMoves: block '{String.from(block.label)}' ends with a cold run's reloads still owed — the plan's reload sequence lies past the block's body, so the colorer's run and the rewrite's numbering have drifted")
+		end 'runLeftOpen'
 		block.opRefs = newRefs
 		seq = seq + bodyCount
 
@@ -376,47 +376,67 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 	brackets.requireAllTaken()
 end 'colorAndDropSelfMoves'
 
-// Splice the saves of the bracket planned at `seq`, if any, before the op about to be emitted; that
-// bracket then owes its reloads. A bracket still owed here is a contradiction: a call is never a capture
-// move, so the walk flushed the previous bracket's reloads before reaching this call.
+// Splice the saves of the run planned to start at `seq`, if any, before the op about to be emitted;
+// that run then owes its reloads. A run still owed here is a contradiction: runs never overlap, and the
+// previous run's reloads were spliced at its last op.
 function spliceBracketSavesBefore(module TargetModule, brackets ColdCallBracketPlan, seq OpSeq, owesReloads bool, newRefs OpIndexArray) returns bool
 	if not brackets.takeAt(seq) 'noBracketHere'
 		return owesReloads
 	end 'noBracketHere'
 
 	if owesReloads 'stillOwed'
-		panic("spliceBracketSavesBefore: the bracket at sequence {seq} begins while the previous one still owes its reloads — a call is never a capture move, so the previous bracket must have been flushed before it")
+		panic("spliceBracketSavesBefore: the run at sequence {seq} begins while the previous one still owes its reloads — runs never overlap, so the previous run's reloads must have been spliced at its last op")
 	end 'stillOwed'
 
-	for entry in 0 upto brackets.openEntryCount() 'eachRegister'
-		appendAllocatorOp(module, op: TargetOp.storeSlotReg(brackets.openSlotAt(entry), srcReg: TargetVReg.physical(brackets.openRegAt(entry))), newRefs: newRefs)
-	end 'eachRegister'
-
+	appendBracketHalf(module, brackets: brackets, half: BracketHalf.save, newRefs: newRefs)
 	return true
 end 'spliceBracketSavesBefore'
 
-// The reloads owed by the open bracket, spliced before the op at `pos` unless that op is still one of
-// its call's result captures; whether they are still owed afterwards. The op is read only while
-// something is owed, so the common op costs one flag test.
-function spliceBracketReloadsUnlessCapturing(module TargetModule, block IrBlock, pos ElementIndex, brackets ColdCallBracketPlan, owesReloads bool, newRefs OpIndexArray) returns bool
-	if not owesReloads or isCaptureMoveAt(module, block: block, pos: pos) 'nothingToSpliceHere'
+// The reloads owed by the open run, spliced right after the op just emitted when that op is the run's
+// last (`ColdCallBracketPlan.openReloadSeq`; `lastSeq` is the last sequence the caller has emitted
+// through — a resequenced capture pair covers two). Whether reloads are still owed afterwards.
+//
+// THE PREMISE THE PLACEMENT RESTS ON: the run's last op is the last capture of its call or the spill
+// store of what it captured, so every read of the call's answer precedes the reloads and nothing after
+// them reads a register they restore. A capture right after the reload point would read a restored
+// register in place of the answer, so the splice refuses one.
+function spliceBracketReloadsAfter(module TargetModule, block IrBlock, brackets ColdCallBracketPlan, lastSeq OpSeq, lastPos ElementIndex, owesReloads bool, newRefs OpIndexArray) returns bool
+	if not owesReloads or brackets.openReloadSeq() > lastSeq 'notTheRunsEnd'
 		return owesReloads
-	end 'nothingToSpliceHere'
+	end 'notTheRunsEnd'
 
-	appendBracketReloads(module, brackets: brackets, newRefs: newRefs)
+	if lastPos + 1 < block.opRefs.count() and isCaptureMoveAt(module, block: block, pos: lastPos + 1) 'aCaptureFollows'
+		panic("spliceBracketReloadsAfter: in cold block '{String.from(block.label)}' a capture move follows the run's reload point at sequence {lastSeq} — it would read a register the reloads restore in place of the call's answer, so the colorer's run end and the captures have come apart")
+	end 'aCaptureFollows'
+
+	appendBracketHalf(module, brackets: brackets, half: BracketHalf.reload, newRefs: newRefs)
 	return false
-end 'spliceBracketReloadsUnlessCapturing'
+end 'spliceBracketReloadsAfter'
 
-function appendBracketReloads(module TargetModule, brackets ColdCallBracketPlan, newRefs OpIndexArray)
+// Which half of a cold run's bracket is being emitted for the open run's registers.
+enum BracketHalf
+	save
+	reload
+end 'BracketHalf'
+
+// One op per register of the open run: its save (`storeSlotReg slot, reg`) or its reload
+// (`loadRegSlot reg, slot`).
+function appendBracketHalf(module TargetModule, brackets ColdCallBracketPlan, half BracketHalf, newRefs OpIndexArray)
 	for entry in 0 upto brackets.openEntryCount() 'eachRegister'
-		appendAllocatorOp(module, op: TargetOp.loadRegSlot(TargetVReg.physical(brackets.openRegAt(entry)), slot: brackets.openSlotAt(entry)), newRefs: newRefs)
+		let reg = TargetVReg.physical(brackets.openRegAt(entry))
+		let slot = brackets.openSlotAt(entry)
+		let op = match half 'h'
+			save gives TargetOp.storeSlotReg(slot, srcReg: reg)
+			reload gives TargetOp.loadRegSlot(reg, slot: slot)
+		end 'h'
+		appendAllocatorOp(module, op: op, newRefs: newRefs)
 	end 'eachRegister'
-end 'appendBracketReloads'
+end 'appendBracketHalf'
 
 // True for a `movRegReg` whose DEST is still virtual and whose SRC is a physical register — the shape of
 // a call-result capture (`virtual(result) ← physical(returnReg)`). Read on the UNCOLORED op, before its
 // dest is rewritten to a physical register.
-function isCaptureMove(op TargetOp) returns bool
+export function isCaptureMove(op TargetOp) returns bool
 	return match op 'm'
 		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
 		prologue or
@@ -705,7 +725,7 @@ function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, s
 	end 'copyPlanned'
 end 'spliceReuseCopyBefore'
 
-// Mint a PHYSICAL op the allocator decided on — a reuse copy, a cold-call save or reload — at the end
+// Mint a PHYSICAL op the allocator decided on — a reuse copy, a cold run's save or reload — at the end
 // of `module.ops` and place it next in the block. It belongs to no statement, so it carries no span.
 function appendAllocatorOp(module TargetModule, op TargetOp, newRefs OpIndexArray)
 	let opIdx = module.ops.count()
@@ -1007,7 +1027,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 	// so the original CFG's classification stays valid across all of them.
 	var predRefs = BlockRefArray.create()
 	var succIds = BlockIdArray.create()
-
+	var heats = BlockHeatArray.create()
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		if topo.succ.degree(predLocal) <= 1 'singleSucc'
 			continue
@@ -1021,6 +1041,8 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 			if topo.pred.degree(succLocal as CsrIndex) > 1 'critical'
 				predRefs.push(try topo.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
 				succIds.push(edge.targetBlockId)
+				// The split block runs exactly when the edge is taken, which is only when both ends run.
+				heats.push(colderHeat(predBlock.heat, b: blockAt(module, topo: topo, local: succLocal).heat))
 			end 'critical'
 		end 'eachEdge'
 	end 'eachPred'
@@ -1028,12 +1050,13 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 	for k in 0 upto predRefs.count() 'eachSplit'
 		let predRef = try predRefs.get(k) otherwise panic("splitCriticalEdgesInFunc: predRefs.get OOB")
 		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
-		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, target: target)
+		let heat = try heats.get(k) otherwise panic("splitCriticalEdgesInFunc: heats.get OOB")
+		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, heat: heat, target: target)
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
-function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId, target Target)
-	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, target: target)
+function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId, heat BlockHeat, target Target)
+	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, target: target)
 	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
 	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
@@ -1045,11 +1068,11 @@ end 'performCriticalSplit'
 // directly, so its borrow never escapes to a caller (which would clash with the
 // split loop mutating the same function). The branch op is the TARGET's — `jmp` for x64,
 // `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
-function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId, target Target) returns BlockRef
+function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId, heat BlockHeat, target Target) returns BlockRef
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel))
+	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.push(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")

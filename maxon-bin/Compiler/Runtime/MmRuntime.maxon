@@ -734,6 +734,12 @@ export type ValueMinter
 		self.next = self.next + 1
 		return id
 	end 'mint'
+
+	// The id the next `mint` answers — what a pass reads before and after an expansion to file the ids
+	// it minted as one derived range (`ValueOriginTable.recordDerivedRange`).
+	export function nextId() returns ValueId
+		return self.next
+	end 'nextId'
 end 'ValueMinter'
 
 // Install the runtime into the lowered Std module. Called only when `moduleUsesHeap` held.
@@ -1074,8 +1080,8 @@ end 'emitWordSlotStore'
 //
 // It returns the block execution continues in, because it FORKS: the caller goes on emitting into that.
 export function emitMovedOutSlotClear(module StdModule, func IrFunction, block IrBlock, base ValueId, index ValueId, elemDrop ValueId, ids ValueMinter) returns IrBlock
-	var clear = module.addBlock(func, label: b"clearmoved")
-	let resume = module.addBlock(func, label: b"moveddone")
+	var clear = module.addBlock(func, label: b"clearmoved", heat: BlockHeat.normal)
+	let resume = module.addBlock(func, label: b"moveddone", heat: BlockHeat.normal)
 
 	let noDrop = emitConst(module, block: block, value: 0, ids: ids)
 	let ownsElements = emitCmp(module, block: block, a: elemDrop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
@@ -1396,7 +1402,7 @@ export function buildStrCopy(module StdModule)
 	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let dest = 0 as ValueId
 	let src = 1 as ValueId
@@ -1468,9 +1474,9 @@ end 'CountedLoop'
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
 // loops reads back as several loops under `--emit-ir-runtime`.
 export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter) returns CountedLoop
-	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray())
-	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray())
-	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray())
+	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 	let i = ids.mint()
@@ -1563,8 +1569,8 @@ end 'WordTailSplit'
 // being load-bearing. It absorbs the empty range (a zero-length `__str_copy`, a move of no elements) on the
 // way past.
 export function openWordTailSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, label ByteArray, ids ValueMinter) returns WordTailSplit
-	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray())
-	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray())
+	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
 	let empty = emitCmp(module, block: cur, a: byteCount, b: nothing, pred: StdCmpPred.le, ids: ids)
@@ -1620,7 +1626,7 @@ function buildMmRawFree(module StdModule, multiM bool, perThread bool)
 	var func = IrFunction.createFromStd(MmRawFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
@@ -1687,7 +1693,7 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
-	var block = module.addBlock(func, label: b"entry")
+	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: block, count: paramCount)
 	let size = 0 as ValueId
 	let destructor = 1 as ValueId
@@ -1915,9 +1921,9 @@ function buildMmIncref(module StdModule)
 	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	let immortal = module.addBlock(func, label: b"immortal")
-	var counted = module.addBlock(func, label: b"counted")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
@@ -1951,9 +1957,9 @@ function buildMmRetain(module StdModule)
 	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	let immortal = module.addBlock(func, label: b"immortal")
-	var counted = module.addBlock(func, label: b"counted")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
@@ -1992,9 +1998,9 @@ function buildMmOwn(module StdModule)
 	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var copy = module.addBlock(func, label: b"copy")
-	var counted = module.addBlock(func, label: b"counted")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var copy = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -2041,9 +2047,9 @@ function buildMmOwnDeep(module StdModule)
 	var func = IrFunction.createFromStd(MmOwnDeepName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var cloned = module.addBlock(func, label: b"cloned")
-	var counted = module.addBlock(func, label: b"counted")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var cloned = module.addBlock(func, label: b"cloned", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let box = 0 as ValueId
@@ -2076,10 +2082,10 @@ function buildMmSoleBox(module StdModule)
 	var func = IrFunction.createFromStd(MmSoleBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var counted = module.addBlock(func, label: b"counted")
-	var shared = module.addBlock(func, label: b"shared")
-	let sole = module.addBlock(func, label: b"sole")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
+	var shared = module.addBlock(func, label: b"shared", heat: BlockHeat.normal)
+	let sole = module.addBlock(func, label: b"sole", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -2335,7 +2341,7 @@ end 'sharedAllocationGuardBox'
 // ⚠ `func` is needed only because the event SPLITS `entry` into new blocks; with `--debugstream` off it
 // is unread and not one op is emitted.
 export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
-	var counted = module.addBlock(func, label: b"counted")
+	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 	emitRouteAwayFromImmortalBox(module, block: entry, ptr: record, immortal: lower, counted: counted, ids: ids)
 
 	let priorCount = emitAdjustRefcount(module, block: counted, ptr: record, delta: OneFewer, ids: ids)
@@ -2365,7 +2371,7 @@ function buildMmIsNull(module StdModule)
 	var func = IrFunction.createFromStd(MmIsNullName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -2382,9 +2388,9 @@ function buildMmDecref(module StdModule)
 	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var release = module.addBlock(func, label: b"release")
-	var lower = module.addBlock(func, label: b"lower")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
@@ -2475,7 +2481,7 @@ function buildMmFree(module StdModule, multiM bool, perThread bool)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var start = module.addBlock(func, label: b"entry")
+	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: start, count: 1)
 	let ptr = 0 as ValueId
@@ -2582,7 +2588,7 @@ function buildThreadCounterReader(module StdModule, name ByteArray, offset ByteO
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	if not usesGt 'oneThreadOfExecution'
 		let processWide = emitProcessWideColumn(module, block: entry, column: column, ids: ids)
@@ -2591,8 +2597,8 @@ function buildThreadCounterReader(module StdModule, name ByteArray, offset ByteO
 		return
 	end 'oneThreadOfExecution'
 
-	var haveThread = module.addBlock(func, label: b"havethread")
-	var answer = module.addBlock(func, label: b"answer")
+	var haveThread = module.addBlock(func, label: b"havethread", heat: BlockHeat.normal)
+	var answer = module.addBlock(func, label: b"answer", heat: BlockHeat.normal)
 	let count = ids.mint()
 	answer.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
 
@@ -2641,10 +2647,10 @@ end 'emitLayerSum'
 // than reading `owner` through it: an M exists with no GT for the few instructions of its own bring-up, and
 // the IOCP completion thread has one for its whole life.
 function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock, threadId ValueId, ids ValueMinter) returns IrBlock
-	var haveOffset = module.addBlock(func, label: b"thoffset")
-	var haveMachine = module.addBlock(func, label: b"thmachine")
-	var haveGt = module.addBlock(func, label: b"thgt")
-	var merge = module.addBlock(func, label: b"thmerge")
+	var haveOffset = module.addBlock(func, label: b"thoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"thmachine", heat: BlockHeat.normal)
+	var haveGt = module.addBlock(func, label: b"thgt", heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: b"thmerge", heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(threadId, argType: StdType.i64))
 
 	var noThread = ParsedIntArray.create()
@@ -2676,8 +2682,8 @@ end 'emitCurrentThreadOrZero'
 //
 // It terminates `cur` and returns the block to continue in.
 function emitThreadTrafficStep(module StdModule, func IrFunction, cur IrBlock, allocsDelta ValueId, freesDelta ValueId, bytesDelta ValueId, ids ValueMinter) returns IrBlock
-	var step = module.addBlock(func, label: b"thstep")
-	let done = module.addBlock(func, label: b"thdone")
+	var step = module.addBlock(func, label: b"thstep", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"thdone", heat: BlockHeat.normal)
 
 	let thread = ids.mint()
 	var ready = emitCurrentThreadOrZero(module, func: func, cur: cur, threadId: thread, ids: ids)
@@ -2707,7 +2713,7 @@ function buildGlobalReader(module StdModule, name ByteArray, label ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let addr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(addr, label: label))
 	let value = emitLoadField(module, block: entry, record: addr, offset: 0, ids: ids)
@@ -3283,10 +3289,10 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var drop = module.addBlock(func, label: b"drop")
-	var free = module.addBlock(func, label: b"free")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -3303,8 +3309,8 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 			continue
 		end 'scalarCase'
 
-		let caseBlock = module.addBlock(func, label: b"case")
-		let nextTest = module.addBlock(func, label: b"casetest")
+		let caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		let tagConst = ids.mint()
 		module.appendOp(cur, op: StdOp.const(tagConst, value: layout.tagOfIndex(ci), valueType: StdType.i64))
 		let isCase = ids.mint()
@@ -3788,10 +3794,10 @@ function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drop
 	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var drop = module.addBlock(func, label: b"drop")
-	var free = module.addBlock(func, label: b"free")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
 	let box = DictionaryDestructorBoxParam if takesDescriptor else PlainDestructorBoxParam
@@ -3859,8 +3865,8 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
 	let nonNull = ids.mint()
 	module.appendOp(cur, op: StdOp.cmp(nonNull, lhs: ptr, rhs: zero, pred: StdCmpPred.ne, operandType: StdType.i64))
-	var dropBlock = module.addBlock(func, label: b"decref")
-	let contBlock = module.addBlock(func, label: b"cont")
+	var dropBlock = module.addBlock(func, label: b"decref", heat: BlockHeat.normal)
+	let contBlock = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
 
 	let dropped = ids.mint()
@@ -4239,7 +4245,7 @@ function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, s
 	let func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -4274,7 +4280,7 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -4395,8 +4401,8 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	let done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -4430,8 +4436,8 @@ function emitUnionManagedCaseChain(module StdModule, func IrFunction, cur IrBloc
 			continue
 		end 'scalarCase'
 
-		let caseBlock = module.addBlock(func, label: b"case")
-		let nextTest = module.addBlock(func, label: b"casetest")
+		let caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		let tagConst = emitConst(module, block: chain, value: layout.tagOfIndex(ci), ids: ids)
 		let isCase = emitCmp(module, block: chain, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
 		module.setTerminator(chain, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
@@ -4472,8 +4478,8 @@ function emitManagedFieldCascade(module StdModule, func IrFunction, cur IrBlock,
 	let oldPtr = emitLoadField(module, block: cur, record: box, offset: offset, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let nonNull = emitCmp(module, block: cur, a: oldPtr, b: zero, pred: StdCmpPred.ne, ids: ids)
-	var visitBlock = module.addBlock(func, label: cascadeFieldBlockLabel(action))
-	let contBlock = module.addBlock(func, label: b"cont")
+	var visitBlock = module.addBlock(func, label: cascadeFieldBlockLabel(action), heat: BlockHeat.normal)
+	let contBlock = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: visitBlock.id, elseBlockId: contBlock.id))
 
 	match action 'action'
@@ -4564,7 +4570,7 @@ function synthesizeElementRecordSoleWalk(module StdModule, id GenericInstanceId,
 	let func = IrFunction.createFromStd(soleWalkSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -4580,7 +4586,7 @@ function emitFieldCascadeSoleWalk(module StdModule, symbolName ByteArray, walks 
 	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
@@ -4603,8 +4609,8 @@ function synthesizeUnionSoleWalk(module StdModule, layout EnumLayout, project Pr
 	let func = IrFunction.createFromStd(soleWalkSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	let done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
@@ -4657,9 +4663,9 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var leaked = module.addBlock(func, label: b"leaked")
-	var clean = module.addBlock(func, label: b"clean")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var leaked = module.addBlock(func, label: b"leaked", heat: BlockHeat.normal)
+	var clean = module.addBlock(func, label: b"clean", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let exitCode = 0 as ValueId
@@ -4681,8 +4687,8 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 	// count falls through to a SECOND check on `__gt_live_count` — two INDEPENDENT `!= 0` tests, never a
 	// summed/OR'd single count. Without the GT runtime, the clean count goes straight to `clean`.
 	if usage.usesGt 'gtGate'
-		var checkGt = module.addBlock(func, label: b"checkgt")
-		var gtLeaked = module.addBlock(func, label: b"gtleaked")
+		var checkGt = module.addBlock(func, label: b"checkgt", heat: BlockHeat.normal)
+		var gtLeaked = module.addBlock(func, label: b"gtleaked", heat: BlockHeat.normal)
 		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: checkGt.id))
 		let gtCountAddr = ids.mint()
 		module.appendOp(checkGt, op: StdOp.globalAddr(gtCountAddr, label: GtLiveCountLabel))

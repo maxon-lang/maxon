@@ -65,46 +65,45 @@ func @firstBigRow {
     x64.imulRegRegImm32 rdx, r15, 10
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdx, 0
   __us_test#44:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, forhdr#4
   __us_test#45:
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 0]
-    x64.cmpRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, forhdr#4
   __us_test#46:
-    x64.leaRegRegImm32 rcx, rdi, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, forhdr#4
   __us_test#47:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
-    x64.movRegImm32 rdx, 0
-    x64.cmpRegReg rcx, rdx
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.movRegImm32 rdi, 0
+    x64.cmpRegReg rsi, rdi
     x64.jcc equal, forhdr#27
   forhdr#4:
-    x64.cmpRegReg rsi, r12
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, forexit
   __rc_ok#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rsi, rax
+    x64.cmpRegReg rdx, rax
     x64.jcc below, __im_load#20
   __im_slow#19:
+    x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rsi
-    x64.storeSlotReg slot0, rsi
     x64.callDirect __managed_get
-    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#9
     x64.jmp tryok#8
   __im_load#20:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rdi, [rax + rsi*8 + 0]
-    x64.movRegReg r8, rdi
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
   tryok#8:
     x64.leaRegRegImm32 rax, r8, 1
   __rc_ok#16:
@@ -113,25 +112,24 @@ func @firstBigRow {
     x64.jcc less, __im_slow#22
   __im_bounds:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rsi, rcx
+    x64.cmpRegReg rdx, rcx
     x64.jcc aboveEqual, __im_slow#22
   __im_buffer:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#22
   __im_viewed:
-    x64.leaRegRegImm32 rdx, rcx, -24
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
-    x64.cmpRegImm32 rdx, 0
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#26
   __im_slow#22:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rsi
-    x64.storeSlotReg slot0, rsi
+    x64.storeSlotReg slot0, rdx
     x64.storeSlotReg slot1, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
     x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot0
+    x64.loadRegSlot rdx, slot0
     x64.loadRegSlot r8, slot1
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#10
@@ -148,29 +146,28 @@ func @firstBigRow {
     x64.popReg rbp
     x64.ret
   __im_store#26:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rsi*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
   tryok#10:
     x64.cmpRegImm32 r8, 25
     x64.jcc greater, hit
   forstep#6:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr#4
   forhdr#27:
-    x64.cmpRegReg rsi, r12
+    x64.cmpRegReg rdx, r12
     x64.jcc greaterEqual, forexit
   __rc_ok#42:
-    x64.cmpRegReg rsi, rax
+    x64.cmpRegReg rdx, rax
     x64.jcc below, __im_load#41
   __im_slow#40:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rsi
     x64.storeSlotReg slot2, rax
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot3, rdi
+    x64.storeSlotReg slot3, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.loadRegSlot rax, slot2
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot3
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#38
   tryerr#9:
@@ -186,21 +183,21 @@ func @firstBigRow {
     x64.popReg rbp
     x64.ret
   __im_load#41:
-    x64.loadRegBaseIndexScale.word64 rcx, [rdi + rsi*8 + 0]
-    x64.movRegReg r8, rcx
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rsi
   tryok#38:
-    x64.leaRegRegImm32 rcx, r8, 1
+    x64.leaRegRegImm32 rsi, r8, 1
   __im_store#33:
-    x64.storeBaseIndexScaleReg.word64 [rdi + rsi*8 + 0], rcx
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
   tryok#30:
     x64.cmpRegImm32 r8, 25
     x64.jcc lessEqual, forstep#28
   hit:
     x64.imulRegRegImm32 rax, r15, 100
-    x64.leaRegRegReg r8, rax, rsi
+    x64.leaRegRegReg r8, rax, rdx
     x64.jmp whileexit
   forstep#28:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr#27
   forexit:
     x64.leaRegRegImm32 r15, r15, 1

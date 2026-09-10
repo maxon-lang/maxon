@@ -39,90 +39,86 @@ func @pairs {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 88
-    x64.movRegReg rax, rcx
-    x64.movRegReg rsi, rdx
+    x64.prologue 104
     x64.movRegImm32 r8, 0
-    x64.movRegImm32 rdi, 2
-    x64.movRegImm32 r9, 0
+    x64.movRegImm32 rax, 2
+    x64.movRegImm32 rsi, 0
   __us_test:
-    x64.loadRegBaseDisp.word64 r10, [rax + 8]
-    x64.loadRegBaseDisp.word64 r11, [rax + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
   forhdr:
-    x64.cmpRegReg r9, rsi
+    x64.cmpRegReg rsi, rdx
     x64.jcc greaterEqual, forexit
   __rc_ok#11:
-    x64.cmpRegReg r9, r10
+    x64.cmpRegReg rsi, rdi
     x64.jcc below, __im_load#17
   __im_slow#16:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdx, r9
     x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot3, r8
-    x64.storeSlotReg slot4, r9
-    x64.storeSlotReg slot5, r10
-    x64.storeSlotReg slot6, r11
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r9
+    x64.movRegReg rdx, rsi
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r10
+    x64.movRegReg r11, r10
+    x64.movRegReg r10, r8
     x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot3
-    x64.loadRegSlot r9, slot4
-    x64.loadRegSlot r10, slot5
-    x64.loadRegSlot r11, slot6
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, tryok
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r9, slot6
+    x64.cmpRegImm32 r11, 0
+    x64.jcc equal, trycont#7
   tryerr#6:
-    x64.movRegImm32 rbx, 100
+    x64.movRegImm32 r10, 100
     x64.jmp trycont#7
   __im_load#17:
-    x64.loadRegBaseIndexScale.word64 rcx, [r11 + r9*8 + 0]
-  tryok:
-    x64.movRegReg rbx, rcx
+    x64.loadRegBaseIndexScale.word64 r10, [r9 + rsi*8 + 0]
   trycont#7:
-    x64.leaRegRegImm32 r9, r9, 1
+    x64.leaRegRegImm32 rsi, rsi, 1
   __rc_ok#13:
-    x64.cmpRegReg r9, r10
+    x64.cmpRegReg rsi, rdi
     x64.jcc below, __im_load#20
   __im_slow#19:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdx, r9
     x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot3, r8
-    x64.storeSlotReg slot4, r9
-    x64.storeSlotReg slot5, r10
-    x64.storeSlotReg slot6, r11
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r9
+    x64.storeSlotReg slot7, r10
+    x64.movRegReg rdx, rsi
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r10
+    x64.movRegReg r11, r8
+    x64.movRegReg rbx, r10
     x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot3
-    x64.loadRegSlot r9, slot4
-    x64.loadRegSlot r10, slot5
-    x64.loadRegSlot r11, slot6
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r9, slot6
+    x64.loadRegSlot r10, slot7
+    x64.cmpRegImm32 rbx, 0
     x64.jcc equal, trycont#10
   tryerr#9:
-    x64.movRegImm32 rcx, 1000
+    x64.movRegImm32 r11, 1000
     x64.jmp trycont#10
   __im_load#20:
-    x64.loadRegBaseIndexScale.word64 rcx, [r11 + r9*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r11, [r9 + rsi*8 + 0]
   trycont#10:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.leaRegRegReg rdx, r8, rbx
-    x64.leaRegRegReg rcx, rdx, rcx
-    x64.leaRegRegReg r8, rcx, rdi
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegReg r8, r8, r10
+    x64.leaRegRegReg r8, r8, r11
+    x64.leaRegRegReg r8, r8, rax
     x64.jmp forhdr
   forexit:
-    x64.epilogue 88
+    x64.epilogue 104
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

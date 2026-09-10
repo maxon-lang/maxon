@@ -463,6 +463,8 @@ type StdToArm64Lowering
 	// did not. Only the argument routing consults it (the value-class column classes a `param` result from
 	// its own carried f64 type), so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
+	// Fresh virtuals for the function being lowered (`mintVirtual`).
+	var fresh as ValueMinter
 
 	// EC16 — the `base + index*scale` chains this function's element accesses spell (`ScaledIndexFolds`,
 	// in the shared lowering). arm64 answers `accessWidthScaleAtZeroOffset`: `LDR Xt, [Xn, Xm, LSL #3]`
@@ -488,8 +490,18 @@ type StdToArm64Lowering
 	let usesGt as bool
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
+
+	// A fresh virtual for a lowering that needs a value of its own beside `resultId` — a call's answer
+	// captured before anything else touches a register, so the reloads of a cold call's bracket can land
+	// after the capture (`SsaDestruction.spliceBracketReloadsAfter` states the premise). Seeded
+	// per function in `prepareFunctionTables`, outside the op walk: the seed reads the source function,
+	// which the walk holds a block of. The class column is sized off the Target ops afterwards
+	// (`buildFunctionValueClasses`), so a fresh id is in it.
+	function mintVirtual() returns TargetVReg
+		return TargetVReg.virtual(self.fresh.mint())
+	end 'mintVirtual'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
 	// flat-block indices `IrFunction.blockRefs` references) and transfer every function. Both
@@ -497,8 +509,7 @@ type StdToArm64Lowering
 	// model survives into the Target tier intact (SSA destruction runs after coloring). Mirrors x64.
 	function prepareSkeleton()
 		for srcBlock in self.stdModule.blocks 'relocateBlocks'
-			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
-			dstBlock.heat = srcBlock.heat
+			var dstBlock = IrBlock.createLike(srcBlock)
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			for srcEdge in srcBlock.branchEdges 'eachEdge'
@@ -533,6 +544,7 @@ type StdToArm64Lowering
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
+		self.fresh = ValueMinter.create(nextFreeValueId(self.stdModule, func: srcFunc) as ParamCount)
 	end 'prepareFunctionTables'
 
 	// Walk the function's blocks, and return the OUTGOING stack-argument bytes its largest call needs — a
@@ -2417,8 +2429,13 @@ type StdToArm64Lowering
 		self.emitPriorityScopeArgs(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64Syscall(Arm64LinuxSyscallGetPriority))
 
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: LinuxGetPriorityBias))
-		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: arm64PhysReg(Arm64Register.x1), rhs: arm64PhysReg(Arm64IntReturnReg)))
+		// The answer is CAPTURED before the fold, and the fold runs on virtuals: a physical op on x0/x1
+		// after the syscall would read or clobber a register a cold-call bracket restores (`mintVirtual`).
+		let answer = self.mintVirtual()
+		self.emit(dstRef, op: TargetOp.movRegReg(answer, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		let bias = self.mintVirtual()
+		self.emit(dstRef, op: TargetOp.arm64MovImm(bias, value: LinuxGetPriorityBias))
+		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: bias, rhs: answer))
 	end 'lowerOsEnterBackgroundPriorityLinux'
 
 	function lowerOsEnterBackgroundPriorityDarwin(resultId ValueId, dstRef BlockRef)
@@ -3116,28 +3133,33 @@ type StdToArm64Lowering
 	// `Arm64LinuxRuntime`'s spawn chunk and the walk in its `mrt_host_env_read` — both do
 	// `arm64LinuxEmitDataAddr` then exactly one `ldr`, which is the reading this isel has to agree with.
 	//
-	// ⚠ **THE ANSWER IS PARKED IN x16 ACROSS THE LOAD** for `lowerTlsSlotLoad`'s reason, stated in full at
-	// `Arm64Scratch`: nothing a post-isel pass splices in writes x16, so no reload can land between the
-	// dereference and the capture.
+	// The slot's ADDRESS is the half the two routes differ in, and each answers it in the register it can:
+	// the Linux `lea` lands in x16 — `lowerTlsSlotLoad`'s reason, stated in full at `Arm64Scratch`: nothing
+	// a post-isel pass splices in writes x16 — while the Darwin call's answer is captured into a virtual,
+	// because a physical read of x0 after a call is what a cold-call bracket's reload would land ahead of
+	// (`mintVirtual`). One load then dereferences whichever it is, straight into the result.
 	function lowerOsEnvBlock(resultId ValueId, dstRef BlockRef)
-		let scratch = arm64PhysReg(Arm64Scratch)
-
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerEnvironSlotAddrDarwin(scratch, dstRef: dstRef)
-			syscall then self.emit(dstRef, op: TargetOp.arm64LeaGlobal(scratch, label: LinuxEnvpLabel))
+		let slotAddr = match arm64OsCallKind(self.target.os) 'route'
+			importCall gives self.lowerEnvironSlotAddrDarwin(dstRef)
+			syscall gives self.lowerEnvironSlotAddrLinux(dstRef)
 		end 'route'
 
-		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(scratch, base: scratch, disp: 0, width: X64AccessWidth.word64))
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: scratch))
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: slotAddr, disp: 0, width: X64AccessWidth.word64))
 	end 'lowerOsEnvBlock'
 
-	// The Darwin half of the route above: `_NSGetEnviron()` answers the address of `environ` in the return
-	// register, which the caller's single load then dereferences. Its own function because a `match` arm is
-	// ONE statement and this half is two — the Linux half is a single `arm64LeaGlobal` and stays inline.
-	function lowerEnvironSlotAddrDarwin(scratch TargetVReg, dstRef BlockRef)
+	// `_NSGetEnviron()` answers the address of `environ` in the return register; the register holding it.
+	function lowerEnvironSlotAddrDarwin(dstRef BlockRef) returns TargetVReg
 		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.nsGetEnviron)))
-		self.emit(dstRef, op: TargetOp.movRegReg(scratch, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		let slotAddr = self.mintVirtual()
+		self.emit(dstRef, op: TargetOp.movRegReg(slotAddr, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		return slotAddr
 	end 'lowerEnvironSlotAddrDarwin'
+
+	function lowerEnvironSlotAddrLinux(dstRef BlockRef) returns TargetVReg
+		let scratch = arm64PhysReg(Arm64Scratch)
+		self.emit(dstRef, op: TargetOp.arm64LeaGlobal(scratch, label: LinuxEnvpLabel))
+		return scratch
+	end 'lowerEnvironSlotAddrLinux'
 
 	// ⭐ `osProcessSpawn` / `osProcessSpawnInherit` ⇒ ONE chunk. See the two arms' own comments for why the
 	// inheritance flag that separates them on Windows has no POSIX twin to lower.

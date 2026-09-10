@@ -55,8 +55,8 @@ func @main {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#24
   __im_slow#20:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -92,8 +92,8 @@ func @main {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#30
   __im_slow#26:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -130,8 +130,8 @@ func @main {
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#36
   __im_slow#32:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -154,8 +154,8 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc above, __im_load#39
   __im_slow#38:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -173,51 +173,49 @@ func @main {
     x64.cmpRegImm32 rcx, 1
     x64.jcc above, __im_load#42
   __im_slow#41:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot1
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#10
+    x64.jcc equal, trycont#12
   tryerr#11:
-    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rcx, 0
     x64.jmp trycont#12
   __im_load#42:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.leaRegRegImm32 rcx, rcx, 8
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  tryok#10:
-    x64.movRegReg rsi, rcx
   trycont#12:
     x64.movRegImm32 rdx, 2
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
-    x64.cmpRegImm32 rcx, 2
+    x64.loadRegBaseDisp.word64 rsi, [r8 + 8]
+    x64.cmpRegImm32 rsi, 2
     x64.jcc above, __im_load#45
   __im_slow#44:
-    x64.movRegReg rcx, r8
     x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, r8
-    x64.callDirect __managed_get
     x64.movRegReg rcx, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rdx, r8
     x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rsi, slot2
+    x64.loadRegSlot rcx, slot2
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont#15
   tryerr#14:
-    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
     x64.jmp trycont#15
   __im_load#45:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
-    x64.leaRegRegImm32 rcx, rcx, 16
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
+    x64.leaRegRegImm32 rdx, rdx, 16
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
   trycont#15:
-    x64.leaRegRegReg rax, rax, rsi
-    x64.leaRegRegReg rbx, rax, rcx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rbx, rax, rdx
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0

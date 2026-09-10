@@ -734,9 +734,9 @@ function emitSlabCurrentP(module StdModule, func IrFunction, cur IrBlock, sharde
 	// ⚠ Three DISTINCT labels: they used to share one caller-supplied name, which put three identically
 	// named blocks in every IR dump of an allocation. The name was the same at both call sites anyway, so
 	// there was never a parameter's worth of information in it.
-	var haveOffset = module.addBlock(func, label: b"mypoffset")
-	var haveMachine = module.addBlock(func, label: b"mypmachine")
-	var merge = module.addBlock(func, label: b"myp")
+	var haveOffset = module.addBlock(func, label: b"mypoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"mypmachine", heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: b"myp", heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(pId, argType: StdType.i64))
 
 	var noProc = ParsedIntArray.create()
@@ -782,9 +782,9 @@ function emitSlabShardRow(module StdModule, func IrFunction, cur IrBlock, myP Va
 		return cur
 	end 'noScheduler'
 
-	var havePid = module.addBlock(func, label: label)
-	var capped = module.addBlock(func, label: label)
-	var merge = module.addBlock(func, label: label)
+	var havePid = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var capped = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(rowId, argType: StdType.i64))
 
 	// ⚠⚠ **`<= MspanOwningPNone` RATHER THAN `==`, WHICH MAKES THIS PREDICATE TOTAL AND NOT MERELY
@@ -866,8 +866,8 @@ end 'emitSlabLockLeave'
 // credit in there would count CAS attempts and turn a cross-processor-free counter into a contention meter.
 // The prior value has no reader — the sum is taken later, by a walk over every P.
 function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, target ValueId, slot ValueId, ids ValueMinter) returns IrBlock
-	var retry = module.addBlock(func, label: b"rpush")
-	let done = module.addBlock(func, label: b"rpushed")
+	var retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
 
 	let credit = emitConst(module, block: cur, value: OneMore, ids: ids)
 	_ = emitFieldAccumulate(module, block: cur, record: target, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
@@ -925,9 +925,9 @@ function buildSlabStateBase(module StdModule, sharded bool)
 	var func = IrFunction.createFromStd(SlabStateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var commit = module.addBlock(func, label: b"commit")
-	var have = module.addBlock(func, label: b"have")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var commit = module.addBlock(func, label: b"commit", heat: BlockHeat.normal)
+	var have = module.addBlock(func, label: b"have", heat: BlockHeat.normal)
 
 	let stateAddr = ids.mint()
 	let current = ids.mint()
@@ -966,8 +966,8 @@ end 'buildSlabStateBase'
 // read costs one load on the once-per-process path, and it is the SAME read — `emitSlabStateWordRead` is
 // the one spelling both this and the function's own entry use.
 function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, stateId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var commit = module.addBlock(func, label: label)
-	var merge = module.addBlock(func, label: label)
+	var commit = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(stateId, argType: StdType.i64))
 
 	let stateAddr = ids.mint()
@@ -1006,9 +1006,9 @@ end 'emitSlabStateBase'
 // A request of 0 reaches class 0, the ladder's sentinel, whose span holds no objects; `__slab_refill`'s
 // guard is where that is caught, on the COLD path, so the hot path pays nothing for a case no caller has.
 function emitSlabClassIndex(module StdModule, func IrFunction, cur IrBlock, size ValueId, classId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var smallTable = module.addBlock(func, label: label)
-	var largeTable = module.addBlock(func, label: label)
-	var merge = module.addBlock(func, label: label)
+	var smallTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var largeTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(classId, argType: StdType.i64))
 
 	let tableBoundary = emitConst(module, block: cur, value: SlabSmallTableMaxSize, ids: ids)
@@ -1061,9 +1061,9 @@ function buildSlabRoundedSize(module StdModule)
 	var func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var osDirect = module.addBlock(func, label: b"osdirect")
-	var small = module.addBlock(func, label: b"small")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.normal)
+	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0 as ValueId
@@ -1108,11 +1108,11 @@ function buildSlabMetaAlloc(module StdModule)
 	var func = IrFunction.createFromStd(SlabMetaAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var recycled = module.addBlock(func, label: b"recycled")
-	var bumpPath = module.addBlock(func, label: b"bump")
-	var take = module.addBlock(func, label: b"take")
-	var fresh = module.addBlock(func, label: b"fresh")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var recycled = module.addBlock(func, label: b"recycled", heat: BlockHeat.normal)
+	var bumpPath = module.addBlock(func, label: b"bump", heat: BlockHeat.normal)
+	var take = module.addBlock(func, label: b"take", heat: BlockHeat.normal)
+	var fresh = module.addBlock(func, label: b"fresh", heat: BlockHeat.normal)
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
@@ -1174,7 +1174,7 @@ function buildSlabMetaFree(module StdModule)
 	var func = IrFunction.createFromStd(SlabMetaFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let span = 0 as ValueId
@@ -1208,12 +1208,12 @@ function buildSlabRefill(module StdModule, sharded bool)
 	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var takePartial = module.addBlock(func, label: b"partial")
-	var grow = module.addBlock(func, label: b"grow")
-	var emptyClass = module.addBlock(func, label: b"emptyclass")
-	var cut = module.addBlock(func, label: b"cut")
-	var install = module.addBlock(func, label: b"install")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var takePartial = module.addBlock(func, label: b"partial", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	var emptyClass = module.addBlock(func, label: b"emptyclass", heat: BlockHeat.normal)
+	var cut = module.addBlock(func, label: b"cut", heat: BlockHeat.normal)
+	var install = module.addBlock(func, label: b"install", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let classIdx = 0 as ValueId
@@ -1329,15 +1329,15 @@ end 'buildSlabRefill'
 // whose row is NOT solely owned — a thread on the shared raw row — is serialised by `buildSlabAllocEntry`
 // before it ever gets here.
 function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, classIdx ValueId, myP ValueId, row ValueId, state ValueId, zeroed bool, sharded bool, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var refill = module.addBlock(func, label: label)
-	var ready = module.addBlock(func, label: label)
-	var recycled = module.addBlock(func, label: label)
-	var virgin = module.addBlock(func, label: label)
-	var handOut = module.addBlock(func, label: label)
-	var pastEnd = module.addBlock(func, label: label)
-	var consumed = module.addBlock(func, label: label)
-	var evict = module.addBlock(func, label: label)
-	var done = module.addBlock(func, label: label)
+	var refill = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var ready = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var recycled = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var virgin = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var handOut = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var pastEnd = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var consumed = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var evict = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	done.blockArgs.push(IrBlockArg.create(slotId, argType: StdType.i64))
 
 	let span = ids.mint()
@@ -1346,8 +1346,8 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	let mcacheSlot = emitMcacheSlotAddr(module, block: cur, state: state, row: row, classIdx: classIdx, ids: ids)
 
 	if sharded 'drainBeforeRefill'
-		var drain = module.addBlock(func, label: label)
-		var reprobe = module.addBlock(func, label: label)
+		var drain = module.addBlock(func, label: label, heat: BlockHeat.normal)
+		var reprobe = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 		emitSlabProbe(module, func: func, cur: cur, mcacheSlot: mcacheSlot, myP: myP, sharded: sharded, hit: ready, miss: drain, ids: ids, label: label)
 
@@ -1457,7 +1457,7 @@ end 'emitSlabAllocClass'
 // it by hand duplicates a pass, and a hand-written one is a second place for the edge's arguments to be
 // wrong.
 function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, mcacheSlot ValueId, myP ValueId, sharded bool, hit IrBlock, miss IrBlock, ids ValueMinter, label ByteArray)
-	var depleted = module.addBlock(func, label: label)
+	var depleted = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let cached = emitLoadField(module, block: cur, record: mcacheSlot, offset: 0, ids: ids)
 	let none = emitConst(module, block: cur, value: 0, ids: ids)
@@ -1474,7 +1474,7 @@ function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, mcacheSlo
 		return
 	end 'noOwnerToCheck'
 
-	var owned = module.addBlock(func, label: label)
+	var owned = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	module.setTerminator(depleted, op: StdOp.condBranch(drained, thenBlockId: miss.id, elseBlockId: owned.id))
 
 	let owner = emitLoadField(module, block: owned, record: cached, offset: MspanOwningPOffset, ids: ids)
@@ -1525,9 +1525,9 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, ze
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var osDirect = module.addBlock(func, label: b"osdirect")
-	var small = module.addBlock(func, label: b"small")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.normal)
+	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0 as ValueId
@@ -1571,10 +1571,10 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, ze
 		return
 	end 'noSharedRow'
 
-	var maybeShared = module.addBlock(func, label: b"maybeshared")
-	var takeLock = module.addBlock(func, label: b"serialised")
-	var soleWriter = module.addBlock(func, label: b"solewriter")
-	var serve = module.addBlock(func, label: b"serve")
+	var maybeShared = module.addBlock(func, label: b"maybeshared", heat: BlockHeat.normal)
+	var takeLock = module.addBlock(func, label: b"serialised", heat: BlockHeat.normal)
+	var soleWriter = module.addBlock(func, label: b"solewriter", heat: BlockHeat.normal)
+	var serve = module.addBlock(func, label: b"serve", heat: BlockHeat.normal)
 
 	let heldLock = ids.mint()
 	serve.blockArgs.push(IrBlockArg.create(heldLock, argType: StdType.i64))
@@ -1598,8 +1598,8 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, ze
 	let slot = ids.mint()
 	var served = emitSlabAllocClass(module, func: func, cur: serve, classIdx: class, myP: myP, row: row, state: state, zeroed: zeroed, sharded: sharded, slotId: slot, ids: ids, label: b"pop")
 
-	var release = module.addBlock(func, label: b"release")
-	var handBack = module.addBlock(func, label: b"handback")
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	var handBack = module.addBlock(func, label: b"handback", heat: BlockHeat.normal)
 
 	let notTaken = emitConst(module, block: served, value: SlabLockNotTaken, ids: ids)
 	let wasSerialised = emitCmp(module, block: served, a: heldLock, b: notTaken, pred: StdCmpPred.ne, ids: ids)
@@ -1642,9 +1642,9 @@ function buildSlabSpanReturn(module StdModule, sharded bool)
 	var func = IrFunction.createFromStd(SlabSpanReturnName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var evict = module.addBlock(func, label: b"evict")
-	var park = module.addBlock(func, label: b"park")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var evict = module.addBlock(func, label: b"evict", heat: BlockHeat.normal)
+	var park = module.addBlock(func, label: b"park", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let span = 0 as ValueId
@@ -1698,7 +1698,7 @@ function buildSlabSpanDestroy(module StdModule)
 	var func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let span = 0 as ValueId
@@ -1766,15 +1766,15 @@ function buildSlabScavenge(module StdModule, sharded bool)
 	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var classLoop = module.addBlock(func, label: b"classloop")
-	var arenas = module.addBlock(func, label: b"arenas")
-	var classStart = module.addBlock(func, label: b"classstart")
-	var spanLoop = module.addBlock(func, label: b"spanloop")
-	var spanBody = module.addBlock(func, label: b"spanbody")
-	var markSeen = module.addBlock(func, label: b"markseen")
-	var destroy = module.addBlock(func, label: b"destroy")
-	var classDone = module.addBlock(func, label: b"classdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var classLoop = module.addBlock(func, label: b"classloop", heat: BlockHeat.normal)
+	var arenas = module.addBlock(func, label: b"arenas", heat: BlockHeat.normal)
+	var classStart = module.addBlock(func, label: b"classstart", heat: BlockHeat.normal)
+	var spanLoop = module.addBlock(func, label: b"spanloop", heat: BlockHeat.normal)
+	var spanBody = module.addBlock(func, label: b"spanbody", heat: BlockHeat.normal)
+	var markSeen = module.addBlock(func, label: b"markseen", heat: BlockHeat.normal)
+	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.normal)
+	var classDone = module.addBlock(func, label: b"classdone", heat: BlockHeat.normal)
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
@@ -1864,8 +1864,8 @@ end 'buildSlabScavenge'
 // `owning_p` against its own P; its raw arm holds `__slab_lock`; the drain runs on the owner by
 // construction, because a remote push targets the owner's queue and nobody else's.
 function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot ValueId, span ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var fullyFree = module.addBlock(func, label: label)
-	let done = module.addBlock(func, label: label)
+	var fullyFree = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let head = emitLoadField(module, block: cur, record: span, offset: MspanFreeListOffset, ids: ids)
 	emitStoreField(module, block: cur, record: slot, offset: 0, value: head)
@@ -1895,7 +1895,7 @@ function buildSlabFreeToSpan(module StdModule)
 	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let slot = 0 as ValueId
@@ -1931,14 +1931,14 @@ function buildSlabDrainRemote(module StdModule)
 	var func = IrFunction.createFromStd(SlabDrainRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var detach = module.addBlock(func, label: b"detach")
-	var swap = module.addBlock(func, label: b"swap")
-	var walk = module.addBlock(func, label: b"walk")
-	var replay = module.addBlock(func, label: b"replay")
-	var orphan = module.addBlock(func, label: b"orphan")
-	var push = module.addBlock(func, label: b"push")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	var swap = module.addBlock(func, label: b"swap", heat: BlockHeat.normal)
+	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var replay = module.addBlock(func, label: b"replay", heat: BlockHeat.normal)
+	var orphan = module.addBlock(func, label: b"orphan", heat: BlockHeat.normal)
+	var push = module.addBlock(func, label: b"push", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0 as ValueId
@@ -2023,9 +2023,9 @@ function buildSlabFree(module StdModule, sharded bool)
 	var func = IrFunction.createFromStd(SlabFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var osDirect = module.addBlock(func, label: b"osdirect")
-	var toSpan = module.addBlock(func, label: b"tospan")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.normal)
+	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
@@ -2048,13 +2048,13 @@ function buildSlabFree(module StdModule, sharded bool)
 		return
 	end 'soleThread'
 
-	var rawOwned = module.addBlock(func, label: b"rawowned")
-	var rawSerialised = module.addBlock(func, label: b"rawlocked")
-	var notRaw = module.addBlock(func, label: b"notraw")
-	var parked = module.addBlock(func, label: b"parked")
-	var mine = module.addBlock(func, label: b"mine")
-	var local = module.addBlock(func, label: b"local")
-	var remote = module.addBlock(func, label: b"remote")
+	var rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
+	var rawSerialised = module.addBlock(func, label: b"rawlocked", heat: BlockHeat.normal)
+	var notRaw = module.addBlock(func, label: b"notraw", heat: BlockHeat.normal)
+	var parked = module.addBlock(func, label: b"parked", heat: BlockHeat.normal)
+	var mine = module.addBlock(func, label: b"mine", heat: BlockHeat.normal)
+	var local = module.addBlock(func, label: b"local", heat: BlockHeat.normal)
+	var remote = module.addBlock(func, label: b"remote", heat: BlockHeat.normal)
 
 	let owner = emitLoadField(module, block: toSpan, record: span, offset: MspanOwningPOffset, ids: ids)
 	let noProc = emitConst(module, block: toSpan, value: MspanOwningPNone, ids: ids)
@@ -2098,7 +2098,7 @@ function buildSlabOsDirectAlloc(module StdModule)
 	var func = IrFunction.createFromStd(SlabOsDirectAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0 as ValueId
@@ -2132,9 +2132,9 @@ function buildSlabOsDirectFree(module StdModule)
 	var func = IrFunction.createFromStd(SlabOsDirectFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var notOurs = module.addBlock(func, label: b"notours")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notOurs = module.addBlock(func, label: b"notours", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId

@@ -1447,8 +1447,7 @@ type MaxonToStdLowering
 			// mutates it in place — `pruneDeadBlockArgs` rebuilds both lists and
 			// field-assigns them onto the Std block, leaving the Maxon block's own
 			// arrays untouched. See IrBlock's header for the ownership rules.
-			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
-			dstBlock.heat = srcBlock.heat
+			var dstBlock = IrBlock.createLike(srcBlock)
 			dstBlock.blockArgs = srcBlock.blockArgs
 			dstBlock.branchEdges = srcBlock.branchEdges
 			self.stdModule.blocks.push(dstBlock)
@@ -2925,7 +2924,7 @@ type MaxonToStdLowering
 
 		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, returnLine: 0, throwsTypeName: impl.throwsTypeName)
 		adapter.maxonReturnType = impl.maxonReturnType
-		var entry = self.stdModule.addBlock(adapter, label: b"entry")
+		var entry = self.stdModule.addBlock(adapter, label: b"entry", heat: BlockHeat.normal)
 		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
 
 		var args = ValueIdArray.create()

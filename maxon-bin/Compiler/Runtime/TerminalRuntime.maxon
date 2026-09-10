@@ -143,7 +143,7 @@ export function installTerminalRuntime(module StdModule, globalData GlobalDataTa
 
 	var func = IrFunction.createFromStd(TerminalStdoutWantsColorName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	if targetProvidesFacility(target, facility: HostFacility.terminalDetection) 'canAsk'
 		let noColorLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: cStringBytes(NoColorEnvVar), kind: RdataPayloadKind.envName)
@@ -166,12 +166,12 @@ end 'installTerminalRuntime'
 // it. `notATerminal` is the one exit that never allocated, which is why it has no release and why it is
 // the block the entry branches to rather than a fallthrough.
 function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry IrBlock, ids ValueMinter, noColorLabel ByteArray, termLabel ByteArray)
-	var notATerminal = module.addBlock(func, label: b"ttynotty")
-	var checkNoColor = module.addBlock(func, label: b"ttynocolor")
-	var checkTerm = module.addBlock(func, label: b"ttyterm")
-	var compareDumb = module.addBlock(func, label: b"ttydumb")
-	var refuse = module.addBlock(func, label: b"ttyno")
-	var allow = module.addBlock(func, label: b"ttyyes")
+	var notATerminal = module.addBlock(func, label: b"ttynotty", heat: BlockHeat.normal)
+	var checkNoColor = module.addBlock(func, label: b"ttynocolor", heat: BlockHeat.normal)
+	var checkTerm = module.addBlock(func, label: b"ttyterm", heat: BlockHeat.normal)
+	var compareDumb = module.addBlock(func, label: b"ttydumb", heat: BlockHeat.normal)
+	var refuse = module.addBlock(func, label: b"ttyno", heat: BlockHeat.normal)
+	var allow = module.addBlock(func, label: b"ttyyes", heat: BlockHeat.normal)
 
 	// Condition 1 — the handle the report is written to, and whether the OS calls it a character device.
 	let which = emitConst(module, block: entry, value: StdOutputHandleSelector, ids: ids)

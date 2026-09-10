@@ -2135,7 +2135,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// The P/M half first: the TLS slot, every P, and this OS thread made M0 holding P[0], with its own
 	// syscall stack and its own inline scheduler GT.
@@ -2227,7 +2227,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var initBlock = module.addBlock(func, label: b"entry")
+	var initBlock = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: initBlock, count: 1)
 	let funcPtr = 0 as ValueId
@@ -2288,8 +2288,8 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 	// ⛔ **A REFUSED SEED IS AN ABORT, BECAUSE THE NEXT STORE IS THROUGH IT.** `emitGtSeedInitialFrame` writes
 	// the first switch-in's frame at `stackBase + size`. The test is the sign, for `__slab_assert_os_alloc`'s
 	// reason: `VirtualAlloc` refuses with NULL and a raw `mmap` with a negative errno.
-	var seeded = module.addBlock(func, label: b"seeded")
-	var seedRefused = module.addBlock(func, label: b"seedrefused")
+	var seeded = module.addBlock(func, label: b"seeded", heat: BlockHeat.normal)
+	var seedRefused = module.addBlock(func, label: b"seedrefused", heat: BlockHeat.normal)
 	let lowestRefusal = emitConst(module, block: initBlock, value: 0, ids: ids)
 	let refused = emitCmp(module, block: initBlock, a: stackBase, b: lowestRefusal, pred: StdCmpPred.le, ids: ids)
 	module.setTerminator(initBlock, op: StdOp.condBranch(refused, thenBlockId: seedRefused.id, elseBlockId: seeded.id))
@@ -2397,9 +2397,9 @@ function buildGtReady(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var wake = module.addBlock(func, label: b"readywake")
-	var doneBlock = module.addBlock(func, label: b"readydone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var wake = module.addBlock(func, label: b"readywake", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"readydone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -2433,12 +2433,12 @@ function buildGtReadyLocked(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var ownerArm = module.addBlock(func, label: b"readyowner")
-	var coroArm = module.addBlock(func, label: b"readycoro")
-	var claim = module.addBlock(func, label: b"readyclaim")
-	var alreadyHeld = module.addBlock(func, label: b"readyheld")
-	var publish = module.addBlock(func, label: b"readypublish")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var ownerArm = module.addBlock(func, label: b"readyowner", heat: BlockHeat.normal)
+	var coroArm = module.addBlock(func, label: b"readycoro", heat: BlockHeat.normal)
+	var claim = module.addBlock(func, label: b"readyclaim", heat: BlockHeat.normal)
+	var alreadyHeld = module.addBlock(func, label: b"readyheld", heat: BlockHeat.normal)
+	var publish = module.addBlock(func, label: b"readypublish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -2559,8 +2559,8 @@ end 'emitGtFifoAppend'
 // ⭐ **PUSH `g` AT THE HEAD** — the one queue operation only a strand queue needs, for its owner. It terminates
 // `cur` and answers the block to continue in.
 function emitGtFifoPushFront(module StdModule, func IrFunction, cur IrBlock, ends GtQueueEnds, g ValueId, ids ValueMinter) returns IrBlock
-	var setTail = module.addBlock(func, label: b"pushfronttail")
-	let pushed = module.addBlock(func, label: b"pushfrontdone")
+	var setTail = module.addBlock(func, label: b"pushfronttail", heat: BlockHeat.normal)
+	let pushed = module.addBlock(func, label: b"pushfrontdone", heat: BlockHeat.normal)
 
 	let head = emitQueueLoadHead(module, block: cur, ends: ends, ids: ids)
 	emitStoreField(module, block: cur, record: g, offset: emitQueueLinkOffset(ends), value: head)
@@ -2612,11 +2612,11 @@ end 'emitGtFifoPop'
 //
 // ⚠ EXPORTED for `SchedRuntime.buildSchedSweepDropped`'s global half, which is its other caller.
 export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ends GtQueueEnds, ids ValueMinter)
-	var loopHdr = module.addBlock(func, label: b"fifosweephdr")
-	var peek = module.addBlock(func, label: b"fifosweeppeek")
-	var free = module.addBlock(func, label: b"fifosweepfree")
-	var leaveEmpty = module.addBlock(func, label: b"fifosweepempty")
-	var leaveLive = module.addBlock(func, label: b"fifosweeplive")
+	var loopHdr = module.addBlock(func, label: b"fifosweephdr", heat: BlockHeat.normal)
+	var peek = module.addBlock(func, label: b"fifosweeppeek", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"fifosweepfree", heat: BlockHeat.normal)
+	var leaveEmpty = module.addBlock(func, label: b"fifosweepempty", heat: BlockHeat.normal)
+	var leaveLive = module.addBlock(func, label: b"fifosweeplive", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(loopHdr.id))
 
@@ -2656,10 +2656,10 @@ end 'emitGtFifoSweepDropped'
 // ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS**, and the POP is what makes that safe: a
 // GT taken off a queue is unreachable by anyone else.
 export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, ids ValueMinter)
-	var noWork = module.addBlock(func, label: b"tsnowork")
-	var checkDropped = module.addBlock(func, label: b"tscheckdropped")
-	var reclaim = module.addBlock(func, label: b"tsreclaim")
-	var hand = module.addBlock(func, label: b"tshand")
+	var noWork = module.addBlock(func, label: b"tsnowork", heat: BlockHeat.normal)
+	var checkDropped = module.addBlock(func, label: b"tscheckdropped", heat: BlockHeat.normal)
+	var reclaim = module.addBlock(func, label: b"tsreclaim", heat: BlockHeat.normal)
+	var hand = module.addBlock(func, label: b"tshand", heat: BlockHeat.normal)
 
 	let candidateZero = emitConst(module, block: candidate, value: 0, ids: ids)
 	let nothingFound = emitCmp(module, block: candidate, a: found, b: candidateZero, pred: StdCmpPred.eq, ids: ids)
@@ -2683,9 +2683,9 @@ function buildGtEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var appendBlock = module.addBlock(func, label: b"append")
-	var emptyBlock = module.addBlock(func, label: b"empty")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var appendBlock = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
+	var emptyBlock = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	emitSchedStepLockedCount(module, block: entry, label: SchedRunqSizeLabel, delta: OneMore, ids: ids)
@@ -2700,10 +2700,10 @@ function buildGtDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var popBlock = module.addBlock(func, label: b"pop")
-	var clearTail = module.addBlock(func, label: b"cleartail")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var popBlock = module.addBlock(func, label: b"pop", heat: BlockHeat.normal)
+	var clearTail = module.addBlock(func, label: b"cleartail", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitSchedStepLockedCount(module, block: popBlock, label: SchedRunqSizeLabel, delta: OneFewer, ids: ids)
 	emitGtFifoPop(module, entry: entry, popBlock: popBlock, clearTail: clearTail, doneBlock: doneBlock, ends: GtQueueEnds.globalLabels, ids: ids)
@@ -2720,9 +2720,9 @@ function buildGtCoroEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var appendBlock = module.addBlock(func, label: b"append")
-	var emptyBlock = module.addBlock(func, label: b"empty")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var appendBlock = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
+	var emptyBlock = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let g = 0 as ValueId
@@ -2740,10 +2740,10 @@ function buildGtCoroDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var popBlock = module.addBlock(func, label: b"pop")
-	var clearTail = module.addBlock(func, label: b"cleartail")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var popBlock = module.addBlock(func, label: b"pop", heat: BlockHeat.normal)
+	var clearTail = module.addBlock(func, label: b"cleartail", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	emitGtFifoPop(module, entry: entry, popBlock: popBlock, clearTail: clearTail, doneBlock: doneBlock, ends: GtQueueEnds.ownerFields(0 as ValueId), ids: ids)
@@ -2764,11 +2764,11 @@ function buildGtStrandNext(module StdModule)
 	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var pop = module.addBlock(func, label: b"snpop")
-	var release = module.addBlock(func, label: b"snrelease")
-	var gotOne = module.addBlock(func, label: b"sngot")
-	var candidate = module.addBlock(func, label: b"sncandidate")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var pop = module.addBlock(func, label: b"snpop", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"snrelease", heat: BlockHeat.normal)
+	var gotOne = module.addBlock(func, label: b"sngot", heat: BlockHeat.normal)
+	var candidate = module.addBlock(func, label: b"sncandidate", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let owner = 0 as ValueId
@@ -2803,8 +2803,8 @@ end 'buildGtStrandNext'
 // LAST.** It terminates `cur` and answers the block to continue in, where `owner` may already be on a free
 // list. Never under `__sched_lock`, for `GtRunnerDoneName`'s reason: the arrival may reclaim.
 function emitGtStrandUnref(module StdModule, func IrFunction, cur IrBlock, owner ValueId, ids ValueMinter) returns IrBlock
-	var arrive = module.addBlock(func, label: b"strandlastref")
-	let done = module.addBlock(func, label: b"strandunreffed")
+	var arrive = module.addBlock(func, label: b"strandlastref", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"strandunreffed", heat: BlockHeat.normal)
 
 	let prior = emitFieldAccumulate(module, block: cur, record: owner, offset: GtOffStrandRefs, delta: emitConst(module, block: cur, value: OneFewer, ids: ids), multiM: true, ids: ids)
 	let wasLast = emitCmp(module, block: cur, a: prior, b: emitConst(module, block: cur, value: 1, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -2823,8 +2823,8 @@ function buildGtCoroSweepDropped(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroSweepDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doneBlock = module.addBlock(func, label: b"csdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"csdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let owner = 0 as ValueId
@@ -2854,7 +2854,7 @@ function buildGtNowNs(module StdModule)
 	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// The two out-params live in THIS CALL's frame, not in `.data` — see `GtClockTicksSlot`.
 	func.stackSize = GtClockScratchBytes
@@ -2957,9 +2957,9 @@ end 'emitTimerEntryBefore'
 // in `__gt_timer_add`, or the moved-last entry in `emitGtTimerStoreRemove` — and everything else is already a
 // heap, so walking the ancestor chain is the whole repair.
 function emitTimerSiftUp(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heapBase ValueId, startIndex ValueId, cont IrBlock)
-	var hdr = module.addBlock(func, label: b"siftuphdr")
-	var body = module.addBlock(func, label: b"siftupbody")
-	var exchange = module.addBlock(func, label: b"siftupswap")
+	var hdr = module.addBlock(func, label: b"siftuphdr", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"siftupbody", heat: BlockHeat.normal)
+	var exchange = module.addBlock(func, label: b"siftupswap", heat: BlockHeat.normal)
 
 	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
 	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
@@ -2996,13 +2996,13 @@ end 'emitTimerSiftUp'
 // The caller has just placed an entry at `startIndex` that may be too LATE for where it sits — the last live
 // entry moved over the hole a pop or a remove opened.
 function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heapBase ValueId, count ValueId, startIndex ValueId, cont IrBlock)
-	var hdr = module.addBlock(func, label: b"siftdownhdr")
-	var haveLeft = module.addBlock(func, label: b"siftdownhaveleft")
-	var chooseChild = module.addBlock(func, label: b"siftdownchoose")
-	var takeLeft = module.addBlock(func, label: b"siftdowntakeleft")
-	var takeRight = module.addBlock(func, label: b"siftdowntakeright")
-	var compare = module.addBlock(func, label: b"siftdowncompare")
-	var exchange = module.addBlock(func, label: b"siftdownswap")
+	var hdr = module.addBlock(func, label: b"siftdownhdr", heat: BlockHeat.normal)
+	var haveLeft = module.addBlock(func, label: b"siftdownhaveleft", heat: BlockHeat.normal)
+	var chooseChild = module.addBlock(func, label: b"siftdownchoose", heat: BlockHeat.normal)
+	var takeLeft = module.addBlock(func, label: b"siftdowntakeleft", heat: BlockHeat.normal)
+	var takeRight = module.addBlock(func, label: b"siftdowntakeright", heat: BlockHeat.normal)
+	var compare = module.addBlock(func, label: b"siftdowncompare", heat: BlockHeat.normal)
+	var exchange = module.addBlock(func, label: b"siftdownswap", heat: BlockHeat.normal)
 
 	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
 	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
@@ -3073,10 +3073,10 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var grow = module.addBlock(func, label: b"grow")
-	var doAdd = module.addBlock(func, label: b"doadd")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	var doAdd = module.addBlock(func, label: b"doadd", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let gt = 0 as ValueId
 	let deadline = 1 as ValueId
@@ -3164,9 +3164,9 @@ end 'buildGtTimerAdd'
 // block to continue in. The region always exists (`__gt_init` allocates it eagerly), so reading its first
 // entry is safe even when it is not live; the count decides which value is published.
 function emitGtPublishTimerWhen(module StdModule, func IrFunction, cur IrBlock, heapBase ValueId, count ValueId, ids ValueMinter) returns IrBlock
-	var hasRoot = module.addBlock(func, label: b"timerwhenroot")
-	var noRoot = module.addBlock(func, label: b"timerwhenempty")
-	let published = module.addBlock(func, label: b"timerwhenpublished")
+	var hasRoot = module.addBlock(func, label: b"timerwhenroot", heat: BlockHeat.normal)
+	var noRoot = module.addBlock(func, label: b"timerwhenempty", heat: BlockHeat.normal)
+	let published = module.addBlock(func, label: b"timerwhenpublished", heat: BlockHeat.normal)
 
 	let isEmpty = emitCmp(module, block: cur, a: count, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isEmpty, thenBlockId: noRoot.id, elseBlockId: hasRoot.id))
@@ -3195,7 +3195,7 @@ end 'emitGtLoadTimerWhen'
 // minted in a block that dominates `due`, for the fire that follows. EXPORTED for the scheduler loop's top and
 // its timed-out park (`SchedRuntime.buildSchedLoop`).
 export function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur IrBlock, due IrBlock, notDue IrBlock, notDueArgs ValueIdArray, ids ValueMinter) returns ValueId
-	var ask = module.addBlock(func, label: b"timerdueask")
+	var ask = module.addBlock(func, label: b"timerdueask", heat: BlockHeat.normal)
 
 	let when = emitGtLoadTimerWhen(module, block: cur, ids: ids)
 	let noTimer = emitCmp(module, block: cur, a: when, b: emitConst(module, block: cur, value: TimerWhenEmpty, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -3249,13 +3249,13 @@ function buildGtTimerCheck(module StdModule)
 	var func = IrFunction.createFromStd(GtTimerCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var loopHdr = module.addBlock(func, label: b"loophdr")
-	var checkDue = module.addBlock(func, label: b"checkdue")
-	var popRoot = module.addBlock(func, label: b"poproot")
-	var moveLast = module.addBlock(func, label: b"movelast")
-	var fire = module.addBlock(func, label: b"fire")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var loopHdr = module.addBlock(func, label: b"loophdr", heat: BlockHeat.normal)
+	var checkDue = module.addBlock(func, label: b"checkdue", heat: BlockHeat.normal)
+	var popRoot = module.addBlock(func, label: b"poproot", heat: BlockHeat.normal)
+	var moveLast = module.addBlock(func, label: b"movelast", heat: BlockHeat.normal)
+	var fire = module.addBlock(func, label: b"fire", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let now = 0 as ValueId
@@ -3383,13 +3383,13 @@ function buildGtAnyCompleted(module StdModule)
 	var func = IrFunction.createFromStd(GtAnyCompletedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var scanHdr = module.addBlock(func, label: b"scanhdr")
-	var scanBody = module.addBlock(func, label: b"scanbody")
-	var checkStatus = module.addBlock(func, label: b"checkstatus")
-	var advance = module.addBlock(func, label: b"advance")
-	var found = module.addBlock(func, label: b"found")
-	var notFound = module.addBlock(func, label: b"notfound")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scanHdr = module.addBlock(func, label: b"scanhdr", heat: BlockHeat.normal)
+	var scanBody = module.addBlock(func, label: b"scanbody", heat: BlockHeat.normal)
+	var checkStatus = module.addBlock(func, label: b"checkstatus", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"advance", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
+	var notFound = module.addBlock(func, label: b"notfound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -3460,10 +3460,10 @@ end 'AwaitAnySlotAct'
 // held. It terminates `cur` and continues at `cont`. A `0` slot holds no promise and is skipped, for
 // `__gt_any_completed`'s reason.
 function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, record ValueId, g ValueId, act AwaitAnySlotAct, cont IrBlock, ids ValueMinter)
-	var hdr = module.addBlock(func, label: b"anywalkhdr")
-	var body = module.addBlock(func, label: b"anywalkbody")
-	var slotAct = module.addBlock(func, label: b"anywalkslot")
-	var next = module.addBlock(func, label: b"anywalknext")
+	var hdr = module.addBlock(func, label: b"anywalkhdr", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"anywalkbody", heat: BlockHeat.normal)
+	var slotAct = module.addBlock(func, label: b"anywalkslot", heat: BlockHeat.normal)
+	var next = module.addBlock(func, label: b"anywalknext", heat: BlockHeat.normal)
 
 	let buffer = emitLoadField(module, block: cur, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 	let length = emitLoadField(module, block: cur, record: record, offset: ManagedRecordLengthOffset, ids: ids)
@@ -3497,8 +3497,8 @@ end 'emitGtAwaitAnySlotWalk'
 // promise, which the front end cannot produce: the abort names it rather than overwrite the first, whose
 // wake would then be lost. Terminates `cur` into `cont`.
 function emitGtClaimAwaiter(module StdModule, func IrFunction, cur IrBlock, promise ValueId, awaiter ValueId, cont IrBlock, ids ValueMinter)
-	var take = module.addBlock(func, label: b"claimawaitertake")
-	var twice = module.addBlock(func, label: b"claimawaitertwice")
+	var take = module.addBlock(func, label: b"claimawaitertake", heat: BlockHeat.normal)
+	var twice = module.addBlock(func, label: b"claimawaitertwice", heat: BlockHeat.normal)
 
 	let prior = emitLoadField(module, block: cur, record: promise, offset: GtOffAwaiter, ids: ids)
 	let taken = emitCmp(module, block: cur, a: prior, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
@@ -3512,7 +3512,7 @@ end 'emitGtClaimAwaiter'
 // One slot's withdrawal: clear the awaiter word only if it still names this registration. Terminates `cur`
 // into `cont`.
 function emitGtAwaitAnyWithdrawSlot(module StdModule, func IrFunction, cur IrBlock, slotGt ValueId, tagged ValueId, cont IrBlock, ids ValueMinter)
-	var clear = module.addBlock(func, label: b"anywithdrawclear")
+	var clear = module.addBlock(func, label: b"anywithdrawclear", heat: BlockHeat.normal)
 
 	let awaiter = emitLoadField(module, block: cur, record: slotGt, offset: GtOffAwaiter, ids: ids)
 	let ours = emitCmp(module, block: cur, a: awaiter, b: tagged, pred: StdCmpPred.eq, ids: ids)
@@ -3531,12 +3531,12 @@ function buildGtAwaitAny(module StdModule)
 	var func = IrFunction.createFromStd(GtAwaitAnyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var scan = module.addBlock(func, label: b"anyscan")
-	var found = module.addBlock(func, label: b"anyfound")
-	var park = module.addBlock(func, label: b"anypark")
-	var withdraw = module.addBlock(func, label: b"anywithdraw")
-	var withdrawn = module.addBlock(func, label: b"anywithdrawn")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"anyscan", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"anyfound", heat: BlockHeat.normal)
+	var park = module.addBlock(func, label: b"anypark", heat: BlockHeat.normal)
+	var withdraw = module.addBlock(func, label: b"anywithdraw", heat: BlockHeat.normal)
+	var withdrawn = module.addBlock(func, label: b"anywithdrawn", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -3575,7 +3575,7 @@ function buildGtDrainAtExit(module StdModule)
 	var func = IrFunction.createFromStd(GtDrainAtExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let code = 0 as ValueId
@@ -3599,9 +3599,9 @@ function buildGtRunMain(module StdModule)
 	var func = IrFunction.createFromStd(GtRunMainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var finished = module.addBlock(func, label: b"mainfinished")
-	var unfinished = module.addBlock(func, label: b"mainunfinished")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"mainfinished", heat: BlockHeat.normal)
+	var unfinished = module.addBlock(func, label: b"mainunfinished", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let mainEntry = 0 as ValueId
@@ -3638,10 +3638,10 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, asyncTrac
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var check = module.addBlock(func, label: b"awaitcheck")
-	var wait = module.addBlock(func, label: b"awaitpark")
-	var awaited = module.addBlock(func, label: b"awaitdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var check = module.addBlock(func, label: b"awaitcheck", heat: BlockHeat.normal)
+	var wait = module.addBlock(func, label: b"awaitpark", heat: BlockHeat.normal)
+	var awaited = module.addBlock(func, label: b"awaitdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let promise = 0 as ValueId
@@ -3679,9 +3679,9 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, asyncTrac
 	var cur = awaited
 
 	if asyncTrace 'emitAwaitTrace'
-		var immediateBlock = module.addBlock(func, label: b"awaitimm")
-		var yieldedBlock = module.addBlock(func, label: b"awaityield")
-		let joinBlock = module.addBlock(func, label: b"awaitjoin")
+		var immediateBlock = module.addBlock(func, label: b"awaitimm", heat: BlockHeat.normal)
+		var yieldedBlock = module.addBlock(func, label: b"awaityield", heat: BlockHeat.normal)
+		let joinBlock = module.addBlock(func, label: b"awaitjoin", heat: BlockHeat.normal)
 		module.setTerminator(cur, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
 		emitGtTraceLine(module, block: immediateBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.immediateSuffix, ids: ids)
 		module.setTerminator(immediateBlock, op: StdOp.branch(joinBlock.id))
@@ -3767,9 +3767,9 @@ end 'awaitExitTerminator'
 // failed swap can only mean another party got there first, and re-reading would find the 0 it just lost to.
 // A CAS loop would spin to reach the conclusion the single failure already carries.
 function emitGtReleaserCall(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, resultDisposition AsyncResultDisposition) returns IrBlock
-	var claim = module.addBlock(func, label: b"releaseclaim")
-	var release = module.addBlock(func, label: b"release")
-	let cont = module.addBlock(func, label: b"releasedone")
+	var claim = module.addBlock(func, label: b"releaseclaim", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"releasedone", heat: BlockHeat.normal)
 
 	// The cheap test first: a spawn whose callee owns nothing writes 0 and MUST pay nothing, which is most
 	// async programs (see this function's header). Only a GT that really owes a release reaches the CAS.
@@ -3824,8 +3824,8 @@ end 'emitGtTeardownArrive'
 // Arrive with `ticket` and, as the second party, reclaim — the whole of every party's arrival. Terminates `cur`
 // and answers the block to continue in, where the struct may already belong to the next spawn.
 function emitGtArriveAndReclaimIfSecond(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ticket ParsedInt, otherTicket ParsedInt, ids ValueMinter) returns IrBlock
-	var reclaim = module.addBlock(func, label: b"teardownreclaim")
-	let arrived = module.addBlock(func, label: b"teardownarrived")
+	var reclaim = module.addBlock(func, label: b"teardownreclaim", heat: BlockHeat.normal)
+	let arrived = module.addBlock(func, label: b"teardownarrived", heat: BlockHeat.normal)
 
 	let second = emitGtTeardownArrive(module, block: cur, ids: ids, gt: gt, ticket: ticket, otherTicket: otherTicket)
 	module.setTerminator(cur, op: StdOp.condBranch(second, thenBlockId: reclaim.id, elseBlockId: arrived.id))
@@ -3853,7 +3853,7 @@ function buildGtReclaim(module StdModule)
 	var func = IrFunction.createFromStd(GtReclaimName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
@@ -3891,10 +3891,10 @@ function buildGtOwnerDone(module StdModule)
 	var func = IrFunction.createFromStd(GtOwnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lastOwned = module.addBlock(func, label: b"ownerlastlive")
-	var signalDrain = module.addBlock(func, label: b"ownersignaldrain")
-	var arrive = module.addBlock(func, label: b"ownerarrive")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lastOwned = module.addBlock(func, label: b"ownerlastlive", heat: BlockHeat.normal)
+	var signalDrain = module.addBlock(func, label: b"ownersignaldrain", heat: BlockHeat.normal)
+	var arrive = module.addBlock(func, label: b"ownerarrive", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -4416,7 +4416,7 @@ function buildGtIsComplete(module StdModule)
 	var func = IrFunction.createFromStd(GtIsCompleteName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
@@ -4461,7 +4461,7 @@ function buildGtCellAlloc(module StdModule)
 	var func = IrFunction.createFromStd(GtCellAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let releaser = 0 as ValueId
 
@@ -4487,7 +4487,7 @@ function buildGtCellComplete(module StdModule)
 	var func = IrFunction.createFromStd(GtCellCompleteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let cell = 0 as ValueId
 	let result = 1 as ValueId
@@ -4572,19 +4572,19 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var notAReplyCell = module.addBlock(func, label: b"notreplycell")
-	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark")
-	var notMailbox = module.addBlock(func, label: b"droppednotmailbox")
-	var waitingArm = module.addBlock(func, label: b"waitingarm")
-	var waitingStores = module.addBlock(func, label: b"waitingstores")
-	var waitingProc = module.addBlock(func, label: b"waitingproc")
-	var waitingUnlock = module.addBlock(func, label: b"waitingunlock")
-	var soleOwner = module.addBlock(func, label: b"soleowner")
-	var queuedArm = module.addBlock(func, label: b"queuedarm")
-	var sweepGreen = module.addBlock(func, label: b"sweepgreen")
-	var sweepCoro = module.addBlock(func, label: b"sweepcoro")
-	var dropDone = module.addBlock(func, label: b"dropdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notAReplyCell = module.addBlock(func, label: b"notreplycell", heat: BlockHeat.normal)
+	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark", heat: BlockHeat.normal)
+	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
+	var waitingArm = module.addBlock(func, label: b"waitingarm", heat: BlockHeat.normal)
+	var waitingStores = module.addBlock(func, label: b"waitingstores", heat: BlockHeat.normal)
+	var waitingProc = module.addBlock(func, label: b"waitingproc", heat: BlockHeat.normal)
+	var waitingUnlock = module.addBlock(func, label: b"waitingunlock", heat: BlockHeat.normal)
+	var soleOwner = module.addBlock(func, label: b"soleowner", heat: BlockHeat.normal)
+	var queuedArm = module.addBlock(func, label: b"queuedarm", heat: BlockHeat.normal)
+	var sweepGreen = module.addBlock(func, label: b"sweepgreen", heat: BlockHeat.normal)
+	var sweepCoro = module.addBlock(func, label: b"sweepcoro", heat: BlockHeat.normal)
+	var dropDone = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -4650,8 +4650,8 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	module.setTerminator(notMailbox, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: waitingStores.id))
 
 	if usesCompletionPort 'ioAware'
-		var waitingTimer = module.addBlock(func, label: b"waitingtimer")
-		var ioArm = module.addBlock(func, label: b"ioarm")
+		var waitingTimer = module.addBlock(func, label: b"waitingtimer", heat: BlockHeat.normal)
+		var ioArm = module.addBlock(func, label: b"ioarm", heat: BlockHeat.normal)
 		let ioParked = ids.mint()
 		module.appendOp(waitingStores, op: StdOp.loadIndirect(ioParked, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
 		let ioZeroConst = ids.mint()
@@ -4752,14 +4752,14 @@ end 'buildGtPromiseDrop'
 // The lock-serialized `ioParked` read here versus the completion thread's `ioParked` read there is what makes the
 // ownership decision mutually exclusive.
 function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock, queuedCont IrBlock, rawFree ByteArray)
-	var ioAbandon = module.addBlock(func, label: b"ioabandon")
-	var ioDrainSpin = module.addBlock(func, label: b"iodrainspin")
-	var ioDrainLoop = module.addBlock(func, label: b"iodrainloop")
-	var ioAlreadyFired = module.addBlock(func, label: b"ioalreadyfired")
-	var ioCleanup = module.addBlock(func, label: b"iocleanup")
-	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe")
-	var ioPendingDec = module.addBlock(func, label: b"iopendingdec")
-	var ioFreeScratch = module.addBlock(func, label: b"iofreescratch")
+	var ioAbandon = module.addBlock(func, label: b"ioabandon", heat: BlockHeat.normal)
+	var ioDrainSpin = module.addBlock(func, label: b"iodrainspin", heat: BlockHeat.normal)
+	var ioDrainLoop = module.addBlock(func, label: b"iodrainloop", heat: BlockHeat.normal)
+	var ioAlreadyFired = module.addBlock(func, label: b"ioalreadyfired", heat: BlockHeat.normal)
+	var ioCleanup = module.addBlock(func, label: b"iocleanup", heat: BlockHeat.normal)
+	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe", heat: BlockHeat.normal)
+	var ioPendingDec = module.addBlock(func, label: b"iopendingdec", heat: BlockHeat.normal)
+	var ioFreeScratch = module.addBlock(func, label: b"iofreescratch", heat: BlockHeat.normal)
 
 	// startBlock: split gt.io_handle into its ownership tag + real handle ; ovl = gt + GtOffOverlapped ;
 	// Enter __sched_lock ; branch on ioParked == 4. io_handle's spare low bit carries pipe ownership (yield_read
@@ -4882,22 +4882,22 @@ function buildGtRunnerDone(module StdModule)
 	var func = IrFunction.createFromStd(GtRunnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var handAwaiter = module.addBlock(func, label: b"runnerawaiter")
-	var haveAwaiter = module.addBlock(func, label: b"runnerhaveawaiter")
-	var plainAwaiter = module.addBlock(func, label: b"runnerplainawaiter")
-	var selectAwaiter = module.addBlock(func, label: b"runnerselectawaiter")
-	var claimSelect = module.addBlock(func, label: b"runnerclaimselect")
-	var payWake = module.addBlock(func, label: b"runnerpaywake")
-	var wake = module.addBlock(func, label: b"runnerwake")
-	var stackCheck = module.addBlock(func, label: b"runnerstackcheck")
-	var releaseStack = module.addBlock(func, label: b"runnerreleasestack")
-	var afterStack = module.addBlock(func, label: b"runnerafterstack")
-	var greenDone = module.addBlock(func, label: b"runnergreendone")
-	var mainDone = module.addBlock(func, label: b"runnermaindone")
-	var greenUnref = module.addBlock(func, label: b"runnergreenunref")
-	var coroDone = module.addBlock(func, label: b"runnercorodone")
-	var coroUnref = module.addBlock(func, label: b"runnercorounref")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var handAwaiter = module.addBlock(func, label: b"runnerawaiter", heat: BlockHeat.normal)
+	var haveAwaiter = module.addBlock(func, label: b"runnerhaveawaiter", heat: BlockHeat.normal)
+	var plainAwaiter = module.addBlock(func, label: b"runnerplainawaiter", heat: BlockHeat.normal)
+	var selectAwaiter = module.addBlock(func, label: b"runnerselectawaiter", heat: BlockHeat.normal)
+	var claimSelect = module.addBlock(func, label: b"runnerclaimselect", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"runnerpaywake", heat: BlockHeat.normal)
+	var wake = module.addBlock(func, label: b"runnerwake", heat: BlockHeat.normal)
+	var stackCheck = module.addBlock(func, label: b"runnerstackcheck", heat: BlockHeat.normal)
+	var releaseStack = module.addBlock(func, label: b"runnerreleasestack", heat: BlockHeat.normal)
+	var afterStack = module.addBlock(func, label: b"runnerafterstack", heat: BlockHeat.normal)
+	var greenDone = module.addBlock(func, label: b"runnergreendone", heat: BlockHeat.normal)
+	var mainDone = module.addBlock(func, label: b"runnermaindone", heat: BlockHeat.normal)
+	var greenUnref = module.addBlock(func, label: b"runnergreenunref", heat: BlockHeat.normal)
+	var coroDone = module.addBlock(func, label: b"runnercorodone", heat: BlockHeat.normal)
+	var coroUnref = module.addBlock(func, label: b"runnercorounref", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -4967,7 +4967,7 @@ function buildGtRunnerDone(module StdModule)
 	module.setTerminator(greenUnreffed, op: StdOp.retVoid)
 
 	var coroArrived = emitGtArriveAndReclaimIfSecond(module, func: func, cur: coroDone, gt: gt, ticket: GtTeardownRunnerTicket, otherTicket: GtTeardownConsumerTicket, ids: ids)
-	let doneAfterCell = module.addBlock(func, label: b"runnercelldone")
+	let doneAfterCell = module.addBlock(func, label: b"runnercelldone", heat: BlockHeat.normal)
 	module.setTerminator(coroArrived, op: StdOp.condBranch(isCell, thenBlockId: doneAfterCell.id, elseBlockId: coroUnref.id))
 	module.setTerminator(doneAfterCell, op: StdOp.retVoid)
 
@@ -4988,15 +4988,15 @@ end 'buildGtRunnerDone'
 // new children — never both, because the rest of the array is still a heap. Comparing it against its parent
 // answers which, so exactly one sift walk runs. Removing the last entry itself leaves a heap already.
 function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
-	var scanHdr = module.addBlock(func, label: b"tmscanhdr")
-	var scanBody = module.addBlock(func, label: b"tmscanbody")
-	var advance = module.addBlock(func, label: b"tmadvance")
-	var removeAt = module.addBlock(func, label: b"tmremoveat")
-	var fillHole = module.addBlock(func, label: b"tmfillhole")
-	var parentCmp = module.addBlock(func, label: b"tmparentcmp")
-	var siftUpStart = module.addBlock(func, label: b"tmsiftup")
-	var siftDownStart = module.addBlock(func, label: b"tmsiftdown")
-	var republish = module.addBlock(func, label: b"tmrepublish")
+	var scanHdr = module.addBlock(func, label: b"tmscanhdr", heat: BlockHeat.normal)
+	var scanBody = module.addBlock(func, label: b"tmscanbody", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"tmadvance", heat: BlockHeat.normal)
+	var removeAt = module.addBlock(func, label: b"tmremoveat", heat: BlockHeat.normal)
+	var fillHole = module.addBlock(func, label: b"tmfillhole", heat: BlockHeat.normal)
+	var parentCmp = module.addBlock(func, label: b"tmparentcmp", heat: BlockHeat.normal)
+	var siftUpStart = module.addBlock(func, label: b"tmsiftup", heat: BlockHeat.normal)
+	var siftDownStart = module.addBlock(func, label: b"tmsiftdown", heat: BlockHeat.normal)
+	var republish = module.addBlock(func, label: b"tmrepublish", heat: BlockHeat.normal)
 
 	let countAddr = ids.mint()
 	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtTimerCountLabel))
@@ -5066,10 +5066,10 @@ end 'emitGtTimerStoreRemove'
 // swap-remove across BOTH arrays in lockstep, keyed on `gt == procGts[i]`. A GT not on a process (parked on a
 // timer instead) scans to the end and branches to `cont` untouched.
 function emitGtProcStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
-	var scanHdr = module.addBlock(func, label: b"pcscanhdr")
-	var scanBody = module.addBlock(func, label: b"pcscanbody")
-	var advance = module.addBlock(func, label: b"pcadvance")
-	var removeAt = module.addBlock(func, label: b"pcremoveat")
+	var scanHdr = module.addBlock(func, label: b"pcscanhdr", heat: BlockHeat.normal)
+	var scanBody = module.addBlock(func, label: b"pcscanbody", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"pcadvance", heat: BlockHeat.normal)
+	var removeAt = module.addBlock(func, label: b"pcremoveat", heat: BlockHeat.normal)
 
 	let countAddr = ids.mint()
 	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
@@ -5144,7 +5144,7 @@ function buildGtSleep(module StdModule, asyncTrace bool, tags GtTraceTags)
 	var func = IrFunction.createFromStd(GtSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ms = 0 as ValueId
@@ -5179,7 +5179,7 @@ end 'buildGtSleep'
 //
 // Returns the block control reaches once the GT is running again. The CALLER terminates that block.
 function emitGtParkOnDeadline(module StdModule, func IrFunction, cur IrBlock, deadline ValueId, ids ValueMinter) returns IrBlock
-	let resumedBlock = module.addBlock(func, label: b"resumed")
+	let resumedBlock = module.addBlock(func, label: b"resumed", heat: BlockHeat.normal)
 	emitGtPark(module, ids: ids, cur: cur, kind: GtParkKindTimer, arg: deadline, cont: resumedBlock)
 	return resumedBlock
 end 'emitGtParkOnDeadline'
@@ -5208,7 +5208,7 @@ function buildGtPark(module StdModule)
 	var func = IrFunction.createFromStd(GtParkName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let kind = 0 as ValueId
 	let arg = 1 as ValueId
@@ -5278,29 +5278,29 @@ function buildGtRegisterPark(module StdModule)
 	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var timerArm = module.addBlock(func, label: b"parktimer")
-	var notTimer = module.addBlock(func, label: b"notparktimer")
-	var procArm = module.addBlock(func, label: b"parkproc")
-	var procParked = module.addBlock(func, label: b"parkprocok")
-	var procOverflow = module.addBlock(func, label: b"parkprocfull")
-	var notProc = module.addBlock(func, label: b"notparkproc")
-	var ioArm = module.addBlock(func, label: b"parkio")
-	var notIo = module.addBlock(func, label: b"notparkio")
-	var mailboxArm = module.addBlock(func, label: b"parkmailbox")
-	var notMailbox = module.addBlock(func, label: b"notparkmailbox")
-	var awaitArm = module.addBlock(func, label: b"parkawait")
-	var awaitRegister = module.addBlock(func, label: b"parkawaitregister")
-	var awaitTake = module.addBlock(func, label: b"parkawaittake")
-	var notAwait = module.addBlock(func, label: b"notparkawait")
-	var awaitAnyArm = module.addBlock(func, label: b"parkawaitany")
-	var awaitAnyRegister = module.addBlock(func, label: b"parkawaitanyregister")
-	var awaitAnyRegistered = module.addBlock(func, label: b"parkawaitanyregistered")
-	var resumeNow = module.addBlock(func, label: b"parkresumenow")
-	var unlockAndPay = module.addBlock(func, label: b"parkunlock")
-	var payWake = module.addBlock(func, label: b"parkwake")
-	var unknownArm = module.addBlock(func, label: b"parkunknown")
-	var doneBlock = module.addBlock(func, label: b"parkdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
+	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
+	var procArm = module.addBlock(func, label: b"parkproc", heat: BlockHeat.normal)
+	var procParked = module.addBlock(func, label: b"parkprocok", heat: BlockHeat.normal)
+	var procOverflow = module.addBlock(func, label: b"parkprocfull", heat: BlockHeat.normal)
+	var notProc = module.addBlock(func, label: b"notparkproc", heat: BlockHeat.normal)
+	var ioArm = module.addBlock(func, label: b"parkio", heat: BlockHeat.normal)
+	var notIo = module.addBlock(func, label: b"notparkio", heat: BlockHeat.normal)
+	var mailboxArm = module.addBlock(func, label: b"parkmailbox", heat: BlockHeat.normal)
+	var notMailbox = module.addBlock(func, label: b"notparkmailbox", heat: BlockHeat.normal)
+	var awaitArm = module.addBlock(func, label: b"parkawait", heat: BlockHeat.normal)
+	var awaitRegister = module.addBlock(func, label: b"parkawaitregister", heat: BlockHeat.normal)
+	var awaitTake = module.addBlock(func, label: b"parkawaittake", heat: BlockHeat.normal)
+	var notAwait = module.addBlock(func, label: b"notparkawait", heat: BlockHeat.normal)
+	var awaitAnyArm = module.addBlock(func, label: b"parkawaitany", heat: BlockHeat.normal)
+	var awaitAnyRegister = module.addBlock(func, label: b"parkawaitanyregister", heat: BlockHeat.normal)
+	var awaitAnyRegistered = module.addBlock(func, label: b"parkawaitanyregistered", heat: BlockHeat.normal)
+	var resumeNow = module.addBlock(func, label: b"parkresumenow", heat: BlockHeat.normal)
+	var unlockAndPay = module.addBlock(func, label: b"parkunlock", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"parkwake", heat: BlockHeat.normal)
+	var unknownArm = module.addBlock(func, label: b"parkunknown", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -5439,9 +5439,9 @@ function buildGtProcAddLocked(module StdModule)
 	var func = IrFunction.createFromStd(GtProcAddLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var overflow = module.addBlock(func, label: b"overflow")
-	var doAdd = module.addBlock(func, label: b"doadd")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var overflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
+	var doAdd = module.addBlock(func, label: b"doadd", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let gt = 0 as ValueId
 	let handle = 1 as ValueId
@@ -5513,7 +5513,7 @@ function buildGtProcCount(module StdModule)
 	var func = IrFunction.createFromStd(GtProcCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let countAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
 	let count = ids.mint()
@@ -5549,9 +5549,9 @@ end 'emitGtStoresPending'
 // whose one block argument receives the wake debt the walks owe. EXPORTED for the scheduler loop's idle poll and
 // its P-less poll (`SchedRuntime.buildSchedLoop`); the strand runner's yield is the third caller.
 export function emitGtPollStores(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
-	var fire = module.addBlock(func, label: b"pollfire")
-	var children = module.addBlock(func, label: b"pollchildren")
-	var reap = module.addBlock(func, label: b"pollreap")
+	var fire = module.addBlock(func, label: b"pollfire", heat: BlockHeat.normal)
+	var children = module.addBlock(func, label: b"pollchildren", heat: BlockHeat.normal)
+	var reap = module.addBlock(func, label: b"pollreap", heat: BlockHeat.normal)
 
 	let noDebt = emitConst(module, block: cur, value: WakeDebtNone, ids: ids)
 	let now = emitGtBranchOnTimerDue(module, func: func, cur: cur, due: fire, notDue: children, notDueArgs: argsOf(noDebt), ids: ids)
@@ -5589,19 +5589,19 @@ function buildGtRunStrand(module StdModule)
 	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var next = module.addBlock(func, label: b"strandnext")
-	var run = module.addBlock(func, label: b"strandrun")
-	var finished = module.addBlock(func, label: b"strandcompleted")
-	var parked = module.addBlock(func, label: b"strandparked")
-	var register = module.addBlock(func, label: b"strandregister")
-	var yielded = module.addBlock(func, label: b"strandyield")
-	var pollStores = module.addBlock(func, label: b"strandpoll")
-	var pollWake = module.addBlock(func, label: b"strandpollwake")
-	var place = module.addBlock(func, label: b"strandplace")
-	var behindSiblings = module.addBlock(func, label: b"strandbehindsiblings")
-	var behindEveryone = module.addBlock(func, label: b"strandbehindeveryone")
-	var released = module.addBlock(func, label: b"strandreleased")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var next = module.addBlock(func, label: b"strandnext", heat: BlockHeat.normal)
+	var run = module.addBlock(func, label: b"strandrun", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"strandcompleted", heat: BlockHeat.normal)
+	var parked = module.addBlock(func, label: b"strandparked", heat: BlockHeat.normal)
+	var register = module.addBlock(func, label: b"strandregister", heat: BlockHeat.normal)
+	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
+	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
+	var pollWake = module.addBlock(func, label: b"strandpollwake", heat: BlockHeat.normal)
+	var place = module.addBlock(func, label: b"strandplace", heat: BlockHeat.normal)
+	var behindSiblings = module.addBlock(func, label: b"strandbehindsiblings", heat: BlockHeat.normal)
+	var behindEveryone = module.addBlock(func, label: b"strandbehindeveryone", heat: BlockHeat.normal)
+	var released = module.addBlock(func, label: b"strandreleased", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let m = 0 as ValueId
@@ -5679,9 +5679,9 @@ function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 	var func = IrFunction.createFromStd(GtTraceEmitName, returnType: StdReturnType.void, paramCount: GtTraceEmitArity as ParamCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(GtTraceEmitArity as ParamCount)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var withSuffix = module.addBlock(func, label: b"suffix")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var withSuffix = module.addBlock(func, label: b"suffix", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: GtTraceEmitArity as ParamCount)
 	let tagPtr = 0 as ValueId
@@ -5822,7 +5822,7 @@ function buildGtIoPark(module StdModule)
 	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	if traced 'readSuffixParams'
 		emitParams(module, block: entry, count: paramCount)
@@ -5932,8 +5932,8 @@ function buildGtResched(module StdModule)
 	var func = IrFunction.createFromStd(GtReschedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitGtPark(module, ids: ids, cur: entry, kind: GtParkKindYield, arg: emitConst(module, block: entry, value: GtParkArgUnused, ids: ids), cont: doneBlock)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -5950,12 +5950,12 @@ function buildGtProcCheck(module StdModule)
 	var func = IrFunction.createFromStd(GtProcCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var loopHdr = module.addBlock(func, label: b"loophdr")
-	var loopBody = module.addBlock(func, label: b"loopbody")
-	var advance = module.addBlock(func, label: b"advance")
-	var fire = module.addBlock(func, label: b"fire")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var loopHdr = module.addBlock(func, label: b"loophdr", heat: BlockHeat.normal)
+	var loopBody = module.addBlock(func, label: b"loopbody", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"advance", heat: BlockHeat.normal)
+	var fire = module.addBlock(func, label: b"fire", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	// The walk MUTATES the store (each reap swap-removes an entry across both arrays), so it runs under the
 	// run-queue lock — `__gt_timer_check`'s arrangement exactly.
@@ -6069,7 +6069,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
@@ -6112,13 +6112,13 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// already calls. Three spellings of one loop is three places a bound can be got wrong.
 	var afterCopy = emitForwardCopy(module, func: func, cur: entry, dest: cmBuf, src: cmdlinePtr, byteCount: cmdlineLen, ids: ids)
 
-	var spawnFailed = module.addBlock(func, label: b"spawnfailed")
-	var spawnOk = module.addBlock(func, label: b"spawnok")
-	var overflowReturn = module.addBlock(func, label: b"overflowreturn")
-	var parkOk = module.addBlock(func, label: b"parkok")
-	var reap = module.addBlock(func, label: b"reap")
-	var reapOverflowed = module.addBlock(func, label: b"reapoverflowed")
-	var reapExit = module.addBlock(func, label: b"reapexit")
+	var spawnFailed = module.addBlock(func, label: b"spawnfailed", heat: BlockHeat.normal)
+	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
+	var overflowReturn = module.addBlock(func, label: b"overflowreturn", heat: BlockHeat.normal)
+	var parkOk = module.addBlock(func, label: b"parkok", heat: BlockHeat.normal)
+	var reap = module.addBlock(func, label: b"reap", heat: BlockHeat.normal)
+	var reapOverflowed = module.addBlock(func, label: b"reapoverflowed", heat: BlockHeat.normal)
+	var reapExit = module.addBlock(func, label: b"reapexit", heat: BlockHeat.normal)
 
 	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA leaves the PROCESS_INFORMATION
 	// untouched, and this call's is a fresh, zeroed slot) → `spawnFailed` (throw, never park on a null handle).
@@ -6258,9 +6258,9 @@ function buildIoInit(module StdModule)
 	var func = IrFunction.createFromStd(IoInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doInit = module.addBlock(func, label: b"doinit")
-	var doneBlock = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doInit = module.addBlock(func, label: b"doinit", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let initDoneAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(initDoneAddr, label: IoInitDoneLabel))
@@ -6323,11 +6323,11 @@ end 'emitStoreWideCharLowByte'
 // different seq) and two separate PROCESSES (different pid) all get distinct names. The 16 hex digits are written
 // MSB-first with a small loop.
 function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, bufPtr ValueId, cont IrBlock)
-	var hexHdr = module.addBlock(func, label: b"pnhexhdr")
-	var hexBody = module.addBlock(func, label: b"pnhexbody")
-	var digitArm = module.addBlock(func, label: b"pndigit")
-	var letterArm = module.addBlock(func, label: b"pnletter")
-	var storeArm = module.addBlock(func, label: b"pnstore")
+	var hexHdr = module.addBlock(func, label: b"pnhexhdr", heat: BlockHeat.normal)
+	var hexBody = module.addBlock(func, label: b"pnhexbody", heat: BlockHeat.normal)
+	var digitArm = module.addBlock(func, label: b"pndigit", heat: BlockHeat.normal)
+	var letterArm = module.addBlock(func, label: b"pnletter", heat: BlockHeat.normal)
+	var storeArm = module.addBlock(func, label: b"pnstore", heat: BlockHeat.normal)
 
 	// seq = (*__io_pipe_seq)++ ; uniquifier = (pid << 32) | (seq & 0xFFFFFFFF).
 	let seqCredit = emitConst(module, block: startBlock, value: OneMore, ids: ids)
@@ -6464,8 +6464,8 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterName = module.addBlock(func, label: b"aftername")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterName = module.addBlock(func, label: b"aftername", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
@@ -6532,8 +6532,8 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// The shared byte-copy loop — see `__gt_process_run`, which reaches the same helper for the same reason.
 	var afterCopy = emitForwardCopy(module, func: func, cur: afterName, dest: cmBuf, src: cmdlinePtr, byteCount: cmdlineLen, ids: ids)
 
-	var spawnFail = module.addBlock(func, label: b"spawnfail")
-	var spawnOk = module.addBlock(func, label: b"spawnok")
+	var spawnFail = module.addBlock(func, label: b"spawnfail", heat: BlockHeat.normal)
+	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 
 	// afterCopy: build STARTUPINFOA (stdout/stderr → pipe write end) and spawn (inherit). The command line
 	// needs no explicit NUL store: `cmBuf` is `cmdlineLen + TrailingNulBytes` of a freshly zeroed slot and the
@@ -6630,8 +6630,8 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// *"an environment error reads as EOF"*, and it has nowhere to carry the difference; the STREAMING API
 	// does — an `__SubprocessStreamState` word per stream — which is why the shared reader distinguishes them
 	// and this one site, which owns the contract, folds them back together.
-	var readOk = module.addBlock(func, label: b"ioreadok")
-	var readRefused = module.addBlock(func, label: b"ioreadrefused")
+	var readOk = module.addBlock(func, label: b"ioreadok", heat: BlockHeat.normal)
+	var readRefused = module.addBlock(func, label: b"ioreadrefused", heat: BlockHeat.normal)
 	let zeroRead = emitConst(module, block: spawnOk, value: 0, ids: ids)
 	let readFailed = emitCmp(module, block: spawnOk, a: rawRead, b: zeroRead, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(spawnOk, op: StdOp.condBranch(readFailed, thenBlockId: readRefused.id, elseBlockId: readOk.id))
@@ -6901,9 +6901,9 @@ end 'emitSubpSlotAddr'
 //
 // It terminates `cur` and returns the block where the handle is known good.
 export function emitSubpRequireHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, handle ValueId, whenBad IrBlock) returns IrBlock
-	var inRange = module.addBlock(func, label: b"subphrange")
-	var liveCheck = module.addBlock(func, label: b"subphlive")
-	let good = module.addBlock(func, label: b"subphok")
+	var inRange = module.addBlock(func, label: b"subphrange", heat: BlockHeat.normal)
+	var liveCheck = module.addBlock(func, label: b"subphlive", heat: BlockHeat.normal)
+	let good = module.addBlock(func, label: b"subphok", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let negative = emitCmp(module, block: cur, a: handle, b: zero, pred: StdCmpPred.lt, ids: ids)
@@ -6915,7 +6915,7 @@ export function emitSubpRequireHandle(module StdModule, func IrFunction, ids Val
 
 	// The table itself may never have been allocated — a program whose first subprocess call is a `wait` on a
 	// handle it invented. A null table is "no handle is live", not a null dereference.
-	var tableLive = module.addBlock(func, label: b"subphtbl")
+	var tableLive = module.addBlock(func, label: b"subphtbl", heat: BlockHeat.normal)
 	let tableAddr = ids.mint()
 	module.appendOp(liveCheck, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
 	let table = emitLoadField(module, block: liveCheck, record: tableAddr, offset: 0, ids: ids)
@@ -6946,8 +6946,8 @@ end 'emitSubpSlotOf'
 // store the pointer (and `size` into `capField`); else reuse the buffer persisted from a prior use. Returns the
 // continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
 function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt, capField ByteOffset) returns IrBlock
-	var doAlloc = module.addBlock(func, label: b"subpalloc")
-	let cont = module.addBlock(func, label: b"subpallocd")
+	var doAlloc = module.addBlock(func, label: b"subpalloc", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"subpallocd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let isNull = emitCmp(module, block: cur, a: existing, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -6981,14 +6981,14 @@ function buildSubpYieldRead(module StdModule)
 	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(5)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var syncDone = module.addBlock(func, label: b"syncdone")
-	var checkErr = module.addBlock(func, label: b"checkerr")
-	var classifyErr = module.addBlock(func, label: b"classifyerr")
-	var cleanEof = module.addBlock(func, label: b"cleaneof")
-	var readFailed = module.addBlock(func, label: b"readfailed")
-	var park = module.addBlock(func, label: b"park")
-	var resume = module.addBlock(func, label: b"resume")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var syncDone = module.addBlock(func, label: b"syncdone", heat: BlockHeat.normal)
+	var checkErr = module.addBlock(func, label: b"checkerr", heat: BlockHeat.normal)
+	var classifyErr = module.addBlock(func, label: b"classifyerr", heat: BlockHeat.normal)
+	var cleanEof = module.addBlock(func, label: b"cleaneof", heat: BlockHeat.normal)
+	var readFailed = module.addBlock(func, label: b"readfailed", heat: BlockHeat.normal)
+	var park = module.addBlock(func, label: b"park", heat: BlockHeat.normal)
+	var resume = module.addBlock(func, label: b"resume", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 5)
 	let readEnd = 0 as ValueId
@@ -7077,7 +7077,7 @@ function buildSubpStrFromBytes(module StdModule)
 	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let srcBuf = 0 as ValueId
 	let srcLen = 1 as ValueId
@@ -7094,8 +7094,8 @@ end 'buildSubpStrFromBytes'
 // The cap-free twin of `emitEnsureSlotBuffer` — for the `bytesOut` out-param slot, a fixed 8 bytes with no grow, so
 // there is no capacity slot to write. Alloc-if-zero then reuse across the handle's life.
 function emitEnsureSlotPtr(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt) returns IrBlock
-	var doAlloc = module.addBlock(func, label: b"subpptr")
-	let cont = module.addBlock(func, label: b"subpptrd")
+	var doAlloc = module.addBlock(func, label: b"subpptr", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"subpptrd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let isNull = emitCmp(module, block: cur, a: existing, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -7252,14 +7252,14 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var allocTbl = module.addBlock(func, label: b"alloctbl")
-	var haveTbl = module.addBlock(func, label: b"havetbl")
-	var slotHdr = module.addBlock(func, label: b"slothdr")
-	var slotCheck = module.addBlock(func, label: b"slotcheck")
-	var slotNext = module.addBlock(func, label: b"slotnext")
-	var noSlot = module.addBlock(func, label: b"noslot")
-	var gotSlot = module.addBlock(func, label: b"gotslot")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var allocTbl = module.addBlock(func, label: b"alloctbl", heat: BlockHeat.normal)
+	var haveTbl = module.addBlock(func, label: b"havetbl", heat: BlockHeat.normal)
+	var slotHdr = module.addBlock(func, label: b"slothdr", heat: BlockHeat.normal)
+	var slotCheck = module.addBlock(func, label: b"slotcheck", heat: BlockHeat.normal)
+	var slotNext = module.addBlock(func, label: b"slotnext", heat: BlockHeat.normal)
+	var noSlot = module.addBlock(func, label: b"noslot", heat: BlockHeat.normal)
+	var gotSlot = module.addBlock(func, label: b"gotslot", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let req = 0 as ValueId
@@ -7335,15 +7335,15 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// ⚠ **THE FAILURE EXIT IS CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH IT.** A `file` or
 	// `discard` stream opens a real file, and `CreateFileA` can fail; see `emitSubpNonPipeChildHandle`.
-	var spawnFail = module.addBlock(func, label: b"spawnfail")
-	var spawnOk = module.addBlock(func, label: b"spawnok")
+	var spawnFail = module.addBlock(func, label: b"spawnfail", heat: BlockHeat.normal)
+	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 
 	var afterStdin = emitSubpStdinSetup(module, func: func, ids: ids, cur: gotSlot, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, whenFailed: spawnFail)
 	var afterStdout = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdin, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqOutKind, dataOffset: SubpReqOutData, limitOffset: SubpReqOutLimit, streamBase: SubpStdoutBase, slotLimitOffset: SubpSlotOutLimit, childOffset: SubpChildStdoutWriteOff, ownedOffset: SubpOwnedStdoutOff, stdSelector: StdOutputHandleSelector, whenFailed: spawnFail)
 	var afterStderr = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdout, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqErrKind, dataOffset: SubpReqErrData, limitOffset: SubpReqErrLimit, streamBase: SubpStderrBase, slotLimitOffset: SubpSlotErrLimit, childOffset: SubpChildStderrWriteOff, ownedOffset: SubpOwnedStderrOff, stdSelector: StdErrorHandleSelector, whenFailed: spawnFail)
 
-	var detached = module.addBlock(func, label: b"detached")
-	var attached = module.addBlock(func, label: b"attached")
+	var detached = module.addBlock(func, label: b"detached", heat: BlockHeat.normal)
+	var attached = module.addBlock(func, label: b"attached", heat: BlockHeat.normal)
 
 	// afterStderr: STARTUPINFO (child ends reloaded from the scratch) and the spawn — no loop from here on, so
 	// the straight-line spill is free of the E5001 hazard.
@@ -7474,12 +7474,12 @@ end 'subpNullDeviceName'
 // closing it would close the PARENT's own stdout. The inherit arm therefore passes 0 as the owned half, and
 // `CloseHandle(0)` is the no-op that makes the close path uniform.
 function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ValueId, data ValueId, nulName ValueId, stdSelector ParsedInt, forWrite bool, join IrBlock, whenFailed IrBlock)
-	var stdArm = module.addBlock(func, label: b"sstd")
-	var pathPick = module.addBlock(func, label: b"spath")
-	var fileArm = module.addBlock(func, label: b"sfile")
-	var nulArm = module.addBlock(func, label: b"snul")
-	var openArm = module.addBlock(func, label: b"sopen")
-	var openOk = module.addBlock(func, label: b"sopenok")
+	var stdArm = module.addBlock(func, label: b"sstd", heat: BlockHeat.normal)
+	var pathPick = module.addBlock(func, label: b"spath", heat: BlockHeat.normal)
+	var fileArm = module.addBlock(func, label: b"sfile", heat: BlockHeat.normal)
+	var nulArm = module.addBlock(func, label: b"snul", heat: BlockHeat.normal)
+	var openArm = module.addBlock(func, label: b"sopen", heat: BlockHeat.normal)
+	var openOk = module.addBlock(func, label: b"sopenok", heat: BlockHeat.normal)
 
 	let inheritConst = emitConst(module, block: cur, value: SubpStdioInherit, ids: ids)
 	let isInherit = emitCmp(module, block: cur, a: kind, b: inheritConst, pred: StdCmpPred.eq, ids: ids)
@@ -7544,15 +7544,15 @@ end 'emitSubpNonPipeChildHandle'
 // A kind the language can spell and this file cannot see is a WRONG ANSWER with no diagnostic anywhere;
 // `emitSubpStdinKindWantsPipe` is that set stated once.
 function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, whenFailed IrBlock) returns IrBlock
-	var queueTest = module.addBlock(func, label: b"sinqtest")
-	var queueArm = module.addBlock(func, label: b"sinqueue")
-	var delayTest = module.addBlock(func, label: b"sindtest")
-	var delayArm = module.addBlock(func, label: b"sindelay")
-	var pipeArm = module.addBlock(func, label: b"sinpipe")
-	var pipeMake = module.addBlock(func, label: b"sinpmake")
-	var nonPipe = module.addBlock(func, label: b"sinother")
-	var join = module.addBlock(func, label: b"sinjoin")
-	let cont = module.addBlock(func, label: b"sindone")
+	var queueTest = module.addBlock(func, label: b"sinqtest", heat: BlockHeat.normal)
+	var queueArm = module.addBlock(func, label: b"sinqueue", heat: BlockHeat.normal)
+	var delayTest = module.addBlock(func, label: b"sindtest", heat: BlockHeat.normal)
+	var delayArm = module.addBlock(func, label: b"sindelay", heat: BlockHeat.normal)
+	var pipeArm = module.addBlock(func, label: b"sinpipe", heat: BlockHeat.normal)
+	var pipeMake = module.addBlock(func, label: b"sinpmake", heat: BlockHeat.normal)
+	var nonPipe = module.addBlock(func, label: b"sinother", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"sinjoin", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"sindone", heat: BlockHeat.normal)
 
 	let kind = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinKind, ids: ids)
 	let data = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinData, ids: ids)
@@ -7623,11 +7623,11 @@ end 'emitSubpStdinSetup'
 // and the parent's own standard-handle selector as its only differences, because those ARE the only differences
 // (`GtRuntime`'s slot layout makes the two stream sub-blocks identical five-word records for this reason).
 function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, kindOffset ByteOffset, dataOffset ByteOffset, limitOffset ByteOffset, streamBase ByteOffset, slotLimitOffset ByteOffset, childOffset ByteOffset, ownedOffset ByteOffset, stdSelector ParsedInt, whenFailed IrBlock) returns IrBlock
-	var pipeArm = module.addBlock(func, label: b"soutpipe")
-	var pipeMake = module.addBlock(func, label: b"soutpmake")
-	var nonPipe = module.addBlock(func, label: b"soutother")
-	var join = module.addBlock(func, label: b"soutjoin")
-	let cont = module.addBlock(func, label: b"soutdone")
+	var pipeArm = module.addBlock(func, label: b"soutpipe", heat: BlockHeat.normal)
+	var pipeMake = module.addBlock(func, label: b"soutpmake", heat: BlockHeat.normal)
+	var nonPipe = module.addBlock(func, label: b"soutother", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"soutjoin", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"soutdone", heat: BlockHeat.normal)
 
 	let kind = emitLoadField(module, block: cur, record: req, offset: kindOffset, ids: ids)
 	let data = emitLoadField(module, block: cur, record: req, offset: dataOffset, ids: ids)
@@ -7695,10 +7695,10 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var copyHdr = module.addBlock(func, label: b"copyhdr")
-	var copyBody = module.addBlock(func, label: b"copybody")
-	var afterCopy = module.addBlock(func, label: b"aftercopy")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var copyHdr = module.addBlock(func, label: b"copyhdr", heat: BlockHeat.normal)
+	var copyBody = module.addBlock(func, label: b"copybody", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"aftercopy", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cmdStrPtr = 0 as ValueId
@@ -7830,14 +7830,14 @@ end 'emitSubpTakeFromStream'
 // the convention `emitSubpOwnedByteCopy` states, and for its reason: a builder answering both a block and a
 // value would have to answer a pair, and a pair is a heap box.
 function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, streamPtr ValueId, readEnd ValueId, bytesOutPtr ValueId, streamBase ByteOffset, streamState EnumLayout, whenStale IrBlock) returns IrBlock
-	var doGrow = module.addBlock(func, label: b"topupgrow")
-	var doRead = module.addBlock(func, label: b"topupread")
-	var readDone = module.addBlock(func, label: b"topupclassify")
-	var stopped = module.addBlock(func, label: b"topupstopped")
-	var setEof = module.addBlock(func, label: b"topupeof")
-	var setFailed = module.addBlock(func, label: b"topupfailed")
-	var didRead = module.addBlock(func, label: b"topupgot")
-	let resumed = module.addBlock(func, label: b"topupnext")
+	var doGrow = module.addBlock(func, label: b"topupgrow", heat: BlockHeat.normal)
+	var doRead = module.addBlock(func, label: b"topupread", heat: BlockHeat.normal)
+	var readDone = module.addBlock(func, label: b"topupclassify", heat: BlockHeat.normal)
+	var stopped = module.addBlock(func, label: b"topupstopped", heat: BlockHeat.normal)
+	var setEof = module.addBlock(func, label: b"topupeof", heat: BlockHeat.normal)
+	var setFailed = module.addBlock(func, label: b"topupfailed", heat: BlockHeat.normal)
+	var didRead = module.addBlock(func, label: b"topupgot", heat: BlockHeat.normal)
+	let resumed = module.addBlock(func, label: b"topupnext", heat: BlockHeat.normal)
 
 	// cur: ensure room for one more chunk past the current length.
 	let bufLenC = emitLoadField(module, block: cur, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
@@ -7927,9 +7927,9 @@ end 'LineReadWait'
 //
 // Answers the block `readMore` must branch to; `refill` is where a pipe with bytes ready continues.
 function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMinter, readEnd ValueId, bytesOutPtr ValueId, refill IrBlock) returns IrBlock
-	var gate = module.addBlock(func, label: b"trypeek")
-	var ready = module.addBlock(func, label: b"trypeeked")
-	var nothing = module.addBlock(func, label: b"trynone")
+	var gate = module.addBlock(func, label: b"trypeek", heat: BlockHeat.normal)
+	var ready = module.addBlock(func, label: b"trypeeked", heat: BlockHeat.normal)
+	var nothing = module.addBlock(func, label: b"trynone", heat: BlockHeat.normal)
 
 	let peekOk = ids.mint()
 	module.appendOp(gate, op: StdOp.osPipePeek(peekOk, handleId: readEnd, availPtrId: bytesOutPtr))
@@ -7964,17 +7964,17 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var scanHdr = module.addBlock(func, label: b"scanhdr")
-	var scanCheck = module.addBlock(func, label: b"scancheck")
-	var scanInc = module.addBlock(func, label: b"scaninc")
-	var found = module.addBlock(func, label: b"found")
-	var noNewline = module.addBlock(func, label: b"nonewline")
-	var emitRemainder = module.addBlock(func, label: b"remainder")
-	var readMore = module.addBlock(func, label: b"readmore")
-	var growCheck = module.addBlock(func, label: b"growcheck")
-	var staleExit = module.addBlock(func, label: b"staleexit")
-	var badHandle = module.addBlock(func, label: b"badhandle")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scanHdr = module.addBlock(func, label: b"scanhdr", heat: BlockHeat.normal)
+	var scanCheck = module.addBlock(func, label: b"scancheck", heat: BlockHeat.normal)
+	var scanInc = module.addBlock(func, label: b"scaninc", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
+	var noNewline = module.addBlock(func, label: b"nonewline", heat: BlockHeat.normal)
+	var emitRemainder = module.addBlock(func, label: b"remainder", heat: BlockHeat.normal)
+	var readMore = module.addBlock(func, label: b"readmore", heat: BlockHeat.normal)
+	var growCheck = module.addBlock(func, label: b"growcheck", heat: BlockHeat.normal)
+	var staleExit = module.addBlock(func, label: b"staleexit", heat: BlockHeat.normal)
+	var badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	// ⭐ **THE PER-LINE CAP IS THE CALLER'S, NOT A CONSTANT.** `__Builtins.subprocessReadStdoutLine(h, maxBytes)`
 	// promises that *"lines longer than maxBytes are truncated and the remainder is delivered on the next
@@ -8105,15 +8105,15 @@ function buildSubpReadExact(module StdModule, streamState EnumLayout)
 	var func = IrFunction.createFromStd(SubpReadExactName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var handleCheck = module.addBlock(func, label: b"exacthandle")
-	var wantCheck = module.addBlock(func, label: b"exacthdr")
-	var takeWant = module.addBlock(func, label: b"exactwant")
-	var eofCheck = module.addBlock(func, label: b"exacteof")
-	var takeRest = module.addBlock(func, label: b"exactrest")
-	var needMore = module.addBlock(func, label: b"exactmore")
-	var staleExit = module.addBlock(func, label: b"exactstale")
-	var refused = module.addBlock(func, label: b"exactrefused")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var handleCheck = module.addBlock(func, label: b"exacthandle", heat: BlockHeat.normal)
+	var wantCheck = module.addBlock(func, label: b"exacthdr", heat: BlockHeat.normal)
+	var takeWant = module.addBlock(func, label: b"exactwant", heat: BlockHeat.normal)
+	var eofCheck = module.addBlock(func, label: b"exacteof", heat: BlockHeat.normal)
+	var takeRest = module.addBlock(func, label: b"exactrest", heat: BlockHeat.normal)
+	var needMore = module.addBlock(func, label: b"exactmore", heat: BlockHeat.normal)
+	var staleExit = module.addBlock(func, label: b"exactstale", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"exactrefused", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let handle = 0 as ValueId
@@ -8193,8 +8193,8 @@ function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase 
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var bad = module.addBlock(func, label: b"statenochild")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var bad = module.addBlock(func, label: b"statenochild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
@@ -8219,13 +8219,13 @@ function buildSubpWriteLine(module StdModule)
 	var func = IrFunction.createFromStd(SubpWriteLineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var growCheck = module.addBlock(func, label: b"growcheck")
-	var doGrow = module.addBlock(func, label: b"dogrow")
-	var doWrite = module.addBlock(func, label: b"dowrite")
-	var wrote = module.addBlock(func, label: b"wrote")
-	var failed = module.addBlock(func, label: b"failed")
-	var badHandle = module.addBlock(func, label: b"badhandle")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var growCheck = module.addBlock(func, label: b"growcheck", heat: BlockHeat.normal)
+	var doGrow = module.addBlock(func, label: b"dogrow", heat: BlockHeat.normal)
+	var doWrite = module.addBlock(func, label: b"dowrite", heat: BlockHeat.normal)
+	var wrote = module.addBlock(func, label: b"wrote", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"failed", heat: BlockHeat.normal)
+	var badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let handle = 0 as ValueId
@@ -8286,9 +8286,9 @@ function buildSubpCloseStdin(module StdModule)
 	var func = IrFunction.createFromStd(SubpCloseStdinName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doClose = module.addBlock(func, label: b"doclose")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doClose = module.addBlock(func, label: b"doclose", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
@@ -8321,8 +8321,8 @@ function buildSubpWait(module StdModule)
 	var func = IrFunction.createFromStd(SubpWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var badHandle = module.addBlock(func, label: b"badhandle")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
@@ -8355,11 +8355,11 @@ function buildSubpRelease(module StdModule)
 	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doRelease = module.addBlock(func, label: b"dorelease")
-	var closeStdin = module.addBlock(func, label: b"closestdin")
-	var afterStdin = module.addBlock(func, label: b"afterstdin")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doRelease = module.addBlock(func, label: b"dorelease", heat: BlockHeat.normal)
+	var closeStdin = module.addBlock(func, label: b"closestdin", heat: BlockHeat.normal)
+	var afterStdin = module.addBlock(func, label: b"afterstdin", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId

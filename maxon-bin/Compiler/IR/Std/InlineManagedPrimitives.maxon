@@ -170,6 +170,12 @@ typealias InlinedSiteCount = int(0 to u64.max)
 // the same reason — the one operation that would write to it is the one that replaces it.
 let sharedUnseededMinter = ValueMinter.create(0)
 
+// The error flag a call site defines: none for a `call`, the flag id for a `tryCall`.
+union ManagedCallFlag
+	none
+	flag(flagId ValueId)
+end 'ManagedCallFlag'
+
 // What a carve leaves behind: the block holding everything that followed the call, and the ref naming it.
 //
 // ⭐ **IT IS ITS OWN TYPE BECAUSE ONE EXPANSION HAS NO SLOW ARM (EC15).** A `__managed_get_unchecked` whose
@@ -237,8 +243,10 @@ end 'BoundedLoad'
 // Expand every inlinable `__ManagedMemory` primitive call in the module.
 export function inlineManagedPrimitives(project Project, module StdModule)
 	var expanded = 0 as InlinedSiteCount
-
-	for func in module.functions 'eachFunc'
+	// An INDEX loop: the function's position is the key its minted ids are filed under
+	// (`ValueOriginTable.recordDerivedRange`).
+	for funcIndex in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("inlineManagedPrimitives: functions.get OOB at {funcIndex}")
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `lowerMaxonToStd` skip on, stated the same way. Here it is purely cost:
 		// this pass registers no `.rdata` and so cannot move a golden through `nextStringId` the way those
@@ -248,7 +256,7 @@ export function inlineManagedPrimitives(project Project, module StdModule)
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
+		var inliner = PrimitiveInliner.create(module, func: func, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -281,10 +289,14 @@ type PrimitiveInliner
 	// three chain columns, and for the same measured reason.
 	var ids as ValueMinter
 	var seeded as bool
+	// The id the minter was seeded at — the first id of the site whose expansion seeded it.
+	var seedFloor as ValueId
+	var funcIndex as FuncIndex
+	var origins as ValueOriginTable
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
-		return Self{module: module, func: func, strides: strides, trivialElements: trivialElements, ids: sharedUnseededMinter, seeded: false, expanded: 0}
+	static function create(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
+		return Self{module: module, func: func, strides: strides, trivialElements: trivialElements, ids: sharedUnseededMinter, seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -293,10 +305,29 @@ type PrimitiveInliner
 			return self.ids
 		end 'already'
 
-		self.ids = ValueMinter.create(nextFreeValueId(self.module, func: self.func) as ParamCount)
+		self.seedFloor = nextFreeValueId(self.module, func: self.func)
+		self.ids = ValueMinter.create(self.seedFloor as ParamCount)
 		self.seeded = true
 		return self.ids
 	end 'valueIds'
+
+	// The first id a site's expansion can mint, read BEFORE the expansion: the minter's next id, or — for
+	// a minter not yet seeded, which the expansion may seed — the floor it will be seeded at, read back
+	// afterwards (`fileMintedSince`).
+	function mintedSoFar() returns ValueId
+		return self.ids.nextId() if self.seeded else 0
+	end 'mintedSoFar'
+
+	// File every id minted since `mintedSoFar` was read as derived from the site's own result, so an E5001
+	// naming one of them names the call the author wrote (`ValueOriginTable.recordDerivedRange`).
+	function fileMintedSince(before ValueId, wasSeeded bool, resultId ValueId)
+		if not self.seeded 'nothingMinted'
+			return
+		end 'nothingMinted'
+
+		let first = before if wasSeeded else self.seedFloor
+		self.origins.recordDerivedRange(self.funcIndex, first: first, bound: self.ids.nextId(), sourceId: resultId)
+	end 'fileMintedSince'
 
 	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT.** Every block an
 	// expansion appends — guard chain, slow arm, continuation — is appended to the very array this loop
@@ -382,7 +413,7 @@ type PrimitiveInliner
 				branch or
 				ret or
 				param then break 'op'
-			call(resultId, callee, args) then return self.expandPlainCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+			call(resultId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.none)
 			retVoid or
 				globalAddr or
 				loadIndirect or
@@ -390,8 +421,7 @@ type PrimitiveInliner
 				osAllocPages or
 				osWriteStdout or
 				rdataAddr then break 'op'
-			tryCall(resultId, errorFlagId, callee, args) then return self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
-
+			tryCall(resultId, errorFlagId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId))
 			// ⚠ Extended past `osThreadCpuTicks` when the allocator rung appended seven ops (memFill, the
 			// reserve/commit/decommit family, and the atomics). None is a CALL, so none can be a managed
 			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
@@ -500,6 +530,19 @@ type PrimitiveInliner
 	// `lowerRuntimeCall` / `appendThrowingCall`) — there is no tag left to match. The names compared
 	// against are the runtime's OWN exported constants and never literals, so this roster and the builders
 	// that emit those entries are one fact rather than two.
+	// One site's expansion, with every id it mints filed as derived from the site's result
+	// (`fileMintedSince`); the two call shapes differ only in the op, so the filing is done once here.
+	function expandFiled(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag) returns BlockRef
+		let wasSeeded = self.seeded
+		let before = self.mintedSoFar()
+		let next = match errorFlagId 'shape'
+			none gives self.expandPlainCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+			flag(flagId) gives self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: flagId)
+		end 'shape'
+		self.fileMintedSince(before, wasSeeded: wasSeeded, resultId: resultId)
+		return next
+	end 'expandFiled'
+
 	function expandPlainCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId) returns BlockRef
 		if callee.equals(ManagedCountName) 'count'
 			return self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
@@ -651,7 +694,7 @@ type PrimitiveInliner
 			return self.finish(frame.carve)
 		end 'oneKnownWidth'
 
-		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel)
+		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel, heat: BlockHeat.normal)
 		let value = self.valueIds().mint()
 
 		// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT
@@ -695,7 +738,7 @@ type PrimitiveInliner
 			let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
 			let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
 
-			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel)
+			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel, heat: BlockHeat.normal)
 			self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
 
 			// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
@@ -859,9 +902,9 @@ type PrimitiveInliner
 
 		// ⚠ Each ref is read the instant its block is minted: `registeredBlockRef` is O(1) exactly because it
 		// asks for the LAST-registered block, and the second `addBlock` is what ends that for the first.
-		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel)
+		var wordArm = self.module.addBlock(self.func, label: InlineWordLabel, heat: BlockHeat.normal)
 		let wordRef = registeredBlockRef(self.module, func: self.func, block: wordArm)
-		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel)
+		var byteArm = self.module.addBlock(self.func, label: InlineByteLabel, heat: BlockHeat.normal)
 		let byteRef = registeredBlockRef(self.module, func: self.func, block: byteArm)
 		self.dispatchOnStride(self.blockAt(blockRef), arr: arr, wordArm: wordArm.id, byteArm: byteArm.id, slow: slow)
 
@@ -924,7 +967,7 @@ type PrimitiveInliner
 	// into a fresh block the caller goes on emitting into. `cur` is TERMINATED here, so every body op the
 	// caller wanted in it must already be there.
 	function guard(cur IrBlock, refused ValueId, slow IrBlock, next ByteArray) returns IrBlock
-		let ok = self.module.addBlock(self.func, label: next)
+		let ok = self.module.addBlock(self.func, label: next, heat: BlockHeat.normal)
 		self.module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: slow.id, elseBlockId: ok.id))
 		return ok
 	end 'guard'
@@ -989,8 +1032,7 @@ type PrimitiveInliner
 	// precisely what ends that — so the order between them may not be left to argument evaluation.
 	function carveFrame(blockRef BlockRef, pos BlockOpPos, slowHeat BlockHeat) returns InlineFrame
 		let carve = self.carveContinuation(blockRef, pos: pos)
-		var slow = self.module.addBlock(self.func, label: ManagedSlowLabel)
-		slow.heat = slowHeat
+		let slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
 		return InlineFrame.create(carve, slow: slow)
 	end 'carveFrame'
 

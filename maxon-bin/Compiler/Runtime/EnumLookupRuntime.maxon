@@ -289,15 +289,15 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project
 	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let raw = 0 as ValueId
 
 	var cur = entry
 
 	for i in 0 upto layout.caseCount() 'eachCase'
-		var hit = module.addBlock(func, label: b"hit")
-		let nextTest = module.addBlock(func, label: b"casetest")
+		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitRawValueTestBranch(module, block: cur, raw: raw, layout: layout, caseIndex: i, comparesBytes: comparesBytes, globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitOkReturn(module, block: hit, value: emitConst(module, block: hit, value: layout.tagOfIndex(i), ids: ids), ids: ids)
 		cur = nextTest
@@ -357,7 +357,7 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 	let func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let name = 0 as ValueId
 
@@ -368,8 +368,8 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 			continue
 		end 'carriesAPayload'
 
-		var hit = module.addBlock(func, label: b"hit")
-		let nextTest = module.addBlock(func, label: b"casetest")
+		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitNameTestBranch(module, block: cur, name: name, caseName: layout.caseNameAt(i), globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, ids: ids)
 		cur = nextTest
@@ -406,12 +406,12 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	let func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: paramCount)
 	let name = 0 as ValueId
 
-	var build = module.addBlock(func, label: b"build")
-	var miss = module.addBlock(func, label: b"nocase")
+	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
+	var miss = module.addBlock(func, label: b"nocase", heat: BlockHeat.normal)
 	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
 
 	let box = emitBoxWithTag(module, block: build, layout: layout, caseIndex: caseIndex, project: project, ids: ids)

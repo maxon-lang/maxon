@@ -103,7 +103,7 @@ type ThreadScratch
 end 'ThreadScratch'
 
 // Thread every admissible join block in every function, in place.
-export function threadConstantBranches(module StdModule)
+export function threadConstantBranches(project Project, module StdModule)
 	var threaded = 0 as ThreadedSiteCount
 	var scratch = ThreadScratch.create()
 
@@ -111,7 +111,7 @@ export function threadConstantBranches(module StdModule)
 	// recorded as writing that same storage — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		threaded = threaded + threadConstantBranchesInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("threadConstantBranches: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+		threaded = threaded + threadConstantBranchesInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("threadConstantBranches: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, origins: project.valueOrigins, scratch: scratch)
 	end 'eachFunc'
 
 	let total = threaded
@@ -151,7 +151,7 @@ end 'ThreadCandidate'
 typealias ThreadCandidateArray = Array with ThreadCandidate
 
 // Thread one function. Returns how many join blocks it rewrote.
-function threadConstantBranchesInFunc(module StdModule, func IrFunction, scratch ThreadScratch) returns ThreadedSiteCount
+function threadConstantBranchesInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, scratch ThreadScratch) returns ThreadedSiteCount
 	collectThreadCandidates(module, func: func, scratch: scratch)
 	if scratch.candidates.count() == 0 'noCandidate'
 		// The common case, and the only cost most functions pay: one op read per block.
@@ -181,7 +181,7 @@ function threadConstantBranchesInFunc(module StdModule, func IrFunction, scratch
 
 	refuseEscapingReads(module, func: func, analysis: analysis, candidates: scratch.candidates, argOwner: argOwner)
 
-	return applyAdmitted(module, func: func, analysis: analysis, candidates: scratch.candidates, argOwner: argOwner, argSlot: argSlot)
+	return applyAdmitted(module, func: func, funcIndex: funcIndex, origins: origins, analysis: analysis, candidates: scratch.candidates, argOwner: argOwner, argSlot: argSlot)
 end 'threadConstantBranchesInFunc'
 
 // Every block with the SHAPE — block args, exactly one body op which is a `cmpImm` on one of them, and
@@ -461,7 +461,7 @@ end 'refuseIfOwnedReadEscapes'
 // Rewrite every admitted candidate, then the function-wide follow-ups the rewrites owe: the compares
 // come out of their blocks, an orphaned Y comes out of the function, the tested slots come off their
 // blocks and every incoming edge, and the constants nothing reads any more are retired.
-function applyAdmitted(module StdModule, func IrFunction, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, argSlot ValueIdArray) returns ThreadedSiteCount
+function applyAdmitted(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, argSlot ValueIdArray) returns ThreadedSiteCount
 	// Seeded ONCE, before any rewrite, past every id the function uses; each duplicated compare mints
 	// its result from here.
 	var minter = ValueMinter.create(nextFreeValueId(module, func: func) as ParamCount)
@@ -474,7 +474,7 @@ function applyAdmitted(module StdModule, func IrFunction, analysis FunctionAnaly
 			continue
 		end 'refused'
 
-		threadOne(module, func: func, analysis: analysis, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot, minter: minter)
+		threadOne(module, func: func, funcIndex: funcIndex, origins: origins, analysis: analysis, candidate: candidate, index: index, argOwner: argOwner, argSlot: argSlot, minter: minter)
 		doomedCompares.insert(candidate.condId)
 		applied = applied + 1
 	end 'eachCandidate'
@@ -503,7 +503,7 @@ end 'applyAdmitted'
 // The rewrite of one join block C and its predecessors. The tree's predecessor list is read AFTER
 // earlier rewrites in the same function and is still exact — see the header for why no rewrite
 // changes an admitted candidate's predecessors.
-function threadOne(module StdModule, func IrFunction, analysis FunctionAnalysis, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
+function threadOne(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, analysis FunctionAnalysis, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
 	var join = module.getBlock(candidate.blockRef)
 	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
@@ -518,7 +518,7 @@ function threadOne(module StdModule, func IrFunction, analysis FunctionAnalysis,
 			continue
 		end 'decidedAtTheEdge'
 
-		duplicateTestInto(module, pred: pred, candidate: candidate, index: index, incoming: incoming, argsToDropped: argsToDropped, droppedTakesArgs: droppedTakesArgs, argOwner: argOwner, argSlot: argSlot, minter: minter)
+		duplicateTestInto(module, pred: pred, candidate: candidate, index: index, incoming: incoming, argsToDropped: argsToDropped, droppedTakesArgs: droppedTakesArgs, argOwner: argOwner, argSlot: argSlot, funcIndex: funcIndex, origins: origins, minter: minter)
 	end 'eachPred'
 
 	// In place at its own index — `setTerminator` appends and would orphan the old op.
@@ -547,13 +547,14 @@ end 'edgeArgsTo'
 // Give one non-constant predecessor P the test: the compare on its own incoming value, a `condBranch`
 // in C's then/else orientation with the dropped target's arm pointing there and the other arm at C, and
 // a fresh edge column — the edge to C it had, plus the edge to the dropped target when that takes args.
-function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index CandidateIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
+function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index CandidateIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, funcIndex FuncIndex, origins ValueOriginTable, minter ValueMinter)
 	var predBlock = pred
 	let argsToJoin = soleEdge(predBlock).argIds
 
-	// The duplicated test answers to the statement the original compare did.
+	// The duplicated test answers to the statement the original compare did, and stands in for its result.
 	module.spans.current = module.spans.at(candidate.compareOpIdx)
 	let condId = minter.mint()
+	origins.recordDerived(funcIndex, valueId: condId, sourceId: candidate.condId)
 	module.appendOp(predBlock, op: StdOp.cmpImm(condId, lhs: incoming, imm: candidate.imm, pred: candidate.pred, operandType: candidate.operandType))
 
 	let keptIsThen = candidate.keptTarget == candidate.thenBlockId

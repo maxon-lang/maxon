@@ -106,7 +106,8 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
-| **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts |
+| **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
+| **Cold-call spilling** | ✅ `IrBlock.heat` + `ColdBlockRuns` (EC28) — a call in a cold block does not confine the hot path; save/reload around the cold run |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
@@ -1703,6 +1704,39 @@ sabotaged compiler then BUILT panicked inside its own CSE, spec-green**: a sabot
 restart from `.bootstrap`, and every rebuild must compile a real program, both now in the skill.
 Not yet: symbolic LOWER bounds, a `mul` step, an element VALUE as a bound source (nothing bounds
 `p[i]` by the length), the inclusive `to` counter (its `i + 1` may wrap).
+
+**`EC28` · Cold-call spilling — a call in a cold block pays for its own registers.** — ✅ **CLOSED
+2026-09-10 (round 6 of the fannkuch loop): fannkuch −4.2%, and the compiler's own self-compile
+−10.2%, the largest compile-time win of the loop.** The allocator had no notion of block coldness: a
+slow arm's `callDirect __managed_get` and the loop header that dominates it read the same loop depth,
+so every value live across the slow arm was confined to the five callee-saved GPRs and the rest was
+stored and reloaded INSIDE the loop for a call that never ran (`@advancePermutation`: 55 hot-path
+spill ops). Now `IrBlock.heat` (`normal`/`cold`) is minted by the passes that create exceptional arms
+(`InlineManagedPrimitives.slowArmHeat` when the fast arm serves the common case, `InsertRangeChecks`'
+panic block, `InlineLeaves`' panic redirect, the parser's `otherwise panic` handler), required by
+`IrModule.addBlock` and copied by every block copier through both backends and the allocator's worker
+unit; `TargetLiveness.confiningImplicitDefsOf` is the one predicate — an op in a cold block confines
+nothing except the one confinement a cold RUN keeps (a value read later in the run than a clobber it
+crosses); `ColdBlockRuns` files each cold block's runs (pre-moves, call, captures, and a captured
+value's own spill store) once, and the sweep, the colorer, the splitter's incremental forbid and the
+rewrite read that one table; the colorer plans one save per live caller-saved register before the run
+and one reload after it, spliced by `SsaDestruction` with the reload premise asserted. A full-pool
+overflow peaking in a cold block is relieved by a spill placed there (`blockIsOffTheHotPath`), and one
+whose values cross a cold run takes the forced bracket rather than E5001 (11 such peaks in the compiler
+itself). Loop unswitching became PRESSURE-AWARE (`allocatableGprCount(target)` minus a margin; a hoist
+plan over budget is refused — a 14-live-value loop the pre-round-4 compiler accepted had been refused
+by round 4's two hoisted loads), and every compiler-minted value carries a derived origin so a refusal
+names a span (RULE 3). ⛔ **Two independent reviews found real defects before landing**: a panic on a
+loop at the pool's edge (the cold arm's own two temporaries with no relief route), and a WRONG ANSWER
+where the splitter's store landed between a `tryCall`'s two captures so the flag capture read the
+restored register (a probe printed 2263 for 2857) — both are cases now, and a pre-existing splitter
+convergence hole at terminator peaks (a segfaulting runaway) fell out of the same work. Sabotage (the
+reload point re-storing instead of restoring): exactly the six controls whose cold arm runs answer
+wrong. Timed A/B (control from the round-5 commit, interleaved, n=11): **2,862 → 2,742 ms**; n=12
+**38,997 → 36,863 ms (ratio to C 1.89 → 1.78)**; census ops 2175 → 2518 (brackets in every cold
+arm), `mov` 213 → 248; the compiler's binary +11% for the same reason; self-compile **44,871 →
+40,313 ms**. The flip loop's fast path is now within a few instructions of clang's; what remains
+is the loop overhead itself (rotation), the phi copies, and `advancePermutation`'s outer structure.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

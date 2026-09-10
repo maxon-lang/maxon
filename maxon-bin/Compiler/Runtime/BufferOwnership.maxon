@@ -541,9 +541,9 @@ export function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFuncti
 
 	// `cur` dominates all three, so the one `capacity` load serves every arm — the same dominance argument
 	// `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
-	var checkRdata = module.addBlock(func, label: b"vouchrdata")
-	var checkInline = module.addBlock(func, label: b"vouchinline")
-	var checkImmortal = module.addBlock(func, label: b"vouchimmortal")
+	var checkRdata = module.addBlock(func, label: b"vouchrdata", heat: BlockHeat.normal)
+	var checkInline = module.addBlock(func, label: b"vouchinline", heat: BlockHeat.normal)
+	var checkImmortal = module.addBlock(func, label: b"vouchimmortal", heat: BlockHeat.normal)
 
 	let hasSpareSlot = emitCmp(module, block: cur, a: capacity, b: length, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(hasSpareSlot, thenBlockId: vouched.id, elseBlockId: checkRdata.id))
@@ -602,8 +602,8 @@ end 'emitRouteOnCapacitySentinel'
 // base is read before the record is republished and spent only after the copy — so a fused helper would
 // serve some call sites and quietly invite the ones that must not fuse them to do so.
 export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var viewBase = module.addBlock(func, label: b"vbase")
-	var ownBase = module.addBlock(func, label: b"obase")
+	var viewBase = module.addBlock(func, label: b"vbase", heat: BlockHeat.normal)
+	var ownBase = module.addBlock(func, label: b"obase", heat: BlockHeat.normal)
 
 	let notOwned = emitBufferNotOwned(module, block: cur, record: record, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
@@ -635,8 +635,8 @@ end 'emitOwedAllocationBase'
 // a `__mm_free` would silently hand a live allocation back and become a use-after-free the day a free
 // list exists. A new non-owned-buffer kind must be taught to the drop path, not only to the write check.
 export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
-	var step = module.addBlock(func, label: b"rcstep")
-	let cont = module.addBlock(func, label: b"rccont")
+	var step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: NoOwedAllocation, ids: ids)
 	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
@@ -703,11 +703,11 @@ end 'emitReleaseOwedBase'
 // record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
 // right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
 export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var owedJoin = module.addBlock(func, label: b"hostowed")
-	var separate = module.addBlock(func, label: b"hostsep")
-	var noSeparate = module.addBlock(func, label: b"hostnosep")
-	var inlineBytes = module.addBlock(func, label: b"hostinline")
-	var nothingHosts = module.addBlock(func, label: b"hostnone")
+	var owedJoin = module.addBlock(func, label: b"hostowed", heat: BlockHeat.normal)
+	var separate = module.addBlock(func, label: b"hostsep", heat: BlockHeat.normal)
+	var noSeparate = module.addBlock(func, label: b"hostnosep", heat: BlockHeat.normal)
+	var inlineBytes = module.addBlock(func, label: b"hostinline", heat: BlockHeat.normal)
+	var nothingHosts = module.addBlock(func, label: b"hostnone", heat: BlockHeat.normal)
 
 	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
 
@@ -805,8 +805,8 @@ export function buildMmCowDetach(module StdModule)
 	var func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var baseJoin = module.addBlock(func, label: b"basejoin")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let record = 0 as ValueId

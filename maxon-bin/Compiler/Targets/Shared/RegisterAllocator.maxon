@@ -224,31 +224,46 @@ export type ReuseCopyPlan
 	end 'clear'
 end 'ReuseCopyPlan'
 
-// ⭐ **THE COLD-CALL BRACKETS ONE COLOURING PASS PLANNED** — for each call in a cold block
-// (`BlockHeat.cold`), the caller-saved registers holding values live across it, each with the frame
-// slot that carries it over the call. The rewrite splices `storeSlotReg slot, reg` before the call and
-// `loadRegSlot reg, slot` after the call's result captures (`SsaDestruction.colorAndDropSelfMoves`).
-// Such a call confines nothing (`confiningImplicitDefsOf`), which is what lets the hot path around it
-// colour into the caller-saved half of the pool.
+// ⭐ **THE COLD-RUN BRACKETS ONE COLOURING PASS PLANNED.** In a cold block (`BlockHeat.cold`) no op
+// confines the values live across it (`opClobberMask`); instead every register a value holds across an
+// op that writes it is SAVED before and RELOADED after, and the unit of that is a RUN, not an op:
 //
-// A bracket names REGISTERS, not values: what it preserves is a register's contents over one call,
+//   THE REGION RULE. A run is a maximal sequence of clobbering ops — argument pre-moves, the call, an
+//   `idiv` — closed by the captures that read its call's answer and the spill stores of what they
+//   captured; the runs of a cold block are computed
+//   once, by one walk, and read by every consumer (`ColdBlockRuns`). The bracket saves, before the
+//   run's FIRST op, every register that a value live at the run's start still holds at some run op that
+//   writes it, and reloads them all after the run's LAST op — one save and one reload per register per
+//   run, never a pair per op. A pre-move's own write is therefore paid exactly as the call's is, so
+//   nothing in a run confines the hot path around it.
+//
+//   What the bracket cannot cover, liveness confines instead: a value the run's later ops READ after a
+//   clobber it is live across — a survivor read by a pre-move after an earlier pre-move — which must not
+//   sit in the clobbered register, since its read would see the argument (`ColdRunSweep`). And an op
+//   that DEFINES A VIRTUAL is no run op at all: a value born inside a run would have no save point, so
+//   such an op — a float negation through an xmm scratch, an arm64 atomic through x16/x17 — keeps its
+//   implicit scratch confining exactly as in a normal block (`coldRunOpKind`).
+//
+// A bracket names REGISTERS, not values: what it preserves is a register's contents over one run,
 // whichever value holds it, so the colorer records the held mask and looks no value up. A save slot is
 // therefore one per register for the whole function — two brackets never overlap (each is its stores,
-// the call, its loads, with nothing of another bracket between), so one slot per register serves every
-// cold call, and the frame grows by at most the caller-saved file, never by the number of cold sites.
+// the run, its loads, with nothing of another bracket between), so one slot per register serves every
+// cold run, and the frame grows by at most the register file, never by the number of cold sites.
 //
-// KEYED BY THE CALL'S LAYOUT SEQUENCE like `ReuseCopyPlan`, but read back with a CURSOR rather than a
-// dense column: the colorer records in layout order and the rewrite walks in the same order, so the
-// next bracket is always the next entry. Cold calls are sparse, and a column the length of the function
-// would be paid by every function for the few that have any — which is also why the per-register slot
-// tables are sized by a pass's FIRST mint rather than at `beginPass`: most functions never mint one.
+// KEYED BY THE RUN'S LAYOUT SEQUENCES like `ReuseCopyPlan` — the first op's for the saves, the last
+// op's for the reloads — but read back with a CURSOR rather than a dense column: the colorer records in
+// layout order and the rewrite walks in the same order, so the next bracket is always the next entry.
+// Cold runs are sparse, and a column the length of the function would be paid by every function for the
+// few that have any — which is also why the per-register slot tables are sized by a pass's FIRST mint
+// rather than at `beginPass`: most functions never mint one.
 //
 // The rewrite's read (`takeAt`) answers a bool and leaves the taken bracket OPEN for `openEntryCount` /
-// `openRegAt` / `openSlotAt` rather than returning a union: a payload-bearing union heap-boxes every
-// case including the payload-free one (`CseLookup`), and `takeAt` is asked at every body op of every
-// function.
+// `openRegAt` / `openSlotAt` / `openReloadSeq` rather than returning a union: a payload-bearing union
+// heap-boxes every case including the payload-free one (`CseLookup`), and `takeAt` is asked at every
+// body op of every function.
 export type ColdCallBracketPlan
-	var seqs as OpSeqArray
+	var saveSeqs as OpSeqArray
+	var reloadSeqs as OpSeqArray
 	// CSR over `regs`/`slots`: bracket k's entries are `[ends[k-1], ends[k])`, the first's from 0.
 	var ends as ColumnLengthColumn
 	var regs as RegNumColumn
@@ -258,18 +273,19 @@ export type ColdCallBracketPlan
 	var slotOfReg as SpillSlotArray
 	var regHasSlot as BoolArray
 	var nextSlot as SpillSlot
-	// The rewrite's position in `seqs`: the bracket at `cursor - 1` is the one last taken.
+	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
 	var cursor as ColumnLength
 
 	export static function create() returns ColdCallBracketPlan
-		return Self{seqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), slots: SpillSlotArray.create(), slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
+		return Self{saveSeqs: OpSeqArray.create(), reloadSeqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), slots: SpillSlotArray.create(), slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
 	end 'create'
 
 	// Forget every bracket and every slot — a pass that ended with a stuck value is discarded whole — and
 	// take the frame's current floor, which a repair between two passes may have raised. Every column
 	// keeps its capacity, so a pass after the first allocates nothing here.
 	export function beginPass(frameSlotCount SpillSlot)
-		self.seqs.clear()
+		self.saveSeqs.clear()
+		self.reloadSeqs.clear()
 		self.ends.clear()
 		self.regs.clear()
 		self.slots.clear()
@@ -279,14 +295,19 @@ export type ColdCallBracketPlan
 		self.cursor = 0
 	end 'beginPass'
 
-	// Record the bracket for the call at layout sequence `seq`: every register in `held`. Sequences arrive
-	// increasing, which is what the rewrite's cursor rests on.
-	export function record(seq OpSeq, held RegMask)
-		if self.seqs.count() > 0 and seq <= (try self.seqs.get(self.seqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: seqs.get OOB on the entry just counted")) 'outOfOrder'
-			panic("ColdCallBracketPlan.record: a bracket at sequence {seq} after one at a later sequence — the colorer records in layout order, which is the order the rewrite reads back")
+	// Record the bracket of the run spanning layout sequences `[saveSeq, reloadSeq]`: every register in
+	// `held`. Runs arrive in increasing order and never overlap, which is what the rewrite's cursor rests
+	// on.
+	export function record(saveSeq OpSeq, reloadSeq OpSeq, held RegMask)
+		if self.saveSeqs.count() > 0 and saveSeq <= (try self.reloadSeqs.get(self.reloadSeqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: reloadSeqs.get OOB on the entry just counted")) 'outOfOrder'
+			panic("ColdCallBracketPlan.record: a run starting at sequence {saveSeq} inside or before the run last recorded — the colorer records runs in layout order and they never overlap")
 		end 'outOfOrder'
+		if reloadSeq < saveSeq 'inverted'
+			panic("ColdCallBracketPlan.record: a run whose reload sequence {reloadSeq} precedes its save sequence {saveSeq}")
+		end 'inverted'
 
-		self.seqs.push(seq)
+		self.saveSeqs.push(saveSeq)
+		self.reloadSeqs.push(reloadSeq)
 		var remaining = held
 		while remaining != 0 'eachHeldRegister'
 			let regNum = regMaskLowest(remaining)
@@ -320,14 +341,14 @@ export type ColdCallBracketPlan
 		return self.nextSlot
 	end 'frameSlotCount'
 
-	// The rewrite's read: is the next bracket the one at layout sequence `seq`? When it is, it becomes
+	// The rewrite's read: does the next run start at layout sequence `seq`? When it does, it becomes
 	// the open bracket and the cursor moves past it.
 	export function takeAt(seq OpSeq) returns bool
-		if self.cursor >= (self.seqs.count() as ColumnLength) 'pastTheLastBracket'
+		if self.cursor >= (self.saveSeqs.count() as ColumnLength) 'pastTheLastBracket'
 			return false
 		end 'pastTheLastBracket'
 
-		let next = try self.seqs.get(self.cursor) otherwise panic("ColdCallBracketPlan.takeAt: seqs.get OOB at cursor {self.cursor}")
+		let next = try self.saveSeqs.get(self.cursor) otherwise panic("ColdCallBracketPlan.takeAt: saveSeqs.get OOB at cursor {self.cursor}")
 		if next != seq 'notThisOp'
 			return false
 		end 'notThisOp'
@@ -336,13 +357,18 @@ export type ColdCallBracketPlan
 		return true
 	end 'takeAt'
 
-	// A bracket the rewrite never reached would be a save and a reload silently missing from a cold call,
+	// A bracket the rewrite never reached would be a save and a reload silently missing from a cold run,
 	// so the walk that consumes the plan asks this when it is done.
 	export function requireAllTaken()
-		if self.cursor != (self.seqs.count() as ColumnLength) 'bracketsLeftOver'
-			panic("ColdCallBracketPlan.requireAllTaken: {self.seqs.count() - self.cursor} bracket(s) were planned at layout sequences the rewrite never visited — the colorer's numbering and the rewrite's have drifted")
+		if self.cursor != (self.saveSeqs.count() as ColumnLength) 'bracketsLeftOver'
+			panic("ColdCallBracketPlan.requireAllTaken: {self.saveSeqs.count() - self.cursor} bracket(s) were planned at layout sequences the rewrite never visited — the colorer's numbering and the rewrite's have drifted")
 		end 'bracketsLeftOver'
 	end 'requireAllTaken'
+
+	// The layout sequence of the open run's last op — the op its reloads land after.
+	export function openReloadSeq() returns OpSeq
+		return try self.reloadSeqs.get(self.openIndex()) otherwise panic("ColdCallBracketPlan.openReloadSeq: reloadSeqs.get OOB at the open bracket")
+	end 'openReloadSeq'
 
 	export function openEntryCount() returns ColumnLength
 		let index = self.openIndex()
@@ -371,7 +397,7 @@ export type ColdCallBracketPlan
 	end 'entryStart'
 
 	function entryEnd(index ColumnLength) returns ColumnLength
-		return try self.ends.get(index) otherwise panic("ColdCallBracketPlan.entryEnd: no bracket {index} of {self.seqs.count()}")
+		return try self.ends.get(index) otherwise panic("ColdCallBracketPlan.entryEnd: no bracket {index} of {self.saveSeqs.count()}")
 	end 'entryEnd'
 end 'ColdCallBracketPlan'
 
@@ -431,7 +457,9 @@ module type RegAllocCounters
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
-
+	// Full-pool peaks relieved by the forced bracket because their values reach a cold run
+	// (`SplitDriver.relievePressure`'s `forcedRatherThanRefused`).
+	export var forcedInsteadOfRefused as EventCount
 	// Values the COLORER could not place, split by one of the two cures. THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure - every value they
 	// relieve sat at a point Hall calls FEASIBLE - so both are counted beside `forcedSpills` rather than
@@ -446,7 +474,7 @@ module type RegAllocCounters
 	export var repairedByEviction as EventCount
 
 	export static function create() returns RegAllocCounters
-		return Self{copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, repairedByWidening: 0, repairedByEviction: 0}
+		return Self{copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, forcedInsteadOfRefused: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
 	export function noteRegisterUse(regNum RegNum)
@@ -506,7 +534,9 @@ export type RegAllocStats
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
-
+	// Full-pool peaks relieved by the forced bracket because their values reach a cold run
+	// (`SplitDriver.relievePressure`'s `forcedRatherThanRefused`).
+	export var forcedInsteadOfRefused as EventCount
 	// Values the COLORER could not place, split by one of the two cures. ⭐⭐ THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure — every value they
 	// relieve sat at a point Hall calls FEASIBLE — so both are counted beside `forcedSpills` rather than
@@ -530,8 +560,7 @@ export type RegAllocStats
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
 		end 'eachClass'
-
-		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, repairedByWidening: 0, repairedByEviction: 0}
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, forcedInsteadOfRefused: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
 	// Scalars, not a PhaseCost — see CompileTimings.addPhaseCost. These are the per-function
@@ -585,6 +614,7 @@ export type RegAllocStats
 		self.reloadsInserted = self.reloadsInserted + counters.reloadsInserted
 		self.rematerialized = self.rematerialized + counters.rematerialized
 		self.forcedSpills = self.forcedSpills + counters.forcedSpills
+		self.forcedInsteadOfRefused = self.forcedInsteadOfRefused + counters.forcedInsteadOfRefused
 		self.repairedByWidening = self.repairedByWidening + counters.repairedByWidening
 		self.repairedByEviction = self.repairedByEviction + counters.repairedByEviction
 	end 'merge'
@@ -626,6 +656,12 @@ end 'allocatablePool'
 // EXPORTED for the same reason `calleeSavedMask` is: `Testing/ScaleCorpus` derives its register-pressure
 // knob widths from the allocator's own masks rather than writing today's numbers down, so that the next
 // move of this pool RETUNES those knobs instead of blinding them.
+// The GPRs the allocator can hand out on `target` — what a Std pass budgets a loop's live-across set
+// against (`unswitchInvariantGuards`), read off the pool itself so the two cannot disagree.
+export function allocatableGprCount(target Target) returns RegCount
+	return regMaskPopcount(poolOfClass(allocatablePool(target), class: RegClass.gpr, file: registerFileFor(target)))
+end 'allocatableGprCount'
+
 export function x64AllocatablePool() returns RegMask
 	return callerSavedMask() or calleeSavedMask()
 end 'x64AllocatablePool'
@@ -1999,12 +2035,13 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		collectBlockOps(block, out: ordered)
 		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
 
-		let coldBlock = block.heat == BlockHeat.cold
+		let runs = liveness.coldRuns.of(local)
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
-			if coldBlock 'mayHoldAColdCall'
-				recordColdCallBracket(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, callerSaved: callerSaved, brackets: brackets)
-			end 'mayHoldAColdCall'
+			match runs.runAt(pos as BlockOpPos) 'run'
+				none then break 'run'
+				run(id) then recordColdRunBracketIfFirst(module, ordered: ordered, runs: runs, id: id, pos: pos as BlockOpPos, blockBaseSeq: blockBaseSeq, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, brackets: brackets, buf: buf)
+			end 'run'
 			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, buf: buf, reuseCopies: reuseCopies, stuck: stuck)
 		end 'eachOp'
 
@@ -2014,25 +2051,32 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	return alloc
 end 'colorFunction'
 
-// At a call in a cold block, plan its bracket: every caller-saved register a value holds ACROSS the
-// call. `inUse` is the registers held before the op; a value dying at the call (a `callReg`'s callee) is
-// not live across it, and a call defines no virtual value of its own, so what remains is exactly the
-// live-across set — the same set the sweep left unconfined (`confiningImplicitDefsOf`). A register is
-// bracketed whichever value holds it, so no value is looked up; a dead phi's register, held for the
-// whole block, is bracketed with the rest, which costs a store and a load in a block that seldom runs.
-function recordColdCallBracket(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq OpSeq, inUse RegMask, deaths BlockDeaths, alloc Allocation, liveness LivenessResult, callerSaved RegMask, brackets ColdCallBracketPlan)
-	let op = try module.ops.get(opIdx) otherwise panic("recordColdCallBracket: opIdx not in module.ops")
-	if not liveness.opFacts.isCallOf(op) 'notACall'
+// At a run's first op, plan the run's bracket (`ColdCallBracketPlan` states the region rule): every
+// register that a value holds at the run's start and that some run op writes while that value is still
+// live — `inUse` less the registers of the values dead by that op. A register is bracketed whichever
+// value holds it, so no value is looked up; a dead phi's register, held for the whole block, is
+// bracketed with the rest, which costs a store and a load in a block that seldom runs.
+function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, runs ColdBlockRuns, id ColdRunId, pos BlockOpPos, blockBaseSeq OpSeq, inUse RegMask, deaths BlockDeaths, alloc Allocation, liveness LivenessResult, brackets ColdCallBracketPlan, buf OperandList)
+	if pos != runs.firstOf(id) 'notTheFirstOp'
 		return
-	end 'notACall'
+	end 'notTheFirstOp'
 
-	let held = (inUse and not deaths.dyingRegsAt(pos, alloc: alloc)) and callerSaved
+	let last = runs.lastOf(id)
+	var held = 0 as RegMask
+	var dead = 0 as RegMask
+	for k in pos upto last + 1 'eachRunOp'
+		let op = try module.ops.get(try ordered.get(k) otherwise panic("recordColdRunBracketIfFirst: ordered.get OOB at {k}")) otherwise panic("recordColdRunBracketIfFirst: op at position {k} not in module.ops")
+		targetOpOperands(op, buf: buf)
+		dead = dead or deaths.dyingRegsAt(k, alloc: alloc)
+		held = held or ((inUse and not dead) and rawClobberMask(op, buf: buf, opFacts: liveness.opFacts))
+	end 'eachRunOp'
+
 	if held == 0 'nothingToPreserve'
 		return
 	end 'nothingToPreserve'
 
-	brackets.record(seq, held: held)
-end 'recordColdCallBracket'
+	brackets.record(blockBaseSeq + (pos as OpSeq), reloadSeq: blockBaseSeq + (last as OpSeq), held: held)
+end 'recordColdRunBracketIfFirst'
 
 // The in-use mask at a block's entry: every non-phi live-in value occupies its
 // color. A live-in value must already be colored (its def dominates) — the
@@ -3003,7 +3047,7 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 	end 'eachClass'
 
 	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
-	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs by widening={stats.repairedByWidening} and by eviction={stats.repairedByEviction}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
+	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs by widening={stats.repairedByWidening} and by eviction={stats.repairedByEviction}, and full-pool peaks across a cold run={stats.forcedInsteadOfRefused}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 
 	// Iterated, not hand-listed: a hand-written line silently omits any phase added

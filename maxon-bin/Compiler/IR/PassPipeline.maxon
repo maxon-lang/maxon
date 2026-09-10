@@ -589,13 +589,13 @@ export type PassPipeline
 			// which divisions live there and why they are worth a second run.
 			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
-			threadConstantBranches then threadConstantBranches(self.stdModule)
+			threadConstantBranches then threadConstantBranches(self.project, module: self.stdModule)
 			refineValueRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.everyFunction)
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
-			unswitchInvariantGuards then self.unswitchRewrote = unswitchInvariantGuards(self.stdModule)
+			unswitchInvariantGuards then self.unswitchRewrote = unswitchInvariantGuards(self.project, module: self.stdModule)
 			refineVersionedRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.rewrittenBy(self.unswitchRewrote))
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)

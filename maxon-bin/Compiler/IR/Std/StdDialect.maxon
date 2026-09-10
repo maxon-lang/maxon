@@ -4520,24 +4520,33 @@ end 'collectStdOpUses'
 // The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
 // carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the
 // maximum def id is the maximum id, and a use can only name an id that some def already introduced.
+//
+// It walks each block's body and terminator itself — exactly the ops `IrModule.liveOpIndices` lists —
+// rather than materializing that list: it is asked once per function by both target lowerings, and an
+// array per function would be an allocation the scale ladder sees.
 export function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
-
+	var def = StdDefinedValues.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
 
 		for arg in block.blockArgs 'eachArg'
 			maxId = maxValueId(maxId, other: arg.valueId)
 		end 'eachArg'
+		for opIdx in block.opRefs 'eachOp'
+			maxId = maxDefinedIdAfter(module, opIdx: opIdx, maxId: maxId, def: def)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'terminated'
+			maxId = maxDefinedIdAfter(module, opIdx: block.terminatorIndex(), maxId: maxId, def: def)
+		end 'terminated'
 	end 'eachBlock'
-	var def = StdDefinedValues.create()
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops"), def: def)
-		maxId = def.maxDefinedId(maxId)
-	end 'eachOp'
-
 	return maxId + 1
 end 'nextFreeValueId'
+
+function maxDefinedIdAfter(module StdModule, opIdx OpIndex, maxId ValueId, def StdDefinedValues) returns ValueId
+	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("nextFreeValueId: op index {opIdx} not in module.ops"), def: def)
+	return def.maxDefinedId(maxId)
+end 'maxDefinedIdAfter'
 
 function maxValueId(a ValueId, other ValueId) returns ValueId
 	return a if a >= other else other

@@ -129,6 +129,26 @@ let MaxGuardsPerLoop = 32 as GuardCount
 // Hoisted values the copy reads are live across its whole body; past this many the trade is a
 // callee-saved register or a forced reload per use against one record load per use.
 let HoistedValueBudget = 6 as HoistedValueCount
+
+// Registers the live-across estimate cannot see a loop needing — an address, a compare's input, a
+// reuse copy — kept free of the budget so a loop that fits on paper fits in the allocator.
+let InLoopTemporaryMargin = 3 as RegCount
+
+// What a loop's live-across set is measured against: the target's allocatable GPRs less the margin, or
+// nothing on a stack machine, where a hoisted value holds no register.
+union HoistPressureBudget
+	unbounded
+	registers(count RegCount)
+end 'HoistPressureBudget'
+
+function hoistPressureBudgetFor(target Target) returns HoistPressureBudget
+	return match target.cpu 'cpu'
+		x64 or
+			arm64 gives HoistPressureBudget.registers(allocatableGprCount(target) - InLoopTemporaryMargin)
+		wasm32 gives HoistPressureBudget.unbounded
+	end 'cpu'
+end 'hoistPressureBudgetFor'
+
 let UnswitchTestLabel = b"__us_test"
 let UnswitchSlowLabel = b"__us_slow"
 
@@ -151,6 +171,7 @@ enum UnswitchRefusal
 	escapingOpResult
 	escapingUseNotUnderOneExit
 	hoistBudgetExceeded
+	pressureBudgetExceeded
 end 'UnswitchRefusal'
 
 function refusalText(reason UnswitchRefusal) returns String
@@ -172,20 +193,22 @@ function refusalText(reason UnswitchRefusal) returns String
 		escapingOpResult gives "an op result defined in the loop is read after it"
 		escapingUseNotUnderOneExit gives "no exit block with only loop predecessors dominates every read of a loop value"
 		hoistBudgetExceeded gives "the copy would read more hoisted values than the budget"
+		pressureBudgetExceeded gives "its live-across set plus the hoisted values would be over the register budget"
 	end 'r'
 end 'refusalText'
 
 // Version every admissible natural loop in every function, in place. Answers which functions it rewrote.
-export function unswitchInvariantGuards(module StdModule) returns RewrittenFunctions
+export function unswitchInvariantGuards(project Project, module StdModule) returns RewrittenFunctions
 	var rewrittenLoops = 0 as RewrittenLoopCount
 	var scratch = UnswitchScratch.create()
 	var rewritten = RewrittenFunctions.sized(module.funcCount())
+	let budget = hoistPressureBudgetFor(project.target)
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		let rewrittenHere = unswitchInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("unswitchInvariantGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
+		let rewrittenHere = unswitchInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("unswitchInvariantGuards: fnIndex {fnIndex} is below module.functions.count()"), funcIndex: fnIndex, origins: project.valueOrigins, budget: budget, scratch: scratch)
 
 		if rewrittenHere == 0 'leftAlone'
 			continue
@@ -206,7 +229,7 @@ end 'unswitchInvariantGuards'
 // ══════════════════════════════════════════════════════════════════════════
 
 // Rewrite every admissible loop of one function — versioned, or hoisted in place. Returns how many.
-function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScratch) returns RewrittenLoopCount
+function unswitchInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, budget HoistPressureBudget, scratch UnswitchScratch) returns RewrittenLoopCount
 	let blockCount = func.blockRefs.count()
 
 	if blockCount < 2 or not holdsAManagedCallee(module, func: func, scratch: scratch) 'nothingToVersion'
@@ -234,7 +257,7 @@ function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScrat
 		collectNaturalLoop(analysis.tree.pred, header: header as CsrIndex, edges: backEdges, nodeCount: blockCount as CsrIndex, into: scratch.members)
 
 		var plan = UnswitchPlan.create(func.name, header: header, members: scratch.members.blocks)
-		if analyzeLoop(module, func: func, analysis: analysis, plan: plan, scratch: scratch) 'admitted'
+		if analyzeLoop(module, func: func, analysis: analysis, plan: plan, budget: budget, scratch: scratch) 'admitted'
 			analysis.markVersioned(plan)
 			plans.push(plan)
 		end 'admitted'
@@ -246,7 +269,7 @@ function unswitchInFunc(module StdModule, func IrFunction, scratch UnswitchScrat
 
 	// Seeded ONCE, past every id the function uses; every copy, chain value and exit phi mints from here.
 	var minter = ValueMinter.create(analysis.valueBound as ParamCount)
-	var columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId)
+	var columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, funcIndex: funcIndex, origins: origins)
 
 	for index in 0 upto plans.count() 'eachExitPhi'
 		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
@@ -527,7 +550,7 @@ let NoGuardAtBlock = 0 as GuardCount
 
 // Decide one loop, filling `plan`. Every clause that refuses does so through `refuse`, so the tally
 // and the trace name it.
-function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
 	if analysis.isInsideAVersionedLoop(plan.header) 'nested'
 		return refuse(plan, reason: UnswitchRefusal.insideAVersionedLoop, scratch: scratch)
 	end 'nested'
@@ -590,7 +613,7 @@ function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunctio
 		return refuse(plan, reason: UnswitchRefusal.noInvariantGuard, scratch: scratch)
 	end 'nothingToDo'
 
-	return hoistFitsBudget(module, func: func, plan: plan, scratch: scratch)
+	return hoistFitsBudget(module, func: func, plan: plan, budget: budget, scratch: scratch)
 end 'analyzeLoop'
 
 // Count and trace one refusal. Answers `false` so a clause can `return refuse(…)`.
@@ -1168,7 +1191,7 @@ end 'numberHoistedOp'
 
 // How many hoisted values the copy still reads — through an op that stays, a terminator that is not
 // folded, or an edge arg. Each is live across the copy's whole body.
-function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
+function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
 	scratch.readHoisted.clear()
 
 	for position in plan.walkOrder 'eachBlock'
@@ -1200,8 +1223,70 @@ function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, s
 		return refuse(plan, reason: UnswitchRefusal.hoistBudgetExceeded, scratch: scratch)
 	end 'overBudget'
 
+	if not fitsPressureBudget(module, func: func, plan: plan, budget: budget, scratch: scratch) 'overPressure'
+		return refuse(plan, reason: UnswitchRefusal.pressureBudgetExceeded, scratch: scratch)
+	end 'overPressure'
+
 	return true
 end 'hoistFitsBudget'
+
+// Register-pressure-aware hoisting: every hoisted value the copy reads is live across the whole loop on
+// top of what the loop already holds across an iteration, and a set past the pool is a hot spill or an
+// E5001 the loop did not have before. Admitted only while the estimate plus the hoisted count fits.
+function fitsPressureBudget(module StdModule, func IrFunction, plan UnswitchPlan, budget HoistPressureBudget, scratch UnswitchScratch) returns bool
+	return match budget 'b'
+		unbounded gives true
+		registers(count) gives estimateLiveAcross(module, func: func, plan: plan, scratch: scratch) + (scratch.readHoisted.insertedIdCount() as RegCount) <= count
+	end 'b'
+end 'fitsPressureBudget'
+
+// The loop's live-across set as the allocator will see it: the header's block args (the values the loop
+// carries) plus every value defined outside the loop and read inside it, each counted once.
+function estimateLiveAcross(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns RegCount
+	scratch.liveAcross.beginLoop()
+	var count = module.blockAtPosition(func, position: plan.header).blockArgs.count() as RegCount
+
+	for position in plan.members 'eachMember'
+		let block = module.blockAtPosition(func, position: position)
+		for opIdx in block.opRefs 'eachOp'
+			count = count + outsideReadsOf(module, opIdx: opIdx, scratch: scratch)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			count = count + outsideReadsOf(module, opIdx: block.terminatorIndex(), scratch: scratch)
+		end 'terminated'
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				count = count + outsideReadOf(argId, scratch: scratch)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachMember'
+
+	return count
+end 'estimateLiveAcross'
+
+// How many of one op's reads name a value defined outside the loop that the estimate has not counted yet.
+function outsideReadsOf(module StdModule, opIdx OpIndex, scratch UnswitchScratch) returns RegCount
+	scratch.reads.clear()
+	collectStdOpUses(module.getOp(opIdx), referenced: scratch.reads)
+
+	var count = 0 as RegCount
+	for i in 0 upto scratch.reads.insertedIdCount() 'eachRead'
+		count = count + outsideReadOf(scratch.reads.insertedIdAt(i), scratch: scratch)
+	end 'eachRead'
+	return count
+end 'outsideReadsOf'
+
+// 1 the first time `valueId` is met as a read of a value defined outside the loop, 0 otherwise.
+function outsideReadOf(valueId ValueId, scratch UnswitchScratch) returns RegCount
+	if scratch.definedInLoop.contains(valueId) or scratch.liveAcross.contains(valueId) 'notANewOutsideValue'
+		return 0
+	end 'notANewOutsideValue'
+
+	scratch.liveAcross.insert(valueId)
+	return 1
+end 'outsideReadOf'
 
 function countHoistedReads(module StdModule, opIdx OpIndex, plan UnswitchPlan, scratch UnswitchScratch)
 	scratch.reads.clear()
@@ -1230,8 +1315,11 @@ type RewriteColumns
 	// What the current rewrite mapped, so `reset` restores exactly that.
 	var mappedValues as ValueIdArray
 	var mappedBlocks as BlockIdArray
+	// Where a freshly minted copy is filed as derived from its original (`mapCopy`).
+	var funcIndex as FuncIndex
+	var origins as ValueOriginTable
 
-	static function identity(valueBound ValueId, blockBound BlockId) returns RewriteColumns
+	static function identity(valueBound ValueId, blockBound BlockId, funcIndex FuncIndex, origins ValueOriginTable) returns RewriteColumns
 		var valueSubst = ValueIdArray.create()
 		for valueId in 0 upto valueBound 'eachValue'
 			valueSubst.push(valueId)
@@ -1242,13 +1330,27 @@ type RewriteColumns
 			blockSubst.push(blockId)
 		end 'eachBlock'
 
-		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(), mappedBlocks: BlockIdArray.create()}
+		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(), mappedBlocks: BlockIdArray.create(), funcIndex: funcIndex, origins: origins}
 	end 'identity'
 
 	function mapValue(original ValueId, fresh ValueId)
 		try self.valueSubst.set(original, value: fresh) otherwise panic("unswitchInvariantGuards: value {original} is outside the substitution column sized by nextFreeValueId")
 		self.mappedValues.push(original)
 	end 'mapValue'
+
+	// Map `original` onto a FRESH id, filed as standing in for it so an E5001 naming the copy names the
+	// value the author wrote (`ValueOriginTable.recordDerived`). `mapValue` is for a target that already
+	// exists.
+	function mapCopy(original ValueId, minter ValueMinter)
+		let fresh = minter.mint()
+		self.fileDerived(fresh, sourceId: original)
+		self.mapValue(original, fresh: fresh)
+	end 'mapCopy'
+
+	// File `valueId` as standing in for `sourceId` (`ValueOriginTable.recordDerived`).
+	function fileDerived(valueId ValueId, sourceId ValueId)
+		self.origins.recordDerived(self.funcIndex, valueId: valueId, sourceId: sourceId)
+	end 'fileDerived'
 
 	function mapBlock(original BlockId, fresh BlockId)
 		try self.blockSubst.set(original, value: fresh) otherwise panic("unswitchInvariantGuards: block {original} is outside the substitution column sized by nextBlockId")
@@ -1295,8 +1397,7 @@ function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
 		let original = module.blockAtPosition(func, position: position)
-		var copy = module.addBlock(func, label: original.label)
-		copy.heat = original.heat
+		let copy = module.addBlock(func, label: original.label, heat: original.heat)
 		columns.mapBlock(original.id, fresh: copy.id)
 		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
 	end 'eachMember'
@@ -1337,7 +1438,7 @@ function mintCopyValues(module StdModule, func IrFunction, plan UnswitchPlan, sc
 		let block = module.blockAtPosition(func, position: position)
 
 		for blockArg in block.blockArgs 'eachPhi'
-			columns.mapValue(blockArg.valueId, fresh: minter.mint())
+			columns.mapCopy(blockArg.valueId, minter: minter)
 		end 'eachPhi'
 
 		for opIdx in block.opRefs 'eachOp'
@@ -1346,9 +1447,9 @@ function mintCopyValues(module StdModule, func IrFunction, plan UnswitchPlan, sc
 				continue
 			end 'noCopyDef'
 
-			columns.mapValue(scratch.def.first, fresh: minter.mint())
+			columns.mapCopy(scratch.def.first, minter: minter)
 			if scratch.def.definesPair() 'twoDefs'
-				columns.mapValue(scratch.def.second, fresh: minter.mint())
+				columns.mapCopy(scratch.def.second, minter: minter)
 			end 'twoDefs'
 		end 'eachOp'
 	end 'eachMember'
@@ -1372,7 +1473,8 @@ type TestChain
 	// The block to emit into, opened on demand so an empty block is never minted.
 	function block(module StdModule, func IrFunction) returns IrBlock
 		if not self.open 'openOne'
-			let fresh = module.addBlock(func, label: UnswitchTestLabel)
+			// The chain runs once per loop entry.
+			let fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal)
 			self.currentRef = registeredBlockRef(module, func: func, block: fresh)
 			self.open = true
 			if not self.started 'theFirst'
@@ -1436,7 +1538,7 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, ana
 				continue
 			end 'thePreheaderHoldsIt'
 
-			columns.mapValue(scratch.def.first, fresh: minter.mint())
+			columns.mapCopy(scratch.def.first, minter: minter)
 			module.spans.current = module.spans.at(opIdx)
 			module.appendOp(chain.block(module, func: func), op: remapStdOpForClone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
 		end 'eachOp'
@@ -1571,7 +1673,8 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 	end 'trailingOps'
 
 	if chain.testRefs.count() != 0 'aTestCanRefuse'
-		var slow = module.addBlock(func, label: UnswitchSlowLabel)
+		// Entered once per loop entry whose guards refuse; it only forwards to the original loop.
+		var slow = module.addBlock(func, label: UnswitchSlowLabel, heat: BlockHeat.normal)
 		module.setTerminator(slow, op: StdOp.branch(headerId))
 		if takesArgs 'slowCarriesArgs'
 			attachEdge(slow, targetId: headerId, argIds: entryArgs)
@@ -1667,7 +1770,7 @@ end 'copiedEdges'
 
 // The exit block takes one phi per escaping value, and every exiting member's edge into it carries the
 // value itself — the copy's edges, remapped from these, then carry the copy's.
-function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, minter ValueMinter)
+function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, columns RewriteColumns, minter ValueMinter)
 	var exit = module.blockAtPosition(func, position: plan.exit)
 	var blockArgs = IrBlockArgArray.create()
 	for blockArg in exit.blockArgs 'eachExisting'
@@ -1677,6 +1780,8 @@ function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunc
 	for index in 0 upto plan.escapingTypes.count() 'eachEscaping'
 		let escapingType = try plan.escapingTypes.get(index) otherwise panic("unswitchInvariantGuards: escapingTypes.get OOB at {index}")
 		let phi = minter.mint()
+		// The phi stands in, after the loop, for the value the loop defined.
+		columns.fileDerived(phi, sourceId: try plan.escaping.get(index) otherwise panic("unswitchInvariantGuards: escaping.get OOB at {index}"))
 		plan.exitPhis.push(phi)
 		blockArgs.push(IrBlockArg.create(phi, argType: escapingType))
 	end 'eachEscaping'
@@ -1727,7 +1832,7 @@ function substituteExitPhis(module StdModule, func IrFunction, analysis Unswitch
 		return
 	end 'nothingEscapes'
 
-	attachExitPhis(module, func: func, analysis: analysis, plan: plan, minter: minter)
+	attachExitPhis(module, func: func, analysis: analysis, plan: plan, columns: columns, minter: minter)
 	reloadMembers(plan, scratch: scratch, blockCount: analysis.tree.blockCount)
 
 	for (iter, valueId) in plan.escaping.withIterator() 'eachEscaping'
@@ -1775,6 +1880,8 @@ end 'reloadMembers'
 type UnswitchScratch
 	export var members as LoopMembership
 	export var definedInLoop as LoopValueStamps
+	// Values defined outside the loop and read inside it, met once each (`estimateLiveAcross`).
+	export var liveAcross as LoopValueStamps
 	export var invariant as LoopValueStamps
 	// Invariant loads the chain takes: a known record's field, or its buffer's refcount word.
 	export var hoistableLoads as LoopValueStamps
@@ -1805,7 +1912,7 @@ type UnswitchScratch
 	export var preheaderDef as StdDefinedValues
 
 	static function create() returns UnswitchScratch
-		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
 	end 'create'
 
 	function beginLoop()

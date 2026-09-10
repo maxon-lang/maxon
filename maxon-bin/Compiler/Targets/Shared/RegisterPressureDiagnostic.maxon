@@ -36,10 +36,12 @@
 // told to delete a value that is not in its source cannot converge. Every blocking value is
 // resolved to a USER source span through four exhaustive routes (`defRangeOf`): a PARAMETER to
 // its declaration (`ParamOriginTable` — it is minted by no op), an op-defined value to its op,
-// a phi to the earliest incoming value it copies, and a splitter-minted value (a reload / a
-// rematerialized constant) chased through `SplitLineage` to the ORIGINAL user value it derives
-// from. Only a value with genuinely NO user ancestry after all four is a compiler DEFECT, so
-// `defRangeOf` PANICS naming it rather than emitting a misleading location.
+// a phi to the earliest incoming value it copies, and a DERIVED value — a splitter-minted reload
+// or rematerialized constant (`SplitLineage`), or an id a Std pass minted as a stand-in for a value
+// with an origin (`ValueOriginTable.derivationOf`: an inlined site's expansion, a versioned loop's
+// copies, a threaded compare) — chased to the ORIGINAL user value it derives from. Only a value with
+// genuinely NO user ancestry after all four is a compiler DEFECT, so `defRangeOf` PANICS naming it
+// rather than emitting a misleading location.
 //
 // ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — THIS NOTE
 // USED TO SAY "unreachable at M5" AND IT WAS REACHED.** Every one of them ends in a table only the
@@ -496,9 +498,9 @@ end 'readsInRegion'
 union ValueSource
 	// A function parameter — its declaration span (from `ParamOriginTable`).
 	param(range SourceRange)
-
-	// A splitter-minted value (a reload / a rematerialized constant) — the ORIGINAL value it
-	// derives from, chased recursively (its source may itself be derived, or a phi/param/op).
+	// A compiler-minted stand-in — a splitter's reload or rematerialized constant, or a Std pass's
+	// derived id — the ORIGINAL value it derives from, chased recursively (its source may itself be
+	// derived, or a phi/param/op).
 	derived(sourceId ValueId)
 
 	// A value defined by a Maxon op — that op's index (into `project.opRanges`).
@@ -509,17 +511,21 @@ union ValueSource
 end 'ValueSource'
 
 // Classify `valueId` into one of the four `ValueSource` routes, in priority order: parameter,
-// then splitter-derived, then op-defined, else a phi. The routes are disjoint by construction —
-// a parameter has a `ParamOriginTable` entry and no op; a fresh reload/remat id is in the
-// `SplitLineage` and in neither origin table; an op-defined value is in `ValueOriginTable`; a
-// phi is in none — so the order only decides which single table answers, never which of two.
+// then derived (the splitter's lineage, then the Std passes' table), then op-defined, else a phi.
+// The routes are disjoint by construction — a parameter has a `ParamOriginTable` entry and no op; a
+// fresh id is in exactly the derivation table of the pass that minted it and in neither origin
+// table; an op-defined value is in `ValueOriginTable`; a phi is in none — so the order only decides
+// which single table answers, never which of two.
 function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
 	match project.valueOrigins.paramRange(funcIndex, valueId: valueId) 'param'
 		found(range) then return ValueSource.param(range)
 		none then break 'param'
 	end 'param'
-
-	match lineage.sourceOf(valueId) 'derived'
+	match lineage.sourceOf(valueId) 'reload'
+		source(sourceId) then return ValueSource.derived(sourceId)
+		none then break 'reload'
+	end 'reload'
+	match project.valueOrigins.derivationOf(funcIndex, valueId: valueId) 'derived'
 		source(sourceId) then return ValueSource.derived(sourceId)
 		none then break 'derived'
 	end 'derived'

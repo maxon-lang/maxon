@@ -492,7 +492,7 @@ function buildListCreate(module StdModule)
 	var func = IrFunction.createFromStd(ListCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let elementDrop = 0 as ValueId
 
@@ -522,7 +522,7 @@ function buildListNodeAlloc(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
 	let value = 1 as ValueId
@@ -545,10 +545,10 @@ function buildListNodeAt(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"walk")
-	var advance = module.addBlock(func, label: b"advance")
-	var found = module.addBlock(func, label: b"found")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"advance", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
@@ -584,7 +584,7 @@ function buildListCount(module StdModule)
 	var func = IrFunction.createFromStd(ListCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
 
@@ -603,9 +603,9 @@ function buildListIsEmpty(module StdModule)
 	var func = IrFunction.createFromStd(ListIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var empty = module.addBlock(func, label: b"empty")
-	var populated = module.addBlock(func, label: b"populated")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	var populated = module.addBlock(func, label: b"populated", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
@@ -657,9 +657,9 @@ end 'emitListLinkPublished'
 // A node arriving with a stale `inward` would be spliced onto the end while still pointing into the middle
 // of a chain — the corruption `emitListClearsNodeLinks` exists to make unrepresentable.
 function emitListLinkAtEnd(module StdModule, func IrFunction, cur IrBlock, list ValueId, node ValueId, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset, ids ValueMinter) returns IrBlock
-	var wasEmpty = module.addBlock(func, label: b"empty")
-	var splice = module.addBlock(func, label: b"splice")
-	var publish = module.addBlock(func, label: b"publish")
+	var wasEmpty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	var splice = module.addBlock(func, label: b"splice", heat: BlockHeat.normal)
+	var publish = module.addBlock(func, label: b"publish", heat: BlockHeat.normal)
 
 	let oldEnd = emitLoadField(module, block: cur, record: list, offset: nearEnd, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
@@ -754,7 +754,7 @@ function buildListEndInsert(module StdModule, name ByteArray, nearEnd ByteOffset
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
 	let value = 1 as ValueId
@@ -796,12 +796,12 @@ function buildListInteriorInsert(module StdModule, name ByteArray, forward ByteO
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var foreignChain = module.addBlock(func, label: b"foreign")
-	var link = module.addBlock(func, label: b"link")
-	var spliced = module.addBlock(func, label: b"spliced")
-	var atEnd = module.addBlock(func, label: b"atend")
-	var publish = module.addBlock(func, label: b"publish")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var foreignChain = module.addBlock(func, label: b"foreign", heat: BlockHeat.normal)
+	var link = module.addBlock(func, label: b"link", heat: BlockHeat.normal)
+	var spliced = module.addBlock(func, label: b"spliced", heat: BlockHeat.normal)
+	var atEnd = module.addBlock(func, label: b"atend", heat: BlockHeat.normal)
+	var publish = module.addBlock(func, label: b"publish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let list = 0 as ValueId
@@ -878,14 +878,14 @@ function buildListInsert(module StdModule)
 	var func = IrFunction.createFromStd(ListInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var inRange = module.addBlock(func, label: b"inrange")
-	var atFront = module.addBlock(func, label: b"front")
-	var afterFront = module.addBlock(func, label: b"notfront")
-	var atBack = module.addBlock(func, label: b"back")
-	var interior = module.addBlock(func, label: b"interior")
-	var linked = module.addBlock(func, label: b"linked")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	var inRange = module.addBlock(func, label: b"inrange", heat: BlockHeat.normal)
+	var atFront = module.addBlock(func, label: b"front", heat: BlockHeat.normal)
+	var afterFront = module.addBlock(func, label: b"notfront", heat: BlockHeat.normal)
+	var atBack = module.addBlock(func, label: b"back", heat: BlockHeat.normal)
+	var interior = module.addBlock(func, label: b"interior", heat: BlockHeat.normal)
+	var linked = module.addBlock(func, label: b"linked", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let list = 0 as ValueId
@@ -971,12 +971,12 @@ end 'buildListInsert'
 // Ordering a decref around that window instead has to be re-applied correctly by every future
 // caller, where a reference that is never released cannot be released early.
 function emitListUnlinkNodeFrom(module StdModule, func IrFunction, cur IrBlock, list ValueId, node ValueId, ids ValueMinter) returns IrBlock
-	var relinkPrev = module.addBlock(func, label: b"relinkprev")
-	var newHead = module.addBlock(func, label: b"newhead")
-	var backLinked = module.addBlock(func, label: b"backlinked")
-	var relinkNext = module.addBlock(func, label: b"relinknext")
-	var newTail = module.addBlock(func, label: b"newtail")
-	var unlinked = module.addBlock(func, label: b"unlinked")
+	var relinkPrev = module.addBlock(func, label: b"relinkprev", heat: BlockHeat.normal)
+	var newHead = module.addBlock(func, label: b"newhead", heat: BlockHeat.normal)
+	var backLinked = module.addBlock(func, label: b"backlinked", heat: BlockHeat.normal)
+	var relinkNext = module.addBlock(func, label: b"relinknext", heat: BlockHeat.normal)
+	var newTail = module.addBlock(func, label: b"newtail", heat: BlockHeat.normal)
+	var unlinked = module.addBlock(func, label: b"unlinked", heat: BlockHeat.normal)
 
 	let prev = emitLoadField(module, block: cur, record: node, offset: ListPrevOffset, ids: ids)
 	let next = emitLoadField(module, block: cur, record: node, offset: ListNextOffset, ids: ids)
@@ -1033,11 +1033,11 @@ function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut b
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var ours = module.addBlock(func, label: b"ours")
-	var foreignChain = module.addBlock(func, label: b"foreign")
-	var unlink = module.addBlock(func, label: b"unlink")
-	var alreadyDetached = module.addBlock(func, label: b"detached")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var ours = module.addBlock(func, label: b"ours", heat: BlockHeat.normal)
+	var foreignChain = module.addBlock(func, label: b"foreign", heat: BlockHeat.normal)
+	var unlink = module.addBlock(func, label: b"unlink", heat: BlockHeat.normal)
+	var alreadyDetached = module.addBlock(func, label: b"detached", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
@@ -1136,10 +1136,10 @@ function buildListReinsert(module StdModule, name ByteArray, nearEnd ByteOffset,
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var handover = module.addBlock(func, label: b"handover")
-	var adopt = module.addBlock(func, label: b"adopt")
-	var link = module.addBlock(func, label: b"link")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var handover = module.addBlock(func, label: b"handover", heat: BlockHeat.normal)
+	var adopt = module.addBlock(func, label: b"adopt", heat: BlockHeat.normal)
+	var link = module.addBlock(func, label: b"link", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
@@ -1194,7 +1194,7 @@ function buildListNodeSetValue(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeSetValueName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let node = 0 as ValueId
 	let value = 1 as ValueId
@@ -1223,9 +1223,9 @@ function buildListCheckedNavigator(module StdModule, name ByteArray, offset Byte
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var absent = module.addBlock(func, label: b"absent")
-	var found = module.addBlock(func, label: b"found")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var absent = module.addBlock(func, label: b"absent", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -1281,10 +1281,10 @@ function buildListClear(module StdModule)
 	var func = IrFunction.createFromStd(ListClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var walk = module.addBlock(func, label: b"walk")
-	var body = module.addBlock(func, label: b"body")
-	var emptied = module.addBlock(func, label: b"emptied")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	var emptied = module.addBlock(func, label: b"emptied", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -1330,9 +1330,9 @@ function buildListEndAccessor(module StdModule, name ByteArray, endOffset ByteOf
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var load = module.addBlock(func, label: b"load")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
@@ -1367,7 +1367,7 @@ end 'buildListLast'
 // The caller supplies `found` — the block the in-range path continues in — and terminates it; this returns
 // the node it holds. Passing the block in rather than handing one back keeps the whole result a `ValueId`.
 function emitListCheckedNodeAt(module StdModule, func IrFunction, entry IrBlock, found IrBlock, list ValueId, index ValueId, ids ValueMinter) returns ValueId
-	var oob = module.addBlock(func, label: b"oob")
+	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
 
 	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: count, ids: ids)
@@ -1386,8 +1386,8 @@ function buildListGet(module StdModule)
 	var func = IrFunction.createFromStd(ListGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var found = module.addBlock(func, label: b"found")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
 	let index = 1 as ValueId
@@ -1413,8 +1413,8 @@ function buildListRemoveAt(module StdModule)
 	var func = IrFunction.createFromStd(ListRemoveAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var found = module.addBlock(func, label: b"found")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let list = 0 as ValueId
 	let index = 1 as ValueId
@@ -1465,12 +1465,12 @@ function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var take = module.addBlock(func, label: b"take")
-	var detachNeighbour = module.addBlock(func, label: b"detach")
-	var emptied = module.addBlock(func, label: b"emptied")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	var take = module.addBlock(func, label: b"take", heat: BlockHeat.normal)
+	var detachNeighbour = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	var emptied = module.addBlock(func, label: b"emptied", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
@@ -1531,7 +1531,7 @@ function buildListFieldRead(module StdModule, name ByteArray, offset ByteOffset)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
@@ -1574,10 +1574,10 @@ function buildListNodeValue(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var slotIsEmpty = module.addBlock(func, label: b"empty")
-	var movedOut = module.addBlock(func, label: b"movedout")
-	var held = module.addBlock(func, label: b"held")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var slotIsEmpty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	var movedOut = module.addBlock(func, label: b"movedout", heat: BlockHeat.normal)
+	var held = module.addBlock(func, label: b"held", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let node = 0 as ValueId
@@ -1622,9 +1622,9 @@ function buildListNodeDecref(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let node = 0 as ValueId
@@ -1651,9 +1651,9 @@ end 'buildListNodeDecref'
 // drop finds nothing left to own. It is `__list_from`'s moved-out slot clear, one structure over. A
 // trivial-element list stamps `element_drop@24` at 0 and takes the same skip.
 function emitDropNodeElement(module StdModule, func IrFunction, cur IrBlock, node ValueId, ids ValueMinter) returns IrBlock
-	var stillHeld = module.addBlock(func, label: b"stillheld")
-	var dropElem = module.addBlock(func, label: b"dropelem")
-	let released = module.addBlock(func, label: b"released")
+	var stillHeld = module.addBlock(func, label: b"stillheld", heat: BlockHeat.normal)
+	var dropElem = module.addBlock(func, label: b"dropelem", heat: BlockHeat.normal)
+	let released = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
 
 	let drop = emitLoadField(module, block: cur, record: node, offset: ListElementDropSlotOffset, ids: ids)
 	let noDrop = emitConst(module, block: cur, value: 0, ids: ids)
@@ -1688,10 +1688,10 @@ function buildListFrom(module StdModule)
 	var func = IrFunction.createFromStd(ListFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"loop")
-	var body = module.addBlock(func, label: b"body")
-	var done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"loop", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
@@ -1752,11 +1752,11 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	// TEMPORARY instead — a name that reads as a parameter and denotes an unrelated value.
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"walk")
-	var body = module.addBlock(func, label: b"body")
-	var append = module.addBlock(func, label: b"append")
-	let done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let list = 0 as ValueId
@@ -1814,8 +1814,8 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 		return
 	end 'wordCopy'
 
-	var deepCopy = module.addBlock(func, label: b"clnelem")
-	var movedOut = module.addBlock(func, label: b"clnnull")
+	var deepCopy = module.addBlock(func, label: b"clnelem", heat: BlockHeat.normal)
+	var movedOut = module.addBlock(func, label: b"clnnull", heat: BlockHeat.normal)
 
 	let absent = emitConst(module, block: body, value: 0, ids: ids)
 	let owns = emitCmp(module, block: body, a: value, b: absent, pred: StdCmpPred.ne, ids: ids)
@@ -1849,11 +1849,11 @@ function buildListSole(module StdModule, name ByteArray, walksElements bool)
 	// ⚠ Both entries reserve two parameter id slots — `buildListClone`'s rule, for its reason.
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"walk")
-	var body = module.addBlock(func, label: b"body")
-	var step = module.addBlock(func, label: b"step")
-	let done = module.addBlock(func, label: b"done")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let list = 0 as ValueId
@@ -1893,7 +1893,7 @@ function emitListElementSole(module StdModule, func IrFunction, body IrBlock, st
 		return
 	end 'trivialElement'
 
-	var visit = module.addBlock(func, label: b"solelem")
+	var visit = module.addBlock(func, label: b"solelem", heat: BlockHeat.normal)
 
 	let value = emitLoadField(module, block: body, record: node, offset: ListValueOffset, ids: ids)
 	let absent = emitConst(module, block: body, value: 0, ids: ids)
@@ -1919,9 +1919,9 @@ function buildListDecref(module StdModule)
 	var func = IrFunction.createFromStd(ListDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId

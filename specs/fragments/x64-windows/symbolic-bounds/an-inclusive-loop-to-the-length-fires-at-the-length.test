@@ -35,17 +35,16 @@ func @overrun {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 80
-    x64.movRegReg rax, rcx
     x64.movRegImm32 r8, 0
-    x64.movRegImm32 rsi, 0
-    x64.loadRegBaseDisp.word64 rdi, [rax + 8]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
   __us_test:
-    x64.loadRegBaseDisp.word64 r9, [rax + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
   forhdr:
-    x64.cmpRegReg rsi, rdi
+    x64.cmpRegReg rdx, rax
     x64.jcc greater, forexit
   each:
-    x64.cmpRegImm32 rsi, 0
+    x64.cmpRegImm32 rdx, 0
     x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inclusive-loop-to-the-length-fires-at-the-length.test:8: Range check failed: value outside typealias 'ElementIndex'\x0a"
@@ -55,34 +54,32 @@ func @overrun {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegReg rsi, rdi
+    x64.cmpRegReg rdx, rax
     x64.jcc below, __im_load
   __im_slow:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdx, rsi
     x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot3, r8
-    x64.storeSlotReg slot4, r9
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, r8
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
+    x64.movRegReg rdi, r8
     x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot3
-    x64.loadRegSlot r9, slot4
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot r8, slot4
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont
   tryerr:
-    x64.movRegImm32 rcx, 1000
+    x64.movRegImm32 rdi, 1000
     x64.jmp trycont
   __im_load:
-    x64.loadRegBaseIndexScale.word64 rcx, [r9 + rsi*8 + 0]
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
   trycont:
-    x64.leaRegRegReg r8, r8, rcx
+    x64.leaRegRegReg r8, r8, rdi
   forstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr
   forexit:
     x64.epilogue 80

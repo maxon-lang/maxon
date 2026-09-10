@@ -731,7 +731,7 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
@@ -778,10 +778,10 @@ export function buildStrEq(module StdModule, name ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var notEqual = module.addBlock(func, label: b"notEqual")
-	var lenMatch = module.addBlock(func, label: b"lenMatch")
-	var allMatch = module.addBlock(func, label: b"allMatch")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notEqual = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
+	var lenMatch = module.addBlock(func, label: b"lenMatch", heat: BlockHeat.normal)
+	var allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let a = 0 as ValueId
@@ -825,8 +825,8 @@ end 'buildStrEq'
 // explicitly because `retypeBlockArgs` runs in `lowerMaxonToStd`, which these post-pipeline functions never
 // pass through.
 export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
-	var header = module.addBlock(func, label: b"cmphdr")
-	var body = module.addBlock(func, label: b"cmpbody")
+	var header = module.addBlock(func, label: b"cmphdr", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"cmpbody", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(header.id))
@@ -892,11 +892,11 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var zeroCase = module.addBlock(func, label: b"zeroCase")
-	var setup = module.addBlock(func, label: b"setup")
-	var countLoop = module.addBlock(func, label: b"countLoop")
-	var writeSetup = module.addBlock(func, label: b"writeSetup")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var zeroCase = module.addBlock(func, label: b"zeroCase", heat: BlockHeat.normal)
+	var setup = module.addBlock(func, label: b"setup", heat: BlockHeat.normal)
+	var countLoop = module.addBlock(func, label: b"countLoop", heat: BlockHeat.normal)
+	var writeSetup = module.addBlock(func, label: b"writeSetup", heat: BlockHeat.normal)
 
 	// The write loop is HEADER-GUARDED (test at the top), following `buildStrEq`/`buildStrCopy`'s shape so
 	// the three string builders read the same way. It is a STYLE choice, not a correctness one. A fused
@@ -905,9 +905,9 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	// — and this shape happened to dodge it by keeping the loop body's values minted last. That column now
 	// GROWS to cover every DEFINED id (see `setValueClass` in StdToX64Conversion), so the dodge is
 	// unnecessary and a bottom-tested loop would compile too; the shared shape stays for consistency.
-	var writeHeader = module.addBlock(func, label: b"writeHeader")
-	var writeBody = module.addBlock(func, label: b"writeBody")
-	var done = module.addBlock(func, label: b"done")
+	var writeHeader = module.addBlock(func, label: b"writeHeader", heat: BlockHeat.normal)
+	var writeBody = module.addBlock(func, label: b"writeBody", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let value = 0 as ValueId
@@ -1082,9 +1082,9 @@ function buildBoolToString(module StdModule)
 	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var trueCase = module.addBlock(func, label: b"trueCase")
-	var falseCase = module.addBlock(func, label: b"falseCase")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var trueCase = module.addBlock(func, label: b"trueCase", heat: BlockHeat.normal)
+	var falseCase = module.addBlock(func, label: b"falseCase", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let value = 0 as ValueId
@@ -1159,13 +1159,13 @@ function buildStrDecref(module StdModule)
 	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var immortal = module.addBlock(func, label: b"immortal")
-	var countable = module.addBlock(func, label: b"countable")
-	var lower = module.addBlock(func, label: b"lower")
-	var release = module.addBlock(func, label: b"release")
-	var baseJoin = module.addBlock(func, label: b"baseJoin")
-	var freeRec = module.addBlock(func, label: b"freeRec")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	var baseJoin = module.addBlock(func, label: b"baseJoin", heat: BlockHeat.normal)
+	var freeRec = module.addBlock(func, label: b"freeRec", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -1271,7 +1271,7 @@ function buildStrClone(module StdModule)
 	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -1298,10 +1298,10 @@ function buildStrRetain(module StdModule)
 	var func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var copyImmortal = module.addBlock(func, label: b"copy")
-	var coOwn = module.addBlock(func, label: b"coown")
-	var join = module.addBlock(func, label: b"owned")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var copyImmortal = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	var coOwn = module.addBlock(func, label: b"coown", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -1359,13 +1359,13 @@ function buildStrFromBytes(module StdModule)
 	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var scan = module.addBlock(func, label: b"scan")
-	var scanBody = module.addBlock(func, label: b"scanBody")
-	var notHigh = module.addBlock(func, label: b"notHigh")
-	var stillSingleByte = module.addBlock(func, label: b"stillSingleByte")
-	var sawMultiByteGrapheme = module.addBlock(func, label: b"sawMultiByteGrapheme")
-	var build = module.addBlock(func, label: b"build")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"scan", heat: BlockHeat.normal)
+	var scanBody = module.addBlock(func, label: b"scanBody", heat: BlockHeat.normal)
+	var notHigh = module.addBlock(func, label: b"notHigh", heat: BlockHeat.normal)
+	var stillSingleByte = module.addBlock(func, label: b"stillSingleByte", heat: BlockHeat.normal)
+	var sawMultiByteGrapheme = module.addBlock(func, label: b"sawMultiByteGrapheme", heat: BlockHeat.normal)
+	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
@@ -1431,7 +1431,7 @@ function buildStrOfBuffer(module StdModule)
 	var func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let src = 0 as ValueId
 	let singleByteGraphemes = 1 as ValueId
@@ -1469,10 +1469,10 @@ function buildMmToCString(module StdModule)
 	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var probe = module.addBlock(func, label: b"nulprobe")
-	var alreadyTerminated = module.addBlock(func, label: b"nulok")
-	var terminateInPlace = module.addBlock(func, label: b"nulwrite")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var probe = module.addBlock(func, label: b"nulprobe", heat: BlockHeat.normal)
+	var alreadyTerminated = module.addBlock(func, label: b"nulok", heat: BlockHeat.normal)
+	var terminateInPlace = module.addBlock(func, label: b"nulwrite", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
@@ -1519,7 +1519,7 @@ function buildMmFromCString(module StdModule)
 	var func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let cstr = 0 as ValueId
 
@@ -1574,9 +1574,9 @@ function buildStrBytesView(module StdModule)
 	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var coOwn = module.addBlock(func, label: b"bvcoown")
-	var ret = module.addBlock(func, label: b"bvret")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var coOwn = module.addBlock(func, label: b"bvcoown", heat: BlockHeat.normal)
+	var ret = module.addBlock(func, label: b"bvret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId

@@ -217,8 +217,10 @@ end 'ParamAliasLookup'
 // without touching their blocks.
 export function insertRangeChecks(project Project, module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
-
-	for func in module.functions 'eachFunc'
+	// An INDEX loop: the function's position is the key its minted ids are filed under
+	// (`ValueOriginTable.recordDerived`).
+	for funcIndex in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("insertRangeChecks: functions.get OOB at {funcIndex}")
 		// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED, AND THE REASON IS NOT MERELY
 		// WASTED WORK — IT IS THE LOADER'S BYTE-NEUTRALITY INVARIANT (P1.8 Slice E).** Dead-function
 		// elimination drops such a function before the back end, so its guard blocks never reach isel; but
@@ -281,7 +283,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		end 'noChecks'
 
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
-		var emitter = RangeCheckEmitter.create(project, module: module, func: func)
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex)
 		emitter.run(checks)
 	end 'eachFunc'
 end 'insertRangeChecks'
@@ -313,6 +315,7 @@ type RangeCheckEmitter
 	var project as Project
 	var module as StdModule
 	var func as IrFunction
+	var funcIndex as FuncIndex
 	var nextId as ValueId
 
 	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
@@ -360,8 +363,8 @@ type RangeCheckEmitter
 	// away. Built and shared exactly as the two columns above are.
 	var guardChainSource as PreSplitOpsByBlock
 
-	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -372,6 +375,15 @@ type RangeCheckEmitter
 		self.nextId = self.nextId + 1
 		return id
 	end 'mintId'
+
+	// A fresh id that stands in for `source` — a guard's bound or compare for the value it checks, a cell
+	// load for its cell — filed so an E5001 naming it names the value the author wrote
+	// (`ValueOriginTable.recordDerived`).
+	function mintDerived(source ValueId) returns ValueId
+		let id = self.mintId()
+		self.project.valueOrigins.recordDerived(self.funcIndex, valueId: id, sourceId: source)
+		return id
+	end 'mintDerived'
 
 	// Process one function's sites. The alias-named sites FIRST (they split blocks and move terminators
 	// onto new continuation blocks), then the call-argument sites — which emit nothing, so their order is
@@ -755,7 +767,6 @@ type RangeCheckEmitter
 		panic("requireGuardHeadHoldsOnlyParams: op {pos} of '{String.from(self.func.name)}'s entry block stands AHEAD of its parameter guard and is not a `param` op — the guard is anchored at `paramCount` on the premise that the first `paramCount` ops are the incoming-register captures, and `InlineLeaves` drops that whole block when it declines the cascade")
 	end 'refuseNonParamAheadOfAGuard'
 
-
 	// Is this parameter an address or a value? `reassignedParamMask` is the ABI's own answer — the same bit
 	// `LowerMaxonToStd` types the slot from and `transferFuncs` shapes the callee's signature with — so this
 	// door and the representation cannot come to disagree.
@@ -1006,7 +1017,7 @@ type RangeCheckEmitter
 	// be a second answer to "what does a cell hold". The offset is `Parser.CellContentOffset`, the same
 	// named constant the parser's own cell load and store address through.
 	function emitCellLoad(head IrBlock, cell ValueId, isFloat bool) returns ValueId
-		let loaded = self.mintId()
+		let loaded = self.mintDerived(cell)
 		self.module.appendOp(head, op: StdOp.loadIndirect(loaded, addrId: cell, offset: CellContentOffset, valueType: StdType.f64 if isFloat else StdType.i64))
 		return loaded
 	end 'emitCellLoad'
@@ -1159,9 +1170,8 @@ type RangeCheckEmitter
 	// carries its label to the backend, which loads the address into the ABI's first-arg register and
 	// calls `mrt_panic`.
 	function emitPanicBlock(message ByteArray) returns IrBlock
-		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic")
 		// Reached only when the range check refuses.
-		panicBlock.heat = BlockHeat.cold
+		let panicBlock = self.module.addBlock(self.func, label: b"__rc_panic", heat: BlockHeat.cold)
 		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
 		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
 		self.emitDeadReturn(panicBlock)
@@ -1225,9 +1235,9 @@ type RangeCheckEmitter
 
 		for i in 0 upto checks.count() 'eachCheck'
 			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
-			let boundId = self.mintId()
+			let boundId = self.mintDerived(value)
 			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: operandType))
-			let condId = self.mintId()
+			let condId = self.mintDerived(value)
 			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: operandType))
 
 			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
@@ -1235,7 +1245,7 @@ type RangeCheckEmitter
 			if i == lastIndex 'lastCheck'
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
 			end 'lastCheck' else 'moreChecks'
-				let next = self.module.addBlock(self.func, label: b"__rc_chk")
+				let next = self.module.addBlock(self.func, label: b"__rc_chk", heat: BlockHeat.normal)
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: next.id))
 				current = next
 			end 'moreChecks'
@@ -1658,11 +1668,10 @@ end 'splitBlockInPlace'
 // caller outside its own two — there isn't one. `splitBlockInPlace` above is the shared entry;
 // `splitChainEnd` reaches this directly because it places the ops itself.
 function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
-	var ok = module.addBlock(func, label: label)
 	var headBlock = head
-
 	// The tail runs exactly when the head does.
-	ok.heat = headBlock.heat
+	var ok = module.addBlock(func, label: label, heat: headBlock.heat)
+
 	ok.terminator = headBlock.terminator
 	ok.condBranch = headBlock.condBranch
 	ok.branchEdges = headBlock.branchEdges

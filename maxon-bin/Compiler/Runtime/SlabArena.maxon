@@ -721,9 +721,9 @@ function buildSlabAssertOsAlloc(module StdModule)
 	var func = IrFunction.createFromStd(SlabAssertOsAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var oom = module.addBlock(func, label: b"oom")
-	var ok = module.addBlock(func, label: b"ok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var oom = module.addBlock(func, label: b"oom", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
@@ -768,7 +768,7 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 	var func = IrFunction.createFromStd(SlabArenaNewName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	let requested = emitConst(module, block: entry, value: geometry.reservationBytes, ids: ids)
 	let raw = ids.mint()
@@ -844,8 +844,8 @@ function buildSlabArenaNew(module StdModule, geometry SlabArenaGeometry)
 	// that actually moved the base would move it PAST the reservation's end; `checkArenaReservationSlack`
 	// asserts that premise at compile time from the grow unit, and this is the same statement asked of the
 	// address a future lane really returns.
-	var misaligned = module.addBlock(func, label: b"misaligned")
-	var aligned = module.addBlock(func, label: b"aligned")
+	var misaligned = module.addBlock(func, label: b"misaligned", heat: BlockHeat.normal)
+	var aligned = module.addBlock(func, label: b"aligned", heat: BlockHeat.normal)
 
 	let granuleMask = emitConst(module, block: entry, value: SlabArenaCommitGranuleBytes - 1, ids: ids)
 	let withinGranule = emitBin(module, block: entry, a: base, b: granuleMask, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -929,26 +929,26 @@ function buildSlabArenaAllocChunks(module StdModule, geometry SlabArenaGeometry)
 	var func = IrFunction.createFromStd(SlabArenaAllocChunksName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkHigh = module.addBlock(func, label: b"checkhigh")
-	var badRequest = module.addBlock(func, label: b"badreq")
-	var start = module.addBlock(func, label: b"start")
-	var arenaLoop = module.addBlock(func, label: b"arenaloop")
-	var grow = module.addBlock(func, label: b"grow")
-	var nextArena = module.addBlock(func, label: b"nextarena")
-	var scanStart = module.addBlock(func, label: b"scanstart")
-	var scanHeader = module.addBlock(func, label: b"scanh")
-	var loadWord = module.addBlock(func, label: b"loadword")
-	var maybeSkip = module.addBlock(func, label: b"maybeskip")
-	var skipWord = module.addBlock(func, label: b"skipword")
-	var testBit = module.addBlock(func, label: b"testbit")
-	var breakRun = module.addBlock(func, label: b"breakrun")
-	var extendRun = module.addBlock(func, label: b"extendrun")
-	var newRun = module.addBlock(func, label: b"newrun")
-	var growRun = module.addBlock(func, label: b"growrun")
-	var checkRun = module.addBlock(func, label: b"checkrun")
-	var resumeScan = module.addBlock(func, label: b"resumescan")
-	var claim = module.addBlock(func, label: b"claim")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkHigh = module.addBlock(func, label: b"checkhigh", heat: BlockHeat.normal)
+	var badRequest = module.addBlock(func, label: b"badreq", heat: BlockHeat.normal)
+	var start = module.addBlock(func, label: b"start", heat: BlockHeat.normal)
+	var arenaLoop = module.addBlock(func, label: b"arenaloop", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	var nextArena = module.addBlock(func, label: b"nextarena", heat: BlockHeat.normal)
+	var scanStart = module.addBlock(func, label: b"scanstart", heat: BlockHeat.normal)
+	var scanHeader = module.addBlock(func, label: b"scanh", heat: BlockHeat.normal)
+	var loadWord = module.addBlock(func, label: b"loadword", heat: BlockHeat.normal)
+	var maybeSkip = module.addBlock(func, label: b"maybeskip", heat: BlockHeat.normal)
+	var skipWord = module.addBlock(func, label: b"skipword", heat: BlockHeat.normal)
+	var testBit = module.addBlock(func, label: b"testbit", heat: BlockHeat.normal)
+	var breakRun = module.addBlock(func, label: b"breakrun", heat: BlockHeat.normal)
+	var extendRun = module.addBlock(func, label: b"extendrun", heat: BlockHeat.normal)
+	var newRun = module.addBlock(func, label: b"newrun", heat: BlockHeat.normal)
+	var growRun = module.addBlock(func, label: b"growrun", heat: BlockHeat.normal)
+	var checkRun = module.addBlock(func, label: b"checkrun", heat: BlockHeat.normal)
+	var resumeScan = module.addBlock(func, label: b"resumescan", heat: BlockHeat.normal)
+	var claim = module.addBlock(func, label: b"claim", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let numChunks = 0 as ValueId
@@ -1110,11 +1110,11 @@ function buildSlabArenaFreeChunks(module StdModule, geometry SlabArenaGeometry)
 	var func = IrFunction.createFromStd(SlabArenaFreeChunksName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkCount = module.addBlock(func, label: b"checkcount")
-	var checkHigh = module.addBlock(func, label: b"checkhigh")
-	var badRange = module.addBlock(func, label: b"badrange")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkCount = module.addBlock(func, label: b"checkcount", heat: BlockHeat.normal)
+	var checkHigh = module.addBlock(func, label: b"checkhigh", heat: BlockHeat.normal)
+	var badRange = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arenaBase = 0 as ValueId
@@ -1179,13 +1179,13 @@ function buildSlabArenaOf(module StdModule, geometry SlabArenaGeometry)
 	var func = IrFunction.createFromStd(SlabArenaOfName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var walk = module.addBlock(func, label: b"walk")
-	var missing = module.addBlock(func, label: b"missing")
-	var testLow = module.addBlock(func, label: b"testlow")
-	var testHigh = module.addBlock(func, label: b"testhigh")
-	var found = module.addBlock(func, label: b"found")
-	var advance = module.addBlock(func, label: b"nextarena")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	var missing = module.addBlock(func, label: b"missing", heat: BlockHeat.normal)
+	var testLow = module.addBlock(func, label: b"testlow", heat: BlockHeat.normal)
+	var testHigh = module.addBlock(func, label: b"testhigh", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"nextarena", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let addr = 0 as ValueId
@@ -1260,17 +1260,17 @@ function buildSlabArenaScavenge(module StdModule, geometry SlabArenaGeometry)
 	var func = IrFunction.createFromStd(SlabArenaScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var arenaLoop = module.addBlock(func, label: b"arenaloop")
-	var finish = module.addBlock(func, label: b"finish")
-	var granuleStart = module.addBlock(func, label: b"granulestart")
-	var granuleLoop = module.addBlock(func, label: b"granuleloop")
-	var nextArena = module.addBlock(func, label: b"nextarena")
-	var testCommit = module.addBlock(func, label: b"testcommit")
-	var skipUncommitted = module.addBlock(func, label: b"skipuncommitted")
-	var testFree = module.addBlock(func, label: b"testfree")
-	var skipInUse = module.addBlock(func, label: b"skipinuse")
-	var release = module.addBlock(func, label: b"release")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var arenaLoop = module.addBlock(func, label: b"arenaloop", heat: BlockHeat.normal)
+	var finish = module.addBlock(func, label: b"finish", heat: BlockHeat.normal)
+	var granuleStart = module.addBlock(func, label: b"granulestart", heat: BlockHeat.normal)
+	var granuleLoop = module.addBlock(func, label: b"granuleloop", heat: BlockHeat.normal)
+	var nextArena = module.addBlock(func, label: b"nextarena", heat: BlockHeat.normal)
+	var testCommit = module.addBlock(func, label: b"testcommit", heat: BlockHeat.normal)
+	var skipUncommitted = module.addBlock(func, label: b"skipuncommitted", heat: BlockHeat.normal)
+	var testFree = module.addBlock(func, label: b"testfree", heat: BlockHeat.normal)
+	var skipInUse = module.addBlock(func, label: b"skipinuse", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	let headAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: SlabArenaListLabel))
@@ -1390,9 +1390,9 @@ end 'SlabBitRun'
 // ⚠ A run may cross a bitmap-word boundary, which is why the word address is recomputed per bit rather than
 // hoisted: a run of 64 chunks spans two words, and 10 pages of a large span can span two as well.
 function emitBitRunUpdate(module StdModule, func IrFunction, cur IrBlock, arenaBase ValueId, firstChunk ValueId, pastChunk ValueId, mode SlabBitRun, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"bitrunh")
-	var body = module.addBlock(func, label: b"bitrunb")
-	let done = module.addBlock(func, label: b"bitrund")
+	var header = module.addBlock(func, label: b"bitrunh", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"bitrunb", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"bitrund", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 
@@ -1452,11 +1452,11 @@ end 'emitBitRunUpdate'
 // why the number is what it is and why this is not a tuning knob; the same fact is what makes the
 // scavenger's decommit legal on every lane.
 function emitCommitGranulesFor(module StdModule, func IrFunction, cur IrBlock, arenaBase ValueId, firstChunk ValueId, pastChunk ValueId, geometry SlabArenaGeometry, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"commith")
-	var test = module.addBlock(func, label: b"committ")
-	var commit = module.addBlock(func, label: b"commitc")
-	var advance = module.addBlock(func, label: b"commita")
-	let done = module.addBlock(func, label: b"committed")
+	var header = module.addBlock(func, label: b"commith", heat: BlockHeat.normal)
+	var test = module.addBlock(func, label: b"committ", heat: BlockHeat.normal)
+	var commit = module.addBlock(func, label: b"commitc", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"commita", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"committed", heat: BlockHeat.normal)
 
 	// The run's first and LAST granule — last rather than one-past, because `pastChunk` is one past the run
 	// and `(pastChunk - 1) >> shift` is the granule the final chunk actually lives in. A one-past-the-end
@@ -1580,14 +1580,14 @@ function buildSlabArenaMapEnsure(module StdModule)
 	var func = IrFunction.createFromStd(SlabArenaMapEnsureName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// The three merge blocks are created HERE rather than inside the emitter, because a caller that owns the
 	// block can go on emitting into it — an emitter that CREATED it could only hand it back inside a pair
 	// with the table base, and a block reached through an immutable field cannot be appended to (E3019).
-	var atL1 = module.addBlock(func, label: b"l1")
-	var atL2 = module.addBlock(func, label: b"l2")
-	var atL3 = module.addBlock(func, label: b"l3")
+	var atL1 = module.addBlock(func, label: b"l1", heat: BlockHeat.normal)
+	var atL2 = module.addBlock(func, label: b"l2", heat: BlockHeat.normal)
+	var atL3 = module.addBlock(func, label: b"l3", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let addr = 0 as ValueId
@@ -1625,8 +1625,8 @@ end 'buildSlabArenaMapEnsure'
 // is therefore already zero). The chunk level has no such cursor yet, so every table is zeroed even when
 // its chunk is provably untouched — a 512- or 8192-word loop run at most a handful of times per program.
 function emitLazyMapLevel(module StdModule, func IrFunction, cur IrBlock, slotAddr ValueId, entryCount ParsedInt, have IrBlock, ids ValueMinter) returns ValueId
-	var allocate = module.addBlock(func, label: mapLevelLabel(have.label, part: b"new"))
-	var existing = module.addBlock(func, label: mapLevelLabel(have.label, part: b"had"))
+	var allocate = module.addBlock(func, label: mapLevelLabel(have.label, part: b"new"), heat: BlockHeat.normal)
+	var existing = module.addBlock(func, label: mapLevelLabel(have.label, part: b"had"), heat: BlockHeat.normal)
 
 	let current = emitLoadField(module, block: cur, record: slotAddr, offset: 0, ids: ids)
 	let absent = emitConst(module, block: cur, value: 0, ids: ids)
@@ -1692,10 +1692,10 @@ function buildSlabArenaMapSet(module StdModule)
 	var func = IrFunction.createFromStd(SlabArenaMapSetName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"pageh")
-	var body = module.addBlock(func, label: b"pageb")
-	var done = module.addBlock(func, label: b"paged")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"pageh", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"pageb", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"paged", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let base = 0 as ValueId
@@ -1746,11 +1746,11 @@ end 'buildSlabArenaMapSet'
 // It takes no lock and needs none even once the mutation paths take one: a published level pointer is never
 // overwritten, so a reader either sees 0 or sees a fully zeroed table.
 export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlock, ptr ValueId, spanId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var atL2 = module.addBlock(func, label: label)
-	var atL3 = module.addBlock(func, label: label)
-	var atPage = module.addBlock(func, label: label)
-	var miss = module.addBlock(func, label: label)
-	var merge = module.addBlock(func, label: label)
+	var atL2 = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var atL3 = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var atPage = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var miss = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(spanId, argType: StdType.i64))
 
 	let l1SlotAddr = ids.mint()
@@ -1785,7 +1785,7 @@ function buildSlabArenaMapGet(module StdModule)
 	var func = IrFunction.createFromStd(SlabArenaMapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId

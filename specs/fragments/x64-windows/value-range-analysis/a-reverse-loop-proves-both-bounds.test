@@ -52,105 +52,102 @@ func @reverseMiddle {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 80
-    x64.movRegReg rsi, rcx
-    x64.movRegImm32 rdi, 1
-    x64.leaRegRegImm32 r8, rdx, -1
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rdx, rdx, -1
   __us_test#66:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rsi + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, whilehdr#1
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, __us_slow
   __us_test#67:
-    x64.loadRegBaseDisp.word64 r9, [rsi + 0]
-    x64.cmpRegImm32 r9, 0
-    x64.jcc equal, whilehdr#1
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __us_slow
   __us_test#68:
-    x64.leaRegRegImm32 rcx, r9, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, whilehdr#1
+    x64.leaRegRegImm32 r8, rdi, -24
+    x64.loadRegBaseDisp.word64 r8, [r8 + 16]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, __us_slow
   __us_test#69:
-    x64.loadRegBaseDisp.word64 rcx, [rsi + 40]
-    x64.movRegImm32 rdx, 0
-    x64.cmpRegReg rcx, rdx
-    x64.jcc equal, whilehdr#38
+    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
+    x64.movRegImm32 r9, 0
+    x64.cmpRegReg r8, r9
+    x64.jcc equal, critsplit
+  __us_slow:
+    x64.xchgRegReg rdx, rax
   whilehdr#1:
-    x64.cmpRegReg rdi, r8
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, whileexit
   __rc_ok#12:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
-    x64.cmpRegReg rdi, rax
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rdx, rsi
     x64.jcc below, __im_load#22
   __im_slow#21:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, rdi
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
     x64.callDirect __managed_get
-    x64.movRegReg r9, r8
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#5
     x64.jmp __rc_ok#14
   __im_load#22:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.loadRegBaseIndexScale.word64 r9, [rax + rdi*8 + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rsi, [rsi + rdx*8 + 0]
+    x64.movRegReg r8, rsi
   __rc_ok#14:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
-    x64.cmpRegReg r8, rax
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rax, rsi
     x64.jcc below, __im_load#25
   __im_slow#24:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, r8
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
-    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r8
+    x64.movRegReg rdx, rax
     x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
-    x64.loadRegSlot r9, slot3
+    x64.movRegReg rsi, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#7
     x64.jmp __rc_ok#16
   __im_load#25:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rsi, [rsi + rax*8 + 0]
   __rc_ok#16:
-    x64.loadRegBaseDisp.word64 rcx, [rsi + 16]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 16]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc less, __im_slow#27
   __im_bounds#28:
-    x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
-    x64.cmpRegReg rdi, rcx
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.cmpRegReg rdx, rdi
     x64.jcc aboveEqual, __im_slow#27
   __im_buffer#29:
-    x64.loadRegBaseDisp.word64 rcx, [rsi + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_slow#27
   __im_viewed#30:
-    x64.leaRegRegImm32 rdx, rcx, -24
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
-    x64.cmpRegImm32 rdx, 0
+    x64.leaRegRegImm32 r9, rdi, -24
+    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
+    x64.cmpRegImm32 r9, 0
     x64.jcc equal, __im_store#31
   __im_slow#27:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, rdi
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
-    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r8
+    x64.movRegReg rax, rsi
     x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
-    x64.loadRegSlot r9, slot3
+    x64.movRegReg rsi, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, __rc_ok#18
   tryerr#9:
@@ -160,36 +157,34 @@ func @reverseMiddle {
     x64.popReg rbp
     x64.ret
   __im_store#31:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdi*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rdi + rdx*8 + 0], rsi
   __rc_ok#18:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 16]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_slow#33
   __im_bounds#34:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 8]
-    x64.cmpRegReg r8, rax
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegReg rax, rsi
     x64.jcc aboveEqual, __im_slow#33
   __im_buffer#35:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_slow#33
   __im_viewed#36:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __im_store#37
   __im_slow#33:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, r8
-    x64.movRegReg rax, r9
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
-    x64.callDirect __managed_set
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rdx, rax
     x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#10
   tryerr#11:
@@ -199,34 +194,32 @@ func @reverseMiddle {
     x64.popReg rbp
     x64.ret
   __im_store#37:
-    x64.storeBaseIndexScaleReg.word64 [rax + r8*8 + 0], r9
+    x64.storeBaseIndexScaleReg.word64 [rsi + rax*8 + 0], r8
   tryok#10:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.leaRegRegImm32 r8, r8, -1
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.leaRegRegImm32 rax, rax, -1
     x64.jmp whilehdr#1
+  critsplit:
+    x64.xchgRegReg rdx, rax
   whilehdr#38:
-    x64.cmpRegReg rdi, r8
+    x64.cmpRegReg rdx, rax
     x64.jcc greaterEqual, whileexit
   __rc_ok#64:
-    x64.cmpRegReg rdi, rax
+    x64.cmpRegReg rdx, rsi
     x64.jcc below, __im_load#63
   __im_slow#62:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, rdi
-    x64.storeSlotReg slot4, rax
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
-    x64.storeSlotReg slot3, r9
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r10
-    x64.movRegReg r10, r8
-    x64.loadRegSlot rax, slot4
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
-    x64.loadRegSlot r9, slot3
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, __rc_ok#59
   tryerr#5:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-reverse-loop-proves-both-bounds.test:10: reverseMiddle: low < high < first <= a.count()\x0a"
@@ -235,29 +228,27 @@ func @reverseMiddle {
     x64.popReg rbp
     x64.ret
   __im_load#63:
-    x64.loadRegBaseIndexScale.word64 r10, [r9 + rdi*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r8, [rdi + rdx*8 + 0]
   __rc_ok#59:
-    x64.cmpRegReg r8, rax
+    x64.cmpRegReg rax, rsi
     x64.jcc below, __im_load#58
   __im_slow#57:
-    x64.movRegReg rcx, rsi
-    x64.movRegReg rdx, r8
-    x64.storeSlotReg slot4, rax
-    x64.storeSlotReg slot0, rsi
-    x64.storeSlotReg slot1, rdi
-    x64.storeSlotReg slot2, r8
-    x64.storeSlotReg slot3, r9
-    x64.storeSlotReg slot5, r10
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
+    x64.storeSlotReg slot3, r8
+    x64.movRegReg rdx, rax
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r10
-    x64.loadRegSlot rax, slot4
-    x64.loadRegSlot rsi, slot0
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot r8, slot2
-    x64.loadRegSlot r9, slot3
-    x64.loadRegSlot r10, slot5
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegReg r9, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.loadRegSlot r8, slot3
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, __im_store#50
   tryerr#7:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reverse-loop-proves-both-bounds.test:11: reverseMiddle: high < first <= a.count()\x0a"
@@ -266,14 +257,14 @@ func @reverseMiddle {
     x64.popReg rbp
     x64.ret
   __im_load#58:
-    x64.loadRegBaseIndexScale.word64 rcx, [r9 + r8*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r9, [rdi + rax*8 + 0]
   __im_store#50:
-    x64.storeBaseIndexScaleReg.word64 [r9 + rdi*8 + 0], rcx
+    x64.storeBaseIndexScaleReg.word64 [rdi + rdx*8 + 0], r9
   __im_store#42:
-    x64.storeBaseIndexScaleReg.word64 [r9 + r8*8 + 0], r10
+    x64.storeBaseIndexScaleReg.word64 [rdi + rax*8 + 0], r8
   tryok#39:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.leaRegRegImm32 r8, r8, -1
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.leaRegRegImm32 rax, rax, -1
     x64.jmp whilehdr#38
   whileexit:
     x64.epilogue 80

@@ -496,11 +496,11 @@ end 'emitWin32BoolOutcome'
 // even though the READ is not: `specs/managed-file.md`'s own note records that Win32 `ERROR_FILE_NOT_FOUND`
 // and POSIX `ENOENT` are BOTH 2, so a future POSIX lane reuses this unchanged and supplies only the calls.
 export function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag ParsedInt, deniedFlag ParsedInt, fallbackFlag ParsedInt, ids ValueMinter)
-	var checkPath = module.addBlock(func, label: b"mfchkp")
-	var checkDenied = module.addBlock(func, label: b"mfchkd")
-	var notFoundBlock = module.addBlock(func, label: b"mfnf")
-	var deniedBlock = module.addBlock(func, label: b"mfden")
-	var otherBlock = module.addBlock(func, label: b"mfoth")
+	var checkPath = module.addBlock(func, label: b"mfchkp", heat: BlockHeat.normal)
+	var checkDenied = module.addBlock(func, label: b"mfchkd", heat: BlockHeat.normal)
+	var notFoundBlock = module.addBlock(func, label: b"mfnf", heat: BlockHeat.normal)
+	var deniedBlock = module.addBlock(func, label: b"mfden", heat: BlockHeat.normal)
+	var otherBlock = module.addBlock(func, label: b"mfoth", heat: BlockHeat.normal)
 
 	let notFoundConst = emitConst(module, block: block, value: ErrorFileNotFound, ids: ids)
 	let isNotFound = emitCmp(module, block: block, a: err, b: notFoundConst, pred: StdCmpPred.eq, ids: ids)
@@ -552,7 +552,7 @@ export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, e
 	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: closedSentinel, ids: ids)
 	let isClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
-	var closedBlock = module.addBlock(func, label: b"closedthrow")
+	var closedBlock = module.addBlock(func, label: b"closedthrow", heat: BlockHeat.normal)
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
 	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
 
@@ -616,10 +616,10 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mfterm")
-	var failed = module.addBlock(func, label: b"mffail")
-	var opened = module.addBlock(func, label: b"mfok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var opened = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -672,9 +672,9 @@ function buildManagedFileClose(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doClose = module.addBlock(func, label: b"mfdo")
-	var done = module.addBlock(func, label: b"mfdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doClose = module.addBlock(func, label: b"mfdo", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"mfdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -722,9 +722,9 @@ function buildManagedFileDestruct(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var drop = module.addBlock(func, label: b"drop")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -746,10 +746,10 @@ function buildManagedFileSize(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doSize = module.addBlock(func, label: b"mfsz")
-	var failed = module.addBlock(func, label: b"mffail")
-	var ok = module.addBlock(func, label: b"mfok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doSize = module.addBlock(func, label: b"mfsz", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -800,14 +800,14 @@ function buildManagedFileRead(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkLow = module.addBlock(func, label: b"mfchklo")
-	var checkOwned = module.addBlock(func, label: b"mfchkown")
-	var checkCap = module.addBlock(func, label: b"mfchkcap")
-	var tooBig = module.addBlock(func, label: b"mfbig")
-	var doRead = module.addBlock(func, label: b"mfrd")
-	var failed = module.addBlock(func, label: b"mffail")
-	var ok = module.addBlock(func, label: b"mfok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkLow = module.addBlock(func, label: b"mfchklo", heat: BlockHeat.normal)
+	var checkOwned = module.addBlock(func, label: b"mfchkown", heat: BlockHeat.normal)
+	var checkCap = module.addBlock(func, label: b"mfchkcap", heat: BlockHeat.normal)
+	var tooBig = module.addBlock(func, label: b"mfbig", heat: BlockHeat.normal)
+	var doRead = module.addBlock(func, label: b"mfrd", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let box = 0 as ValueId
@@ -865,10 +865,10 @@ function buildManagedFileWrite(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doWrite = module.addBlock(func, label: b"mfwr")
-	var failed = module.addBlock(func, label: b"mffail")
-	var ok = module.addBlock(func, label: b"mfok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doWrite = module.addBlock(func, label: b"mfwr", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let box = 0 as ValueId
@@ -897,12 +897,12 @@ function buildManagedFileExists(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mfterm")
-	var missing = module.addBlock(func, label: b"mfmiss")
-	var found = module.addBlock(func, label: b"mffound")
-	var isDir = module.addBlock(func, label: b"mfdir")
-	var isFile = module.addBlock(func, label: b"mffile")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	var missing = module.addBlock(func, label: b"mfmiss", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"mffound", heat: BlockHeat.normal)
+	var isDir = module.addBlock(func, label: b"mfdir", heat: BlockHeat.normal)
+	var isFile = module.addBlock(func, label: b"mffile", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -957,11 +957,11 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterFirst = module.addBlock(func, label: b"mfterm")
-	var afterSecond = module.addBlock(func, label: b"mfterm2")
-	var failed = module.addBlock(func, label: b"mffail")
-	var ok = module.addBlock(func, label: b"mfok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterFirst = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	var afterSecond = module.addBlock(func, label: b"mfterm2", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
 	let firstPath = emitPathToCString(module, func: func, cur: entry, join: afterFirst, pathRec: 0 as ValueId, ids: ids)
@@ -1034,10 +1034,10 @@ function buildManagedFileStat(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileStatName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mfterm")
-	var failed = module.addBlock(func, label: b"mffail")
-	var pack = module.addBlock(func, label: b"mfpack")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	var pack = module.addBlock(func, label: b"mfpack", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -1124,9 +1124,9 @@ end 'emitFileTimeToUnixSeconds'
 // return blocks because there is no `setcc` in this tier — the shape `MmRuntime.emitConstReturn` states once
 // for every runtime predicate, and for the same reason.
 function emitStoreAttributeFlag(module StdModule, func IrFunction, cur IrBlock, out ValueId, offset ByteOffset, attrs ValueId, mask ParsedInt, ids ValueMinter) returns IrBlock
-	var setBlock = module.addBlock(func, label: b"mfattr1")
-	var clearBlock = module.addBlock(func, label: b"mfattr0")
-	let cont = module.addBlock(func, label: b"mfattrc")
+	var setBlock = module.addBlock(func, label: b"mfattr1", heat: BlockHeat.normal)
+	var clearBlock = module.addBlock(func, label: b"mfattr0", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"mfattrc", heat: BlockHeat.normal)
 
 	let maskConst = emitConst(module, block: cur, value: mask, ids: ids)
 	let bit = emitBin(module, block: cur, a: attrs, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -1156,11 +1156,11 @@ function buildManagedFileStatField(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileStatFieldName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkIndex = module.addBlock(func, label: b"mfchki")
-	var badBuffer = module.addBlock(func, label: b"mfbadbuf")
-	var badIndex = module.addBlock(func, label: b"mfbadidx")
-	var load = module.addBlock(func, label: b"mfload")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkIndex = module.addBlock(func, label: b"mfchki", heat: BlockHeat.normal)
+	var badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
+	var badIndex = module.addBlock(func, label: b"mfbadidx", heat: BlockHeat.normal)
+	var load = module.addBlock(func, label: b"mfload", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let buffer = 0 as ValueId
@@ -1174,7 +1174,7 @@ function buildManagedFileStatField(module StdModule)
 	// BOTH ENDS, in two compares: `StdCmpPred` is SIGNED throughout this tier (there is no unsigned
 	// predicate), so a lone `index >= fields` accepts a negative index and reads BELOW the buffer. This is
 	// `ManagedMemoryRuntime.emitIndexOutOfRange`'s shape and it is here for its reason.
-	var checkHigh = module.addBlock(func, label: b"mfchkhi")
+	var checkHigh = module.addBlock(func, label: b"mfchkhi", heat: BlockHeat.normal)
 	let zeroIndex = emitConst(module, block: checkIndex, value: 0, ids: ids)
 	let negativeIndex = emitCmp(module, block: checkIndex, a: index, b: zeroIndex, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(checkIndex, op: StdOp.condBranch(negativeIndex, thenBlockId: badIndex.id, elseBlockId: checkHigh.id))
@@ -1200,9 +1200,9 @@ function buildManagedFileStatFree(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileStatFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var badBuffer = module.addBlock(func, label: b"mfbadbuf")
-	var release = module.addBlock(func, label: b"mfrel")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"mfrel", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let buffer = 0 as ValueId

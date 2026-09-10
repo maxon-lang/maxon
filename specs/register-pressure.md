@@ -1377,8 +1377,8 @@ register the input may hold is one the def may hold too.
 `0xFFFFFFFF << 4` is `0xFFFFFFFF0`, so limb 0 keeps `0xFFFFFFF0` and carries `0xF` into limb 1,
 which holds `1 << 4 | 0xF` = **31**. The clear loop then zeroes limb 0 only.
 
-Note: the arm64-macos and arm64-linux goldens of this case were minted before `keep` was added and
-cannot be re-minted from an x64-windows host (no runner); they are owed a re-mint on a host that runs them.
+The arm64-macos and arm64-linux goldens of this case embed the program without `keep` and owe a
+re-mint on a host that runs those lanes.
 ```maxon
 typealias Limb = int(i64.min to i64.max)
 typealias Limbs = Array with Limb

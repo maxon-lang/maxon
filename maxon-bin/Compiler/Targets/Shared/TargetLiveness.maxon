@@ -728,8 +728,11 @@ export type LivenessResult
 	// and the memo must be the SAME object across all of them or each pays the derivation again.
 	export var opFacts as OpVariantFacts
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
+	// The runs of every cold block (`ColdRunTable`), rebuilt for the blocks a split touches.
+	export var coldRuns as ColdRunTable
+
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts, coldRuns ColdRunTable) returns LivenessResult
+		return Self{coldRuns: coldRuns, cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
 	end 'create'
 
 	// The dead block-arg count of local block `local`, for ONE register file.
@@ -997,9 +1000,10 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	var maxPressure = zeroClassRow()
 	var demand = zeroClassRow()
-
+	// The cold blocks' runs, walked once here and read by the sweep below and by everything after it.
+	let coldRuns = ColdRunTable.build(module, topo: cfg.topo, buf: sweep.buf, opFacts: opFacts)
 	for i in 0 upto numBlocks 'eachBlock'
-		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, runs: coldRuns.of(i), live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
 		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
@@ -1021,7 +1025,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 		end 'hasOne'
 	end 'theContributionsNoSweepMakes'
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts, coldRuns: coldRuns)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -2319,9 +2323,9 @@ export type UseIndex
 	// hence it dominates every reload of `f` placed at one of `f`'s uses.
 	var slotResident as BoolArray
 	var spillSlot as SpillSlotArray
-
-	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
-	var touchesLoop as BoolArray
+	// Appears as an operand — def OR use — of an op, a phi or an edge in a block ON THE HOT PATH of a
+	// loop: at loop depth > 0 and not cold (`blockIsOffTheHotPath`).
+	var touchesHotLoop as BoolArray
 
 	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
 	// fills in place, through the very same mutators a split edits it with.
@@ -2343,7 +2347,7 @@ export type UseIndex
 		var spillSlot = SpillSlotArray.create()
 		spillSlot.resize(valueCount)
 
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount as ColumnLength), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount as ColumnLength), phiBlock: phiBlock, edgePassed: falseColumn(valueCount as ColumnLength), spillStored: falseColumn(valueCount as ColumnLength), slotResident: falseColumn(valueCount as ColumnLength), spillSlot: spillSlot, touchesLoop: falseColumn(valueCount as ColumnLength)}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount as ColumnLength), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount as ColumnLength), phiBlock: phiBlock, edgePassed: falseColumn(valueCount as ColumnLength), spillStored: falseColumn(valueCount as ColumnLength), slotResident: falseColumn(valueCount as ColumnLength), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount as ColumnLength)}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -2473,8 +2477,9 @@ export type UseIndex
 	end 'spillSlotOf'
 
 	// True iff `valueId`'s def block and every block that touches it — as an OP OPERAND *or* as a
-	// BRANCH-EDGE ARG — are at loop depth 0, which is exactly the shape a COLD spill needs: the store
-	// after its def and every reload before an after-peak use then lie outside every loop.
+	// BRANCH-EDGE ARG — are off the hot path (`blockIsOffTheHotPath`: at loop depth 0, or cold), which
+	// is exactly the shape a COLD spill needs: the store after its def and every reload before an
+	// after-peak use then cost no loop's hot path an instruction.
 	//
 	// ⚠ **THE EDGE HALF USED TO BE MISSING HERE AND MADE UP FOR BY A BLANKET BAR**, and that bar was a
 	// FALSE E5001 generator. `isColdSpillable` refused every edge-passed value outright — the only safe
@@ -2484,9 +2489,9 @@ export type UseIndex
 	// `URL.parse`: 23 values "must be held in registers at once inside this loop", NINETEEN of them
 	// used ZERO times in it. The fact a cold spill actually needs is a DEPTH, and a depth is what this
 	// column now holds for both kinds of use.
-	export function defAndUsesAtDepthZero(valueId ValueId) returns bool
-		return not (try self.touchesLoop.get(valueId) otherwise panic("UseIndex.defAndUsesAtDepthZero: value {valueId} out of range"))
-	end 'defAndUsesAtDepthZero'
+	export function defAndUsesOffTheHotPath(valueId ValueId) returns bool
+		return not (try self.touchesHotLoop.get(valueId) otherwise panic("UseIndex.defAndUsesOffTheHotPath: value {valueId} out of range"))
+	end 'defAndUsesOffTheHotPath'
 
 	// WHICH of the two ways `valueId` is defined, or `none` — a tag, never a boxed payload (see
 	// `ValueDefKind`). The payload accessors below are reached only behind it.
@@ -2701,7 +2706,7 @@ export type UseIndex
 		try self.edgePassed.set(valueId, value: false) otherwise panic("UseIndex.resetValue: edgePassed.set OOB for value {valueId}")
 		try self.spillStored.set(valueId, value: false) otherwise panic("UseIndex.resetValue: spillStored.set OOB for value {valueId}")
 		try self.slotResident.set(valueId, value: false) otherwise panic("UseIndex.resetValue: slotResident.set OOB for value {valueId}")
-		try self.touchesLoop.set(valueId, value: false) otherwise panic("UseIndex.resetValue: touchesLoop.set OOB for value {valueId}")
+		try self.touchesHotLoop.set(valueId, value: false) otherwise panic("UseIndex.resetValue: touchesHotLoop.set OOB for value {valueId}")
 	end 'resetValue'
 
 	// Record `valueId`'s def: an op at `opIdx`, in block `blockLocal`. A split MINTS values — each
@@ -2757,10 +2762,10 @@ export type UseIndex
 		try self.edgePassed.set(valueId, value: true) otherwise panic("UseIndex.setEdgePassed: edgePassed.set OOB for value {valueId}")
 	end 'setEdgePassed'
 
-	// Record that `valueId` is an operand — def or use — of an op in a block at loop depth > 0.
-	function setTouchesLoop(valueId ValueId)
-		try self.touchesLoop.set(valueId, value: true) otherwise panic("UseIndex.setTouchesLoop: touchesLoop.set OOB for value {valueId}")
-	end 'setTouchesLoop'
+	// Record that `valueId` is an operand — def or use — of an op, phi or edge in a block on a loop's hot path.
+	function setTouchesHotLoop(valueId ValueId)
+		try self.touchesHotLoop.set(valueId, value: true) otherwise panic("UseIndex.setTouchesHotLoop: touchesHotLoop.set OOB for value {valueId}")
+	end 'setTouchesHotLoop'
 
 	// Grow the value space to `newValueCount`, keeping every column's contents. A split MINTS value ids
 	// — one per reload — and every column here is keyed by value id, so this is what lets the index
@@ -2787,7 +2792,7 @@ export type UseIndex
 		self.spillStored.growFilled(newValueCount as ElementIndex, value: false)
 		self.slotResident.growFilled(newValueCount as ElementIndex, value: false)
 		self.spillSlot.growFilled(newValueCount as ElementIndex, value: 0)
-		self.touchesLoop.growFilled(newValueCount as ElementIndex, value: false)
+		self.touchesHotLoop.growFilled(newValueCount as ElementIndex, value: false)
 
 		self.valueCount = newValueCount
 	end 'growTo'
@@ -2842,6 +2847,19 @@ function scannedValuesHold(which ScannedValues, valueId ValueId) returns bool
 	end 'w'
 end 'scannedValuesHold'
 
+// Where a spill op costs a loop's hot path nothing: a block outside every loop, or a COLD block at any
+// depth — a store or reload there runs once, or only when the guard it sits behind refuses, which is what
+// the cold call it brackets already pays. The one predicate behind `SpillPlacement.cold`: the use index
+// records a value's def and uses against it (`touchesHotLoop`), and every placed op is re-checked against
+// it (`assertPlacementLegal`), so the two cannot drift.
+export function blockIsOffTheHotPath(cfg FuncCfg, blockLocal CfgIndex, heat BlockHeat) returns bool
+	if heat == BlockHeat.cold 'cold'
+		return true
+	end 'cold'
+
+	return (try cfg.loopDepth.get(blockLocal) otherwise panic("blockIsOffTheHotPath: loopDepth.get OOB at block local {blockLocal}")) == 0
+end 'blockIsOffTheHotPath'
+
 // Record ONE block's index facts — its phi defs, every op def/use of a `which` value, its edge args —
 // and return the block's op count.
 //
@@ -2858,7 +2876,7 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 	let opCount = ordered.count()
 
 	for pos in 0 upto opCount 'eachOp'
-		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, pos: pos, opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
+		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, pos: pos, opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
 	end 'eachOp'
 
 	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount, which: which)
@@ -2869,18 +2887,17 @@ end 'indexBlockFacts'
 // no ordering constraint.
 function indexBlockArgDefs(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal CfgIndex, which ScannedValues)
 	// A phi's DEF is its own block's entry, so a phi of a block inside a loop is (re)defined once per
-	// iteration — the same fact `touchesLoop` records for an op def, and the reason a loop-carried
+	// iteration — the same fact `touchesHotLoop` records for an op def, and the reason a loop-carried
 	// accumulator must never be cold-spilled. Recorded here so `isColdSpillable` can ask ONE question
-	// about depth instead of barring every phi outright (see `defAndUsesAtDepthZero`).
-	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockArgDefs: loopDepth.get OOB")) != 0
+	// about the block instead of barring every phi outright (see `defAndUsesOffTheHotPath`).
+	let onHotPath = not blockIsOffTheHotPath(cfg, blockLocal: blockLocal, heat: block.heat)
 
 	for arg in block.blockArgs 'eachPhi'
 		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
 			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
-
-			if inLoop 'insideLoop'
-				index.setTouchesLoop(arg.valueId)
-			end 'insideLoop'
+			if onHotPath 'insideHotLoop'
+				index.setTouchesHotLoop(arg.valueId)
+			end 'insideHotLoop'
 		end 'recorded'
 	end 'eachPhi'
 end 'indexBlockArgDefs'
@@ -2892,8 +2909,8 @@ end 'indexBlockArgDefs'
 // ⚠ THE CALLER OWNS THE ORDER. `addUseRecord` appends at each value's tail and REFUSES a record that
 // would land out of sequence, so ops must be offered in ascending (block, position) — which the
 // whole-block walk gets from its own loop and the split gets by sorting its candidate positions.
-function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, which ScannedValues, buf OperandList, opFacts OpVariantFacts)
-	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexOneOpFacts: loopDepth.get OOB")) != 0
+function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, heat BlockHeat, pos BlockOpPos, opIdx OpIndex, which ScannedValues, buf OperandList, opFacts OpVariantFacts)
+	let onHotPath = not blockIsOffTheHotPath(cfg, blockLocal: blockLocal, heat: heat)
 	let op = try module.ops.get(opIdx) otherwise panic("indexOneOpFacts: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -2914,9 +2931,9 @@ function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 			continue
 		end 'notRecorded'
 
-		if inLoop 'insideLoop'
-			index.setTouchesLoop(v)
-		end 'insideLoop'
+		if onHotPath 'insideHotLoop'
+			index.setTouchesHotLoop(v)
+		end 'insideHotLoop'
 
 		// Residency is recorded for the op's ONE virtual operand whichever side it is on: a
 		// `storeSlotReg`'s source (a use) and a `loadRegSlot`'s destination (a def) both end with
@@ -2941,11 +2958,11 @@ end 'indexOneOpFacts'
 // block's first after-peak use dominate the edge too.
 function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal CfgIndex, opCount OpSeq, which ScannedValues)
 	// An edge arg is READ at the end of this block, so a block inside a loop touches its args once per
-	// iteration exactly as an op operand does — and `touchesLoop` is the one column that says so. It is
-	// recorded here rather than left to `isColdSpillable`'s old blanket edge bar, which could not tell a
-	// loop-carried arg from one handed across a depth-0 `if` join and refused both (see
-	// `defAndUsesAtDepthZero`).
-	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockEdgeUses: loopDepth.get OOB")) != 0
+	// iteration exactly as an op operand does — and `touchesHotLoop` is the one column that says so. It
+	// is recorded here rather than left to `isColdSpillable`'s old blanket edge bar, which could not tell
+	// a loop-carried arg from one handed across a depth-0 `if` join and refused both (see
+	// `defAndUsesOffTheHotPath`).
+	let onHotPath = not blockIsOffTheHotPath(cfg, blockLocal: blockLocal, heat: block.heat)
 
 	for edge in block.branchEdges 'eachEdge'
 		for argId in edge.argIds 'eachArg'
@@ -2954,11 +2971,9 @@ function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLoc
 			end 'notRecorded'
 
 			index.setEdgePassed(argId)
-
-			if inLoop 'insideLoop'
-				index.setTouchesLoop(argId)
-			end 'insideLoop'
-
+			if onHotPath 'insideHotLoop'
+				index.setTouchesHotLoop(argId)
+			end 'insideHotLoop'
 			if index.blockHasEdgeUseOf(argId, blockLocal: blockLocal) 'dedupe'
 				continue
 			end 'dedupe'
@@ -3063,7 +3078,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 			end 'inAnUnregisteredEarlierBlock'
 
 			if next == 0 or slot != (try candidates.get(next - 1) otherwise panic("reindexSplitValues: candidates.get OOB at {next - 1}")) 'notAlreadyDone'
-				indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, pos: pressure.positionOfSlot(blockLocal, slot: slot as PressureSlot), opIdx: pressure.opAtSlot(slot as PressureSlot), which: which, buf: scratch.buf, opFacts: opFacts)
+				indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, pos: pressure.positionOfSlot(blockLocal, slot: slot as PressureSlot), opIdx: pressure.opAtSlot(slot as PressureSlot), which: which, buf: scratch.buf, opFacts: opFacts)
 			end 'notAlreadyDone'
 
 			next = next + 1
@@ -3428,15 +3443,18 @@ export type PressureSweepScratch
 	export var liveByClass as RegCountColumn
 	export var opPressure as RegCountColumn
 	export var blockMax as RegCountColumn
+	// The cold block being swept, when the block is one (`ColdRunSweep`).
+	export var coldRun as ColdRunSweep
 
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow()}
+		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create()}
 	end 'create'
 
-	// Widen the working row to `wordsPerRow`, ZEROING only the words the growth added — the rest of the
-	// row is already zero, and re-zeroing it would be O(values/64) on every split.
+	// Widen the working rows to `wordsPerRow`, ZEROING only the words the growth added — the rest of
+	// each row is already zero, and re-zeroing it would be O(values/64) on every split.
 	export function widenRow(wordsPerRow BitWordCount)
 		self.liveRow.growFilled(wordsPerRow as ElementIndex, value: 0)
+		self.coldRun.widen(wordsPerRow)
 	end 'widenRow'
 end 'PressureSweepScratch'
 
@@ -3532,7 +3550,7 @@ end 'sweepEstablishedRegisters'
 // residue neither can prevent — greedy is not exact for list colouring — is repaired by
 // `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Keeping the old sentence here would be
 // the same one-fact-written-twice this rung corrected in `HallCondition.hallVerdictAt`'s own header.
-function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
+function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -3560,10 +3578,13 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
-
+	if block.heat == BlockHeat.cold 'coldBlock'
+		scratch.coldRun.beginBlock(wordsPerRow)
+	end 'coldBlock'
 	for ri in 0 upto ordered.count() 'eachOpRev'
-		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
+		let pos = ordered.count() - 1 - ri
+		let opIdx = try ordered.get(pos) otherwise panic("sweepBlockPressure: ordered.get OOB")
+		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as BlockOpPos, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxRegCount(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -3942,7 +3963,7 @@ end 'nonSweptForbidOf'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS this op's transient
 // register (see `addOpTransientPressure`).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, pos BlockOpPos, runs ColdBlockRuns, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 
 	// This also fills `buf` with the op's operands, which everything below reads.
@@ -3959,6 +3980,12 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 	if clobberMask != 0 'hasClobber'
 		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
+	if heat == BlockHeat.cold 'coldBlock'
+		match runs.runAt(pos) 'run'
+			none then break 'run'
+			run(id) then coldRun.confineRunOp(op, buf: buf, opFacts: opFacts, runs: runs, id: id, pos: pos, liveRow: liveRow, forbidden: forbidden, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+		end 'run'
+	end 'coldBlock'
 
 	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
 	// registers (its implicit reads AND writes). `applyForbidden` above only covers
@@ -3968,8 +3995,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 	// be RAX (holds the dividend) or RDX (the cqo sign-extension, then the remainder), so
 	// it must avoid implicitUses ∪ implicitDefs = {RAX, RDX}. This mask is 0 for every op
 	// without implicit registers, so the loop is a no-op except at `idiv`.
-	let implicitTouch = opFacts.implicitUsesOf(op) or opFacts.implicitDefsOf(op)
-
+	let implicitTouch = operandImplicitTouchOf(op, opFacts: opFacts)
 	if implicitTouch != 0 'hasImplicit'
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
@@ -3985,9 +4011,11 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 end 'stepBackwardOverOp'
 
 // Every register `op` WRITES without being a virtual def that a value live ACROSS the op must avoid:
-// its CONFINING implicit-def mask (a call's 9 caller-saved plus all 16 XMMs, an `idiv`'s RAX/RDX —
-// nothing for a call in a cold block, see `confiningImplicitDefsOf`) plus each PHYSICAL def operand
-// (an argument pre-move's `mov argReg, v`). This is exactly what `forbidden` accumulates.
+// its CONFINING implicit-def mask (a call's 9 caller-saved GPRs and xmm0–5, an `idiv`'s RAX/RDX) plus
+// each PHYSICAL def operand (an argument pre-move's `mov argReg, v`) — and NOTHING for any op in a cold
+// block, where a clobber is paid by the run's bracket instead of by the colouring of the hot path
+// around it (`ColdCallBracketPlan` states the region rule; `ColdRunSweep` the one refinement the sweep
+// keeps). This is exactly what `forbidden` accumulates.
 //
 // ⚠ IT IS ONE FUNCTION BECAUSE IT IS ONE FACT. The liveness sweep folds this mask into `forbidden`;
 // the splitter asks the same question in the other direction — "would a reload spanning this op be
@@ -3998,24 +4026,361 @@ end 'stepBackwardOverOp'
 // `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
 export function opClobberMask(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
-	return confiningImplicitDefsOf(op, heat: heat, opFacts: opFacts) or physicalDefMask(buf)
+	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
+		return 0
+	end 'bracketedNotConfined'
+
+	return rawClobberMask(op, buf: buf, opFacts: opFacts)
 end 'opClobberMask'
 
-// The implicit defs of `op` that CONFINE a value live across it — its `implicitDefs`, except that a
-// call in a cold block confines nothing: the colorer brackets every caller-saved register it finds live
-// across such a call with a save before it and a reload after it (`ColdCallBracketPlan`), so the
-// clobber is paid where the call is rather than by the colouring of the hot path around it.
+// Every register `op` writes without naming a virtual — its implicit defs plus its physical def
+// operands — whatever the heat: the fact a bracket saves against, where `opClobberMask` is the fact a
+// colouring is confined by. `buf` must already hold `op`'s operands.
+export function rawClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
+	return opFacts.implicitDefsOf(op) or physicalDefMask(buf)
+end 'rawClobberMask'
+
+// The implicit defs of `op` that CONFINE a value live across it — its `implicitDefs`, except for a run
+// op in a cold block, which confines nothing: the run's bracket preserves every register it writes
+// (`ColdCallBracketPlan`), so the clobber is paid where the run is rather than by the colouring of the
+// hot path around it. An op that defines a virtual is no run op (`coldRunOpKind`) and keeps its scratch
+// confining. Fills `buf` with `op`'s operands.
 //
 // ⚠ ONE HOME, read by the liveness sweep, the pressure index's per-op clobber, the splitter's run
-// boundaries and its fixed-register tie-break. The op's `implicitDefs` metadata is unchanged and every
-// consistency assert over it still holds; only its effect on confinement is gated, and gated here.
-export function confiningImplicitDefsOf(op TargetOp, heat BlockHeat, opFacts OpVariantFacts) returns RegMask
-	if heat == BlockHeat.cold and opFacts.isCallOf(op) 'bracketedNotConfined'
+// boundaries and its fixed-register tie-break. The op's `implicitDefs` is the instruction's own fact and
+// every consistency assert reads that; only its effect on confinement is decided here.
+export function confiningImplicitDefsOf(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
+	targetOpOperands(op, buf: buf)
+	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
 		return 0
 	end 'bracketedNotConfined'
 
 	return opFacts.implicitDefsOf(op)
 end 'confiningImplicitDefsOf'
+
+// How an op of a cold block figures in the block's RUNS (`ColdCallBracketPlan` states the region rule):
+// a `clobber` writes a register by name or implicitly and defines no virtual — an argument pre-move,
+// an `idiv` — a `call` is a call, a `capture` reads a call's answer into a virtual, a `store` is a
+// spill store, and `none` is any other op. A store continues the run of the capture it follows — the
+// splitter stores a captured value right after its capture, and a run closed there would restore the
+// register the NEXT capture reads — and opens none. An op that DEFINES A VIRTUAL and also writes
+// scratch implicitly (`negF64RegReg`'s xmm scratch, the arm64 atomics' x16/x17) is `none`: a value
+// born inside a run would have no save point before it, so such an op is kept out of every run and
+// its scratch stays CONFINING (`opClobberMask`). `buf` must already hold `op`'s operands.
+export enum ColdRunOpKind
+	none
+	clobber
+	call
+	capture
+	store
+end 'ColdRunOpKind'
+
+export function coldRunOpKind(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns ColdRunOpKind
+	if isCaptureMove(op) 'capture'
+		return ColdRunOpKind.capture
+	end 'capture'
+	if definesAVirtual(buf) 'ownValue'
+		return ColdRunOpKind.none
+	end 'ownValue'
+	if opFacts.isCallOf(op) 'call'
+		return ColdRunOpKind.call
+	end 'call'
+	if rawClobberMask(op, buf: buf, opFacts: opFacts) != 0 'clobber'
+		return ColdRunOpKind.clobber
+	end 'clobber'
+	if opFacts.slotRoleOf(op) == OpSlotRole.spillStore 'store'
+		return ColdRunOpKind.store
+	end 'store'
+
+	return ColdRunOpKind.none
+end 'coldRunOpKind'
+
+function definesAVirtual(buf OperandList) returns bool
+	for o in buf 'each'
+		if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
+			return true
+		end 'virtualDef'
+	end 'each'
+	return false
+end 'definesAVirtual'
+
+// A run of a cold block, by its index among the block's runs in layout order.
+export typealias ColdRunId = int(0 to u64.max)
+export typealias ColdRunIdColumn = Array with ColdRunId
+
+// Which run a body op belongs to, or `none`.
+export union ColdRunAt
+	none
+	run(id ColdRunId)
+end 'ColdRunAt'
+
+// ONE cold block's runs, computed by ONE forward walk (`rebuild`) and read by every consumer — the
+// liveness sweep, the colorer, the splitter's forbid rebuild and, through the plan's sequences, the
+// rewrite — so no two of them spell the run structure. A run is a maximal sequence of clobbers and
+// calls closed by the captures that follow its last call and the spill stores of what they captured;
+// a clobber or call after that opens the next run, and a cold block's terminator is never a run op.
+//
+// THE CALL GROUP the walk asserts: a capture directly follows a call, another capture or a captured
+// value's store, and a store inside a run follows a capture or another store. A `none` op between a
+// call and one of its captures would close the run before that capture, and the run's reloads would
+// restore the very register the capture then reads — which is why the splitter anchors a reload for
+// a pre-move's read before the group's first pre-move (`firstPreMoveBefore`) rather than between two
+// pre-moves, and why a captured value's store, the one op of the splitter's that lands between two
+// captures, is a run op.
+// A capture or a captured value's store: the ops that end a call group, after which the next clobber
+// or call opens a new run.
+function closesACallGroup(kind ColdRunOpKind) returns bool
+	return kind == ColdRunOpKind.capture or kind == ColdRunOpKind.store
+end 'closesACallGroup'
+
+// The kind the walk files `kind` under: a store is a run op only inside a call group, where it follows
+// a capture or another store; a store anywhere else — after the op that defines a value of the block's
+// own — is `none`. A store directly after a clobber or a call has no value to read and is malformed.
+function walkKindOf(kind ColdRunOpKind, lastKind ColdRunOpKind, block IrBlock, pos BlockOpPos) returns ColdRunOpKind
+	if kind != ColdRunOpKind.store 'notAStore'
+		return kind
+	end 'notAStore'
+	if lastKind == ColdRunOpKind.clobber or lastKind == ColdRunOpKind.call 'nothingToStore'
+		panic("ColdBlockRuns.rebuild: the spill store at position {pos} of cold block '{String.from(block.label)}' directly follows a clobber or a call, which defines no virtual it could read")
+	end 'nothingToStore'
+	return ColdRunOpKind.store if closesACallGroup(lastKind) else ColdRunOpKind.none
+end 'walkKindOf'
+
+export type ColdBlockRuns
+	var inRun as BoolArray
+	var runIdOfPos as ColdRunIdColumn
+	var first as BlockOpPosArray
+	var last as BlockOpPosArray
+
+	export static function create() returns ColdBlockRuns
+		return Self{inRun: BoolArray.create(), runIdOfPos: ColdRunIdColumn.create(), first: BlockOpPosArray.create(), last: BlockOpPosArray.create()}
+	end 'create'
+
+	export function runCount() returns ColdRunId
+		return self.first.count() as ColdRunId
+	end 'runCount'
+
+	// The run the body op at `pos` belongs to; the terminator's position (past the body) is in none.
+	export function runAt(pos BlockOpPos) returns ColdRunAt
+		if pos >= self.inRun.count() or not (try self.inRun.get(pos) otherwise panic("ColdBlockRuns.runAt: inRun.get OOB at {pos}")) 'notInARun'
+			return ColdRunAt.none
+		end 'notInARun'
+
+		return ColdRunAt.run(try self.runIdOfPos.get(pos) otherwise panic("ColdBlockRuns.runAt: runIdOfPos.get OOB at {pos}"))
+	end 'runAt'
+
+	export function firstOf(id ColdRunId) returns BlockOpPos
+		return try self.first.get(id) otherwise panic("ColdBlockRuns.firstOf: no run {id} of {self.first.count()}")
+	end 'firstOf'
+
+	export function lastOf(id ColdRunId) returns BlockOpPos
+		return try self.last.get(id) otherwise panic("ColdBlockRuns.lastOf: no run {id} of {self.last.count()}")
+	end 'lastOf'
+
+	// The one forward walk. Refills in place, so a block re-walked after a split allocates nothing new.
+	export function rebuild(module TargetModule, block IrBlock, buf OperandList, opFacts OpVariantFacts)
+		let count = block.opRefs.count()
+		self.inRun.refill(count as ElementIndex, value: false)
+		self.runIdOfPos.refill(count as ElementIndex, value: 0)
+		self.first.clear()
+		self.last.clear()
+
+		var lastKind = ColdRunOpKind.none
+		for pos in 0 upto count 'eachOp'
+			let op = try module.ops.get(try block.opRefs.get(pos) otherwise panic("ColdBlockRuns.rebuild: opRefs.get OOB at {pos}")) otherwise panic("ColdBlockRuns.rebuild: op at position {pos} of '{String.from(block.label)}' not in module.ops")
+			targetOpOperands(op, buf: buf)
+			let kind = walkKindOf(coldRunOpKind(op, buf: buf, opFacts: opFacts), lastKind: lastKind, block: block, pos: pos)
+			match kind 'k'
+				none then break 'k'
+				capture then self.requireCaptureAdjacent(lastKind, block: block, pos: pos)
+				store then break 'k'
+				clobber or
+					call then self.openRunIfClosed(lastKind, pos: pos)
+			end 'k'
+			if kind != ColdRunOpKind.none 'inARun'
+				self.extendOpenRun(pos)
+			end 'inARun'
+			lastKind = kind
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			let terminator = try module.ops.get(block.terminatorIndex()) otherwise panic("ColdBlockRuns.rebuild: terminator of '{String.from(block.label)}' not in module.ops")
+			targetOpOperands(terminator, buf: buf)
+			if coldRunOpKind(terminator, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'aRunOpTerminates'
+				panic("ColdBlockRuns.rebuild: the terminator of cold block '{String.from(block.label)}' is a run op — a terminator reads or writes no register a bracket could save, so every consumer of the runs takes it for `none`")
+			end 'aRunOpTerminates'
+		end 'terminated'
+	end 'rebuild'
+
+	function requireCaptureAdjacent(lastKind ColdRunOpKind, block IrBlock, pos BlockOpPos)
+		if lastKind != ColdRunOpKind.call and not closesACallGroup(lastKind) 'separated'
+			panic("ColdBlockRuns.rebuild: the capture at position {pos} of cold block '{String.from(block.label)}' does not directly follow its call, another capture or a captured value's store — an op was inserted into a call group, and the run's reloads would restore the register this capture reads")
+		end 'separated'
+	end 'requireCaptureAdjacent'
+
+	function openRunIfClosed(lastKind ColdRunOpKind, pos BlockOpPos)
+		if lastKind == ColdRunOpKind.none or closesACallGroup(lastKind) 'opens'
+			self.first.push(pos)
+			self.last.push(pos)
+		end 'opens'
+	end 'openRunIfClosed'
+
+	function extendOpenRun(pos BlockOpPos)
+		let id = (self.first.count() - 1) as ColdRunId
+		try self.last.set(id, value: pos) otherwise panic("ColdBlockRuns.extendOpenRun: last.set OOB at run {id}")
+		try self.inRun.set(pos, value: true) otherwise panic("ColdBlockRuns.extendOpenRun: inRun.set OOB at {pos}")
+		try self.runIdOfPos.set(pos, value: id) otherwise panic("ColdBlockRuns.extendOpenRun: runIdOfPos.set OOB at {pos}")
+	end 'extendOpenRun'
+end 'ColdBlockRuns'
+
+export typealias ColdBlockRunsArray = Array with ColdBlockRuns
+
+// The runs of every cold block of a function (`ColdBlockRuns`), by block local. Built with the
+// liveness and rebuilt for the blocks a split touched, so positions are always current. Every block
+// that is not cold shares the table's one empty entry, which is never rebuilt.
+export type ColdRunTable
+	var blocks as ColdBlockRunsArray
+
+	export static function build(module TargetModule, topo FuncTopology, buf OperandList, opFacts OpVariantFacts) returns ColdRunTable
+		var blocks = ColdBlockRunsArray.create()
+		let noRuns = ColdBlockRuns.create()
+		for local in 0 upto topo.numBlocks 'eachBlock'
+			let block = blockAt(module, topo: topo, local: local)
+			if block.heat == BlockHeat.cold 'cold'
+				var runs = ColdBlockRuns.create()
+				runs.rebuild(module, block: block, buf: buf, opFacts: opFacts)
+				blocks.push(runs)
+			end 'cold' else 'notCold'
+				blocks.push(noRuns)
+			end 'notCold'
+		end 'eachBlock'
+		return Self{blocks: blocks}
+	end 'build'
+
+	export function of(local CfgIndex) returns ColdBlockRuns
+		return try self.blocks.get(local) otherwise panic("ColdRunTable.of: block local {local} is outside the {self.blocks.count()} blocks the table was built over")
+	end 'of'
+
+	// Re-walk one block after a split moved its positions; a block that is not cold has nothing to walk.
+	export function rebuildBlock(module TargetModule, topo FuncTopology, local CfgIndex, buf OperandList, opFacts OpVariantFacts)
+		let block = blockAt(module, topo: topo, local: local)
+		if block.heat != BlockHeat.cold 'notCold'
+			return
+		end 'notCold'
+
+		var runs = self.of(local)
+		runs.rebuild(module, block: block, buf: buf, opFacts: opFacts)
+	end 'rebuildBlock'
+end 'ColdRunTable'
+
+// The position a reload for the read at `pos` lands before: the group's first pre-move when the op at
+// `pos` is a pre-move or its call, `pos` itself otherwise — see `ColdBlockRuns`.
+export function firstPreMoveBefore(module TargetModule, block IrBlock, pos BlockOpPos, buf OperandList, opFacts OpVariantFacts) returns BlockOpPos
+	// A read by the terminator lands the reload past the body, where no group is.
+	if pos >= block.opRefs.count() 'pastTheBody'
+		return pos
+	end 'pastTheBody'
+
+	let kind = coldRunKindAt(module, block: block, pos: pos, buf: buf, opFacts: opFacts)
+	if kind != ColdRunOpKind.clobber and kind != ColdRunOpKind.call 'notInAGroup'
+		return pos
+	end 'notInAGroup'
+
+	var first = pos
+	while first > 0 and coldRunKindAt(module, block: block, pos: first - 1, buf: buf, opFacts: opFacts) == ColdRunOpKind.clobber 'extend'
+		first = first - 1
+	end 'extend'
+	return first
+end 'firstPreMoveBefore'
+
+// The last position a reload placed for the read at `pos` may serve: the call that closes the read's
+// group when the read is a pre-move or the call itself, the block's end otherwise. A reload hoisted
+// above a group (`firstPreMoveBefore`) that also served a read past the group's call would be live
+// across that call — confined to the callee-saved half, exactly what the split was to relieve.
+export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos BlockOpPos, buf OperandList, opFacts OpVariantFacts) returns BlockOpPos
+	let count = block.opRefs.count()
+	if pos >= count 'pastTheBody'
+		return pos
+	end 'pastTheBody'
+
+	var at = pos
+	while at < count 'toTheCall'
+		let kind = coldRunKindAt(module, block: block, pos: at, buf: buf, opFacts: opFacts)
+		if kind == ColdRunOpKind.call 'theGroupsCall'
+			return at
+		end 'theGroupsCall'
+		if kind != ColdRunOpKind.clobber 'notAGroup'
+			return count if at == pos else at
+		end 'notAGroup'
+		at = at + 1
+	end 'toTheCall'
+
+	return count
+end 'reloadRunBoundFrom'
+
+function coldRunKindAt(module TargetModule, block IrBlock, pos BlockOpPos, buf OperandList, opFacts OpVariantFacts) returns ColdRunOpKind
+	let op = try module.ops.get(try block.opRefs.get(pos) otherwise panic("coldRunKindAt: opRefs.get OOB at {pos}")) otherwise panic("coldRunKindAt: op at position {pos} not in module.ops")
+	targetOpOperands(op, buf: buf)
+	return coldRunOpKind(op, buf: buf, opFacts: opFacts)
+end 'coldRunKindAt'
+
+function captureAt(module TargetModule, block IrBlock, pos BlockOpPos) returns bool
+	return isCaptureMove(try module.ops.get(try block.opRefs.get(pos) otherwise panic("captureAt: opRefs.get OOB at {pos}")) otherwise panic("captureAt: op at position {pos} not in module.ops"))
+end 'captureAt'
+
+// The backward sweep's ONE confinement inside a cold block: a value READ by a later op of the same run
+// than a clobber it is live across cannot sit in a register that clobber writes — the read would see
+// the pre-move's argument in place of the value — so those clobbers confine it (`confineRunOp`). Every
+// other value live across a run's ops is preserved by the run's bracket (`ColdCallBracketPlan`), which
+// is why `opClobberMask` answers 0 for a run op. The splitter's rebuild of a forbid states the same
+// rule per value (`coldRunClobbersFor`), reading the same `ColdBlockRuns`.
+//
+// `readLater` holds the values the run's ops after the current one read; the backward walk meets a
+// run's last op first and empties it there.
+export type ColdRunSweep
+	var readLater as BitWordArray
+	// Whether `readLater` holds a bit, so a block start clears it only when there is something to clear.
+	var readLaterHeld as bool
+
+	export static function create() returns ColdRunSweep
+		return Self{readLater: BitWordArray.create(), readLaterHeld: false}
+	end 'create'
+
+	export function widen(wordsPerRow BitWordCount)
+		self.readLater.growFilled(wordsPerRow as ElementIndex, value: 0)
+	end 'widen'
+
+	export function beginBlock(wordsPerRow BitWordCount)
+		self.emptyReadLater(wordsPerRow)
+	end 'beginBlock'
+
+	function emptyReadLater(wordsPerRow BitWordCount)
+		if self.readLaterHeld 'held'
+			zeroRow(self.readLater, wordsPerRow: wordsPerRow)
+			self.readLaterHeld = false
+		end 'held'
+	end 'emptyReadLater'
+
+	// One run op, walked backward: the run's last op empties the set, a clobber confines the values read
+	// later in the run, and this op's reads are then counted for the ops before it.
+	export function confineRunOp(op TargetOp, buf OperandList, opFacts OpVariantFacts, runs ColdBlockRuns, id ColdRunId, pos BlockOpPos, liveRow BitWordArray, forbidden RegMaskColumn, wordsPerRow BitWordCount, liveBuf ValueIdArray)
+		if pos == runs.lastOf(id) 'theRunsLastOp'
+			self.emptyReadLater(wordsPerRow)
+		end 'theRunsLastOp'
+
+		let raw = rawClobberMask(op, buf: buf, opFacts: opFacts)
+		if raw != 0 'clobbers'
+			applyForbiddenWithin(liveRow, within: self.readLater, forbidden: forbidden, buf: buf, clobberMask: raw, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+		end 'clobbers'
+
+		for o in buf 'eachOperand'
+			if (not operandIsDef(o)) and operandIsVirtual(o) 'read'
+				bitsetAdd(self.readLater, base: 0, bit: operandValueId(o) as BitIndex)
+				self.readLaterHeld = true
+			end 'read'
+		end 'eachOperand'
+	end 'confineRunOp'
+end 'ColdRunSweep'
 
 // The registers `buf`'s operands write BY NAME rather than by allocation — every PHYSICAL def (a
 // call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`). It is the
@@ -4318,14 +4683,29 @@ function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf Opera
 	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
 
 	for v in liveBuf 'eachTarget'
-		if operandDefinesValue(buf, v: v) 'ownDef'
-			continue
-		end 'ownDef'
-
-		let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
-		try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
+		forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
 	end 'eachTarget'
 end 'applyForbidden'
+
+// `applyForbidden` over the values of `liveRow` that are ALSO in `within` — a cold run's clobber, which
+// confines only the values read later in the run (`ColdRunSweep`).
+function applyForbiddenWithin(liveRow BitWordArray, within BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
+	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
+	for v in liveBuf 'eachTarget'
+		if bitsetTest(within, base: 0, bit: v as BitIndex) 'readLater'
+			forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
+		end 'readLater'
+	end 'eachTarget'
+end 'applyForbiddenWithin'
+
+// Add `clobberMask` to `v`'s forbidden registers unless the op is `v`'s own def.
+function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask)
+	if operandDefinesValue(buf, v: v) 'ownDef'
+		return
+	end 'ownDef'
+	let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
+	try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
+end 'forbidLiveValue'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool
 	for o in buf 'each'
@@ -4336,6 +4716,19 @@ function operandDefinesValue(buf OperandList, v ValueId) returns bool
 
 	return false
 end 'operandDefinesValue'
+
+// The registers an op's EXPLICIT operands must avoid: its implicit reads and writes (`idiv`'s RAX/RDX),
+// except a CALL's — a call reads its callee register before it clobbers anything, so its callee may sit
+// in any register its own live range allows; forbidding it the caller-saved half would confine every
+// reload of a callee to the callee-saved five, which a pre-move peak cannot relieve. Read by the sweep
+// and by the splitter's forbid rebuild, so the two cannot drift.
+export function operandImplicitTouchOf(op TargetOp, opFacts OpVariantFacts) returns RegMask
+	if opFacts.isCallOf(op) 'readsItsCalleeFirst'
+		return 0
+	end 'readsItsCalleeFirst'
+
+	return opFacts.implicitUsesOf(op) or opFacts.implicitDefsOf(op)
+end 'operandImplicitTouchOf'
 
 // Add `implicitMask` (the op's implicit reads ∪ writes) to the forbidden set of every
 // EXPLICIT VIRTUAL operand of the op. Unlike `applyForbidden` (which forbids values live

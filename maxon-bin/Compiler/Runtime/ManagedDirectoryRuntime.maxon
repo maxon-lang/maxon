@@ -289,9 +289,9 @@ end 'emitFileNameAddr'
 // own: the header dominates the continuation (its `condBranch` is the only way in), so the value is simply
 // in scope — the same dominance argument `ManagedFileRuntime.emitPathToCString` makes for its own `len`.
 export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, length ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"mdslh")
-	var body = module.addBlock(func, label: b"mdslb")
-	let done = module.addBlock(func, label: b"mdsld")
+	var header = module.addBlock(func, label: b"mdslh", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"mdslb", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"mdsld", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(header.id))
@@ -377,10 +377,10 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryOpenSearchName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mdterm")
-	var failed = module.addBlock(func, label: b"mdfail")
-	var opened = module.addBlock(func, label: b"mdok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
+	var opened = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -438,17 +438,17 @@ function buildManagedDirectoryNext(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var checkPend = module.addBlock(func, label: b"mdpend")
-	var consume = module.addBlock(func, label: b"mdconsume")
-	var fetch = module.addBlock(func, label: b"mdfetch")
-	var fetchFailed = module.addBlock(func, label: b"mdnofile")
-	var atEof = module.addBlock(func, label: b"mdeof")
-	var fetchError = module.addBlock(func, label: b"mdnexterr")
-	var dotCheck = module.addBlock(func, label: b"mddot")
-	var dot1 = module.addBlock(func, label: b"mddot1")
-	var dot2 = module.addBlock(func, label: b"mddot2")
-	var found = module.addBlock(func, label: b"mdfound")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkPend = module.addBlock(func, label: b"mdpend", heat: BlockHeat.normal)
+	var consume = module.addBlock(func, label: b"mdconsume", heat: BlockHeat.normal)
+	var fetch = module.addBlock(func, label: b"mdfetch", heat: BlockHeat.normal)
+	var fetchFailed = module.addBlock(func, label: b"mdnofile", heat: BlockHeat.normal)
+	var atEof = module.addBlock(func, label: b"mdeof", heat: BlockHeat.normal)
+	var fetchError = module.addBlock(func, label: b"mdnexterr", heat: BlockHeat.normal)
+	var dotCheck = module.addBlock(func, label: b"mddot", heat: BlockHeat.normal)
+	var dot1 = module.addBlock(func, label: b"mddot1", heat: BlockHeat.normal)
+	var dot2 = module.addBlock(func, label: b"mddot2", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"mdfound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -513,7 +513,7 @@ function buildManagedDirectoryNext(module StdModule)
 	module.setTerminator(dot1, op: StdOp.condBranch(isSingleDot, thenBlockId: fetch.id, elseBlockId: dot2.id))
 
 	let secondDot = emitCmp(module, block: dot2, a: byte1, b: dotConst, pred: StdCmpPred.eq, ids: ids)
-	var dot3 = module.addBlock(func, label: b"mddot3")
+	var dot3 = module.addBlock(func, label: b"mddot3", heat: BlockHeat.normal)
 	module.setTerminator(dot2, op: StdOp.condBranch(secondDot, thenBlockId: dot3.id, elseBlockId: found.id))
 
 	let twoIndex = emitConst(module, block: dot3, value: 2, ids: ids)
@@ -542,7 +542,7 @@ function buildManagedDirectoryFilename(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryFilenameName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
@@ -573,9 +573,9 @@ function buildManagedDirectoryClose(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var doClose = module.addBlock(func, label: b"mddo")
-	var done = module.addBlock(func, label: b"mddone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doClose = module.addBlock(func, label: b"mddo", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"mddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -621,9 +621,9 @@ function buildManagedDirectoryDestruct(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var lower = module.addBlock(func, label: b"lower")
-	var drop = module.addBlock(func, label: b"drop")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -654,12 +654,12 @@ function buildManagedDirectoryExists(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mdterm")
-	var missing = module.addBlock(func, label: b"mdmiss")
-	var present = module.addBlock(func, label: b"mdpresent")
-	var isDir = module.addBlock(func, label: b"mdisdir")
-	var notDir = module.addBlock(func, label: b"mdnotdir")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
+	var missing = module.addBlock(func, label: b"mdmiss", heat: BlockHeat.normal)
+	var present = module.addBlock(func, label: b"mdpresent", heat: BlockHeat.normal)
+	var isDir = module.addBlock(func, label: b"mdisdir", heat: BlockHeat.normal)
+	var notDir = module.addBlock(func, label: b"mdnotdir", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -707,10 +707,10 @@ function buildManagedDirectoryCreate(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryCreateName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var afterCopy = module.addBlock(func, label: b"mdterm")
-	var failed = module.addBlock(func, label: b"mdfail")
-	var ok = module.addBlock(func, label: b"mdok")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
@@ -760,12 +760,12 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var attempt = module.addBlock(func, label: b"mdattempt")
-	var fitTest = module.addBlock(func, label: b"mdcpfit")
-	var grow = module.addBlock(func, label: b"mdgrow")
-	var failed = module.addBlock(func, label: b"mdfail")
-	var copyOut = module.addBlock(func, label: b"mdcopy")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"mdattempt", heat: BlockHeat.normal)
+	var fitTest = module.addBlock(func, label: b"mdcpfit", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"mdgrow", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
+	var copyOut = module.addBlock(func, label: b"mdcopy", heat: BlockHeat.normal)
 
 	// The buffer and its capacity are the loop's carried pair — the phi model is the only way a value
 	// crosses a merge at this tier, and `attempt` is the only block with more than one predecessor.

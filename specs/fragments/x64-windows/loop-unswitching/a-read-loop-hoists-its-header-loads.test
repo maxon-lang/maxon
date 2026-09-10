@@ -35,38 +35,34 @@ func @total {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 80
-    x64.movRegReg rax, rcx
-    x64.movRegReg rsi, rdx
     x64.movRegImm32 r8, 0
-    x64.movRegImm32 rdi, 0
+    x64.movRegImm32 rax, 0
   __us_test:
-    x64.loadRegBaseDisp.word64 r9, [rax + 8]
-    x64.loadRegBaseDisp.word64 r10, [rax + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
   forhdr:
-    x64.cmpRegReg rdi, rsi
+    x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, forexit
   __rc_ok:
-    x64.cmpRegReg rdi, r9
+    x64.cmpRegReg rax, rsi
     x64.jcc below, __im_load
   __im_slow:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdx, rdi
     x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot3, r8
-    x64.storeSlotReg slot4, r9
-    x64.storeSlotReg slot5, r10
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rdx, rax
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.movRegReg rdx, r10
+    x64.movRegReg r9, r8
     x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot3
-    x64.loadRegSlot r9, slot4
-    x64.loadRegSlot r10, slot5
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-read-loop-hoists-its-header-loads.test:8: total: i < n = a.count()\x0a"
@@ -76,11 +72,11 @@ func @total {
     x64.popReg rbp
     x64.ret
   __im_load:
-    x64.loadRegBaseIndexScale.word64 rcx, [r10 + rdi*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r9, [rdi + rax*8 + 0]
   tryok:
-    x64.leaRegRegReg r8, r8, rcx
+    x64.leaRegRegReg r8, r8, r9
   forstep:
-    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
     x64.epilogue 80

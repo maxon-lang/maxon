@@ -627,7 +627,7 @@ export type SynthesizedFunction
 		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
+		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -721,7 +721,7 @@ export type SynthesizedFunction
 	// control flow and there is no default that is right for both a fall-through and a two-way branch;
 	// leaving it unset makes a forgotten terminator a loud IR failure rather than a silently invented edge.
 	export function openBlock(label ByteArray) returns IrBlock
-		let opened = self.module.addBlock(self.func, label: label)
+		let opened = self.module.addBlock(self.func, label: label, heat: BlockHeat.normal)
 		self.block = opened
 		return opened
 	end 'openBlock'

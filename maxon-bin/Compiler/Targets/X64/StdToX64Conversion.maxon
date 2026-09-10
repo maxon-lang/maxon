@@ -888,14 +888,26 @@ type StdToX64Lowering
 	// map did not. Only the argument routing consults it — the value-class column already classes a `param`
 	// result from its own carried f64 type — so it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
+	// Fresh virtuals for the function being lowered (`mintVirtual`).
+	var fresh as ValueMinter
 
 	// Does this module carry the green-thread scheduler? The syscall bracket rides it exactly as the arm64
 	// isel's does — a program with no scheduler has no machine to announce anything to.
 	let usesGt as bool
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
+
+	// A fresh virtual for a lowering that needs a value of its own beside `resultId` — a call's answer
+	// captured before anything else touches a register, so the reloads of a cold call's bracket can land
+	// after the capture (`SsaDestruction.spliceBracketReloadsAfter` states the premise). Seeded
+	// per function in `prepareFunctionTables`, outside the op walk: the seed reads the source function,
+	// which the walk holds a block of. The class column is sized off the Target ops afterwards
+	// (`buildFunctionValueClasses`), so a fresh id is in it.
+	function mintVirtual() returns TargetVReg
+		return TargetVReg.virtual(self.fresh.mint())
+	end 'mintVirtual'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
 	// result land in?" — is TARGET-INDEPENDENT and lives in `Targets/Shared/StdLoweringShared.maxon`
@@ -923,8 +935,7 @@ type StdToX64Lowering
 	// the parse memo holds). See IrBlock's header for the full ownership rules.
 	function prepareSkeleton()
 		for srcBlock in self.stdModule.blocks 'relocateBlocks'
-			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
-			dstBlock.heat = srcBlock.heat
+			var dstBlock = IrBlock.createLike(srcBlock)
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			for srcEdge in srcBlock.branchEdges 'eachEdge'
@@ -1224,6 +1235,7 @@ type StdToX64Lowering
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.anyScaleAndDisplacement)
+		self.fresh = ValueMinter.create(nextFreeValueId(self.stdModule, func: srcFunc) as ParamCount)
 	end 'prepareFunctionTables'
 
 	// The function's block count as the STD module knows it — a scoped read, so the caller holds
@@ -3834,10 +3846,13 @@ type StdToX64Lowering
 		self.emitLinuxPriorityScopeArgs(dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGetPriority))
 
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rax), value: LinuxGetPriorityBias as MachineWord))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
+		// The answer is CAPTURED before the fold, and the fold runs on virtuals: a physical op on rax/rcx
+		// after the syscall would read or clobber a register a cold-call bracket restores (`mintVirtual`).
+		let answer = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(answer, srcReg: x64PhysReg(X64Register.rax)))
+		let bias = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(bias, value: LinuxGetPriorityBias as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(TargetVReg.virtual(resultId), lhs: bias, rhs: answer))
 	end 'lowerOsEnterBackgroundPriorityLinux'
 
 	// The `(which, who)` pair BOTH priority syscalls open with — the set then adds its value in RDX. One
@@ -5051,8 +5066,8 @@ type StdToX64Lowering
 
 		// The `ordered` block is the second half of the original's branch, so it runs exactly when the
 		// original does.
-		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockHeatOf(blockRef))
-		let newId = self.blockIdOf(newRef)
+		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockAt(blockRef).heat)
+		let newId = self.blockAt(newRef).id
 		self.emitOrderedBlockBody(newRef, cond: floatCondCodeForPred(pred), thenBlockId: thenBlockId, elseBlockId: elseBlockId, edges: inheritedEdges)
 		return newId
 	end 'buildOrderedBlock'
@@ -5067,18 +5082,16 @@ type StdToX64Lowering
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		var ordered = IrBlock.create(newId, label: FloatOrderedLabel)
-		ordered.heat = heat
-		self.targetModule.blocks.push(ordered)
+		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat))
 		let newRef = self.targetModule.blocks.count() - 1
 		srcFunc.blockRefs.push(newRef)
 		return newRef
 	end 'addOrderedBlock'
 
-	function blockHeatOf(blockRef BlockRef) returns BlockHeat
-		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("blockHeatOf: blockRef {blockRef} not in targetModule.blocks")
-		return block.heat
-	end 'blockHeatOf'
+	// `blockRef`'s block — a scoped read whose borrow ends with the one field the caller takes off it.
+	function blockAt(blockRef BlockRef) returns IrBlock
+		return try self.targetModule.blocks.get(blockRef) otherwise panic("blockAt: blockRef {blockRef} not in targetModule.blocks")
+	end 'blockAt'
 
 	// Emit the `ordered` block's whole body: the ordered equality test to `then`, the `jmp` to
 	// `else`, and the phi edges it inherited. Uniform for both `==` and `!=` — only `cond`
@@ -5107,12 +5120,6 @@ type StdToX64Lowering
 
 		return copied
 	end 'cloneBranchEdgesOf'
-
-	// The id of `blockRef`'s block — a scoped read, so the caller never holds this borrow.
-	function blockIdOf(blockRef BlockRef) returns BlockId
-		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("blockIdOf: blockRef {blockRef} not in targetModule.blocks")
-		return block.id
-	end 'blockIdOf'
 
 	// The three fields of the `condBranch` terminating `blockRef`'s Std block, in one read and one
 	// match — a TUPLE, because three one-field readers would be the same lookup and the same two

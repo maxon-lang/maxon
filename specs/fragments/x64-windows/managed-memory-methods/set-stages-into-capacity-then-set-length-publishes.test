@@ -252,8 +252,8 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, __im_load#55
   __im_slow#54:
-    x64.movRegReg rcx, rbx
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -279,11 +279,11 @@ func @main {
     x64.cmpRegImm32 rcx, 2
     x64.jcc above, __im_load#58
   __im_slow#57:
-    x64.movRegReg rcx, rbx
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.movRegReg rsi, r8
+    x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot1
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
@@ -301,21 +301,21 @@ func @main {
   __im_load#58:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.leaRegRegImm32 rcx, rcx, 16
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   tryok#19:
     x64.movRegImm32 rdx, 3
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegImm32 rcx, 3
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
+    x64.cmpRegImm32 rsi, 3
     x64.jcc above, __im_load#61
   __im_slow#60:
-    x64.movRegReg rcx, rbx
     x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rsi
+    x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r8
     x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rsi, slot2
+    x64.loadRegSlot rcx, slot2
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#21
@@ -330,13 +330,13 @@ func @main {
     x64.popReg rbp
     x64.ret
   __im_load#61:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRegImm32 rcx, rcx, 24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.leaRegRegImm32 rdx, rdx, 24
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
   tryok#21:
     x64.leaRegRegReg rax, r8, rax
-    x64.leaRegRegReg rax, rax, rsi
-    x64.leaRegRegReg r12, rax, rcx
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r12, rax, rdx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:

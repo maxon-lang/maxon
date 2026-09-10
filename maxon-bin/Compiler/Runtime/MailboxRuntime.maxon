@@ -208,10 +208,10 @@ end 'installMailboxRuntime'
 // runtime in this tree uses (the Std tier has no select). The caller holds `__sched_lock` on entry and holds
 // nothing on return.
 function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var wakeParked = module.addBlock(func, label: label)
-	var unlock = module.addBlock(func, label: b"mboxunlock")
-	var payWake = module.addBlock(func, label: b"mboxwake")
-	let cont = module.addBlock(func, label: b"mboxwoken")
+	var wakeParked = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var unlock = module.addBlock(func, label: b"mboxunlock", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"mboxwake", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"mboxwoken", heat: BlockHeat.normal)
 
 	let parked = emitLoadField(module, block: cur, record: mbox, offset: MboxOffParkedGt, ids: ids)
 	let noneParked = emitConst(module, block: cur, value: 0, ids: ids)
@@ -258,7 +258,7 @@ function buildSvcSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SvcSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let loopPtr = 0 as ValueId
 	let state = 1 as ValueId
@@ -293,13 +293,13 @@ function buildMboxSend(module StdModule)
 	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var abandon = module.addBlock(func, label: b"sendclosed")
-	var append = module.addBlock(func, label: b"sendappend")
-	var firstEnvelope = module.addBlock(func, label: b"sendfirst")
-	var chainEnvelope = module.addBlock(func, label: b"sendchain")
-	var linked = module.addBlock(func, label: b"sendlinked")
-	let doneBlock = module.addBlock(func, label: b"senddone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var abandon = module.addBlock(func, label: b"sendclosed", heat: BlockHeat.normal)
+	var append = module.addBlock(func, label: b"sendappend", heat: BlockHeat.normal)
+	var firstEnvelope = module.addBlock(func, label: b"sendfirst", heat: BlockHeat.normal)
+	var chainEnvelope = module.addBlock(func, label: b"sendchain", heat: BlockHeat.normal)
+	var linked = module.addBlock(func, label: b"sendlinked", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let mbox = 0 as ValueId
@@ -358,14 +358,14 @@ function buildMboxRecv(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var attempt = module.addBlock(func, label: b"recvtry")
-	var pop = module.addBlock(func, label: b"recvpop")
-	var clearTail = module.addBlock(func, label: b"recvlast")
-	var popped = module.addBlock(func, label: b"recvpopped")
-	var emptyQueue = module.addBlock(func, label: b"recvempty")
-	var drained = module.addBlock(func, label: b"recvdrained")
-	var park = module.addBlock(func, label: b"recvpark")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"recvtry", heat: BlockHeat.normal)
+	var pop = module.addBlock(func, label: b"recvpop", heat: BlockHeat.normal)
+	var clearTail = module.addBlock(func, label: b"recvlast", heat: BlockHeat.normal)
+	var popped = module.addBlock(func, label: b"recvpopped", heat: BlockHeat.normal)
+	var emptyQueue = module.addBlock(func, label: b"recvempty", heat: BlockHeat.normal)
+	var drained = module.addBlock(func, label: b"recvdrained", heat: BlockHeat.normal)
+	var park = module.addBlock(func, label: b"recvpark", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0 as ValueId
@@ -423,7 +423,7 @@ function buildMboxClose(module StdModule)
 	var func = IrFunction.createFromStd(MboxCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0 as ValueId
 
@@ -444,7 +444,7 @@ function buildMboxHandleCloneBox(module StdModule)
 	var func = IrFunction.createFromStd(MboxHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0 as ValueId
 
@@ -482,7 +482,7 @@ function buildMboxHandleRetainBox(module StdModule)
 	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0 as ValueId
 
@@ -505,11 +505,11 @@ function buildMboxHandleDropBox(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var closeIt = module.addBlock(func, label: b"dropclose")
-	var releaseRef = module.addBlock(func, label: b"droprelease")
-	var freeMbox = module.addBlock(func, label: b"dropfree")
-	var doneBlock = module.addBlock(func, label: b"dropdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var closeIt = module.addBlock(func, label: b"dropclose", heat: BlockHeat.normal)
+	var releaseRef = module.addBlock(func, label: b"droprelease", heat: BlockHeat.normal)
+	var freeMbox = module.addBlock(func, label: b"dropfree", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0 as ValueId
@@ -560,11 +560,11 @@ function buildMboxServiceExit(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var freeMbox = module.addBlock(func, label: b"exitfree")
-	var doneBlock = module.addBlock(func, label: b"exitdone")
-	var answerShutdown = module.addBlock(func, label: b"exitanswershutdown")
-	var ownerDone = module.addBlock(func, label: b"exitownerdone")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var freeMbox = module.addBlock(func, label: b"exitfree", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"exitdone", heat: BlockHeat.normal)
+	var answerShutdown = module.addBlock(func, label: b"exitanswershutdown", heat: BlockHeat.normal)
+	var ownerDone = module.addBlock(func, label: b"exitownerdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0 as ValueId
@@ -602,7 +602,7 @@ function buildMboxAbandon(module StdModule)
 	var func = IrFunction.createFromStd(MboxAbandonName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let mbox = 0 as ValueId
 	let box = 1 as ValueId
@@ -649,9 +649,9 @@ end 'buildMboxAbandon'
 // It terminates `cur` into `cont`, handing it the wake debt as `cont`'s one block argument: the caller owns the
 // release and pays the debt after it, as `__gt_register_park` does for every arm that takes the lock.
 export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBlock, gt ValueId, mbox ValueId, cont IrBlock, ids ValueMinter)
-	var recheckClosed = module.addBlock(func, label: b"parkmboxclosed")
-	var undoPark = module.addBlock(func, label: b"parkmboxundo")
-	var registerWaiter = module.addBlock(func, label: b"parkmboxwait")
+	var recheckClosed = module.addBlock(func, label: b"parkmboxclosed", heat: BlockHeat.normal)
+	var undoPark = module.addBlock(func, label: b"parkmboxundo", heat: BlockHeat.normal)
+	var registerWaiter = module.addBlock(func, label: b"parkmboxwait", heat: BlockHeat.normal)
 
 	let head = emitLoadField(module, block: cur, record: mbox, offset: MboxOffHead, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)

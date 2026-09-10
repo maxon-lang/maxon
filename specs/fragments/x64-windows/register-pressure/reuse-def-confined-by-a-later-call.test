@@ -72,7 +72,7 @@ func @shift {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 56
+    x64.prologue 72
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
@@ -95,7 +95,7 @@ func @shift {
   tryerr#5:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -116,7 +116,7 @@ func @shift {
   shiftneg:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at reuse-def-confined-by-a-later-call.test:16: negative shift count\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -158,10 +158,10 @@ func @shift {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_store#29
   __im_slow#25:
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, rsi
-    x64.storeSlotReg slot0, r8
     x64.callDirect __managed_set
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
@@ -170,7 +170,7 @@ func @shift {
   tryerr#9:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -186,28 +186,28 @@ func @shift {
     x64.movRegReg r14, r8
     x64.jmp whilehdr#1
   whileexit#3:
-    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdx, 0
   __us_test#46:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, whilehdr#10
   __us_test#47:
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
-    x64.cmpRegImm32 r8, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, whilehdr#10
   __us_test#48:
-    x64.leaRegRegImm32 rax, r8, -24
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 rax, 0
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, whilehdr#10
   __us_test#49:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.movRegImm32 rcx, 0
-    x64.cmpRegReg rax, rcx
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.movRegImm32 rdi, 0
+    x64.cmpRegReg rsi, rdi
     x64.jcc equal, whilehdr#36
   whilehdr#10:
-    x64.cmpRegReg rsi, r13
+    x64.cmpRegReg rdx, r13
     x64.jcc greaterEqual, whileexit#12
   clear#11:
     x64.movRegImm32 rax, 0
@@ -217,56 +217,54 @@ func @shift {
     x64.jcc less, __im_slow#31
   __im_bounds#32:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rsi, rcx
+    x64.cmpRegReg rdx, rcx
     x64.jcc aboveEqual, __im_slow#31
   __im_buffer#33:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#31
   __im_viewed#34:
-    x64.leaRegRegImm32 rdx, rcx, -24
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
-    x64.cmpRegImm32 rdx, 0
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_store#35
   __im_slow#31:
+    x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rsi
-    x64.storeSlotReg slot1, rsi
     x64.callDirect __managed_set
-    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdx, slot1
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#14
     x64.jmp tryok#13
   __im_store#35:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rsi*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
   tryok#13:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp whilehdr#10
   whilehdr#36:
-    x64.cmpRegReg rsi, r13
+    x64.cmpRegReg rdx, r13
     x64.jcc greaterEqual, whileexit#12
   clear#45:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rsi, 0
   __im_bounds#43:
-    x64.cmpRegReg rsi, rdi
+    x64.cmpRegReg rdx, rax
     x64.jcc below, __im_store#40
   __im_slow#39:
+    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot3, rcx
+    x64.storeSlotReg slot1, rdx
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rsi
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot0, r8
+    x64.movRegReg rax, rsi
     x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot0
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rdx, slot1
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#37
   tryerr#14:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -275,12 +273,12 @@ func @shift {
     x64.popReg rbp
     x64.ret
   __im_store#40:
-    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rax
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
   tryok#37:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp whilehdr#36
   whileexit#12:
-    x64.epilogue 56
+    x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
