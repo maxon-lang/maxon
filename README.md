@@ -142,8 +142,11 @@ compiled by something else first, and that is worth being able to look at.
 
 ## Contributing
 
-Maxon is written by AI and built in the open. Bug reports, patches, clearer docs, and real
-programs written in Maxon are all welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
+Maxon is written by AI and built in the open — so **we prefer a fix to a bug report**. An AI
+coding agent pointed at this repository can usually turn a failing program into a pull request,
+and the fix reaches everyone sooner than a report would. Clearer docs and real programs written in
+Maxon are welcome too, and so is a report of a bug you cannot fix. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md),
 join the [discussions](https://github.com/maxon-lang/maxon/discussions), or read the
 [contributing guide](https://maxon.dev/docs/contributing) on the site.
 

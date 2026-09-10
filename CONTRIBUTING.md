@@ -2,8 +2,8 @@
 
 Maxon is free and open source, dual-licensed under
 [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE). It was written by AI, but it's built in
-the open — and contributions are welcome, whether that's a bug report, a patch to the compiler,
-a documentation fix, or a real program written in the language.
+the open — and contributions are welcome, whether that's a fix to the compiler, a documentation
+fix, a real program written in the language, or a bug report.
 
 The project's guiding philosophy is **"You aren't going to write it. You are going to read
 it."** The AI writes the code; humans read it. So Maxon favors explicit, readable code over
@@ -12,10 +12,26 @@ as much as in the language itself.
 
 ## Ways to contribute
 
-### Report a bug
+### Fix a bug
+
+**We prefer a fix to a report.** Maxon is written by AI, and an AI coding agent pointed at this
+repository can usually turn a failing program into a fix — so a pull request that fixes a bug is
+worth far more than an issue describing it, and reaches everyone sooner. The repository carries
+instructions for coding agents (`.claude/CLAUDE.md` and its skills for Claude Code,
+`.github/copilot-instructions.md` for Copilot), so an agent opened in a checkout already knows how
+to build, test and land a change.
 
 Found a miscompile, a crash, a confusing diagnostic, or a place where the docs and the compiler
-disagree? Open an issue. A good report includes:
+disagree?
+
+1. Add a spec case that reproduces it (see [Tests](#tests)) and watch it fail.
+2. Fix it until that case — and the rest of the suite — passes.
+3. Open a pull request. A bug fix needs no issue first.
+
+### Report a bug you cannot fix
+
+If you cannot fix it, [open an issue](https://github.com/maxon-lang/maxon/issues/new?template=bug_report.yml)
+— an unfixed bug is still worth knowing about. A good report includes:
 
 - A minimal `.maxon` program that reproduces the problem.
 - What you expected to happen, and what actually happened (exact output or exit code).
@@ -34,8 +50,9 @@ case in a comment. The most-upvoted ideas are the ones looked at first.
 
 The compiler (a native backend, with no LLVM), the language server, and the standard library are all
 open. Patches that fix bugs, improve diagnostics, or extend the standard library are welcome.
-For anything non-trivial, open an issue first so the approach can be discussed before you invest
-the work, then send a pull request.
+A bug fix goes straight to a pull request. A new feature or a change of design starts in
+[Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), so the approach can be
+agreed before you invest the work.
 
 ### Improve the docs and examples
 
@@ -121,7 +138,9 @@ change behavior:
 
 ## Pull requests
 
-- Open an issue first for anything beyond a small fix, so the design can be agreed on.
+- A bug fix needs no issue first. A new feature or a change of design starts in
+  [Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), so the design can be
+  agreed on.
 - Keep each pull request focused on one logical change.
 - Make sure the compiler builds cleanly and the spec suite passes.
 - Format Maxon source with `maxon fmt` and match the style of the surrounding code. Maxon favors
