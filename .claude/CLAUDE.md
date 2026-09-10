@@ -173,10 +173,14 @@ suspension — spell it `<!-- disabled-test: -->`), and refuses the retired `<!-
 ⛔⛔ **DO NOT MARK A CASE THE COMPILER ALREADY REFUSES.** A lane with no substrate answers **E3104**, and
 the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
 with nothing said anywhere. The two are not two spellings of one fact — one is the fact and the other is
-the fact made invisible. So async, the clock, subprocess, argv, file and directory IO and console stdin
-carry NO marker on wasm: the wasm lane runs 7024 and reports 492 skips, and every one of those skips is
-a case a reader can count. A marker is for a case that would otherwise go RED — an ISA-specific codegen
-reading, a POSIX/Windows shell spelling, a diagnostic displaced by E3104 — and it states its reason.
+the fact made invisible. So async, the clock, argv, file and directory IO and console stdin carry NO
+marker on wasm: every one of those skips is a case a reader can count. A marker is for a case that would
+otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a diagnostic
+displaced by E3104 — and it states its reason.
+
+⚠ **SUBPROCESS IS THE EXCEPTION, AND NEEDS THE MARKER.** A target that can never host a child process
+answers **E3074** ahead of E3104 (`requireTargetSupportsCallee`), and the harness counts only E3104 as a
+SKIP — so an unmarked subprocess case goes RED on wasm. Mark it `wasm32-wasi`.
 
 ## `run_scale_test` — the scaling INSTRUMENT. ⚠ NOT A GATE.
 

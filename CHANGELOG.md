@@ -2,7 +2,7 @@
 
 What changed in each release of the Maxon compiler and standard library, newest first.
 
-## 0.1.1 — 2026-09-09
+## 0.1.1 — 2026-09-10
 
 ### Added
 
@@ -24,12 +24,16 @@ What changed in each release of the Maxon compiler and standard library, newest 
 - `maxon fmt` separates groups of declarations with one blank line at every nesting depth, not only
   at the top level.
 - The Windows installer is code-signed.
+- On Linux and macOS, starting a program that cannot be found raises
+  `SubprocessError.executableNotFound` instead of `spawnFailed`.
 
 ### Fixed
 
 - Non-ASCII text displays correctly in a Windows console.
 - A deadlocked program on Linux reports the deadlock instead of occasionally hanging.
 - A default parameter value is filled in a global variable's initializer, not only inside a function.
+- On Linux, a subprocess started by program name finds the program on `PATH`, and a file of that
+  name in the working directory is never run in its place.
 
 ### Removed
 
