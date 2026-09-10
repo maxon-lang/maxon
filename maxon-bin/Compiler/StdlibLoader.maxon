@@ -327,11 +327,13 @@ export function loadStdlibSources(project Project) throws CompileError
 		end 'theUsersOwnFile'
 
 		try loadOneSourceFile(project, path: path)
+
 		// RECORDED, because it is the answer to "which of this compile's files are stdlib source?" and
 		// this loop is the one place that knows it for free — every path here came out of an enumeration
 		// of `stdlib/`. Re-deriving it later by testing each source path against that directory costs
 		// four String allocations a question (see StdlibSource's header).
 		project.stdlibSourcePaths.push(path)
+
 		// AND ADMITTED to the process-wide token memo, from the same loop and for the same reason: this
 		// is the one place that knows a file came out of an enumeration of `stdlib/`, and a memo that
 		// outlives the `Project` has to be told which files are worth the memory. See
@@ -370,6 +372,7 @@ function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns Maxon
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
 	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header.
 	let cwd = Directory.currentPath()
+
 	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootIsElsewhere'
 		return registered
 	end 'rootIsElsewhere'
@@ -377,5 +380,6 @@ function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns Maxon
 	for path in project.db.sourcePaths 'each'
 		registered.insert(path.resolve(cwd))
 	end 'each'
+
 	return registered
 end 'registeredPathsWhenTheRootIsInsideStdlib'

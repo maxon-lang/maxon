@@ -18,11 +18,13 @@ export union LexerError implements Error
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	unterminatedString(line LineNumber, column ColumnNumber)
 	unterminatedBlockComment(line LineNumber, column ColumnNumber)
+
 	// An opening `{` inside a double-quoted string didn't close before the
 	// string did. The (line, column) point at the offending `{` so the
 	// diagnostic underlines the brace itself rather than the EOF position.
 	// Use `\{` to embed a literal `{` in a string literal.
 	unescapedBrace(line LineNumber, column ColumnNumber)
+
 	// A `#`-prefixed directive whose name is not one of the recognized
 	// directive keywords (`if`, `else`, `endif`). Carries the bare name so
 	// the surfacing diagnostic can quote the offending text.
@@ -71,6 +73,7 @@ enum DfaState
 	sawLt
 	sawGt
 	sawSlash
+
 	// Terminal states
 	skipWs
 	skipCr
@@ -137,6 +140,7 @@ export enum TokenKind
 	typealias = "typealias"
 	export = "export"
 	public = "public"
+
 	// Control flow
 	if = "if"
 	else = "else"
@@ -158,10 +162,12 @@ export enum TokenKind
 	otherwise = "otherwise"
 	throw = "throw"
 	ignore = "ignore"
+
 	// Cooperative concurrency: `async f()` spawns a green thread returning a
 	// promise; `await p` suspends until it completes. See specs/async-await.md.
 	async = "async"
 	await = "await"
+
 	// Declarations
 	returns = "returns"
 	var = "var"
@@ -182,6 +188,7 @@ export enum TokenKind
 	from = "from"
 	to = "to"
 	mod = "mod"
+
 	// Logical / bitwise operators
 	and = "and"
 	or = "or"
@@ -191,29 +198,35 @@ export enum TokenKind
 	shr = "shr"
 	as = "as"
 	is = "is"
+
 	// `sizeof(Type)` — a compile-time-or-descriptor intrinsic yielding a type's byte size (P1.6-B1).
 	// Its own keyword so `sizeof(T)` parses its parenthesized operand as a TYPE (recovering `T` as the
 	// enclosing generic type's parameter), not as a value-position call to a function named `sizeof`.
 	sizeof = "sizeof"
+
 	// `countof(Type)` — `sizeof`'s twin for a SIZED container type: how many ELEMENTS the type holds
 	// (`Vector with 3 Int` ⇒ 3), rather than how many bytes one value of it occupies (W190). Its own keyword
 	// for `sizeof`'s reason — the parenthesized operand is a TYPE, and an identifier-arm read would make
 	// `countof(Self)` a value-position call to a function nobody declared.
 	countof = "countof"
+
 	// Literals
 	true = "true"
 	false = "false"
+
 	// Primitive types
 	int = "int"
 	float = "float"
 	bool = "bool"
 	cstring = "cstring"
+
 	// Literals
 	intLiteral = "integer literal"
 	floatLiteral = "float literal"
 	charLiteral = "character literal"
 	stringLiteral = "string literal"
 	byteStringLiteral = "byte string literal"
+
 	// Delimiters for pre-lexed interpolation expressions. A double-quoted
 	// string containing `{...}` interpolations emits as:
 	//   stringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
@@ -226,6 +239,7 @@ export enum TokenKind
 	// through a sub-parser for every `{...}` segment.
 	stringInterpStart = "interpolation start"
 	stringInterpEnd = "interpolation end"
+
 	// ⭐ **A FORMAT SPECIFIER IS ONE TOKEN OF RAW SOURCE — `"{n:08x}"` emits
 	//   stringInterpStart intLiteral(n) stringFormatSpec("08x") stringInterpEnd.**
 	// It is captured by the LEXER rather than reassembled by the parser from the tokens
@@ -236,8 +250,10 @@ export enum TokenKind
 	// The bytes between the `:` and the closing `}`
 	// are therefore taken verbatim, once, by `scanInterpFormatSpec`.
 	stringFormatSpec = "format specifier"
+
 	// Identifiers
 	identifier = "identifier"
+
 	// Punctuation
 	leftParen = "("
 	rightParen = ")"
@@ -259,16 +275,19 @@ export enum TokenKind
 	dot = "."
 	colon = ":"
 	comma = ","
+
 	// `@` prefixes a compiler annotation (currently only `@heap`). Emitted as a
 	// standalone token; the parser consumes it together with the following
 	// annotation identifier (e.g. `heap`) and the `var`/`let` it decorates.
 	at = "@"
+
 	// Conditional-compilation directives. Emitted as standalone tokens by the
 	// lexer; the parser consults the build target to decide which branch to
 	// keep and skips the others at the token-stream level.
 	hashIf = "#if"
 	hashElse = "#else"
 	hashEndif = "#endif"
+
 	// `///` — the ONE comment form that is a token. `//` and `/* … */` are dropped by the lexer; this one
 	// is emitted because two readers OUTSIDE the grammar need the text and the span back: `maxon fmt`
 	// round-trips it, and the LSP maps a cursor position into it. The grammar itself never reads one —
@@ -301,6 +320,7 @@ end 'tokenKindIsSkippedLayout'
 
 export type Token
 	export let kind as TokenKind
+
 	// The token's text, as a ZERO-COPY slice of the source buffer — a pointer and a
 	// length, not a copy. Nothing is materialized per token, and a `String` is built
 	// from it only at the boundaries that genuinely need one (a symbol name that
@@ -317,6 +337,7 @@ export type Token
 	export let value as ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
+
 	// Byte offsets into the source buffer bracketing this token's span, used
 	// by the parser to compute op source ranges and by the LSP to map cursor
 	// positions back to ops. Both fields are 0 on EOF and synthetic tokens.
@@ -481,6 +502,7 @@ end 'expectationDisplayText'
 // rule, for why the keyword table and not a list, and for the multi-word classes this leaves quoted.
 function expectationNamesATokenClass(expected String) returns bool
 	let word = expected.toByteArray()
+
 	if word.isEmpty() 'namesNothingAtAll'
 		return false
 	end 'namesNothingAtAll'
@@ -615,6 +637,7 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		33 then tokens.push(Token.create(TokenKind.dot, line: line, column: column))
 		34 then tokens.push(Token.create(TokenKind.leftBracket, line: line, column: column))
 		35 then tokens.push(Token.create(TokenKind.rightBracket, line: line, column: column))
+
 		// Backslash is illegal at the source level outside of strings; emit a
 		// synthetic identifier carrying the literal `\` so the parser surfaces
 		// `Expected function declaration, got '\\'` (which the spec runner's
@@ -636,6 +659,7 @@ type Lexer
 	var len as ByteOffset
 	export var line as LineNumber
 	export var column as ColumnNumber
+
 	// Pending lexer error stashed by scanners that hit an unrecoverable
 	// state but still need to emit a partial token before unwinding via the
 	// shared CursorError path. Read by run() after CursorError surfaces;
@@ -643,6 +667,7 @@ type Lexer
 	// unexpectedEof.
 	var pendingError as LexerError
 	var hasPendingError as bool
+
 	// Set by sub-scanners that complete a token whose final byte happens to
 	// be the last byte of the source (no trailing newline). They unwind via
 	// CursorError because that's the shared "done" channel; the flag lets
@@ -702,6 +727,7 @@ type Lexer
 	// every later diagnostic in the file would inherit.
 	function retreat() throws CursorError
 		try cursor.retreat() otherwise throw CursorError.atStart
+
 		if cursor.current() == Ascii.lf 'unconsumedNewline'
 			panic("Lexer.retreat: stepped back over the newline at byte {cursorByte()} — the length of the line before it is not recoverable, and only the DFA's one-byte lookahead over a digit or a letter ever retreats")
 		end 'unconsumedNewline'
@@ -716,6 +742,7 @@ type Lexer
 		try cursor.advance() otherwise return false
 		return true
 	end 'tryAdvance'
+
 	// Variable-content emit: the token's text as a zero-copy `ByteArray` slice of the
 	// source, plus the byte range it spans. Used by the identifier, number,
 	// string-literal and directive scanners — every token whose text is not implied
@@ -733,6 +760,7 @@ type Lexer
 		if tokens.count() == 0 'startOfFile'
 			return TokenKind.eof
 		end 'startOfFile'
+
 		return (try tokens.get(tokens.count() - 1) otherwise panic("Lexer.lastTokenKind: get failed one below a non-zero count")).kind
 	end 'lastTokenKind'
 
@@ -745,9 +773,11 @@ type Lexer
 	// at EOF the cursor still sits ON the last byte, so that byte is part of the token.
 	function sliceNumberEndByte() returns ByteOffset
 		let b = cursor.current()
+
 		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
 			return cursorByte() + 1
 		end 'includeLastByte'
+
 		return cursorByte()
 	end 'sliceNumberEndByte'
 
@@ -800,6 +830,7 @@ type Lexer
 		try advance() otherwise 'slashesEndTheFile'
 			try finishAtEof()
 		end 'slashesEndTheFile'
+
 		try scanComment(startLine, startCol: startCol, startByte: startByte)
 	end 'handleEnterComment'
 
@@ -815,10 +846,12 @@ type Lexer
 	// the top-level run() loop and scanInterp() so the two share one driver.
 	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
 		let ch = cursor.current()
+
 		// The offset of the token's FIRST byte, read before any mover runs — `scanComment` is the one
 		// dispatch arm that cannot recover it afterwards, because two slashes are already behind the cursor
 		// by the time it is reached.
 		let startByte = cursorByte()
+
 		// `#` opens a compiler directive (e.g. `#if`, `#else`, `#endif`). It
 		// sits outside the table-driven DFA because the directive name is a
 		// run of letters following the `#`, and we want to emit a dedicated
@@ -827,8 +860,10 @@ type Lexer
 			if startByte == 0 and len > 1 and (try bytes.get(1) otherwise panic("Lexer: byte 1 is unreachable in a source of {len} bytes")) == Ascii.bang 'isShebang'
 				return try skipShebang()
 			end 'isShebang'
+
 			return try scanDirective(startLine, startCol: startCol)
 		end 'isDirective'
+
 		// `@` opens a compiler annotation (e.g. `@heap`). Like `#`, it sits
 		// outside the table-driven DFA: emit a standalone `at` token and let the
 		// table-driven scanner pick up the following annotation identifier on the
@@ -840,22 +875,29 @@ type Lexer
 			try advance() otherwise 'atEofAfter'
 				atEof = true
 			end 'atEofAfter'
+
 			return atEof
 		end 'isAt'
+
 		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 		var atEnd = false
 		try advance() otherwise 'lastChar'
 			atEnd = true
 		end 'lastChar'
+
 		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+
 		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
 			var nextClass = CharClass.eof
+
 			if not atEnd 'hasNext'
 				let nextCh = cursor.current()
 				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
 			end 'hasNext'
+
 			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
 		end 'live'
+
 		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, startByte: startByte, lastChar: atEnd)
 		return atEnd
@@ -902,15 +944,20 @@ type Lexer
 	// Opening quote already consumed by main loop.
 	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let strStart = cursorByte()
+
 		while cursorByte() < len 'strBody'
 			let sc = cursor.current()
+
 			if sc == Ascii.quote 'endStr'
 				emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursorByte(), startLine: startLine, startCol: startCol)
+
 				if not tryAdvance() 'squoteEof'
 					try finishAtEof()
 				end 'squoteEof'
+
 				return
 			end 'endStr'
+
 			// Raw escape bytes stay in the fragment; the parser decodes them
 			// on emit. Skip the byte following `\` so `\'` doesn't close the
 			// literal and `\\` doesn't swallow the next byte as escape lead.
@@ -918,15 +965,19 @@ type Lexer
 				if not tryAdvance() 'escEof'
 					break
 				end 'escEof'
+
 				if not tryAdvance() 'escNextEof'
 					break
 				end 'escNextEof'
+
 				continue
 			end 'esc'
+
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
 		end 'strBody'
+
 		// Unterminated string at EOF — stash an unterminatedString lexer
 		// error and unwind via CursorError. run() reads the stashed
 		// LexerError and surfaces it to the caller.
@@ -946,15 +997,20 @@ type Lexer
 		var fragStart = cursorByte()
 		var fragLine = startLine
 		var fragCol = startCol
+
 		while cursorByte() < len 'dstrBody'
 			let dc = cursor.current()
+
 			if dc == Ascii.dquote 'endDstr'
 				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte(), startLine: fragLine, startCol: fragCol)
+
 				if not tryAdvance() 'dquoteEof'
 					try finishAtEof()
 				end 'dquoteEof'
+
 				return
 			end 'endDstr'
+
 			if dc == Ascii.lf 'newlineInDstr'
 				// Stop at newline (matches C# ScanStringLiteral) — emit a
 				// partial fragment then stash the unterminated-string error
@@ -965,6 +1021,7 @@ type Lexer
 				pendingError = LexerError.unterminatedString(startLine, column: startCol)
 				throw CursorError.exhausted
 			end 'newlineInDstr'
+
 			if dc == Ascii.backslash 'esc'
 				// Raw escape bytes stay in the fragment; the parser decodes them
 				// on emit. Skip the escape's following byte so a backslash-lbrace
@@ -972,39 +1029,49 @@ type Lexer
 				if not tryAdvance() 'escEof'
 					break
 				end 'escEof'
+
 				if not tryAdvance() 'escNextEof'
 					break
 				end 'escNextEof'
+
 				continue
 			end 'esc'
+
 			if dc == '{' 'openInterp'
 				// Emit the literal fragment accumulated before the `{`.
 				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursorByte(), startLine: fragLine, startCol: fragCol)
 				let interpLine = line
 				let interpCol = column
 				tokens.push(Token.create(TokenKind.stringInterpStart, line: interpLine, column: interpCol))
+
 				// Consume the `{`; scanInterp runs the DFA until matching `}`.
 				if not tryAdvance() 'lBraceEof'
 					throw CursorError.exhausted
 				end 'lBraceEof'
+
 				try scanInterp(interpLine, openCol: interpCol)
+
 				// scanInterp returns with cursor AT `}`; advance past it to start
 				// the next fragment.
 				let closeLine = line
 				let closeCol = column
 				tokens.push(Token.create(TokenKind.stringInterpEnd, line: closeLine, column: closeCol))
+
 				if not tryAdvance() 'rBraceEof'
 					throw CursorError.exhausted
 				end 'rBraceEof'
+
 				fragStart = cursorByte()
 				fragLine = line
 				fragCol = column
 				continue
 			end 'openInterp'
+
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
 		end 'dstrBody'
+
 		// Unterminated string at EOF — emit a partial fragment so downstream
 		// tooling has something to attach error info to, then stash the
 		// lexer error and unwind via CursorError. run() reads the stashed
@@ -1035,28 +1102,37 @@ type Lexer
 	// "unify" these two bodies on this point.
 	function scanByteStringLiteralBody(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let strStart = cursorByte()
+
 		while cursorByte() < len 'bstrBody'
 			let bc = cursor.current()
+
 			if bc == Ascii.dquote 'endBstr'
 				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursorByte(), startLine: startLine, startCol: startCol)
+
 				if not tryAdvance() 'closeEof'
 					try finishAtEof()
 				end 'closeEof'
+
 				return
 			end 'endBstr'
+
 			if bc == Ascii.backslash 'esc'
 				if not tryAdvance() 'escEof'
 					break
 				end 'escEof'
+
 				if not tryAdvance() 'escNextEof'
 					break
 				end 'escNextEof'
+
 				continue
 			end 'esc'
+
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
 		end 'bstrBody'
+
 		emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursorByte() + 1, startLine: startLine, startCol: startCol)
 		hasPendingError = true
 		pendingError = LexerError.unterminatedString(startLine, column: startCol)
@@ -1098,60 +1174,76 @@ type Lexer
 	// `"{["a": 1].count()}"` at the MAP literal's colon.
 	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
 		var depth = 1
+
 		// Parens and brackets the interpolation body has left open. Braces are `depth`'s, since
 		// they also decide where the body ENDS; these only decide whether a `:` is the body's own.
 		var groupDepth = 0
+
 		// Cursor position right after the opening `{` — used on failure to
 		// scan the consumed body for `"`. We can't track this via a flag set
 		// in scanInterp's outer loop because sub-scanners like the char-literal
 		// scanner gobble bytes (including `"`) without surfacing them back.
 		let bodyStart = cursorByte()
+
 		while cursorByte() < len 'interp'
 			let ch = cursor.current()
+
 			if ch == ':' and depth == 1 and groupDepth == 0 'formatSpecifier'
 				try scanInterpFormatSpec(openLine, openCol: openCol, bodyStart: bodyStart)
 				return
 			end 'formatSpecifier'
+
 			if ch == '(' or ch == '[' 'openGroup'
 				groupDepth = groupDepth + 1
 			end 'openGroup'
+
 			// A close with nothing open is a source error the PARSER reports against the tokens;
 			// the count simply stays at the floor rather than going negative behind it.
 			if (ch == ')' or ch == ']') and groupDepth > 0 'closeGroup'
 				groupDepth = groupDepth - 1
 			end 'closeGroup'
+
 			if ch == '}' 'closeBrace'
 				depth = depth - 1
+
 				if depth == 0 'atClose'
 					return
 				end 'atClose'
+
 				// Nested close brace — emit as a token and advance.
 				let braceLine = line
 				let braceCol = column
 				tokens.push(Token.create(TokenKind.rightBrace, line: braceLine, column: braceCol))
+
 				if not tryAdvance() 'rBraceEof'
 					throw CursorError.exhausted
 				end 'rBraceEof'
+
 				continue
 			end 'closeBrace'
+
 			if ch == '{' 'openBrace'
 				depth = depth + 1
 				let braceLine = line
 				let braceCol = column
 				tokens.push(Token.create(TokenKind.leftBrace, line: braceLine, column: braceCol))
+
 				if not tryAdvance() 'lBraceEof'
 					throw CursorError.exhausted
 				end 'lBraceEof'
+
 				continue
 			end 'openBrace'
 
 			let atEnd = try stepDfa(line, startCol: column) otherwise 'subEof'
 				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'subEof'
+
 			if atEnd 'interpEof'
 				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'interpEof'
 		end 'interp'
+
 		// Loop guard `cursorByte() < len` failed without a matching `}`.
 		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 	end 'scanInterp'
@@ -1198,20 +1290,25 @@ type Lexer
 		// blame, and the colon is what the author typed to ask for one either way.
 		let specLine = line
 		let specCol = column
+
 		if not tryAdvance() 'colonAtEof'
 			try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 		end 'colonAtEof'
 
 		let specStart = cursorByte()
+
 		while cursorByte() < len 'specBody'
 			let ch = cursor.current()
+
 			if ch == '}' 'specEnd'
 				emitStringLit(TokenKind.stringFormatSpec, strStart: specStart, endByte: cursorByte(), startLine: specLine, startCol: specCol)
 				return
 			end 'specEnd'
+
 			if ch == Ascii.lf 'lineEndedFirst'
 				break
 			end 'lineEndedFirst'
+
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
@@ -1226,11 +1323,13 @@ type Lexer
 	// string's closing quote, so the `{` was meant as a literal brace.
 	function failInterp(openLine LineNumber, openCol ColumnNumber, bodyStart ByteOffset) throws CursorError
 		hasPendingError = true
+
 		if interpBodyContainsDquote(bodyStart) 'sawDquote'
 			pendingError = LexerError.unescapedBrace(openLine, column: openCol)
 		end 'sawDquote' else 'genuineEof'
 			pendingError = LexerError.unterminatedString(openLine, column: openCol)
 		end 'genuineEof'
+
 		throw CursorError.exhausted
 	end 'failInterp'
 
@@ -1240,13 +1339,17 @@ type Lexer
 	function interpBodyContainsDquote(bodyStart ByteOffset) returns bool
 		var i = bodyStart
 		let stop = cursorByte()
+
 		while i < stop 'scan'
 			let b = try bytes.get(i) otherwise return false
+
 			if b == Ascii.dquote 'hit'
 				return true
 			end 'hit'
+
 			i = i + 1
 		end 'scan'
+
 		return false
 	end 'interpBodyContainsDquote'
 
@@ -1260,58 +1363,74 @@ type Lexer
 		// scanNumber is invoked from a sub-parser (e.g. string interpolation)
 		// over a substring that ends on a digit. 0 is safe — treated as "no prefix".
 		let prefixByte = try cursor.peek(1) otherwise 0
+
 		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
 			// Hex literal: 0x or 0X
 			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
 				_ = tryAdvance()
+
 				if not tryAdvance() 'hexPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					try finishAtEof()
 				end 'hexPrefixEof'
+
 				while cursorByte() < len 'hexDigits'
 					let hc = cursor.current()
+
 					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
 						break
 					end 'endHex'
+
 					if not tryAdvance() 'hexEof'
 						break
 					end 'hexEof'
 				end 'hexDigits'
+
 				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 				return
 			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
 				// Binary literal: 0b or 0B
 				_ = tryAdvance()
+
 				if not tryAdvance() 'binPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					try finishAtEof()
 				end 'binPrefixEof'
+
 				while cursorByte() < len 'binDigits'
 					let bc = cursor.current()
+
 					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
 						break
 					end 'endBin'
+
 					if not tryAdvance() 'binEof'
 						break
 					end 'binEof'
 				end 'binDigits'
+
 				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 				return
 			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
 				_ = tryAdvance()
+
 				if not tryAdvance() 'octPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					try finishAtEof()
 				end 'octPrefixEof'
+
 				while cursorByte() < len 'octDigits'
 					let oc = cursor.current()
+
 					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
 						break
 					end 'endOct'
+
 					if not tryAdvance() 'octEof'
 						break
 					end 'octEof'
 				end 'octDigits'
+
 				emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 				return
 			end 'isOct'
@@ -1320,9 +1439,11 @@ type Lexer
 		// Decimal digits (with underscore separators)
 		while cursorByte() < len 'digits'
 			let dc = cursor.current()
+
 			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
 				break
 			end 'endNum'
+
 			if not tryAdvance() 'digitsEof'
 				break
 			end 'digitsEof'
@@ -1344,19 +1465,25 @@ type Lexer
 
 		// Check for decimal point (float literal)
 		var isFloat = false
+
 		if cursorByte() < len and not followsMemberDot 'checkDot'
 			let dotCh = cursor.current()
+
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
+
 				if not tryAdvance() 'dotEof'
 					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					return
 				end 'dotEof'
+
 				while cursorByte() < len 'fracDigits'
 					let fc = cursor.current()
+
 					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
 						break
 					end 'endFrac'
+
 					if not tryAdvance() 'fracEof'
 						break
 					end 'fracEof'
@@ -1367,15 +1494,19 @@ type Lexer
 		// Check for scientific notation exponent (e/E) — only after a decimal point
 		if isFloat and cursorByte() < len 'checkExp'
 			let expCh = cursor.current()
+
 			if (expCh == Ascii.lowerE or expCh == Ascii.upperE) and exponentDigitFollows() 'hasExp'
 				isFloat = true
+
 				if not tryAdvance() 'expEof'
 					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
 					return
 				end 'expEof'
+
 				// Optional sign
 				if cursorByte() < len 'checkSign'
 					let signCh = cursor.current()
+
 					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
 						if not tryAdvance() 'signEof'
 							emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
@@ -1383,12 +1514,15 @@ type Lexer
 						end 'signEof'
 					end 'hasSign'
 				end 'checkSign'
+
 				// Exponent digits
 				while cursorByte() < len 'expDigits'
 					let ec = cursor.current()
+
 					if not isDigit(ec) 'endExp'
 						break
 					end 'endExp'
+
 					if not tryAdvance() 'expDigitsEof'
 						break
 					end 'expDigitsEof'
@@ -1413,16 +1547,20 @@ type Lexer
 		let cb = cursor.current()
 		var atEof = false
 		var endOfs = cursorByte()
+
 		if isDigit(cb) or cb == Ascii.underscore or (cb == Ascii.dot and not followsMemberDot and not isFloat) 'includeDecLast'
 			endOfs = cursorByte() + 1
 			atEof = true
 		end 'includeDecLast'
+
 		let numBytes = try bytes.slice(numStart as ElementIndex, endIndex: endOfs as ElementIndex) otherwise panic("Lexer: number-slice invariant violated")
+
 		if isFloat 'emitFloat'
 			emitWithSource(TokenKind.floatLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
 		end 'emitFloat' else 'emitInt'
 			emitWithSource(TokenKind.intLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
 		end 'emitInt'
+
 		if atEof 'numDone'
 			try finishAtEof()
 		end 'numDone'
@@ -1441,6 +1579,7 @@ type Lexer
 	// about a stray `xp`.
 	function exponentDigitFollows() returns bool
 		let afterE = try cursor.peek(1) otherwise 0
+
 		if isDigit(afterE) 'digitImmediately'
 			return true
 		end 'digitImmediately'
@@ -1448,12 +1587,14 @@ type Lexer
 		if afterE != Ascii.plus and afterE != Ascii.minus 'noSignEither'
 			return false
 		end 'noSignEither'
+
 		return isDigit(try cursor.peek(2) otherwise 0)
 	end 'exponentDigitFollows'
 
 	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
 	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let startPos = cursorByte()
+
 		// Phase 7 step 7: byte-string literal prefix. A bare `b` immediately
 		// followed by `"` (no intervening alphanumeric) opens a byte-string
 		// literal. Use peek(1) to look one byte ahead without committing —
@@ -1462,6 +1603,7 @@ type Lexer
 		// scanning at the source's last byte).
 		if cursor.current() == Ascii.lowerB 'maybeByteStr'
 			let nextByte = try cursor.peek(1) otherwise 0
+
 			if nextByte == Ascii.dquote 'isByteStr'
 				// Consume the `b` and the opening `"`, then scan the body
 				// exactly like a non-interpolating double-quoted string —
@@ -1470,33 +1612,42 @@ type Lexer
 				if not tryAdvance() 'bEof'
 					try finishAtEof()
 				end 'bEof'
+
 				if not tryAdvance() 'qEof'
 					try finishAtEof()
 				end 'qEof'
+
 				try scanByteStringLiteralBody(startLine, startCol: startCol)
 				return
 			end 'isByteStr'
 		end 'maybeByteStr'
+
 		while cursorByte() < len 'identBody'
 			let ic = cursor.current()
+
 			if not isAlphaNum(ic) 'endIdent'
 				break
 			end 'endIdent'
+
 			if not tryAdvance() 'identEof'
 				break
 			end 'identEof'
 		end 'identBody'
+
 		// If tryAdvance() returned false at EOF, cursor is still on the last
 		// identifier byte — include it. Otherwise cursor is past the identifier.
 		var atEof = false
 		var identEnd = cursorByte()
+
 		if isAlphaNum(cursor.current()) 'includeLastByte'
 			identEnd = identEnd + 1
 			atEof = true
 		end 'includeLastByte'
+
 		let identBytes = try bytes.slice(startPos as ElementIndex, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
 		let kind = classifyIdentifier(identBytes)
 		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
+
 		if atEof 'identDone'
 			try finishAtEof()
 		end 'identDone'
@@ -1511,6 +1662,7 @@ type Lexer
 	// true if the directive consumed the source's final byte.
 	function scanDirective(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
 		let hashStart = cursorByte()
+
 		// Consume the `#`.
 		try advance() otherwise 'eofAtHash'
 			// `#` at EOF with no name following — treat as malformed directive.
@@ -1518,25 +1670,33 @@ type Lexer
 			pendingError = LexerError.unexpectedEof(startLine, column: startCol)
 			throw CursorError.exhausted
 		end 'eofAtHash'
+
 		let nameStart = cursorByte()
 		var atEof = false
+
 		while cursorByte() < len 'directiveBody'
 			let dc = cursor.current()
+
 			if not isAlpha(dc) 'endName'
 				break
 			end 'endName'
+
 			if not tryAdvance() 'eofInName'
 				atEof = true
 				break
 			end 'eofInName'
 		end 'directiveBody'
+
 		var nameEnd = cursorByte()
+
 		if atEof and isAlpha(cursor.current()) 'includeLastByte'
 			nameEnd = nameEnd + 1
 		end 'includeLastByte'
+
 		let nameBytes = try bytes.slice(nameStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: invariant violated")
 		let name = String.from(nameBytes)
 		let kind = classifyDirective(name)
+
 		if kind == TokenKind.identifier 'unknown'
 			// Unknown directive name — stash a distinct lexer error so the
 			// diagnostic can quote the offending name; run()'s caller maps
@@ -1545,11 +1705,14 @@ type Lexer
 			pendingError = LexerError.unknownDirective(name, line: startLine, column: startCol)
 			throw CursorError.exhausted
 		end 'unknown'
+
 		let fullSpanBytes = try bytes.slice(hashStart as ElementIndex, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: span slice invariant violated")
 		emitWithSource(kind, value: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
+
 		if atEof 'directiveDone'
 			try finishAtEof()
 		end 'directiveDone'
+
 		return false
 	end 'scanDirective'
 
@@ -1574,6 +1737,7 @@ type Lexer
 			if cursor.current() == Ascii.lf 'endOfLine'
 				break
 			end 'endOfLine'
+
 			if not tryAdvance() 'lineEndsTheFile'
 				try finishAtEof()
 			end 'lineEndsTheFile'
@@ -1612,6 +1776,7 @@ type Lexer
 
 		let textStart = cursorByte()
 		var atEof = false
+
 		while cursor.current() != Ascii.lf 'docBody'
 			if not tryAdvance() 'docEof'
 				atEof = true
@@ -1644,26 +1809,32 @@ type Lexer
 	function scanBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		while cursorByte() < len 'skipBlockComment'
 			let cc = cursor.current()
+
 			if cc == Ascii.star 'checkEnd'
 				// Sentinel: 0 = EOF; safely treated as not the comment closer.
 				let next = try cursor.peek(1) otherwise 0
+
 				if next == Ascii.slash 'foundEnd'
 					_ = tryAdvance()
+
 					if not tryAdvance() 'endSlashEof'
 						// `*/` was the last two bytes — comment closed cleanly,
 						// just at EOF. Mark clean completion so run() doesn't
 						// surface this as truncated input.
 						try finishAtEof()
 					end 'endSlashEof'
+
 					return
 				end 'foundEnd'
 			end 'checkEnd'
+
 			if not tryAdvance() 'blockEof'
 				hasPendingError = true
 				pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
 				throw CursorError.exhausted
 			end 'blockEof'
 		end 'skipBlockComment'
+
 		// Loop exit without finding `*/` — unterminated.
 		hasPendingError = true
 		pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
@@ -1680,6 +1851,7 @@ type Lexer
 		// `emittedAtEof` set means a complete token landed on the last byte
 		// (clean completion); otherwise it's truly truncated input.
 		var done = false
+
 		while not done 'scan'
 			let startLine = line
 			let startCol = column
@@ -1703,9 +1875,11 @@ type Lexer
 			if hasPendingError 'hasErr'
 				throw pendingError
 			end 'hasErr'
+
 			if not emittedAtEof 'truncated'
 				throw LexerError.unexpectedEof(startLine, column: startCol)
 			end 'truncated'
+
 			return true
 		end 'cursorErr'
 	end 'stepOnce'
@@ -1723,6 +1897,7 @@ export function tokenize(source String) returns TokenArray throws LexerError
 		// Empty or whitespace-only source yields an empty token stream.
 		return TokenArray.create()
 	end 'emptySource'
+
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
 	return try lexer.run()
 end 'tokenize'
@@ -1864,12 +2039,15 @@ function classifyDirective(name String) returns TokenKind
 	if name == "if" 'isIf'
 		return TokenKind.hashIf
 	end 'isIf'
+
 	if name == "else" 'isElse'
 		return TokenKind.hashElse
 	end 'isElse'
+
 	if name == "endif" 'isEndif'
 		return TokenKind.hashEndif
 	end 'isEndif'
+
 	return TokenKind.identifier
 end 'classifyDirective'
 

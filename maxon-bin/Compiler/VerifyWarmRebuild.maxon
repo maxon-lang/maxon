@@ -83,6 +83,7 @@ export function verifyWarmRebuild(inputPath FilePath, target Target) returns boo
 	let invalidationOk = try verifyInvalidation(inputPath, target: target)
 
 	let allOk = determinismOk and cacheOk and invalidationOk
+
 	if allOk 'passed'
 		print("verify-warm-rebuild: PASS (determinism + cache + invalidation)\n")
 		return true
@@ -154,6 +155,7 @@ function compareSection(name String, left ByteArray, right ByteArray) returns Se
 	let rightCount = right.count()
 
 	var common = leftCount
+
 	if rightCount < common 'rightShorter'
 		common = rightCount
 	end 'rightShorter'
@@ -161,6 +163,7 @@ function compareSection(name String, left ByteArray, right ByteArray) returns Se
 	for i in 0 upto common 'scan'
 		let l = try left.get(i) otherwise panic("compareSection: left.get({i}) OOB (common={common})")
 		let r = try right.get(i) otherwise panic("compareSection: right.get({i}) OOB (common={common})")
+
 		if l != r 'diff'
 			return SectionComparison.mismatch("section '{name}' differs at byte {i}: left={l}, right={r}")
 		end 'diff'
@@ -235,9 +238,11 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let secondNoMiss = assertCounterMove("second queryAllModule records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
 	let tokensHitOnRebuild = assertCounterMove("rebuild token re-query hits (tokenHits)", before: tokHitBefore, after: tokHitAfter, expectedDelta: fileCount)
 	let parseHitOnRebuild = assertCounterMove("rebuild parse re-query hits (parseHits)", before: parHitBefore, after: parHitAfter, expectedDelta: fileCount)
+
 	// One signature read per parse re-query — every `queryParseOps` reads the index before it can
 	// even decide whether its own memo is valid.
 	let signaturesHitOnRebuild = assertCounterMove("rebuild signature re-query hits (signatureHits)", before: sigHitBefore, after: sigHitAfter, expectedDelta: fileCount)
+
 	// The ACTIVE (directive-filtered) stream is memoized separately and gets the same pair of
 	// assertions, for the reason every other memo here has them: a cache nothing verifies is a cache
 	// whose staleness bugs are simply unpaid (this file's own QueryDatabase header names that
@@ -251,6 +256,7 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
 
 	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and activeTokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and activeTokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
+
 	if allOk 'passed'
 		print("PASS cache: allModule miss->hit, tokens/directives/signatures/parse hit on rebuild (hits={tokHitAfter}/{actHitAfter}/{sigHitAfter}/{parHitAfter}, misses={tokMissAfter}/{actMissAfter}/{sigMissAfter}/{parMissAfter})\n")
 		return true
@@ -588,6 +594,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let methodReceiverKindEditInvalidatesEveryFile = assertCounterMove("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: methodReceiverKindEditMisses, expectedDelta: fileCount)
 
 	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
+
 	if allOk 'passed'
 		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
 		return true
@@ -614,6 +621,7 @@ end 'parseMissesOnRequery'
 // through here — each is a statement about a query counter, and each prints its own summary line.
 function assertCounterMove(label String, before QueryCount, after QueryCount, expectedDelta QueryCount) returns bool
 	let expected = before + expectedDelta
+
 	if after == expected 'ok'
 		return true
 	end 'ok'

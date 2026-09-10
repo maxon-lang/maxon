@@ -108,13 +108,16 @@ end 'allowedRegistersOf'
 // confined one, which is the pigeonhole's job and outranks it.
 export function maxClassPoolSize(pool RegMask, file RegisterFile) returns RegCount
 	var widest = 0 as RegCount
+
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		let size = classPoolSizeOf(pool, class: class, file: file)
+
 		if size > widest 'wider'
 			widest = size
 		end 'wider'
 	end 'eachClass'
+
 	return widest
 end 'maxClassPoolSize'
 
@@ -168,10 +171,12 @@ end 'valueConfinedTo'
 // constrained tally exact as it goes.
 export type EffectivePools
 	export var sizes as RegCountColumn
+
 	// How many values are CONSTRAINED (an effective pool strictly smaller than THEIR OWN CLASS's full
 	// one). Zero in a call-free, idiv-free function, which is what lets its pressure sweeps skip the
 	// census entirely.
 	var constrained as ColumnLength
+
 	// How many values live in the XMM file. It is what lets a function with no float at all skip the
 	// census entirely — see `anyXmm`.
 	var xmmValues as ColumnLength
@@ -197,6 +202,7 @@ export type EffectivePools
 			if size < classPoolSizeOf(pool, class: class, file: liveness.registerFile) 'constrainedValue'
 				self.constrained = self.constrained + 1
 			end 'constrainedValue'
+
 			if class == RegClass.xmm 'xmmValue'
 				self.xmmValues = self.xmmValues + 1
 			end 'xmmValue'
@@ -275,13 +281,16 @@ end 'EffectivePools'
 export type RegPoolCensus
 	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
 	var byPoolSize as RegCountColumn
+
 	// Which buckets of `byPoolSize` are NON-EMPTY, as a bitmask. Exists so the SMALLEST effective
 	// pool among the live values is a trailing-zero count instead of a scan for the first non-empty
 	// bucket — see `screenViolates`, which needs it on every op.
 	var occupied as MachineWord
+
 	// How many live values are CONSTRAINED (effective pool strictly smaller than THEIR OWN FILE's full
 	// pool). Zero at every op of a call-free, idiv-free function.
 	var constrained as RegCount
+
 	// The allocatable pool size of each file — this function's constants, set once at `reset` so the
 	// per-value "is it constrained?" test is a row read rather than a popcount at every flip.
 	var classPoolSizes as RegCountColumn
@@ -296,8 +305,10 @@ export type RegPoolCensus
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
 		end 'eachSize'
+
 		self.occupied = 0
 		self.constrained = 0
+
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(self.classPoolSizes, class: class, value: classPoolSizeOf(pool, class: class, file: file))
@@ -328,9 +339,11 @@ export type RegPoolCensus
 
 	export function remove(poolSize RegCount, class RegClass)
 		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.remove: pool size {poolSize} out of range")
+
 		if current == 0 'underflow'
 			panic("RegPoolCensus.remove: no live value has an effective pool of {poolSize} — the census has drifted from the live row it mirrors")
 		end 'underflow'
+
 		try self.byPoolSize.set(poolSize, value: current - 1) otherwise panic("RegPoolCensus.remove: byPoolSize.set OOB")
 
 		if current == 1 'bucketBecameEmpty'
@@ -381,12 +394,15 @@ export type RegPoolCensus
 
 		// Start at `smallestPool`: `C(p)` is zero below it, so those iterations can only compare 0 > p.
 		var confinedSoFar = 0 as RegCount
+
 		for p in smallestPool upto fullPoolSize 'prefixSum'
 			confinedSoFar = confinedSoFar + (try self.byPoolSize.get(p) otherwise panic("RegPoolCensus.screenViolates: byPoolSize.get OOB at {p}"))
+
 			if confinedSoFar > p 'violates'
 				return true
 			end 'violates'
 		end 'prefixSum'
+
 		return false
 	end 'screenViolates'
 end 'RegPoolCensus'
@@ -405,14 +421,18 @@ end 'RegPoolCensus'
 export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass RegCountColumn, ids ValueIdArray, wasLive BoolArray)
 	ids.clear()
 	wasLive.clear()
+
 	for o in buf 'snapshot'
 		if not operandIsVirtual(o) 'physical'
 			continue
 		end 'physical'
+
 		let v = operandValueId(o)
+
 		if valueIdListContains(ids, valueId: v) 'alreadySnapshot'
 			continue
 		end 'alreadySnapshot'
+
 		ids.push(v)
 		wasLive.push(bitsetTest(row, base: 0, bit: v as BitIndex))
 	end 'snapshot'
@@ -423,12 +443,14 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, cens
 		let v = try ids.get(k) otherwise panic("stepCensusBackwardOverOp: ids.get OOB at {k}")
 		let was = try wasLive.get(k) otherwise panic("stepCensusBackwardOverOp: wasLive.get OOB at {k}")
 		let now = bitsetTest(row, base: 0, bit: v as BitIndex)
+
 		if was == now 'unchanged'
 			continue
 		end 'unchanged'
 
 		let size = try effPoolSizes.get(v) otherwise panic("stepCensusBackwardOverOp: value {v} is outside the function's value space")
 		let class = try classes.get(v) otherwise panic("stepCensusBackwardOverOp: value {v} has no recorded register class")
+
 		if now 'entered'
 			census.add(size, class: class)
 		end 'entered' else 'left'
@@ -446,6 +468,7 @@ function valueIdListContains(ids ValueIdArray, valueId ValueId) returns bool
 			return true
 		end 'match'
 	end 'each'
+
 	return false
 end 'valueIdListContains'
 
@@ -488,13 +511,17 @@ end 'valueIdListContains'
 export type HallScratch
 	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
 	export var allowed as RegMaskColumn
+
 	// The matching, as its two inverse maps (positions in `live`, not ValueIds).
 	export var regOfValue as RegNumColumn
 	export var valueOfReg as LiveIndexColumn
+
 	// One augmenting search's parent links: register -> the value position that offered it.
 	export var parentOfReg as LiveIndexColumn
+
 	// The worklist both alternating-path walks drive off.
 	export var queue as LiveIndexColumn
+
 	// One point's live values, filtered to ONE register file — the list the per-class verdict runs
 	// over. Allocated once with the rest of the scratch, for the same reason.
 	export var classLive as ValueIdArray
@@ -509,6 +536,7 @@ export union HallVerdict
 	// Every live value can be given a DISTINCT register it is allowed to take. The point colours,
 	// whatever the screen suspected.
 	feasible
+
 	// It cannot. `witness` is the register set the overflow is against (the callee-saved subset at a
 	// call, `pool ∖ {rax,rdx}` at an `idiv`, or — the case this file was written for — the
 	// callee-saved subset at a point that is not a call at all). `tight` is how many live values are
@@ -582,12 +610,14 @@ end 'HallVerdict'
 // class-agnostic pool question is exactly the confusion the volatility rename exists to end.)
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
+
 	// "No register" / "no value" markers, each one past the last valid index of its side.
 	let noRegister = RegisterFileSize as RegNum
 	let noValue = valueCount
 
 	var allowed = scratch.allowed
 	allowed.resize(valueCount)
+
 	for i in 0 upto valueCount 'eachValue'
 		let v = try live.get(i) otherwise panic("hallVerdictAt: live.get OOB at {i}")
 		try allowed.set(i, value: allowedRegistersOf(liveness, valueId: v, pool: pool)) otherwise panic("hallVerdictAt: allowed.set OOB at {i}")
@@ -602,6 +632,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	valueOfReg.refill(RegisterFileSize, value: noValue)
 
 	var matched = 0 as RegCount
+
 	for i in 0 upto valueCount 'augment'
 		if augmentValue(i, scratch: scratch, noRegister: noRegister, noValue: noValue) 'grew'
 			matched = matched + 1
@@ -621,6 +652,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	// it must agree, and a disagreement means the matching or the reachability walk is wrong — which
 	// would silently corrupt the deficit this reports.
 	let expected = regMaskPopcount(witness) + (valueCount - matched)
+
 	if tight != expected 'inconsistentTightSet'
 		panic("hallVerdictAt: {tight} live values are confined to the witness {witness} but the matching's tight set has {expected} (witness {regMaskPopcount(witness)} + unmatched {valueCount - matched}) — the maximum matching and its alternating-path reachability disagree")
 	end 'inconsistentTightSet'
@@ -640,6 +672,7 @@ end 'hallVerdictAt'
 function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, noValue LiveIndex) returns bool
 	var allowed = scratch.allowed
 	var valueOfReg = scratch.valueOfReg
+
 	// register -> the value position that offered it during THIS search (its predecessor on the
 	// alternating path). Only registers in `visited` have a meaningful entry, and `visited` is local to
 	// this search — but the column is re-filled anyway, so a stale link can never be read even if that
@@ -652,15 +685,18 @@ function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, n
 	queue.push(start)
 
 	var head = 0 as ColumnLength
+
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("augmentValue: queue.get OOB at {head}")
 		head = head + 1
 
 		let mask = try allowed.get(u) otherwise panic("augmentValue: allowed.get OOB for value position {u}")
+
 		for r in 0 upto RegisterFileSize 'eachRegister'
 			if not regMaskContains(mask, regNum: r) 'notAllowed'
 				continue
 			end 'notAllowed'
+
 			if regMaskContains(visited, regNum: r) 'alreadyOnAPath'
 				continue
 			end 'alreadyOnAPath'
@@ -669,6 +705,7 @@ function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, n
 			try parentOfReg.set(r, value: u) otherwise panic("augmentValue: parentOfReg.set OOB at {r}")
 
 			let holder = try valueOfReg.get(r) otherwise panic("augmentValue: valueOfReg.get OOB at {r}")
+
 			if holder == noValue 'freeRegister'
 				applyAugmentingPath(r, start: start, scratch: scratch, noRegister: noRegister)
 				return true
@@ -691,6 +728,7 @@ function applyAugmentingPath(freeReg RegNum, start LiveIndex, scratch HallScratc
 	var valueOfReg = scratch.valueOfReg
 	var reg = freeReg
 	var reachedStart = false
+
 	while not reachedStart 'walkBack'
 		let u = try parentOfReg.get(reg) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
 		let vacated = try regOfValue.get(u) otherwise panic("applyAugmentingPath: regOfValue.get OOB for value position {u}")
@@ -699,9 +737,11 @@ function applyAugmentingPath(freeReg RegNum, start LiveIndex, scratch HallScratc
 		try regOfValue.set(u, value: reg) otherwise panic("applyAugmentingPath: regOfValue.set OOB for value position {u}")
 
 		reachedStart = u == start
+
 		if (not reachedStart) and vacated == noRegister 'brokenPath'
 			panic("applyAugmentingPath: value position {u} is on the alternating path but held no register, yet it is not the search's start — only the start is unmatched, so the parent links are corrupt")
 		end 'brokenPath'
+
 		reg = vacated
 	end 'walkBack'
 end 'applyAugmentingPath'
@@ -719,10 +759,12 @@ function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister 
 	var regOfValue = scratch.regOfValue
 	var valueOfReg = scratch.valueOfReg
 	var reachable = 0 as RegMask
+
 	// The queue is shared with `augmentValue`, which has finished by the time this runs (the matching
 	// must be MAXIMUM before its tight set means anything).
 	var queue = scratch.queue
 	queue.clear()
+
 	for i in 0 upto valueCount 'seedUnmatched'
 		if (try regOfValue.get(i) otherwise panic("tightRegisterSet: regOfValue.get OOB at {i}")) == noRegister 'unmatched'
 			queue.push(i)
@@ -730,15 +772,18 @@ function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister 
 	end 'seedUnmatched'
 
 	var head = 0 as ColumnLength
+
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("tightRegisterSet: queue.get OOB at {head}")
 		head = head + 1
 
 		let mask = try allowed.get(u) otherwise panic("tightRegisterSet: allowed.get OOB for value position {u}")
+
 		for r in 0 upto RegisterFileSize 'eachRegister'
 			if not regMaskContains(mask, regNum: r) 'notAllowed'
 				continue
 			end 'notAllowed'
+
 			if regMaskContains(reachable, regNum: r) 'alreadyReached'
 				continue
 			end 'alreadyReached'
@@ -746,6 +791,7 @@ function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister 
 			reachable = regMaskAdd(reachable, regNum: r)
 
 			let holder = try valueOfReg.get(r) otherwise panic("tightRegisterSet: valueOfReg.get OOB at {r}")
+
 			if holder == noValue 'freeRegister'
 				panic("tightRegisterSet: register {r} is reachable from an unmatched value along an alternating path yet is held by nobody — that is an augmenting path, so the matching `augmentValue` produced is not maximum")
 			end 'freeRegister'
@@ -761,11 +807,14 @@ end 'tightRegisterSet'
 // lies inside it. This is the set the overflow is about, and the number the deficit is measured from.
 function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount LiveIndex) returns RegCount
 	var confined = 0 as RegCount
+
 	for i in 0 upto valueCount 'eachValue'
 		let mask = try allowed.get(i) otherwise panic("countConfinedTo: allowed.get OOB at {i}")
+
 		if (mask and not witness) == 0 'insideWitness'
 			confined = confined + 1
 		end 'insideWitness'
 	end 'eachValue'
+
 	return confined
 end 'countConfinedTo'

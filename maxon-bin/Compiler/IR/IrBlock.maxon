@@ -74,6 +74,7 @@ end 'BlockArgReturnRole'
 export type IrBlockArg
 	export var valueId as ValueId
 	export var argType as StdType
+
 	// `none` from every producer there is — see `BlockArgReturnRole`, which
 	// records that the compiler has neither a producer of another value nor a reader.
 	export var returnRole as BlockArgReturnRole
@@ -185,11 +186,13 @@ export type IrBlock
 	export var label as ByteArray
 	export var opRefs as OpIndexArray
 	export var terminator as Terminator
+
 	// The block's conditional-branch body op, when it has one. Set ONLY by
 	// `IrModule.appendCondBranch`, which is the only way a conditional branch may enter
 	// a block; `appendOp` refuses to append past it. See `CondBranch`.
 	export var condBranch as CondBranch
 	export var blockArgs as IrBlockArgArray
+
 	// Outgoing branch-argument lists — the values each successor edge passes to
 	// that successor's block-args (phis). Populated by the PARSER (M4b on-the-fly
 	// SSA, `recordBranchEdge`), carried verbatim through `lowerMaxonToStd` and
@@ -330,11 +333,13 @@ export typealias SpliceBatchIndex = int(0 to u64.max)
 // lets the splitter read a position out of its use index rather than search for it.
 export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from SpliceBatchIndex, to SpliceBatchIndex)
 	let pending = to - from
+
 	if pending == 0 'nothingToSplice'
 		return
 	end 'nothingToSplice'
 
 	let oldCount = block.opRefs.count()
+
 	// Grow FIRST and fill BACKWARD: every slot written is either one already copied out or one the
 	// growth just added, so no original op ref is clobbered before it has been moved.
 	//
@@ -349,11 +354,14 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 	var write = oldCount + pending
 	var read = oldCount
 	var k = to
+
 	while k > from 'eachPendingSplice'
 		let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
+
 		if at > oldCount 'pastTheEnd'
 			panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
 		end 'pastTheEnd'
+
 		if at > read 'outOfOrder'
 			panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {read} or lower — a batch must be ASCENDING by position, because it is materialized in ONE backward pass")
 		end 'outOfOrder'
@@ -376,9 +384,11 @@ end 'spliceOpRefs'
 // Used by IR printers across all phases to iterate a function's blocks.
 module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) returns IrBlockArray
 	var result = IrBlockArray.create()
+
 	for blockRef in blockRefs 'each'
 		let block = try blocks.get(blockRef) otherwise panic("invariant: blockRef from blockRefs not in blocks")
 		result.push(block)
 	end 'each'
+
 	return result
 end 'resolveFuncBlocks'

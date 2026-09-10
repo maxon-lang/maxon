@@ -92,8 +92,10 @@ export function requireFormatterPreservesItsCorpus()
 	// `requireCorpusIsPaired`, immediately below.
 	var sources = StringArray.create()
 	var expectations = StringArray.create()
+
 	for entry in entries 'eachEntry'
 		let storedExtension = entry.fileExtension()
+
 		if storedExtension == CaseSourceExtension 'aSource'
 			sources.push(entry.stem())
 		end 'aSource' else if storedExtension == CaseExpectedExtension 'anExpectation'
@@ -220,6 +222,7 @@ function checkCase(caseName String, root FilePath, broken StringArray)
 	// see: a rule that flips a file between two spellings formats correctly and reports correctly every
 	// single run.
 	let twice = format(formatted)
+
 	if twice != formatted 'notIdempotent'
 		broken.push("'{caseName}' is not idempotent — a second pass changed the output again. The first pass gives:{LineFeed}{formatted}and the second gives:{LineFeed}{twice}")
 	end 'notIdempotent'
@@ -256,6 +259,7 @@ function requireCommentMultiplicityHolds(caseName String, source String, formatt
 	for comment in commentTextsIn(source) 'eachComment'
 		let before = occurrencesOf(source, needle: comment)
 		let after = occurrencesOf(formatted, needle: comment)
+
 		if after == before 'preserved'
 			continue
 		end 'preserved'
@@ -283,6 +287,7 @@ function commentTextsIn(source String) returns StringArray
 	for rawLine in source.split(LineFeed) 'eachLine'
 		if onLineOne 'lineOne'
 			onLineOne = false
+
 			if rawLine.startsWith(ShebangMarker) 'shebang'
 				found.push(rawLine.trimEnd())
 				continue
@@ -291,6 +296,7 @@ function commentTextsIn(source String) returns StringArray
 
 		let at = try rawLine.findFirst(CommentMarker) otherwise continue
 		let text = rawLine.slice(at, endIndex: rawLine.endIndex()).trimEnd()
+
 		if found.contains(text) 'alreadyListed'
 			continue
 		end 'alreadyListed'

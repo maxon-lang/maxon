@@ -302,6 +302,7 @@ function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+
 	// `bufLen` twice more: once as the `uint32_t` in-out `bufsize` (this is a little-endian machine, so the
 	// low half of the word IS the u32 the callee reads), and once as the DEFAULT answer — `bufLen` means
 	// "too small, double and come back", which is the right verdict for every way the walk below can fail
@@ -509,6 +510,7 @@ function buildArm64DarwinWaitNewChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixWaitNotSignalled)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
+
 	// MAC8's three: a process object's pid, the status it will report, and whether a kill already chose that
 	// status. Written for EVERY kind, because `malloc` does not zero and a garbage `childKilled` would make an
 	// ordinary child report whatever the heap held.
@@ -589,6 +591,7 @@ function buildArm64DarwinThreadCreateChunk() returns FunctionCodeChunk
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixWaitKindThread)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostWaitNewName)
+
 	// The slot keeps the TAGGED handle (that is what this chunk answers); the field address below is computed
 	// from the untagged pointer, because a tag in the top bits is not part of the address.
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
@@ -672,6 +675,7 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: takeSignal)
+
 	// A ZERO timeout is a POLL: the caller wants the state, not a wait (`WaitPollTimeout`, which
 	// `__gt_proc_check` uses). Answer the default `WAIT_TIMEOUT` without touching the condvar.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
@@ -679,6 +683,7 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: WaitInfinite)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: waitTimed)
+
 	// Unbounded: `pthread_cond_wait(&cond, &mutex)` and re-test. That IS the `while (!signalled)` loop the
 	// primitive requires — a condvar wake is advisory, and re-testing is the only sound response to one.
 	arm64DarwinCondArgs(asm, objSlot: SlotObj)
@@ -894,6 +899,7 @@ function buildArm64DarwinTlsAllocChunk(globalData GlobalDataTable) returns Funct
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotKey)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinNoTlsDestructor)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKeyCreate)
+
 	// `pthread_key_create` answers 0 on success and an errno otherwise — an `int`, so the upper half of x0
 	// is unspecified and the test is on the low 32 bits (`Arm64NarrowResultShift`, the trap
 	// `mrt_darwin_exe_path` records for `_NSGetExecutablePath`).
@@ -943,6 +949,7 @@ function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBufLen)
+
 	// An unset variable answers 0 bytes written — `GetEnvironmentVariableA`'s own answer, and the DEFAULT
 	// here so the NULL arm needs no branch of its own.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixEnvUnset)
@@ -1107,6 +1114,7 @@ function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) 
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotOutPtr)
+
 	// MAC8: a subprocess PIPE END reaches this chunk as a tagged handle (`StdOp.osWriteFile` on the child's
 	// stdin, `StdOp.osReadOverlapped` on either output pipe). Masking the kind bits off is a no-op for the
 	// untagged descriptors `osFileOpenRead`/`osStdHandle` answer, so one mask serves every producer.
@@ -1239,6 +1247,7 @@ function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadOnly)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.open)
+
 	// The RAW answer is what `fsync` and `close` are handed — they read only its low half, exactly as the
 	// callee that produced it wrote only that half. The NARROWED copy exists solely for the sign test: after
 	// `lsl #32` a negative `int` has bit 63 set, so a signed compare against 0 reads the descriptor's sign
@@ -1502,6 +1511,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: nextEntry)
 
 	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: runtimeFrameSlots(darwinStatLayout().bytes))
+
 	// `fstatat(dirfd(dir), name, &st, 0)` — RELATIVE to the open directory, which is why this walk never
 	// builds a path and never owns a path buffer.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
@@ -1603,6 +1613,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	arm64DarwinEmitRequireAllocation(asm, globalData: globalData)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.opendir)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDir)
+
 	// `opendir`'s errno has to be captured BEFORE the `free` below, which runs allocator code of its own —
 	// the ordering `ManagedFileRuntime` states once for the Std tier, restated here because the free is this
 	// chunk's rather than that graph's.
@@ -2095,6 +2106,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// real one — `installGtRuntime`'s own stated reason for installing its members unconditionally.
 	if usage.usesGt 'schedulerClocks'
 		chunks.push(buildArm64DarwinSleepMsChunk())
+
 		// MAC3's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
 		// tier whenever `installGtRuntime` runs, and every one of these chunks is the target-side body of an op
 		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each MACHINE's own park event
@@ -2106,6 +2118,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinThreadCreateChunk())
 		chunks.push(buildArm64DarwinWaitOneChunk(globalData))
 		chunks.push(buildArm64DarwinTlsAllocChunk(globalData))
+
 		// ⭐⭐ **MAC8's CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
 		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a
 		// spawn, an exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that
@@ -2154,6 +2167,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// BOTH families reach it: `__mf_exists`/`__mf_stat` open a search on a bare path exactly as
 	// `__md_open_search` opens one on a glob.
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
+
 	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF MAC8**, so it is gated one bit wider
 	// than the cluster below it: `__gt_subp_yield_read` classifies a failed read with it and every spawn
 	// failure publishes through it. Splitting it out of the cluster is what keeps the cluster's own

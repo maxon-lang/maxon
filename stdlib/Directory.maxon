@@ -10,6 +10,7 @@ end 'DirectoryListError'
 /// Static directory operations.
 public type Directory
 	typealias FilePathArray = Array with FilePath
+
 	var dir as __ManagedDirectory
 
 	/// List files and directories at a path
@@ -20,11 +21,14 @@ public type Directory
 				throw DirectoryListError.notFound
 			end 'open'
 		}
+
 		var result = FilePathArray.create()
+
 		while (try search.dir.next() otherwise throw DirectoryListError.listFailed) != 0 'loop'
 			let name = String.init(search.dir.filename())
 			result.push(path.join(name))
 		end 'loop'
+
 		search.dir.close()
 		return result
 	end 'list'
@@ -46,17 +50,20 @@ public type Directory
 		if Directory.exists(path) 'already'
 			return true
 		end 'already'
+
 		if let parent = try path.parent() 'hasParent'
 			if not parent.isEmpty() 'nonEmpty'
 				_ = Directory.create(parent)
 			end 'nonEmpty'
 		end 'hasParent'
+
 		try __ManagedDirectory.create(path.path.addressableBytes()) otherwise 'createFailed'
 			// The contract is about the directory EXISTING after the call, not about who made it: another
 			// process can win the gap between the check above and this call, and a caller told `false` for a
 			// directory that is plainly there refuses work it could have done.
 			return Directory.exists(path)
 		end 'createFailed'
+
 		return true
 	end 'create'
 

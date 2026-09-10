@@ -36,6 +36,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
+
 		while cap < numElements * 2 'calc_cap'
 			cap = cap * 2
 		end 'calc_cap'
@@ -94,11 +95,13 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// Check load factor and grow if needed (75% threshold)
 		let loadLimit = trunc((capacity * 3) / 4)
+
 		if count >= loadLimit 'grow'
 			grow()
 		end 'grow'
 
 		let hash = element.hash()
+
 		// capacity is always a power of two (starts at 16, only ever doubled), so
 		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
 		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
@@ -124,9 +127,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Occupied gives false
 				Deleted gives false
 			end 'se1'
+
 			if isEmpty 'empty'
 				// Empty slot - insert here or at first deleted
 				var insertIndex = index
+
 				if firstDeleted >= 0 'use_deleted'
 					insertIndex = firstDeleted
 				end 'use_deleted'
@@ -140,6 +145,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Empty gives false
 				Occupied gives false
 			end 'sd1'
+
 			if isDeleted and firstDeleted < 0 'mark_deleted'
 				firstDeleted = index
 			end 'mark_deleted'
@@ -149,9 +155,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'check_exists'
 				// Skip the full element.equals() unless the cached hash matches.
 				let slotHash = try hashes.get(index) otherwise hash
+
 				if slotHash == hash 'hash_match'
 					if let existing = try elements.get(index) 'get_existing'
 						if existing == element 'exists'
@@ -192,12 +200,14 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
+
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
 		let mask = capacity - 1
 		var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 		var probes = 0
+
 		while probes < capacity 'probe'
 			let state = try states.get(index) otherwise SlotState.Empty
 
@@ -206,6 +216,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Occupied gives false
 				Deleted gives false
 			end 'se1'
+
 			if isEmpty 'empty'
 				return false
 			end 'empty'
@@ -215,9 +226,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'check_found'
 				// Skip the full element.equals() unless the cached hash matches.
 				let slotHash = try hashes.get(index) otherwise hash
+
 				if slotHash == hash 'hash_match'
 					if let existing = try elements.get(index) 'get_existing'
 						if existing == element 'found'
@@ -242,12 +255,14 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
+
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
 		let mask = capacity - 1
 		var index = (spreadHash(hash) and mask) as TableSlotIndex
 
 		var probes = 0
+
 		while probes < capacity 'probe'
 			let state = try states.get(index) otherwise SlotState.Empty
 
@@ -256,6 +271,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Occupied gives false
 				Deleted gives false
 			end 'se1'
+
 			if isEmpty 'empty'
 				return false
 			end 'empty'
@@ -265,9 +281,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'check_found'
 				// Skip the full element.equals() unless the cached hash matches.
 				let slotHash = try hashes.get(index) otherwise hash
+
 				if slotHash == hash 'hash_match'
 					if let existing = try elements.get(index) 'get_existing'
 						if existing == element 'found'
@@ -309,6 +327,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	function grow()
 		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
+
 		if newCapacity == 0 'handle_zero'
 			newCapacity = 16
 		end 'handle_zero'
@@ -345,6 +364,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'occupied'
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
@@ -358,6 +378,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 						Occupied gives true
 						Deleted gives true
 					end 'se1'
+
 					while isNotEmpty 'find_slot'
 						index = (index + 1) and mask
 						currentState = try states.get(index) otherwise SlotState.Empty
@@ -383,6 +404,7 @@ end 'Set'
 public type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
 	typealias IterElementArray = Array with Element
 	typealias IterStateArray = Array with SlotState
+
 	var elements as IterElementArray
 	var states as IterStateArray
 	var capacity as TableCapacity

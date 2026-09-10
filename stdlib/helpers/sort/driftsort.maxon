@@ -97,16 +97,20 @@ public extension Array
 		if n < 2 'tiny'
 			return n
 		end 'tiny'
+
 		var x = n
+
 		// `x` is >= 1 throughout: it is seeded to n (>= 2 here) and only ever reassigned the Newton
 		// midpoint (x + n/x)/2, which is >= 1 for x, n >= 1. `SortIndex` is 0-inclusive and there is
 		// no flow-narrowing to say otherwise, so the divide `n / x` — fallible at the type level —
 		// rides `try`; the `otherwise` is unreachable, so it panics rather than fold a wrong answer.
 		var y = (x + (try (n / x) otherwise panic("sqrtApprox: Newton iterate x reached 0"))) / 2
+
 		while y < x 'newton'
 			x = y
 			y = (x + (try (n / x) otherwise panic("sqrtApprox: Newton iterate x reached 0"))) / 2
 		end 'newton'
+
 		return x
 	end 'sqrtApprox'
 
@@ -126,6 +130,7 @@ public extension Array
 			let cap = 64 as SortIndex
 			return half if half < cap else cap
 		end 'smallN'
+
 		return self.sqrtApprox(n)
 	end 'minGoodRunLen'
 
@@ -141,33 +146,42 @@ public extension Array
 		if hi - lo <= 1 'trivial'
 			return hi - lo
 		end 'trivial'
+
 		var runEnd = lo + 1
 		let v0 = try managed.get(lo) otherwise panic("naturalRunLen: get OOB at lo")
 		let v1 = try managed.get(lo + 1) otherwise panic("naturalRunLen: get OOB at lo+1")
 		let initialOrd = cmp(v0, v1)
 		let isDescending = initialOrd == Ordering.greaterThan
+
 		if isDescending 'desc'
 			while runEnd < hi 'scanDesc'
 				let a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (desc)")
 				let b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (desc)")
+
 				if cmp(a, b) != Ordering.greaterThan 'stop'
 					break
 				end 'stop'
+
 				runEnd = runEnd + 1
 			end 'scanDesc'
+
 			Log.trace("findRun.descending")
 			self.reverseRange(lo, hi: runEnd)
 		end 'desc' else 'asc'
 			while runEnd < hi 'scanAsc'
 				let a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (asc)")
 				let b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (asc)")
+
 				if cmp(a, b) == Ordering.greaterThan 'stop'
 					break
 				end 'stop'
+
 				runEnd = runEnd + 1
 			end 'scanAsc'
+
 			Log.trace("findRun.ascending")
 		end 'asc'
+
 		return runEnd - lo
 	end 'naturalRunLen'
 
@@ -181,20 +195,26 @@ public extension Array
 	// inputs where a sort-then-merge beats deferring); see `driftsortRange`.
 	function createRun(lo SortIndex, hi SortIndex, minGood SortIndex, eager bool, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator) returns SortRun
 		let avail = hi - lo
+
 		if avail <= 1 'trivial'
 			return SortRun.init(lo, length: avail, power: 0 as NodePower)
 		end 'trivial'
+
 		let natural = self.naturalRunLen(lo, hi: hi, cmp: cmp)
+
 		if natural >= minGood 'goodNatural'
 			Log.trace("driftsort.naturalRun")
 			return SortRun.init(lo, length: natural, power: 0 as NodePower)
 		end 'goodNatural'
+
 		let want = minGood if minGood < avail else avail
+
 		if eager 'eagerSort'
 			Log.trace("driftsort.eagerRun")
 			self.stableQuicksortRange(lo, hi: lo + want, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			return SortRun.init(lo, length: want, power: 0 as NodePower)
 		end 'eagerSort'
+
 		Log.trace("driftsort.logicalRun")
 		return SortRun.initLogical(lo, length: want, power: 0 as NodePower)
 	end 'createRun'
@@ -229,6 +249,7 @@ public extension Array
 	function nodePowerBetween(s1 SortIndex, s2 SortIndex, n2 SortIndex, n SortIndex) returns NodePower
 		// scale = ceil(2^62 / n) = (2^62 + n - 1) / n
 		let twoTo62 = 4611686018427387904 as NodePowerWord  // 2^62
+
 		// `n` is a run length, always >= 1; `NodePowerWord` admits 0, so the scale divide rides `try`;
 		// the `otherwise` is unreachable, so it panics.
 		let nWord = n as NodePowerWord
@@ -236,21 +257,26 @@ public extension Array
 		let x = (s1 + s2) as NodePowerWord
 		let y = (s2 + s2 + n2) as NodePowerWord
 		let diff = (scale * x) xor (scale * y)
+
 		if diff == 0 'noDiff'
 			return 64 as NodePower
 		end 'noDiff'
+
 		// Count leading zeros of `diff` over the full 64-bit width. The top bit
 		// (2^63) exceeds the signed-i64 literal range, so build it as 2^62 * 2 —
 		// which `NodePowerWord` admits and orders unsigned.
 		var lz = 0 as NodePower
 		var bit = twoTo62 * 2  // 2^63 (top bit)
+
 		while bit > 0 'lzScan'
 			if (diff and bit) != 0 'foundHigh'
 				return lz
 			end 'foundHigh'
+
 			lz = lz + 1
 			bit = bit / 2
 		end 'lzScan'
+
 		return lz
 	end 'nodePowerBetween'
 
@@ -267,13 +293,17 @@ public extension Array
 		let top = stack.count() - 1
 		let right = try stack.get(top) otherwise panic("mergeTopTwo: stack.get OOB at top")
 		let left = try stack.get(top - 1) otherwise panic("mergeTopTwo: stack.get OOB at top-1")
+
 		if not left.sorted 'sortLeft'
 			self.stableQuicksortRange(left.startIndex, hi: left.startIndex + left.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'sortLeft'
+
 		if not right.sorted 'sortRight'
 			self.stableQuicksortRange(right.startIndex, hi: right.startIndex + right.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'sortRight'
+
 		self.mergeAdaptive(left.startIndex, mid: right.startIndex, hi: right.startIndex + right.length, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+
 		// Replace the top two stack entries with the merged run. The new
 		// run's power-to-next will be set when a new right neighbor is
 		// pushed; until then it carries the left run's old power.
@@ -292,16 +322,19 @@ public extension Array
 	// At end-of-input, drain the stack by merging top-to-bottom.
 	public function driftsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
+
 		if n <= 32 'small'
 			self.smallSortRange(lo, hi: hi, cmp: cmp)
 			return
 		end 'small'
+
 		// Driftsort's minimum good run length (~sqrt(n) for large n). A natural
 		// run shorter than this is manufactured by the stable quicksort rather
 		// than padded with insertion sort.
 		let minGood = self.minGoodRunLen(n)
 		var stack = RunArrayStack.create()
 		var scratch = MergeScratchArray.create()
+
 		// `stablePartition`'s one-slot pivot storage. It lives out here for the
 		// same reason `scratch` does — so a sort pays for it once rather than
 		// once per partition — and it must be a storage NOTHING ELSE WRITES: that
@@ -309,6 +342,7 @@ public extension Array
 		// starts empty; the first partition's `push` gives it its one slot and
 		// every later `clear` + `push` reuses that slot's capacity.
 		var pivotHold = MergeScratchArray.create()
+
 		// Driftsort auxiliary-buffer sizing. Rust uses
 		//   alloc_len = max(n - n/2, min(n, MAX_FULL_ALLOC_BYTES / sizeof(T)), SMALL_SORT_SCRATCH)
 		// i.e. a full-size buffer (capped at 8 MB worth of elements) shrinking
@@ -326,22 +360,28 @@ public extension Array
 		let elemBytes = managed.elementSize()
 		let halfUp = n - n / 2
 		var byteCap = n
+
 		if elemBytes > 0 'haveSize'
 			// Guarded `elemBytes > 0`, but the guard does not narrow the type, so the divide rides
 			// `try`; the zero path is unreachable inside the guard, so it panics.
 			let maxElems = try (8000000 / elemBytes) otherwise panic("driftsort scratch: elemBytes was 0 inside the elemBytes > 0 guard")
 			byteCap = maxElems if maxElems < n else n
 		end 'haveSize'
+
 		var allocLen = halfUp
+
 		if byteCap > allocLen 'byByte'
 			allocLen = byteCap
 		end 'byByte'
+
 		if 32 > allocLen 'bySmallSort'
 			allocLen = 32 as SortIndex
 		end 'bySmallSort'
+
 		let scratchCap = allocLen
 		scratch.resize(scratchCap)
 		Log.trace("buffer.alloc")
+
 		// Eager run-creation pays off only on short inputs, where a small-sort
 		// (or two plus a merge) beats deferring. Driftsort's rule is
 		// `len <= small_sort_threshold * 2`; with our threshold of 32 that is
@@ -349,49 +389,61 @@ public extension Array
 		// 33..64.)
 		let eager = n <= 64
 		var curStart = lo
+
 		while curStart < hi 'streamRuns'
 			let newRun = self.createRun(curStart, hi: hi, minGood: minGood, eager: eager, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			let runLen = newRun.length
+
 			// Compute power between the previous top-of-stack run and this
 			// new one, then pop-merge while existing top runs have power
 			// >= this new boundary's power.
 			if stack.count() > 0 'havePrev'
 				let prev = try stack.get(stack.count() - 1) otherwise panic("driftsortRange: stack.get OOB")
 				let p = self.nodePowerBetween(prev.startIndex, s2: curStart, n2: runLen, n: n)
+
 				// Patch prev's power to record the boundary between prev and
 				// newRun. Preserve prev.sorted — a logical (unsorted) prev must
 				// stay unsorted until it is merged, or stability is lost.
 				var prevWithPower = SortRun.init(prev.startIndex, length: prev.length, power: p)
+
 				if not prev.sorted 'prevLogical'
 					prevWithPower = SortRun.initLogical(prev.startIndex, length: prev.length, power: p)
 				end 'prevLogical'
+
 				try stack.set(stack.count() - 1, value: prevWithPower) otherwise panic("driftsortRange: stack.set OOB")
+
 				// While the run two-from-top has a power >= top's power, merge top into it.
 				while stack.count() >= 2 'popMerge'
 					let topIdx = stack.count() - 1
 					let top = try stack.get(topIdx) otherwise panic("driftsortRange: top get OOB")
 					let below = try stack.get(topIdx - 1) otherwise panic("driftsortRange: below get OOB")
+
 					if below.power < top.power 'stop'
 						break
 					end 'stop'
+
 					// Merge top into below. The boundary power of the merged
 					// pair against `newRun` is the same as `top.power` since
 					// top is the rightmost stack entry adjacent to `newRun`.
 					self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				end 'popMerge'
 			end 'havePrev'
+
 			Log.trace("driftsort.push")
 			stack.push(newRun)
 			curStart = curStart + runLen
 		end 'streamRuns'
+
 		// Drain: merge top-to-bottom until only one run remains.
 		while stack.count() > 1 'drain'
 			self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'drain'
+
 		// A lone logical run never reached a merge (e.g. the whole input became
 		// one short run). Sort it so the final array is ordered.
 		if stack.count() == 1 'lone'
 			let only = try stack.get(0) otherwise panic("driftsortRange: stack.get OOB at drain end")
+
 			if not only.sorted 'loneLogical'
 				self.stableQuicksortRange(only.startIndex, hi: only.startIndex + only.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			end 'loneLogical'

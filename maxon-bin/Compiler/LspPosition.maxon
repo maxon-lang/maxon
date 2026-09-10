@@ -75,6 +75,7 @@ module type LspLineIndex
 
 		var offset = 0
 		var previousByte = 0 as Byte
+
 		for sourceByte in source.bytes() 'eachByte'
 			if sourceByte == LspNewlineByte 'lineBreak'
 				// `offset` is this `\n`'s own index, so the line it ends stops here — or one byte
@@ -127,11 +128,13 @@ module type LspLineIndex
 	function lineContaining(offset ByteOffset) returns LspLineNumber
 		var low = 0
 		var high = lineStarts.count() - 1
+
 		while low < high 'narrow'
 			// Biased UP, because the invariant is "the greatest line whose start is <= offset": a
 			// midpoint that rounds down would let `low == mid` and never advance.
 			let mid = low + (high - low + 1) / 2
 			let midStart = try lineStarts.get(mid) otherwise panic("LspLineIndex.lineContaining: mid is within [low, high] and lineStarts is dense")
+
 			if midStart <= offset 'atOrBefore'
 				low = mid
 			end 'atOrBefore' else 'after'
@@ -159,6 +162,7 @@ module type LspLineIndex
 
 		var character = 0
 		var pos = startOfLine(line)
+
 		while pos < target 'walkTheLine'
 			character = character + utf16UnitsAt(source, pos: pos)
 			pos = pos + (utf8ByteLengthAt(source, pos: pos as BytePos) as ByteOffset)
@@ -178,6 +182,7 @@ module type LspLineIndex
 		let lineEnd = endOfLineContent(position.line)
 		var pos = startOfLine(position.line)
 		var character = 0
+
 		while character < position.character 'walkTheLine'
 			if pos >= lineEnd 'clampToLineEnd'
 				return lineEnd

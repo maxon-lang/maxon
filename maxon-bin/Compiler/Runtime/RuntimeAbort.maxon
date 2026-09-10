@@ -64,13 +64,16 @@ export enum RuntimeAbort
 	// `__managed_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
 	arrayCapacityOverflow = 71
+
 	// `__managed_append`: `dest` and `src` disagree on `element_size@24`, so the single-stride blit would
 	// over-read the packed source and splice garbage in.
 	arrayAppendElementSizeMismatch = 72
+
 	// `__managed_resize`: a NEGATIVE length. The shrink's zero range starts at `buffer + n·es`, which for a
 	// negative `n` is an address BELOW the buffer — the one out-of-buffer write a detach cannot fix.
 	// Pinned by `byte-string-literal.negative-resize-aborts`.
 	arrayNegativeResize = 73
+
 	// `__managed_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
 	// literal is never 0 and a descriptor read never yields 0) — it would make `__managed_grow` allocate a
 	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with the
@@ -78,6 +81,7 @@ export enum RuntimeAbort
 	// `RunProcessError.storeOverflow` instead); this is the one that moved because it is unreachable from
 	// any source program.
 	arrayElementSizeZero = 74
+
 	// `__mm_leak_check` (the ONE OS-exit gate): a green thread was spawned but neither AWAITED nor DROPPED —
 	// `__gt_live_count` was non-zero at exit (or, negative, an over-reclaim). A GT struct + its seed stack are
 	// `__slab_alloc`/`osAllocPages` allocations INVISIBLE to `__mm_alloc_count`, so this leak is its own class
@@ -85,6 +89,7 @@ export enum RuntimeAbort
 	// goes to the green-thread counter, not the heap one (this file's founding rule: an abort must not report
 	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
 	greenThreadLeak = 75
+
 	// ⚠ **76 IS RETIRED, NOT REUSABLE (W105).** It was `hashTableInsertNoFreeSlot` — the shared
 	// `__set_insert`/`__map_upsert` probe walking every slot without meeting an Empty one or a reusable
 	// tombstone. `HashTableRuntime` is deleted, so nothing emits that `osExit` and a live registry may not go
@@ -97,10 +102,12 @@ export enum RuntimeAbort
 	// and `__mm_free` is not null-safe — without the guard the free writes to the
 	// header eight bytes below address 0.
 	managedFileStatNullBuffer = 78
+
 	// `__mf_stat_field`: an index outside the six fields the 48-byte stat buffer holds — including a
 	// NEGATIVE one, which the signed `StdCmpPred` makes a separate compare. Without the guard the read
 	// returns whatever sits past a 48-byte allocation: a silent wrong answer, not a crash.
 	managedFileStatIndexOutOfRange = 79
+
 	// `__list_remove_node` / `__list_detach_node`: the node handed in is linked into a DIFFERENT chain than
 	// the receiver. `owner@32` names the chain a node belongs to, and the unlink used to gate on it merely
 	// being non-zero — so `b.remove(nodeOfA)` repaired `b`'s `head`/`tail`/`count` from `a`'s links, MEASURED
@@ -116,6 +123,7 @@ export enum RuntimeAbort
 	// markability guard catches the inline `a.remove(b.insertLast(x))`), so reaching here needs two named
 	// chains and a handle carried between them.
 	managedListNodeNotInThisChain = 77
+
 	// `__list_node_value`: the node's element slot is EMPTY on a chain whose element is MANAGED — the state
 	// `__list_remove_node`/`__list_remove_first` leave behind when they hand the element to the caller and
 	// NULL `value@16` so nobody drops it twice. `__list_node_decref` is built for that state and skips its
@@ -138,6 +146,7 @@ export enum RuntimeAbort
 	// or make the read throw — is a semantic question `/specs/managed-list.md` does not answer and this abort
 	// does not decide; like `managedListNodeNotInThisChain` beside it, it only stops the corruption.
 	managedListNodeElementMovedOut = 81
+
 	// `__slab_assert_os_alloc`: an OS page call was REFUSED — the address space or the system commit limit is
 	// exhausted. Every caller stores INTO the pointer it just got, so without this guard the condition arrives
 	// as `mov %reg, (<garbage>)`: an opaque access violation, in the one failure a user is most likely to hit
@@ -149,6 +158,7 @@ export enum RuntimeAbort
 	// in `SlabArena.maxon` for why the sign catches both and no lane can answer a page base that is not
 	// positive.
 	slabOsAllocFailed = 82
+
 	// `__slab_arena_alloc_chunks`: a chunk-run request no arena can EVER satisfy — a count of 0 or less, or
 	// more chunks than an arena holds past its metadata. It is a COMPILER bug (a caller computed a span
 	// geometry wrong), and both directions are silent without the guard: the loop maps a fresh arena and
@@ -156,6 +166,7 @@ export enum RuntimeAbort
 	// large, while a 0-chunk request satisfies `runLen >= 0` before any bit is cleared and answers a chunk
 	// still marked FREE — which is then handed out a second time.
 	slabChunkRunUnsatisfiable = 83
+
 	// `__slab_arena_free_chunks`: a chunk range outside the arena. Below the metadata chunks it releases the
 	// arena's own bitmap into the pool; past the last chunk it writes beyond the bitmap into chunk 0's
 	// payload. Both corrupt the map that decides which chunks are free, so the fault surfaces later,
@@ -163,6 +174,7 @@ export enum RuntimeAbort
 	// from the one above, this registry's founding rule: two different faults in two different functions may
 	// not report one number.
 	slabChunkRangeOutOfArena = 84
+
 	// `__slab_refill`: a class whose span holds NO objects was asked for one. Only class 0 — the ladder's
 	// sentinel, size 0 — can answer that description, and the only request that reaches it is a ZERO-BYTE
 	// one. It is refused HERE, on the refill path, rather than at the class lookup, because that lookup is
@@ -171,18 +183,21 @@ export enum RuntimeAbort
 	// Unguarded it computes a zero-chunk span and lands on `slabChunkRunUnsatisfiable`, which is a true
 	// statement about the arena and a misleading one about the fault.
 	slabClassServesNoObject = 85
+
 	// ⭐⭐ `__slab_alloc`'s pop (`emitSlabAllocClass`): **INV-1 IS BROKEN.** The span reported free slots
 	// (`free_count > 0`), its free list was empty, and its virgin bump region was exhausted — so the three
 	// sources of a free slot disagree about how many there are. The alternative to trapping is handing out
 	// a slot PAST the span's last one, which writes into whatever the arena placed in the next chunk and
 	// surfaces later, somewhere else, as one slot owned by two objects.
 	slabSpanExhaustedPastItsEnd = 86
+
 	// `__slab_os_direct_free`: a pointer whose 16-byte prefix does not carry the allocator's magic word — a
 	// double free, or a pointer that never came from the OS-direct tier. The length is carried in the
 	// mapping rather than in a side table, so there is nothing to search and the stamp is what catches
 	// the fault. Unguarded, the free reads user data as a byte count and hands it to `osFreePages`,
 	// which unmaps an arbitrary region of the process.
 	slabOsDirectPointerNotOurs = 87
+
 	// `__slab_arena_of`: an address that lies inside NO arena's reservation. Its one caller is the scavenger's
 	// span destruction, which needs an arena base to turn a span's page base into a chunk index — so reaching
 	// here means a span was registered whose pages did not come from the arena at all, which is a COMPILER
@@ -191,6 +206,7 @@ export enum RuntimeAbort
 	// that is whatever sits at address 8. Separate from `slabChunkRangeOutOfArena` beside it, this registry's
 	// founding rule: that one is a bad RANGE inside a real arena, this one is no arena at all.
 	slabAddressOutsideEveryArena = 88
+
 	// ⛔⛔ `__slab_free`: a free reached a span carrying `MspanOwningPParked` — the span is on an mcentral
 	// list, which means EVERY one of its slots is already free. So the pointer handed in is a DOUBLE FREE, or
 	// a slot that outlived the span it came from. It cannot be a benign race: a slot in flight on a remote
@@ -201,6 +217,7 @@ export enum RuntimeAbort
 	// not depend on who is asking. Letting a raw OS thread through instead lands on an out-of-bounds
 	// array read and then a push onto a parked span.
 	slabFreeOfParkedSpan = 89
+
 	// `__slab_drain_remote`: a slot on a P's remote-free queue whose page maps to NO span. Every slot that
 	// reaches a queue came through `__slab_free`, which routes a map miss to the OS-direct tier before the
 	// queue exists as an option, and a span is never unregistered while one of its slots is live — so this is
@@ -208,6 +225,7 @@ export enum RuntimeAbort
 	// replay would push the slot onto a span pointer of `ArenaMapNoSpan`, i.e. store through address 0 and
 	// then increment the word at 16.
 	slabRemoteFreeSlotHasNoSpan = 90
+
 	// ⛔⛔ `__slab_arena_new`: the arena's base is not a multiple of `SlabArenaCommitGranuleBytes`.
 	//
 	// ⭐⭐ **THIS IS THE INVARIANT THAT WAS BROKEN FOR TWO WEEKS WITH NOTHING TO SAY SO, AND IT IS WHY THIS
@@ -227,6 +245,7 @@ export enum RuntimeAbort
 	// `checkArenaReservationSlack` asserts that premise at compile time from the grow unit; this asks the
 	// same thing of the address a future lane really returns.
 	slabArenaBaseNotGranuleAligned = 91
+
 	// ⛔⛔ `__gt_drive_until` AND `__gt_await_any`: a SCHEDULER DEADLOCK. This driver's green thread has no
 	// runnable coroutine, the scheduler's three tiers hold nothing, no child is parked, no timer is pending,
 	// no overlapped read is in flight and no other M is live — so the thread this drive is waiting for can
@@ -249,6 +268,7 @@ export enum RuntimeAbort
 	// thread neither awaited nor dropped, which is `greenThreadLeak` (75) with the count in it, reported by
 	// `__mm_leak_check` a few instructions later. Two different faults may not report one number.
 	schedulerDeadlock = 92
+
 	// `__gt_register_park`: the park note carries a kind no site writes. `GtRuntime`'s `GtParkKindTimer` /
 	// `GtParkKindProc` / `GtParkKindIo` / `GtParkKindMailbox` are the FOUR `emitGtPark` can stamp, so a fifth
 	// value is a COMPILER bug rather than a program's — and it is silent without this: the thread would be
@@ -261,6 +281,7 @@ export enum RuntimeAbort
 	// the direction that reads as completeness. The kinds are enumerated by NAME above rather than counted so
 	// that the next one has to be spelled here to be believed; do not reintroduce a bare number.
 	schedulerUnknownParkKind = 93
+
 	// ⛔⛔ `__gt_promise_drop`: a PROMISE named a green thread parked in `__mbox_recv`. Its `waiting` road
 	// deregisters the timer, process and in-flight-read stores and there is nothing anywhere that clears
 	// `mbox.parkedGt` but the waker's own store, so falling through it would free a thread the mailbox still
@@ -274,6 +295,7 @@ export enum RuntimeAbort
 	// reaching a reclamation path that has no answer for it. This registry's founding rule: two different
 	// faults may not report one number.
 	schedulerPromiseParkedOnAMailbox = 94
+
 	// ⛔⛔⛔ `emitSchedPidlePutLocked`: a processor was being put on `__sched_pidle` WITH A NON-EMPTY RUN
 	// QUEUE — `runqhead != runqtail`. **This is Go's own assertion, ported with the code it guards**
 	// (`vendor/go/src/runtime/proc.go:7425`: `pidleput` throws `"pidleput: P has non-empty run queue"`),
@@ -320,6 +342,7 @@ export enum RuntimeAbort
 	// `handoffp` is the road that will take it. This is what says so on the first run rather than the
 	// five-hundredth.
 	schedulerIdledAProcessorHoldingWork = 95
+
 	// ⭐⭐ **`__mm_sole_box`: a record about to CROSS to another green thread has a second owner.** A send,
 	// a `spawn`'s state and a service reply all MOVE their value whole, and the language guarantees one
 	// green thread per box — which is what lets a refcount step be a plain load/add/store. The static
@@ -333,6 +356,7 @@ export enum RuntimeAbort
 	// SYNTHESIZED Std function, and the abort road (`emitRuntimeAbort`) is `osExit`, not `osPanic` —
 	// `mrt_panic` prints a message but exits `PanicExitCode`, which is not this code.
 	transferredRecordNotSole = 96
+
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER PROCESS; it is not emitted
@@ -383,9 +407,11 @@ end 'baseName'
 
 function lastSegment(s String, separator String) returns String
 	let parts = s.split(separator)
+
 	if parts.isEmpty() 'whole'
 		return s
 	end 'whole'
+
 	return try parts.get(parts.count() - 1) otherwise s
 end 'lastSegment'
 

@@ -59,13 +59,16 @@ function reader(lines Count) returns Count
 	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise panic("spawn failed")
 
 	var n = 0 as Count
+
 	while true 'lineLoop'
 		let line = try child.readStdoutLine() otherwise 'readFailed'
 			break
 		end 'readFailed'
+
 		if line.isEmpty() 'eof'
 			break
 		end 'eof'
+
 		n = n + 1
 	end 'lineLoop'
 
@@ -94,8 +97,10 @@ function main() returns ExitCode
 	let total = ra + rb + rc + rd
 	let expected = readersPerRun * linesPerReader
 	print("lines={total} expected={expected}\n")
+
 	if total == expected 'ok'
 		return 0
 	end 'ok'
+
 	return 1
 end 'main'

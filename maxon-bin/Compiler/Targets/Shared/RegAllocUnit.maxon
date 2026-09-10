@@ -98,6 +98,7 @@ typealias RegAllocUnitBlockArray = Array with RegAllocUnitBlock
 // ONE FUNCTION'S WHOLE ALLOCATOR INPUT.
 module type RegAllocUnit
 	export var name as ByteArray
+
 	// Was this function PARSED? The splitter asks it twice — a function the compiler emitted has no
 	// author to refuse, so its full-pool peak is relieved by a forced bracket rather than raised as
 	// E5001. Carried as the bool the two sites actually ask for rather than as the `FilePath` they used
@@ -105,13 +106,16 @@ module type RegAllocUnit
 	// left it empty would silently turn every user function into a compiler-emitted one.
 	export var hasAuthor as bool
 	export var paramCount as ParamCount
+
 	// The bytes of slot area already reserved — `promoteStackRecords`' region. It is the SEED the spill
 	// slots are placed above, and the result carries the final total back.
 	export var stackSize as StackSize
 	export var valueClass as ValueClassColumn
+
 	// The blocks in `func.blockRefs` order. The allocator re-orders them (RPO) and the result carries
 	// the order it chose.
 	export var blocks as RegAllocUnitBlockArray
+
 	// ⭐⭐ **THE DEBUG-SPAN COLUMN, FLAT AND IN `liveOpIndices` ORDER — WHICH IS THE ONLY THING THAT CAN
 	// CROSS.** Ops go over BY VALUE and come home at recycled, arbitrary indices, so no op-index-keyed
 	// table survives the round trip. What does survive is ORDER: `liveOpIndices` is "each block's
@@ -119,10 +123,12 @@ module type RegAllocUnit
 	// pushes and exactly the order `spliceRegAllocResult` places. One array per UNIT rather than per
 	// block, because the deep-move walk visits every record and a per-block array multiplies them.
 	export var spanIds as SpanIdArray
+
 	// Whether the compile is capturing spans at all. Carried rather than derived from `spanIds.count()`:
 	// an empty column and a function with no live ops are different facts, and the private module has to
 	// know which it is before it appends anything.
 	export var spansArmed as bool
+
 	// ⭐ **THE VALUES THE PARSER NAMED, FLAT AND IN `IrFunction.debugLocals` ORDER.** The allocator is the
 	// last point at which a `ValueId` still means anything — the encoder sees physical registers — so this
 	// is the question that has to cross, and the answer comes home in the same order.
@@ -135,9 +141,11 @@ module type RegAllocUnit
 	export static function extract(module TargetModule, func IrFunction, valueClass ValueClassColumn) returns RegAllocUnit
 		var blocks = RegAllocUnitBlockArray.create()
 		blocks.reserve(func.blockRefs.count())
+
 		// ⚠ **BUILT FRESH, NEVER ALIASED.** A unit is MOVED to a worker, so every record reachable from
 		// it must be sole or the transfer walk aborts the process (`RuntimeAbort.transferredRecordNotSole`).
 		var spanIds = SpanIdArray.create()
+
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("RegAllocUnit.extract: blockRef {blockRef} from '{String.from(func.name)}' is not in module.blocks")
 			collectBlockSpanIds(module, block: block, into: spanIds)
@@ -153,6 +161,7 @@ end 'RegAllocUnit'
 function debugValueIdsOf(func IrFunction) returns ValueIdArray
 	var valueIds = ValueIdArray.create()
 	valueIds.reserve(debugValueTallyOf(func))
+
 	for local in func.debugLocals 'eachBinding'
 		for v in local.valueIds 'eachValue'
 			valueIds.push(v)
@@ -167,6 +176,7 @@ end 'debugValueIdsOf'
 // per function for a number.
 function debugValueTallyOf(func IrFunction) returns ElementIndex
 	var tally = 0 as ElementIndex
+
 	for local in func.debugLocals 'eachBinding'
 		tally = tally + local.valueIds.count()
 	end 'eachBinding'
@@ -184,6 +194,7 @@ end 'debugValueTallyOf'
 // have.
 type SoleBody
 	export var ops as TargetOpArray
+
 	// The conditional branch's POSITION, and whether there is one — two scalars rather than a
 	// `UnitCondBranch`, so nothing hands a union BOX out through a field read. Each consumer mints its own
 	// (see `soleTargetOp` for why a shared box is not a copy).
@@ -201,6 +212,7 @@ type SoleBody
 			if condIsSet and opIdx == condOpIdx 'thisIsTheConditionalBranch'
 				condPos = ops.count()
 			end 'thisIsTheConditionalBranch'
+
 			ops.push(unitOpAt(module, opIdx: opIdx, moduleKeepsOps: moduleKeepsOps))
 		end 'eachOp'
 
@@ -240,12 +252,14 @@ function extractUnitBlock(module TargetModule, block IrBlock) returns RegAllocUn
 
 	var blockArgIds = ValueIdArray.create()
 	blockArgIds.reserve(block.blockArgs.count())
+
 	for arg in block.blockArgs 'eachPhi'
 		blockArgIds.push(arg.valueId)
 	end 'eachPhi'
 
 	var edges = UnitEdgeArray.create()
 	edges.reserve(block.branchEdges.count())
+
 	for edge in block.branchEdges 'eachEdge'
 		edges.push(UnitEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
 	end 'eachEdge'
@@ -480,6 +494,7 @@ function rebuildUnitModule(unit RegAllocUnit) returns TargetModule
 	module.spans.armed = unit.spansArmed
 
 	var spanAt = 0 as SpanCursor
+
 	for unitBlock in unit.blocks 'eachBlock'
 		let blockRef = module.blocks.count()
 		var block = IrBlock.create(unitBlock.id, label: unitBlock.label)
@@ -502,6 +517,7 @@ end 'rebuildUnitModule'
 // only ever a capacity.
 function unitBodyTally(unit RegAllocUnit) returns ElementIndex
 	var tally = 0 as ElementIndex
+
 	for unitBlock in unit.blocks 'eachBlock'
 		tally = tally + unitBlock.body.count()
 	end 'eachBlock'
@@ -517,6 +533,7 @@ end 'unitBodyTally'
 function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAllocUnitBlock, spanIds SpanIdArray, spanAt SpanCursor) returns SpanCursor
 	var cursor = spanAt
 	block.opRefs.reserve(unitBlock.body.count())
+
 	for op in unitBlock.body 'eachOp'
 		let opIdx = module.ops.count()
 		module.ops.push(op)
@@ -539,18 +556,22 @@ function fillRebuiltBlock(module TargetModule, block IrBlock, unitBlock RegAlloc
 
 	var blockArgs = IrBlockArgArray.create()
 	blockArgs.reserve(unitBlock.blockArgIds.count())
+
 	for valueId in unitBlock.blockArgIds 'eachPhi'
 		// The TYPE is a placeholder and can be: the allocator reads a value's register FILE off the
 		// class column the lowering produced, never off a phi's Std type (see `RegAllocUnitBlock`).
 		blockArgs.push(IrBlockArg.create(valueId, argType: StdType.i64))
 	end 'eachPhi'
+
 	block.blockArgs = blockArgs
 
 	var branchEdges = BranchEdgeArray.create()
 	branchEdges.reserve(unitBlock.edges.count())
+
 	for edge in unitBlock.edges 'eachEdge'
 		branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))
 	end 'eachEdge'
+
 	block.branchEdges = branchEdges
 
 	return cursor
@@ -612,11 +633,13 @@ module type RegAllocResult
 	export var counters as RegAllocCounters
 	export var facts as RegAllocFacts
 	export var costs as RegAllocCosts
+
 	// The spans of the ops in `blocks`, flat and in the order those blocks list them — the same
 	// `liveOpIndices` order the unit's column arrived in, re-derived on THIS side because the allocator
 	// reordered the blocks and minted ops of its own. `spliceRegAllocResult` consumes it in lockstep with
 	// the ops and refuses if the two do not come out even.
 	export var spanIds as SpanIdArray
+
 	// The location of every value the unit asked about, in the order it asked — the one shape that can
 	// cross, exactly as `spanIds` does. `spliceRegAllocResult` refuses a count that does not match the
 	// question, because a shortfall would misattribute every later record.
@@ -640,6 +663,7 @@ module type RegAllocResult
 	// record literal; sharing a key would make the freshness summary answer `false` for both.
 	export static function byAllocating(unit RegAllocUnit, pool RegMask, callerSaved RegMask, file RegisterFile, opFacts OpVariantFacts) returns RegAllocResult throws RegAllocRefusal
 		var module = rebuildUnitModule(unit)
+
 		// ⛔ **THE UNIT STOPS HOLDING ITS OPS THE MOMENT THE REBUILT MODULE HOLDS THEM.** `fillRebuiltBlock`
 		// pushes the unit's own boxes rather than copies of them, so until this runs every op has two
 		// owners and the harvest below could not move one home. Only `blocks` goes: `valueClass` and
@@ -660,10 +684,12 @@ module type RegAllocResult
 		module.spans.requireParallelTo(module.ops.count(), what: "after allocation")
 
 		let blocks = harvestAllocatedBlocks(module, func: func)
+
 		// ⚠ **BEFORE `module.ops.clear()`, and built FRESH** — the column is read through the block walk,
 		// which needs the ops still in place, and the array crosses a reply so it must be sole.
 		let spanIds = harvestResultSpanIds(module, func: func)
 		let stackSize = func.stackSize
+
 		// ⭐⭐ **THE REPLY MOVES THE OPS HOME, AND THIS IS THE HALF THAT MAKES THEM SOLE.** Every op box the
 		// allocator settled on is in exactly two places by now — this module's flat `ops` and the blocks
 		// above — and dropping the module's half is what lets the harvest carry the boxes themselves
@@ -683,6 +709,7 @@ end 'RegAllocResult'
 function harvestAllocatedBlocks(module TargetModule, func IrFunction) returns RegAllocResultBlockArray
 	var blocks = RegAllocResultBlockArray.create()
 	blocks.reserve(func.blockRefs.count())
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("harvestAllocatedBlocks: blockRef {blockRef} is not in the rebuilt module's blocks")
 		blocks.push(harvestResultBlock(module, block: block))
@@ -696,6 +723,7 @@ end 'harvestAllocatedBlocks'
 // place" rather than as a desync.
 function harvestResultSpanIds(module TargetModule, func IrFunction) returns SpanIdArray
 	var ids = SpanIdArray.create()
+
 	if not module.spans.armed 'notCapturing'
 		return ids
 	end 'notCapturing'
@@ -730,18 +758,23 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 
 	var newRefs = BlockRefArray.create()
 	newRefs.reserve(result.blocks.count())
+
 	for resultBlock in result.blocks 'eachBlock'
 		let blockRef = try blockRefById.get(resultBlock.id) otherwise panic("spliceRegAllocResult: '{String.from(func.name)}' names a block id {resultBlock.id} outside this function's id space")
+
 		if blockRef == noSuchBlock 'idNotInThisFunction'
 			panic("spliceRegAllocResult: '{String.from(func.name)}' has no block with id {resultBlock.id} — the allocator neither adds nor removes blocks, so every result block is one this function already owns")
 		end 'idNotInThisFunction'
+
 		var block = try module.blocks.get(blockRef) otherwise panic("spliceRegAllocResult: blockRef {blockRef} is not in module.blocks")
 
 		var opRefs = OpIndexArray.create()
 		opRefs.reserve(resultBlock.ops.count())
+
 		for op in resultBlock.ops 'eachOp'
 			opRefs.push(slots.place(module, op: op))
 		end 'eachOp'
+
 		block.opRefs = opRefs
 
 		block.condBranch = match resultBlock.condBranch 'cond'
@@ -768,9 +801,11 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 	// A shortfall would silently shift every later binding onto its neighbour's location, which reads as a
 	// plausible dump rather than as a defect.
 	let debugValueTally = debugValueTallyOf(func)
+
 	if result.debugLocations.count() != debugValueTally 'debugLocationsOutOfStep'
 		panic("spliceRegAllocResult: '{String.from(func.name)}' asked the allocator about {debugValueTally} named value(s) and {result.debugLocations.count()} came home — the two orders have drifted, and every record past the shortfall would name another binding's location")
 	end 'debugLocationsOutOfStep'
+
 	func.debugLocalLocations = result.debugLocations
 
 	// ⭐ **THE COLUMN AND THE OPS CAME OUT EVEN.** The splice walks the result's blocks and the column was
@@ -811,6 +846,7 @@ type OpSlotSupply
 
 	export function place(module TargetModule, op TargetOp) returns OpIndex
 		let spanId = self.nextSpan()
+
 		if self.taken < self.recycled.count() 'reuseThisFunctionsOwnSlot'
 			let recycledIdx = try self.recycled.get(self.taken) otherwise panic("OpSlotSupply.place: recycled.get OOB at {self.taken} below count {self.recycled.count()}")
 			self.taken = self.taken + 1
@@ -844,8 +880,10 @@ end 'OpSlotSupply'
 // splice quadratic in a function's block count.
 function blockRefsByIdOf(module TargetModule, func IrFunction) returns BlockRefArray
 	var highestId = 0 as BlockId
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
+
 		if block.id > highestId 'higher'
 			highestId = block.id
 		end 'higher'
@@ -856,6 +894,7 @@ function blockRefsByIdOf(module TargetModule, func IrFunction) returns BlockRefA
 	// function but not gap-free, so the holes are real.
 	var byId = BlockRefArray.create()
 	byId.refill(((highestId + 1) as ElementIndex), value: module.blocks.count())
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
 		try byId.set(block.id, value: blockRef) otherwise panic("blockRefsByIdOf: block id {block.id} is above the {byId.count()} the id space was sized to")

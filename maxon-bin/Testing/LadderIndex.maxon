@@ -69,9 +69,11 @@ export function requireLadderIndexComplete()
 
 	let unindexed = namesMissingFrom(scripts, other: indexed)
 	let stale = namesMissingFrom(indexed, other: scripts)
+
 	// A THIRD failure, and it is this file's own disease rather than a tidiness rule: two rows for one
 	// script are two descriptions of one ladder, free to disagree, with nothing to say which is current.
 	let repeated = namesRepeatedIn(indexed)
+
 	if unindexed.isEmpty() and stale.isEmpty() and repeated.isEmpty() 'consistent'
 		return
 	end 'consistent'
@@ -105,11 +107,13 @@ let IndexedNameIndent = "\n    "
 // only in which list is which.
 function namesMissingFrom(names StringArray, other StringArray) returns StringArray
 	var missing = StringArray.create()
+
 	for name in names 'eachName'
 		if not other.contains(name) 'absent'
 			missing.push(name)
 		end 'absent'
 	end 'eachName'
+
 	return missing
 end 'namesMissingFrom'
 
@@ -118,6 +122,7 @@ end 'namesMissingFrom'
 function namesRepeatedIn(names StringArray) returns StringArray
 	var seen = StringArray.create()
 	var repeated = StringArray.create()
+
 	for name in names 'eachName'
 		if not seen.contains(name) 'firstTime'
 			seen.push(name)
@@ -128,6 +133,7 @@ function namesRepeatedIn(names StringArray) returns StringArray
 			repeated.push(name)
 		end 'notYetReported'
 	end 'eachName'
+
 	return repeated
 end 'namesRepeatedIn'
 
@@ -138,12 +144,15 @@ function ladderScriptNames(dir FilePath) returns StringArray
 	let entries = try Directory.list(dir) otherwise panic("LadderIndex: could not list {LaddersRelativeDir} — it holds the hand-built ladders this check reconciles against their index. Run the suite from the repo root.")
 
 	var names = StringArray.create()
+
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
+
 		if name.endsWith(LadderScriptExtension) 'isScript'
 			names.push(name)
 		end 'isScript'
 	end 'eachEntry'
+
 	return names
 end 'ladderScriptNames'
 
@@ -157,12 +166,14 @@ function indexedScriptNames(dir FilePath) returns StringArray
 	let text = try File.readText(path) otherwise panic("LadderIndex: could not read {LaddersRelativeDir}/{LadderIndexFileName} — it is the index every hand-built ladder is found through. Run the suite from the repo root.")
 
 	var names = StringArray.create()
+
 	for line in text.split("\n") 'eachLine'
 		match rowScriptName(line) 'row'
 			notARow then continue
 			named(name) then names.push(name)
 		end 'row'
 	end 'eachLine'
+
 	return names
 end 'indexedScriptNames'
 
@@ -195,6 +206,7 @@ function rowScriptName(line String) returns IndexedRow
 	let usage = try quoted.get(1) otherwise return IndexedRow.notARow
 
 	let name = try usage.split(UsageArgumentSeparator).get(0) otherwise return IndexedRow.notARow
+
 	if not name.endsWith(LadderScriptExtension) 'notAScriptName'
 		return IndexedRow.notARow
 	end 'notAScriptName'

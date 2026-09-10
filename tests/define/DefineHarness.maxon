@@ -100,11 +100,14 @@ end 'stagedProgram'
 function copyFixtureTree(stored FilePath, destination FilePath)
 	for entry in listing(stored) 'eachEntry'
 		let name = entry.filename()
+
 		if Directory.isDirectory(entry) 'aSubdirectory'
 			let child = destination.join(name)
+
 			if not Directory.create(child) 'couldNotCreate'
 				panic("define tests: the gate could not run — could not create {child.toString()} in the staging tree.")
 			end 'couldNotCreate'
+
 			copyFixtureTree(entry, destination: child)
 			continue
 		end 'aSubdirectory'
@@ -143,6 +146,7 @@ function spawnBuild(staged FilePath, extraArguments StringArray) returns Collect
 	arguments.push(staged.toString())
 	arguments.push(OutputOption)
 	arguments.push(builtExecutable(staged).toString())
+
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
 	end 'eachExtra'
@@ -211,6 +215,7 @@ end 'requireBuiltExecutable'
 
 function spawnCompiler(arguments StringArray, staged FilePath, what String) returns CollectedOutput
 	let binary = testedCompilerPath()
+
 	if not File.exists(binary) 'noBinary'
 		panic("define tests: the gate could not run — {what} needs a driver at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
@@ -243,6 +248,7 @@ end 'executableSuffix'
 
 function fixtureDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("define tests: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not Directory.isDirectory(path) 'notThere'
 		panic("define tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
@@ -252,9 +258,11 @@ end 'fixtureDir'
 
 function stagingDir(spelled String) returns FilePath
 	var prefix = ""
+
 	for component in spelled.split(PathSeparator) 'eachComponent'
 		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
 		let ancestor = try FilePath.from(prefix) otherwise panic("define tests: the gate could not run — '{prefix}' is not a spellable path")
+
 		if not Directory.create(ancestor) 'couldNotCreate'
 			panic("define tests: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
 		end 'couldNotCreate'

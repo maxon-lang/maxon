@@ -317,30 +317,39 @@ export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeS
 	if callee.equals(ManagedFileOpenReadName) 'openRead'
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenReadMethod)
 	end 'openRead'
+
 	if callee.equals(ManagedFileOpenWriteName) 'openWrite'
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenWriteMethod)
 	end 'openWrite'
+
 	if callee.equals(ManagedFileOpenWriteExecutableName) 'openWriteExecutable'
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenWriteExecutableMethod)
 	end 'openWriteExecutable'
+
 	if callee.equals(ManagedFileSizeName) 'size'
 		return RuntimeCalleeSourceMethod.found(ManagedFileSizeMethod)
 	end 'size'
+
 	if callee.equals(ManagedFileReadName) 'read'
 		return RuntimeCalleeSourceMethod.found(ManagedFileReadMethod)
 	end 'read'
+
 	if callee.equals(ManagedFileWriteName) 'write'
 		return RuntimeCalleeSourceMethod.found(ManagedFileWriteMethod)
 	end 'write'
+
 	if callee.equals(ManagedFileDeleteName) 'delete'
 		return RuntimeCalleeSourceMethod.found(ManagedFileDeleteMethod)
 	end 'delete'
+
 	if callee.equals(ManagedFileRenameName) 'rename'
 		return RuntimeCalleeSourceMethod.found(ManagedFileRenameMethod)
 	end 'rename'
+
 	if callee.equals(ManagedFileStatName) 'stat'
 		return RuntimeCalleeSourceMethod.found(ManagedFileStatMethod)
 	end 'stat'
+
 	panic("managedFileSourceMethod: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedFile` callee — this map is asked ONLY behind `isThrowingManagedFileRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedFile*Method` constant. `installManagedFileRuntime`'s drift guard asks this for every throwing `__mf_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedFileSourceMethod'
 
@@ -546,6 +555,7 @@ export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, e
 	var closedBlock = module.addBlock(func, label: b"closedthrow")
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
 	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
+
 	// The DECODE is emitted into `entry` rather than into `join`, which is sound for the reason the header
 	// gives about the handle itself: `entry` dominates `join`, and on the closed edge the subtraction is a
 	// dead arithmetic op the allocator colours away.
@@ -622,11 +632,13 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	// between the call and the classification can be allowed to disturb it.
 	let handle = ids.mint()
 	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+
 	match mode 'op'
 		read then module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
 		write then module.appendOp(afterCopy, op: StdOp.osFileOpenWrite(handle, pathPtrId: scratch))
 		writeExecutable then module.appendOp(afterCopy, op: StdOp.osFileOpenWriteExecutable(handle, pathPtrId: scratch))
 	end 'op'
+
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
@@ -670,6 +682,7 @@ function buildManagedFileClose(module StdModule)
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedFileClosedHandle, ids: ids)
 	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+
 	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
 	// `emitLiveHandleOrClosedThrow` makes for its own.
 	let handle = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
@@ -935,10 +948,12 @@ end 'buildManagedFileExists'
 function buildManagedFilePathOperation(module StdModule, name ByteArray, mode ManagedFilePathOpMode, fallbackFlag ParsedInt)
 	var paramCount = 1 as ParamCount
 	var paramTypes = oneI64Param()
+
 	if managedFilePathOpTakesTwoPaths(mode) 'twoPaths'
 		paramCount = 2 as ParamCount
 		paramTypes = twoI64Params()
 	end 'twoPaths'
+
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(paramCount)
 
@@ -950,22 +965,27 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 
 	emitParams(module, block: entry, count: paramCount)
 	let firstPath = emitPathToCString(module, func: func, cur: entry, join: afterFirst, pathRec: 0 as ValueId, ids: ids)
+
 	// The second path's copy runs from `afterFirst` into `afterSecond`; a one-path operation simply falls
 	// through, so the two blocks stay in the same order and neither builder needs its own skeleton.
 	let secondPath = emitOptionalSecondPath(module, func: func, cur: afterFirst, join: afterSecond, mode: mode, ids: ids)
 
 	let verdict = ids.mint()
 	emitIoPark(module, block: afterSecond, operation: GtIoOperation.fileExists, ids: ids)
+
 	match mode 'op'
 		delete then module.appendOp(afterSecond, op: StdOp.osFileDelete(verdict, pathPtrId: firstPath))
 		rename then module.appendOp(afterSecond, op: StdOp.osFileRename(verdict, oldPathPtrId: firstPath, newPathPtrId: secondPath))
 	end 'op'
+
 	let err = ids.mint()
 	module.appendOp(afterSecond, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterSecond, ptr: firstPath, ids: ids)
+
 	if managedFilePathOpTakesTwoPaths(mode) 'freeSecond'
 		emitRawFree(module, block: afterSecond, ptr: secondPath, ids: ids)
 	end 'freeSecond'
+
 	let falseConst = emitConst(module, block: afterSecond, value: Win32False, ids: ids)
 	let failedCall = emitCmp(module, block: afterSecond, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(afterSecond, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
@@ -998,6 +1018,7 @@ function emitOptionalSecondPath(module StdModule, func IrFunction, cur IrBlock, 
 		module.setTerminator(cur, op: StdOp.branch(join.id))
 		return emitConst(module, block: join, value: 0, ids: ids)
 	end 'onePath'
+
 	// Parameter 1 — the SECOND path. `emitParams` numbers a function's parameters from 0, so the id IS the
 	// index and needs no cast.
 	let newPathRec = 1 as ValueId
@@ -1233,6 +1254,7 @@ function claimManagedFileOrdinals(project Project, declaration EnumLayout)
 	fileErrors.claim(ManagedFileSizeFailedCaseName, ordinal: ManagedFileSizeFailedOrdinal)
 	fileErrors.claim(ManagedFileDeleteFailedCaseName, ordinal: ManagedFileDeleteFailedOrdinal)
 	fileErrors.claim(ManagedFileStatFailedCaseName, ordinal: ManagedFileStatFailedOrdinal)
+
 	// The two the runtime ABORTS on rather than throwing — see the ordinal block at the top of this file.
 	fileErrors.neverThrown(ManagedFileInvalidStatBufferCaseName, ordinal: ManagedFileInvalidStatBufferOrdinal)
 	fileErrors.neverThrown(ManagedFileInvalidStatIndexCaseName, ordinal: ManagedFileInvalidStatIndexOrdinal)
@@ -1259,6 +1281,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	buildManagedFileWrite(module)
 	buildManagedFileExists(module)
 	buildManagedFilePathOperation(module, name: ManagedFileDeleteName, mode: ManagedFilePathOpMode.delete, fallbackFlag: ManagedFileDeleteFailedFlag)
+
 	// ⚠ `rename`'s catch-all is `deleteFailed`, not a variant of its own: the enum has no `renameFailed` to
 	// reach for. See the ordinals at the top of this file.
 	buildManagedFilePathOperation(module, name: ManagedFileRenameName, mode: ManagedFilePathOpMode.rename, fallbackFlag: ManagedFileDeleteFailedFlag)
@@ -1270,11 +1293,14 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 		if not isManagedFileRuntimeCallee(func.name) 'notOurs'
 			continue
 		end 'notOurs'
+
 		let named = isThrowingManagedFileRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+
 		if stamped and not named 'stampedNotNamed'
 			panic("installManagedFileRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedFileRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.1)")
 		end 'stampedNotNamed'
+
 		if named and not stamped 'namedNotStamped'
 			panic("installManagedFileRuntime: isThrowingManagedFileRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.1)")
 		end 'namedNotStamped'

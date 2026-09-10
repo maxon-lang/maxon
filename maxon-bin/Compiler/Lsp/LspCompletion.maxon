@@ -112,6 +112,7 @@ typealias OfferedLabelSet = Set with String
 union CompletionSubject
 	// `Color.` — the receiver names a TYPE, so its STATIC surface is what an author may write next.
 	staticSurfaceOf(typeName String)
+
 	// `arr.` — the receiver names a VALUE of some type, so its INSTANCE surface is offered.
 	instanceSurfaceOf(typeName String)
 	nothingToOffer
@@ -123,6 +124,7 @@ function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOf
 
 	let subject = subjectAt(tokens, blocks: blocks, offset: offset)
 	let typeName = subjectTypeName(subject)
+
 	if typeName.isEmpty() 'nothingToComplete'
 		return offers
 	end 'nothingToComplete'
@@ -153,6 +155,7 @@ end 'subjectTypeName'
 // `arr.` and after `arr.pu`, is the receiver either way.
 function subjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns CompletionSubject
 	let receiver = receiverIndexBefore(tokens, offset: offset)
+
 	if receiver >= tokens.count() 'noReceiver'
 		return CompletionSubject.nothingToOffer
 	end 'noReceiver'
@@ -172,6 +175,7 @@ end 'subjectAt'
 // offers nothing, which is what both routes answer for it.
 function valueSubject(tokens TokenArray, before TokenIndex, name String) returns CompletionSubject
 	let bound = completionBoundTypeName(tokens, before: before, name: name)
+
 	if bound.isEmpty() 'nothingBindsIt'
 		return CompletionSubject.staticSurfaceOf(name)
 	end 'nothingBindsIt'
@@ -197,6 +201,7 @@ function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns Token
 	end 'nothingBefore'
 
 	let receiver = lspTokenAt(tokens, index: candidate)
+
 	if receiver.kind != TokenKind.identifier 'notANameToCompleteOn'
 		return tokens.count()
 	end 'notANameToCompleteOn'
@@ -226,6 +231,7 @@ function completionBoundTypeName(tokens TokenArray, before TokenIndex, name Stri
 		end 'pastTheCursor'
 
 		let keyword = lspTokenAt(tokens, index: tokenLine.firstIndex)
+
 		if keyword.kind != TokenKind.let and keyword.kind != TokenKind.var 'notABinding'
 			continue
 		end 'notABinding'
@@ -300,6 +306,7 @@ function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, 
 
 	for tokenLine in lspTokenLines(tokens) 'eachLine'
 		let line = lspLineOf(tokenLine.line)
+
 		if not lspBlockHoldsLine(block, line: line) 'outsideTheBody'
 			continue
 		end 'outsideTheBody'
@@ -313,6 +320,7 @@ function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, 
 			if wantsStatics 'staticAccess'
 				addOffer(offers, offered: offered, label: String.from(lspTokenAt(tokens, index: tokenLine.firstIndex).value), kind: EnumMemberCompletionKind)
 			end 'staticAccess'
+
 			continue
 		end 'aCaseName'
 
@@ -351,6 +359,7 @@ function addMemberOnLine(offers CompletionOfferArray, offered OfferedLabelSet, t
 
 	let keyword = lspTokenAt(tokens, index: index)
 	let name = lspTokenAt(tokens, index: index + 1)
+
 	if name.kind != TokenKind.identifier 'unnamed'
 		return
 	end 'unnamed'
@@ -404,6 +413,7 @@ function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet
 
 	for (registered, signature) in project.funcSignatures 'eachFunction'
 		let qualified = String.from(registered)
+
 		if not qualified.startsWith(prefix) 'anotherType'
 			continue
 		end 'anotherType'

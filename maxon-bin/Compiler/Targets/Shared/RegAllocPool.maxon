@@ -118,6 +118,7 @@ module function allocateOnAWorkerPool(module TargetModule, target Target, projec
 	let funcCount = module.funcCount()
 	let processors = __Builtins.schedProcessorCount()
 	let workerCount = processors if processors < funcCount else funcCount
+
 	// The only evidence that the allocator ran in PARALLEL rather than merely correctly: both
 	// byte-identity gates pass on a pool of one, so nothing else can tell a pool of one from a pool of
 	// sixteen. `tests/parallel-compile/` pins this line.
@@ -138,6 +139,7 @@ module function allocateOnAWorkerPool(module TargetModule, target Target, projec
 	let poolSize = workerCount as PoolSize
 
 	var workers = RegAllocWorkerHandleArray.create()
+
 	for _ in 0 upto workerCount 'eachWorker'
 		workers.push(spawn RegAllocWorker.create(target.cpu, os: target.os))
 	end 'eachWorker'
@@ -145,6 +147,7 @@ module function allocateOnAWorkerPool(module TargetModule, target Target, projec
 	var counters = RegAllocCountersArray.create()
 	var facts = RegAllocFactsArray.create()
 	var costs = RegAllocCostsArray.create()
+
 	for _ in 0 upto funcCount 'eachFunction'
 		counters.push(RegAllocCounters.create())
 		facts.push(RegAllocFacts.create())
@@ -196,6 +199,7 @@ end 'allocateOnAWorkerPool'
 function drainThePool(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerCount PoolSize, counters RegAllocCountersArray, facts RegAllocFactsArray, costs RegAllocCostsArray) returns FuncIndex
 	let funcCount = module.funcCount() as PoolSize
 	let order = functionsLongestFirst(module, funcCount: funcCount)
+
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = module.funcCount() as FuncIndex
@@ -207,6 +211,7 @@ function drainThePool(module TargetModule, valueClasses ValueClassColumns, worke
 
 	let pipeline = workerCount * JobsInFlightPerWorker
 	let inFlight = pipeline if pipeline < funcCount else funcCount
+
 	while dispatched < inFlight as PoolSlot 'fillThePipeline'
 		let workerSlot = try (dispatched mod (workerCount as PoolSlot)) otherwise panic("drainThePool: a pool of no workers never reaches the dispatch loop")
 		let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
@@ -280,13 +285,16 @@ end 'dispatchOneJob'
 function functionsLongestFirst(module TargetModule, funcCount PoolSize) returns FuncIndexArray
 	var keys = FunctionOpTallyArray.create()
 	let keyStride = funcCount as FunctionOpTally
+
 	for funcIndex in 0 upto funcCount 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
 		keys.push(liveOpTallyOf(module, func: func) * keyStride + funcIndex)
 	end 'eachFunc'
+
 	keys.sort()
 
 	var order = FuncIndexArray.create()
+
 	for k in 0 upto keys.count() 'largestFirst'
 		let key = try keys.get(keys.count() - 1 - k) otherwise panic("functionsLongestFirst: keys.get OOB walking back from {keys.count()}")
 		order.push((try (key mod keyStride) otherwise panic("functionsLongestFirst: a pool of no functions never reaches the ordering")) as FuncIndex)
@@ -300,9 +308,11 @@ end 'functionsLongestFirst'
 // compile.
 function liveOpTallyOf(module TargetModule, func IrFunction) returns FunctionOpTally
 	var tally = 0 as FunctionOpTally
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in module.blocks")
 		tally = tally + block.opRefs.count()
+
 		if block.hasTerminatorOp() 'hasTerminator'
 			tally = tally + 1
 		end 'hasTerminator'

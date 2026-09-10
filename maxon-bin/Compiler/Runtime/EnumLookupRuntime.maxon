@@ -92,14 +92,18 @@ function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member
 	if EnumFromNameCaseSeparator.count() != 1 'separatorIsNotOneByte'
 		panic("qualifiedEnumMember: the case separator is {EnumFromNameCaseSeparator.count()} bytes, and this scan stops at ONE — the join and the split would name different boundaries")
 	end 'separatorIsNotOneByte'
+
 	let separator = try EnumFromNameCaseSeparator.get(0) otherwise panic("qualifiedEnumMember: get(0) failed on the one-byte separator the guard above just measured")
 
 	var declarationName = ByteArray.create()
+
 	for i in prefixLength upto callee.count() 'eachByte'
 		let b = try callee.get(i) otherwise panic("qualifiedEnumMember: callee.get OOB at {i} below its own count")
+
 		if b == separator 'caseTailBegins'
 			break
 		end 'caseTailBegins'
+
 		declarationName.push(b)
 	end 'eachByte'
 
@@ -153,6 +157,7 @@ export function verifyEnumLookupErrorOrdinals(project Project)
 	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(), installer: b"installEnumLookupHelpers")
 	enumLookupErrors.claim(EnumLookupNoSuchRawValueCaseName, ordinal: EnumLookupNoSuchRawValueOrdinal)
 	enumLookupErrors.claim(EnumLookupNoSuchCaseNameCaseName, ordinal: EnumLookupNoSuchCaseNameOrdinal)
+
 	// The twin's argument applies verbatim (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): a small
 	// case list is not an excuse to skip the totality arm either, and over a `synthesized` layout it PANICS.
 	enumLookupErrors.requireTotal()
@@ -179,6 +184,7 @@ export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
 
 	for (_, layout) in project.enumTypes 'each'
 		var buildsABox = false
+
 		if usage.neededEnumLookups.contains(enumFromNameSymbol(layout.name)) 'generalReferenced'
 			usage.usesStrEq = true
 			buildsABox = layout.isBoxed()
@@ -196,7 +202,9 @@ export function noteEnumLookupUsage(usage RuntimeUsage, project Project)
 			if not usage.neededEnumLookups.contains(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(i))) 'caseNotReferenced'
 				continue
 			end 'caseNotReferenced'
+
 			usage.usesStrEq = true
+
 			// A per-case helper exists only for a payload-bearing case, which is what makes its union boxed.
 			buildsABox = true
 		end 'eachCase'
@@ -243,6 +251,7 @@ export function installEnumLookupHelpers(module StdModule, project Project, need
 			if not needed.contains(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(i))) 'caseNotReferenced'
 				continue
 			end 'caseNotReferenced'
+
 			synthesizeEnumFromNameCase(module, layout: layout, caseIndex: i, project: project)
 		end 'eachCase'
 	end 'each'
@@ -285,6 +294,7 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project
 	let raw = 0 as ValueId
 
 	var cur = entry
+
 	for i in 0 upto layout.caseCount() 'eachCase'
 		var hit = module.addBlock(func, label: b"hit")
 		let nextTest = module.addBlock(func, label: b"casetest")
@@ -352,6 +362,7 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 	let name = 0 as ValueId
 
 	var cur = entry
+
 	for i in 0 upto layout.caseCount() 'eachCase'
 		if layout.payloadArityAt(i) > 0 'carriesAPayload'
 			continue
@@ -387,6 +398,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	let arity = layout.payloadArityAt(caseIndex)
 	let paramCount = (1 + arity) as ParamCount
 	var paramTypes = StdTypeArray.create()
+
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
@@ -403,6 +415,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
 
 	let box = emitBoxWithTag(module, block: build, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
+
 	// Slot `j` takes parameter `j + 1` — the name is parameter 0. The zero-fill past this case's own arity is
 	// `Parser.emitEnumBox`'s, and for its stated reason: E3129 admits a binding read on the path of a case that
 	// declares no such slot precisely because that 0 is pinned by a STORE rather than by the allocator.
@@ -415,6 +428,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: build, value: 0, ids: ids))
 		end 'widerSiblingsSlot'
 	end 'eachSlot'
+
 	emitOkReturn(module, block: build, value: box, ids: ids)
 
 	emitErrorReturn(module, block: miss, flag: EnumLookupNoSuchCaseNameFlag, ids: ids)
@@ -450,9 +464,11 @@ function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout,
 	end 'bareTag'
 
 	let box = emitBoxWithTag(module, block: block, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
+
 	for j in 0 upto layout.maxPayloadArity() 'zeroFill'
 		emitStoreField(module, block: block, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: block, value: 0, ids: ids))
 	end 'zeroFill'
+
 	emitOkReturn(module, block: block, value: box, ids: ids)
 end 'emitCaseValueReturn'
 

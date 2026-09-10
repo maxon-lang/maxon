@@ -123,10 +123,12 @@ export typealias TargetKey = bits(64)
 // below are functions of (these bytes, this target) and of nothing else.
 export type SharedTargetView
 	export let targetKey as TargetKey
+
 	// The `#if`-resolved stream. Only a SUCCEEDING filter is ever published here — see
 	// `Queries.queryActiveTokens`, whose per-`Project` memo may hold a failure (its diagnostic is
 	// already on that compile's `project.diagnostics`) and whose shared one may not.
 	export let activeTokens as TokenArray
+
 	// `Parser.fileNamesProducerMask` over that stream — a bitmask, so a memo of it is one integer
 	// and there is nothing to alias. Filled on FIRST DEMAND rather than beside the tokens, because
 	// the two have different consumers: every token reader wants the stream, only the declaration
@@ -171,6 +173,7 @@ export type SharedFileMemo
 				return view
 			end 'thisTarget'
 		end 'eachView'
+
 		throw SharedMemoMiss.notHeld
 	end 'viewOf'
 
@@ -236,6 +239,7 @@ export type QueryDatabase
 
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
 	export var tokenCache as TokenCacheMap
+
 	// The same file's tokens with `#if` resolved — see `queryActiveTokens`. A SECOND cache rather
 	// than a filter folded into `tokenCache`, because the two answer different questions and only
 	// one of them is target-dependent: `tokenCache` holds what the file SAYS, this holds what this

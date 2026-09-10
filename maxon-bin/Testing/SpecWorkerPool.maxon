@@ -525,6 +525,7 @@ typealias PlanIndex = int(0 to u64.max)
 // at 1 because a pool of no workers runs nothing. The guard is what carries the count into the type.
 export function defaultWorkerCount() returns WorkerCount
 	let reported = __Builtins.cpuCount()
+
 	if reported < 1 'unreported'
 		return 1 as WorkerCount
 	end 'unreported'
@@ -619,6 +620,7 @@ function buildPlans(specDir FilePath, filter String, effectiveTarget Target, inc
 	var excluded = ExcludedCaseArray.create()
 
 	let specPaths = try specFilePaths(specDir)
+
 	for specPath in specPaths 'eachSpec'
 		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
 		let specName = specPath.stem()
@@ -629,12 +631,14 @@ function buildPlans(specDir FilePath, filter String, effectiveTarget Target, inc
 		end 'eachExcluded'
 
 		let tests = selection.selected
+
 		if tests.count() == 0 'selectsNothing'
 			continue
 		end 'selectsNothing'
 
 		var testNames = StringArray.create()
 		var weight = 0 as JobWeight
+
 		for test in tests 'eachTest'
 			testNames.push(test.name)
 			weight = weight + (test.source.byteLength() as JobWeight)
@@ -691,14 +695,17 @@ typealias SpecJobArray = Array with SpecJob
 // dispatch order deterministic for a given corpus.
 function popHeaviestJob(queue SpecJobArray) returns SpecJob
 	let n = queue.count()
+
 	if n == 0 'emptyQueue'
 		panic("popHeaviestJob: the dispatch loop only pops from a queue it has proved non-empty")
 	end 'emptyQueue'
 
 	var bestIdx = 0
 	var bestWeight = 0 as JobWeight
+
 	for i in 0 upto n 'scan'
 		let candidate = try queue.get(i) otherwise panic("popHeaviestJob: queue.get({i}) is in bounds by construction")
+
 		if candidate.weight > bestWeight 'heavier'
 			bestIdx = i
 			bestWeight = candidate.weight
@@ -708,10 +715,12 @@ function popHeaviestJob(queue SpecJobArray) returns SpecJob
 	// `.clone()` cuts the borrow on the queue's storage, without which the `set` below is refused.
 	let chosen = (try queue.get(bestIdx) otherwise panic("popHeaviestJob: queue.get({bestIdx}) is in bounds by construction")).clone()
 	let lastIdx = n - 1
+
 	if bestIdx != lastIdx 'notAlreadyLast'
 		let last = (try queue.get(lastIdx) otherwise panic("popHeaviestJob: queue.get({lastIdx}) is in bounds by construction")).clone()
 		try queue.set(bestIdx, value: last) otherwise panic("popHeaviestJob: queue.set({bestIdx}) is in bounds by construction")
 	end 'notAlreadyLast'
+
 	_ = try queue.pop() otherwise panic("popHeaviestJob: pop() on a queue proved non-empty above")
 
 	return chosen
@@ -744,6 +753,7 @@ export function runPersistentWorker(specDir FilePath, filter String, updateRequi
 		end 'parentGone'
 
 		let job = line.trim()
+
 		if job == ExitCommand 'shutDown'
 			break
 		end 'shutDown'
@@ -964,6 +974,7 @@ function decodeRecordPayload(payload String) returns String
 
 	while i < n 'walk'
 		let b = try bytes.get(i) otherwise panic("decodeRecordPayload: bytes.get({i}) is in bounds by construction")
+
 		if b != AsciiBackslash or i + 1 >= n 'literalByte'
 			decoded.push(b)
 			i = i + 1
@@ -971,6 +982,7 @@ function decodeRecordPayload(payload String) returns String
 		end 'literalByte'
 
 		let escaped = try bytes.get(i + 1) otherwise panic("decodeRecordPayload: bytes.get({i} + 1) is in bounds by the guard above")
+
 		if escaped == AsciiLowerN 'newline'
 			decoded.push(AsciiLineFeed as Byte)
 			i = i + 2
@@ -1006,9 +1018,11 @@ end 'decodeRecordPayload'
 // VERBATIM, and trimming it would quietly rewrite the text a spec author reads.
 function sliceAfterPrefix(line String, prefix String) returns String
 	var pos = line.startIndex()
+
 	for _ in 0 upto prefix.byteLength() 'skipPrefix'
 		pos = try line.indexAfter(pos) otherwise panic("sliceAfterPrefix: '{line}' is shorter than the prefix '{prefix}' it startsWith")
 	end 'skipPrefix'
+
 	return line.slice(pos, endIndex: line.endIndex())
 end 'sliceAfterPrefix'
 
@@ -1091,6 +1105,7 @@ function decodeGolden(token String, payload String, verdictClaimedIt bool, line 
 		if verdictClaimedIt 'twoOwners'
 			panic("spec worker pool: a record claims BOTH a payload-carrying verdict and {GoldenDriftedToken}, so its one payload field has two owners: '{line}'")
 		end 'twoOwners'
+
 		return GoldenDrift.drifted(payload)
 	end 'isDrift'
 
@@ -1291,6 +1306,7 @@ function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, 
 
 	while true 'lineLoop'
 		let line = try child.readStdoutLine()
+
 		// STAMPED BEFORE THE EOF TEST, so there is exactly ONE stamp site: every read that RETURNS is
 		// evidence from the worker's own pipe, EOF included. Stamping only real lines would leave a dead
 		// worker's last stamp stale for the interval between its EOF and the dispatcher serving the
@@ -1341,12 +1357,14 @@ end 'LastStep'
 // The LAST wins because a worker emits one per step and only the most recent one can have killed it.
 function lastStepIn(lines StringArray) returns LastStep
 	var last = LastStep.none
+
 	for line in lines 'eachLine'
 		if line.startsWith(WorkerStepMarker) 'isBreadcrumb'
 			let cut = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerStepMarker), expected: "label", line: line)
 			last = LastStep.started(stepFromToken(cut.field, line: line), label: cut.rest.trim())
 		end 'isBreadcrumb'
 	end 'eachLine'
+
 	return last
 end 'lastStepIn'
 
@@ -1360,6 +1378,7 @@ end 'lastStepIn'
 // is silently walked past.
 function recordLinesOf(lines StringArray) returns StringArray
 	var records = StringArray.create()
+
 	for line in lines 'eachLine'
 		if not line.startsWith(WorkerStepMarker) 'isNotABreadcrumb'
 			records.push(line)
@@ -1367,6 +1386,7 @@ function recordLinesOf(lines StringArray) returns StringArray
 	end 'eachLine'
 
 	let terminator = try records.pop() otherwise panic("recordLinesOf: a finished job's drain always carries its {WorkerReadyMarker} terminator — only a caller that has already asked `endedWithReady` reaches here")
+
 	if terminator.trim() != WorkerReadyMarker 'notTheTerminator'
 		panic("recordLinesOf: a finished job's last line is its {WorkerReadyMarker}, not '{terminator}' — the drain returned lines it did not read to the end of")
 	end 'notTheTerminator'
@@ -1387,6 +1407,7 @@ function drainChildStderr(child StreamingSubprocess) returns String
 
 	while true 'lineLoop'
 		let line = try child.readStderrLine() otherwise break
+
 		if line.isEmpty() 'eof'
 			break
 		end 'eof'
@@ -1434,6 +1455,7 @@ type PersistentWorkerHandle
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
+
 		// WHICH directory and WHICH cases, emitted by the one function both re-emitters of this command
 		// line read — see `Main.specSelectionArgv`.
 		argv.append(specSelectionArgv(specDir, filter: filter, updateRequired: updateRequired, includeNetwork: includeNetwork))
@@ -1499,6 +1521,7 @@ type PersistentWorkerHandle
 		end 'shutdownFailed'
 
 		let stderr = drainChildStderr(child)
+
 		if not stderr.isEmpty() 'workerSpoke'
 			printError("{stderr}\n")
 		end 'workerSpoke'
@@ -1579,9 +1602,11 @@ end 'abortOnDeadWorker'
 // identically on a stream, and only one of them is true.
 function deadWorkerStderr(handle PersistentWorkerHandle) returns String
 	let stderr = drainChildStderr(handle.child)
+
 	if stderr.isEmpty() 'silent'
 		return "(the worker wrote nothing to stderr before dying)"
 	end 'silent'
+
 	return stderr
 end 'deadWorkerStderr'
 
@@ -1604,9 +1629,11 @@ end 'deadWorkerStderr'
 // costing now (the whole run).
 function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
 	var results = SpecTestResultArray.create()
+
 	for testName in plan.testNames 'eachTest'
 		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason), golden: GoldenDrift.notPinned))
 	end 'eachTest'
+
 	return results
 end 'deadJobResults'
 
@@ -1638,12 +1665,14 @@ end 'deathCause'
 // managed to say. The per-test FAIL reasons are one line each; this is where the stack trace is.
 function reportDeadWorker(handle PersistentWorkerHandle, specName String, lastStep LastStep, killedByDeadline bool)
 	printError("\n=== spec worker {handle.workerId} {deathCause(killedByDeadline)} on '{specName}' — failing that spec and continuing ===\n")
+
 	// BOTH ARMS SPEAK, for `deadWorkerStderr`'s reason one line down: "it never said what it was doing"
 	// and "nobody asked" read identically as an absent line, and only one of them is true.
 	match lastStep 'breadcrumb'
 		none then printError("last step started: (none — it died before announcing one)\n")
 		started(step, label) then printError("last step started: {stepVerb(step)} {label}\n")
 	end 'breadcrumb'
+
 	printError("{deadWorkerStderr(handle)}\n")
 end 'reportDeadWorker'
 
@@ -1653,6 +1682,7 @@ end 'reportDeadWorker'
 // quotes that deadline at an operator, and an operator-facing duration has exactly one spelling here.
 export function formatSeconds(ms DurationMs) returns String
 	let whole = ms / MillisPerSecond
+
 	// Scaled by the tenths-per-second BEFORE the divide, so the one divisor in this function is
 	// `MillisPerSecond` twice over rather than a second constant derived from it.
 	let tenths = (ms - whole * MillisPerSecond) * TenthsPerSecond / MillisPerSecond
@@ -1709,6 +1739,7 @@ function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPr
 
 	for slot in 0 upto busy.count() 'eachSlot'
 		let isBusy = try busy.get(slot) otherwise panic("abortOnWedgedPool: busy.get({slot}) is in bounds by construction")
+
 		if not isBusy 'idleSlot'
 			report.push("  slot {slot}: idle")
 			continue
@@ -1753,6 +1784,7 @@ export type PoolRun
 	export let failedWorkers as WorkerTally
 	export let cpu as SuiteCpuTally
 	export let poolSize as WorkerCount
+
 	// The cases this run passed over and owes the reader a sentence about, from the parent's own plan walk
 	// — see `ExclusionReason` for the two kinds. It rides HERE rather than being re-derived by the reporter
 	// because deciding it a second time would need a second parse of every spec, and a second copy of the
@@ -1850,6 +1882,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 
 	let suitePlan = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	let plans = suitePlan.plans
+
 	if plans.count() == 0 'selectsNothing'
 		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.
 		// Spawning a pool only to tell it there is nothing to do would add a way for that message
@@ -1867,6 +1900,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
 
 	var jobQueue = SpecJobArray.create()
+
 	for i in 0 upto plans.count() 'enqueue'
 		let plan = try plans.get(i) otherwise panic("runSpecPool: plans.get({i}) is in bounds by construction")
 		jobQueue.push(SpecJob.create(i, specName: plan.specName, weight: plan.weight))
@@ -1875,6 +1909,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// A worker with no job would spawn, say hello, and be shut down again — pure cost, and one more
 	// process to go wrong.
 	var poolSize = workerCount
+
 	if jobQueue.count() < poolSize 'moreWorkersThanJobs'
 		poolSize = jobQueue.count() as WorkerCount
 	end 'moreWorkersThanJobs'
@@ -1904,6 +1939,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	var drains = DrainPromiseArray.create()
 	var dispatchedAt = SlotInstantArray.create()
 	var spokeAt = SlotInstantArray.create()
+
 	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
 	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
 	// without this the sweep would re-terminate the same (already dead) worker on every one-millisecond
@@ -1912,10 +1948,12 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// then have its bound pushed forward for ever.
 	var expired = BoolArray.create()
 	let idleJob = SpecJob.idle()
+
 	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
 	// age is not a thing the report prints. It only keeps these arrays the same length as `busy` from
 	// the start, so the three are indexed by the same slot number.
 	let idleInstant = Clock.nowMs()
+
 	for _ in 0 upto poolSize 'initSlots'
 		busy.push(false)
 		inFlight.push(idleJob)
@@ -1927,6 +1965,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
 	// where worker-count invariance is won: nothing is reported as it arrives.
 	var buckets = SpecResultBuckets.create()
+
 	for _ in 0 upto plans.count() 'initBuckets'
 		buckets.push(SpecTestResultArray.create())
 	end 'initBuckets'
@@ -1987,6 +2026,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		// the pipe. That is head-of-line blocking, and it is what the non-blocking peek prevents.
 		if let readySlot = try findReadyDrain(busy, drains: drains, cursor: drainCursor) 'haveAnswer'
 			var handle = try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")
+
 			// Cloned out of the array so the borrow does not pin `inFlight` for the re-dispatch
 			// below, which overwrites this very slot.
 			let job = (try inFlight.get(readySlot) otherwise panic("runSpecPool: inFlight.get({readySlot}) is in bounds by construction")).clone()
@@ -2077,12 +2117,14 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		// allowed. The clock therefore runs only once every outstanding worker has been given up on, which
 		// leaves it measuring exactly what its name says.
 		let progress = dispatched + completed
+
 		if progress != lastProgress or anyWorkerStillSpeaking 'stillMoving'
 			lastProgress = progress
 			lastProgressMs = now
 		end 'stillMoving'
 
 		let idleFor = Clock.elapsedMs(lastProgressMs)
+
 		if idleFor >= WedgeWatchdogMs 'wedged'
 			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: jobQueue.count(), dispatched: dispatched, completed: completed)
 		end 'wedged'
@@ -2133,6 +2175,7 @@ end 'concatBuckets'
 // race.
 function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws CompileError
 	let tempRoot = specTempRootDir(specDir)
+
 	if not Directory.create(tempRoot) 'noTempRoot'
 		throw CompileError.directoryNotFound(tempRoot)
 	end 'noTempRoot'
@@ -2143,6 +2186,7 @@ function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws Comp
 	// as fatal as the scratch root's: every case that touches the filesystem would then run somewhere
 	// nobody chose.
 	let runWorkingDir = specRunWorkingDir()
+
 	if not Directory.create(runWorkingDir) 'noRunWorkingDir'
 		throw CompileError.directoryNotFound(runWorkingDir)
 	end 'noRunWorkingDir'
@@ -2258,11 +2302,13 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Bool
 
 	for slot in 0 upto busy.count() 'eachSlot'
 		let isBusy = try busy.get(slot) otherwise panic("enforceProgressDeadlines: busy.get({slot}) is in bounds by construction")
+
 		if not isBusy 'idleSlot'
 			continue
 		end 'idleSlot'
 
 		let alreadyGivenUpOn = try expired.get(slot) otherwise panic("enforceProgressDeadlines: expired.get({slot}) is in bounds by construction")
+
 		if alreadyGivenUpOn 'killedAlready'
 			continue
 		end 'killedAlready'
@@ -2281,6 +2327,7 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Bool
 
 		var handle = try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")
 		printError("error: spec worker {handle.workerId} has said nothing about '{job.specName}' for {formatSeconds(silent)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
+
 		// TERMINATE, do NOT release: the dispatch loop's dead-worker path still has to read this
 		// worker's stderr, and it is the ONE place a handle is freed. Killing here closes the worker's
 		// stdout, which is what makes its drain complete and hands the slot to that path.
@@ -2340,6 +2387,7 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	// stamps it writes land in the array this loop reads. It is the parent's array throughout: the drain
 	// only ever writes its own slot, and only the dispatcher ever reads one.
 	let drain = async drainResultsThunk(handle.child, spokeAt: spokeAt, slot: slot)
+
 	if slot == drains.count() 'firstDispatchToThisSlot'
 		drains.push(drain)
 	end 'firstDispatchToThisSlot' else if slot < drains.count() 'redispatch'
@@ -2386,6 +2434,7 @@ function findIdleSlot(busy BoolArray, cursor WorkerId) returns WorkerId throws N
 	for offset in 0 upto poolSize 'scan'
 		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
 		let isBusy = try busy.get(slot) otherwise panic("findIdleSlot: busy.get({slot}) is in bounds by construction")
+
 		if not isBusy 'isIdle'
 			return slot
 		end 'isIdle'
@@ -2403,11 +2452,13 @@ function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerI
 	for offset in 0 upto poolSize 'scan'
 		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
 		let isBusy = try busy.get(slot) otherwise panic("findReadyDrain: busy.get({slot}) is in bounds by construction")
+
 		if not isBusy 'skipIdle'
 			continue
 		end 'skipIdle'
 
 		let drain = try drains.get(slot) otherwise panic("findReadyDrain: a busy slot always has a drain promise, and slot {slot} is busy")
+
 		if drainHasAnswered(drain) 'hasAnswered'
 			return slot
 		end 'hasAnswered'

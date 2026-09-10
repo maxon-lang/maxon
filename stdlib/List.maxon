@@ -26,9 +26,11 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 	// InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
 	static function init(arr ElementArray) returns Self
 		var result = Self{chain: EManagedList.create()}
+
 		for item in arr 'build'
 			result.append(item)
 		end 'build'
+
 		return result
 	end 'init'
 
@@ -47,6 +49,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 		let node = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
+
 		return node.value()
 	end 'first'
 
@@ -55,6 +58,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 		let node = try chain.tail() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
+
 		return node.value()
 	end 'last'
 
@@ -63,11 +67,13 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 		var current = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
+
 		for _ in 0 upto offset 'walk'
 			current = try current.next() otherwise 'err2'
 				throw ArrayError.indexOutOfBounds
 			end 'err2'
 		end 'walk'
+
 		return current
 	end 'walkTo'
 
@@ -115,6 +121,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 		let node = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
+
 		return chain.remove(node)
 	end 'removeFirst'
 
@@ -123,6 +130,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 		let node = try chain.tail() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
+
 		return chain.remove(node)
 	end 'removeLast'
 
@@ -140,9 +148,11 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 	/// Create a deep copy of this list
 	public function clone() returns Self
 		var result = Self{chain: EManagedList.create()}
+
 		for item in self 'copy'
 			result.append(item)
 		end 'copy'
+
 		return result
 	end 'clone'
 
@@ -160,6 +170,7 @@ end 'List'
 public type ListIterator uses Element implements Iterator with Element
 	typealias EManagedList = __ManagedList with Element
 	typealias ENode = __ManagedListNode with Element
+
 	var node as ENode
 
 	public static function create(chain EManagedList) returns Self throws IterationError

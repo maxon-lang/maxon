@@ -146,6 +146,7 @@ function summarize(report CovReport) returns CovSummary
 	var covered = 0
 	var instrumented = 0
 	var eliminated = 0
+
 	for file in report.files 'eachFile'
 		for line in file.lines 'eachLine'
 			covered = covered + (1 if line.state == CovLineState.covered else 0)
@@ -156,6 +157,7 @@ function summarize(report CovReport) returns CovSummary
 
 	var taken = 0
 	var armsInstrumented = 0
+
 	for branch in report.branches 'eachBranch'
 		for arm in branch.arms 'eachArm'
 			taken = taken + (1 if arm.count > 0 else 0)
@@ -223,6 +225,7 @@ function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
 		let count = countOf(point, data: data, index: index as CovSlot)
 		let incoming = CovLine.create(point.line as CovLineNumber, state: stateOf(point, count: count), count: count)
 		let key = lineKey(point.file, line: incoming.line)
+
 		if not merged.contains(key) 'firstPointOnThisLine'
 			order.push(CovLineKey.create(point.file, line: incoming.line))
 		end 'firstPointOnThisLine'
@@ -243,6 +246,7 @@ end 'joinFiles'
 // about to write through.
 function busierOf(merged CovMergedLineMap, key String, incoming CovLine) returns CovLine
 	let held = try merged.get(key) otherwise return incoming
+
 	if held.state == CovLineState.eliminated 'heldNoCodeAtAll'
 		return incoming
 	end 'heldNoCodeAtAll'
@@ -294,6 +298,7 @@ function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArra
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
+
 		if not point.isBranchArm() 'notAnArm'
 			continue
 		end 'notAnArm'
@@ -309,6 +314,7 @@ end 'joinBranches'
 
 function compareBranchPosition(left CovArmRow, right CovArmRow) returns Ordering
 	let byFile = compareBytesOrdinally(left.file.toByteArray(), right: right.file.toByteArray())
+
 	if byFile != Ordering.equalTo 'differentFiles'
 		return byFile
 	end 'differentFiles'
@@ -434,6 +440,7 @@ function renderText(report CovReport) returns String
 
 	if report.branches.count() > 0 'someBranches'
 		out.append("{LineFeed}{SectionRule} {BranchesSectionName} {SectionRule}{LineFeed}")
+
 		for branch in report.branches 'eachBranch'
 			out.append(renderBranchRow(branch))
 		end 'eachBranch'
@@ -453,6 +460,7 @@ end 'targetStatusLine'
 
 function renderBranchRow(branch CovBranch) returns String
 	var row = "  {reportPathDisplay(branch.file)}{PositionSeparator}{branch.line}{PositionSeparator}{branch.column}"
+
 	for arm in branch.arms 'eachArm'
 		row.append("  {armText(arm)}")
 	end 'eachArm'
@@ -481,6 +489,7 @@ end 'renderListing'
 
 function renderStatesOnly(file CovFile) returns String
 	var out = "  (source not available: {reportPathDisplay(file.path)}){LineFeed}"
+
 	for line in file.lines 'eachLine'
 		out.append("{padLeft(marker(line), width: CountColumnWidth)} {ColumnSeparator}{line.line}{LineFeed}")
 	end 'eachLine'
@@ -490,12 +499,14 @@ end 'renderStatesOnly'
 
 function renderAnnotatedSource(file CovFile, source StringArray) returns String
 	var markerOfLine = CovMarkerMap.create()
+
 	for line in file.lines 'eachLine'
 		markerOfLine.upsert(line.line, value: marker(line))
 	end 'eachLine'
 
 	var out = ""
 	var lineNumber = 0
+
 	for text in source 'eachSourceLine'
 		lineNumber = lineNumber + 1
 		let mark = try markerOfLine.get(lineNumber as CovLineNumber) otherwise ""
@@ -530,6 +541,7 @@ function sourceLines(path String) returns CovSourceLookup
 	let body = try File.readText(spelled) otherwise return CovSourceLookup.unreadable
 
 	var lines = StringArray.create()
+
 	for row in body.split(LineFeed) 'eachRow'
 		lines.push(row.replace(CarriageReturn, with: "") if row.endsWith(CarriageReturn) else row)
 	end 'eachRow'
@@ -555,20 +567,24 @@ function renderJson(report CovReport) returns String
 
 	out.append("\"files\":[")
 	var firstFile = true
+
 	for file in report.files 'eachFile'
 		out.append("" if firstFile else ",")
 		out.append(jsonFile(file))
 		firstFile = false
 	end 'eachFile'
+
 	out.append("],")
 
 	out.append("\"branches\":[")
 	var firstBranch = true
+
 	for branch in report.branches 'eachBranch'
 		out.append("" if firstBranch else ",")
 		out.append(jsonBranch(branch))
 		firstBranch = false
 	end 'eachBranch'
+
 	out.append("]\}")
 
 	return out
@@ -584,11 +600,13 @@ end 'jsonTargetStatus'
 function jsonFile(file CovFile) returns String
 	var out = "\{\"path\":{jsonString(reportPathDisplay(file.path))},\"lines\":["
 	var first = true
+
 	for line in file.lines 'eachLine'
 		out.append("" if first else ",")
 		out.append(jsonLine(line))
 		first = false
 	end 'eachLine'
+
 	out.append("]\}")
 
 	return out
@@ -612,11 +630,13 @@ end 'stateName'
 function jsonBranch(branch CovBranch) returns String
 	var out = "\{\"file\":{jsonString(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":["
 	var first = true
+
 	for arm in branch.arms 'eachArm'
 		out.append("" if first else ",")
 		out.append(jsonArm(arm))
 		first = false
 	end 'eachArm'
+
 	out.append("]\}")
 
 	return out
@@ -640,9 +660,11 @@ end 'jsonBool'
 // quote, the backslash, and the control range below space.
 function jsonString(text String) returns String
 	var out = "\""
+
 	for octet in text.bytes() 'eachByte'
 		out.append(jsonEscaped(octet))
 	end 'eachByte'
+
 	out.append("\"")
 
 	return out
@@ -739,6 +761,7 @@ end 'CovSidecarLoad'
 // machine-specific — an instrument whose own output cannot be compared across runs.
 function loadSidecar(binary FilePath, buildId HashDigest) returns CovSidecarLoad
 	let sidecarPath = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise return CovSidecarLoad.refused("'{binary.toString()}' has no spellable sidecar path")
+
 	if not File.exists(sidecarPath) 'noSidecar'
 		return CovSidecarLoad.refused("no debug-info sidecar at {reportPathDisplay(sidecarPath)} — a coverage report needs the point table it holds. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag.")
 	end 'noSidecar'
@@ -764,6 +787,7 @@ function loadCounters(exePath String, sidecar MxdbgReader, buildId HashDigest, d
 	end 'notInstrumented'
 
 	let data = try FilePath.from(dataPath) otherwise return CovLoad.refused("'{dataPath}' is not a spellable path")
+
 	if not File.exists(data) 'noCounters'
 		return CovLoad.refused("no coverage data at {reportPathDisplay(dataPath)} — the program wrote none, so the run did not complete")
 	end 'noCounters'

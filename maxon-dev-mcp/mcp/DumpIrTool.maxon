@@ -85,15 +85,19 @@ function addArtifactIfPresent(out IrArtifactArray, label String, path FilePath)
 	if not File.exists(path) 'absent'
 		return
 	end 'absent'
+
 	let raw = try File.readText(path) otherwise 'readErr'
 		return
 	end 'readErr'
+
 	let bytes = raw.toByteArray()
 	let n = bytes.count()
+
 	if n <= irMaxBytes 'fits'
 		out.push(IrArtifact.create(label, path: path.path, content: raw, truncated: false))
 		return
 	end 'fits'
+
 	let trimmed = sliceBytes(bytes, from: 0, until: irMaxBytes)
 	out.push(IrArtifact.create(label, path: path.path, content: trimmed, truncated: true))
 end 'addArtifactIfPresent'
@@ -113,10 +117,12 @@ function buildOutcome(mainFile ResolvedSource, result CollectedOutput) returns T
 
 	var artifactNodes = JsonNodeIdArray.create()
 	let an = artifacts.count()
+
 	for i in 0 upto an 'each'
 		let art = try artifacts.get(i) otherwise 'gErr'
 			panic("buildOutcome: artifacts.get OOB — i bounded by an")
 		end 'gErr'
+
 		let labelId = doc.add(JsonNode.stringNode(art.label))
 		let pathId = doc.add(JsonNode.stringNode(art.path))
 		let contentId = doc.add(JsonNode.stringNode(art.content))
@@ -133,6 +139,7 @@ function buildOutcome(mainFile ResolvedSource, result CollectedOutput) returns T
 		aChildren.push(truncId)
 		artifactNodes.push(doc.add(JsonNode.objectNode(aKeys, children: aChildren)))
 	end 'each'
+
 	let artifactsArr = doc.add(JsonNode.arrayNode(artifactNodes))
 
 	var keys = StringArray.create()

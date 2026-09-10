@@ -156,6 +156,7 @@ end 'CounterSource'
 export type PhaseProbe
 	export let nanos as InstantNanos
 	export let cpuTicks as CpuTicks
+
 	// Cumulative allocations and cumulative FREES at the instant the phase opened. The process-wide source
 	// keeps no free counter — it keeps a LIVE one — so its cumulative frees are read as `total - live`,
 	// which is exact at every instant by definition. See `freesSoFar`.
@@ -181,9 +182,11 @@ export type PhaseProbe
 	// Memory counters first, clock next, CPU last — see this file's header.
 	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
+
 		// Recorded OUTSIDE the counters, beside the emission it pairs with, so the span the stack knows
 		// about and the span the trace shows are opened by the same statement (see `openPhaseSpans`).
 		openPhaseSpans.push(name)
+
 		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
 		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
 		return Self.openOn(CounterSource.processWide)
@@ -240,6 +243,7 @@ export type PhaseProbe
 	export function elapsed() returns PhaseDelta
 		let endCpuTicks = threadCpuTicks()
 		let elapsedNanos = Clock.elapsedNanos(self.nanos)
+
 		// CLOSED ON THE SOURCE IT WAS OPENED ON — see `CounterSource`.
 		let endAllocTotal = allocsSoFar(self.source)
 		let endFreeTotal = freesSoFar(self.source)

@@ -185,6 +185,7 @@ export enum MultiMSharing
 	// allocation in the language to guard a race that cannot occur. The class states the discipline a slot
 	// owes WHEN THE HAZARD EXISTS; it never claimed a prefix is emitted where no thread can race.
 	atomicStep
+
 	// Every mutation, and every read WHOSE ANSWER IS USED, happens inside `__sched_lock`. A word whose
 	// transaction spans several words — the FIFO's head/tail pair, the timer store's count/base/capacity
 	// triple, the process store's count — cannot be made indivisible by an atomic, because what must be
@@ -216,6 +217,7 @@ export enum MultiMSharing
 	//
 	// A further site is not covered by any of this: it needs its own argument at its own line, or the lock.
 	underSchedLock
+
 	// Written before any worker M can exist, and never after. Bring-up is single-threaded BY CONSTRUCTION and
 	// not by convention: the first `__gt_init` is reached by the only thread there is, because
 	// `__sched_init_procs` — which it calls — is what BUILDS the P array a worker is spawned onto, and the
@@ -223,16 +225,19 @@ export enum MultiMSharing
 	// bring-up returns. A slot nothing writes at all (`__sched_shutdown_flag`, whose teardown does not exist
 	// yet) is sealed trivially and rides this class too.
 	sealedBeforeWorkers
+
 	// A plain read-modify-write whose lost update is BOUNDED and SELF-CORRECTING, argued at its own site.
 	// One member: `__sched_max_active_workers`, a monotone high-water mark — a lost sample loses a transient
 	// reading while the mark still converges to the true peak, and it can never UNDER-report two live
 	// workers, because the reader's own increment is already visible in the value it compares.
 	monotoneApproximation
+
 	// ONE aligned machine word, written whole and read whole, whose contract does not say WHICH writer's
 	// value a reader gets. No tearing is possible on any lane the compiler emits, so every observable value is a value
 	// somebody really wrote; what multi-M costs is precision, not safety. One member:
 	// `__subp_last_error`, whose own site argues why exactness there needs per-green-thread storage.
 	lastWriterWins
+
 	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
 	// that "I do not know" is the answer a new slot arrives with.** A shared word with no discipline is the
 	// failure this whole rung exists to remove — a lost update nothing reproduces on demand — so a slot that
@@ -1838,6 +1843,7 @@ function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail Ir
 	let isZero = emitCmp(module, block: block, a: tested, b: zero, pred: StdCmpPred.eq, ids: ids)
 
 	var edgeArgs = ValueIdArray.create()
+
 	for value in bailValues 'eachBailValue'
 		edgeArgs.push(emitConst(module, block: block, value: value, ids: ids))
 	end 'eachBailValue'
@@ -2086,6 +2092,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 		pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+
 		// ⭐ **THE THREE HEADS W213-C2 ADDS, AND ALL THREE ARE `underSchedLock` FOR THE SAME REASON.** Each is
 		// the head of an intrusive list whose transaction spans TWO words — the head and the joining struct's
 		// own link — which is exactly what that class exists for and exactly what no atomic can make
@@ -2115,12 +2122,15 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		// `__sched_init_procs`'s like the three above.
 		pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins)
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+
 		// Every mutation is the `atomicRmw` in `emitSchedSpinningTransition` or the gate's `atomicCas`; see
 		// `SchedSpinningLabel` for what a lost update would cost (a permanently suppressed wakeup).
 		pushRuntimeGlobal(out, label: SchedSpinningLabel, sharing: MultiMSharing.atomicStep)
+
 		// Every mutation is `emitGlobalAccumulate(multiM: true)` at the driver's arm and disarm; see
 		// `SchedParkedDriversLabel` for why the same instruction is also the Dekker pair's barrier.
 		pushRuntimeGlobal(out, label: SchedParkedDriversLabel, sharing: MultiMSharing.atomicStep)
+
 		// ⛔ **GATE SITE 3 OF 4 — see `targetBracketsBlockingSyscalls`.** The monitor's one-shot; its only
 		// mutation is the `atomicCas` at `__sched_wake_or_spawn`'s gate, and on a lane with no bracket that gate
 		// is not emitted, so this word would be a `.data` slot nothing writes — a line in the `data {` block of
@@ -2139,6 +2149,7 @@ end 'schedRuntimeGlobals'
 export function installSchedRuntime(module StdModule, target Target)
 	buildSchedInitProcs(module, target: target)
 	buildSchedDrainPending(module)
+
 	// The three publish doors, from two bodies: the two unlocked ones differ only in WHICH END a green
 	// thread's publish uses, so they share `buildSchedPublish`; the locked one answers a wake debt instead of
 	// performing a wake, which is a different signature and therefore its own body.
@@ -2150,6 +2161,7 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedSteal(module)
 	buildSchedFindRunnable(module)
 	buildSchedSweepDropped(module)
+
 	// The three per-P sums, from ONE body: they differ in the name they answer to and the field they read, and
 	// in nothing else. See `buildSchedPerProcSum`.
 	//
@@ -2163,6 +2175,7 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedWorkerLoop(module)
 	buildSchedStartM(module)
 	buildSchedWakeOrSpawn(module, target: target)
+
 	// ⛔ **GATE SITE 1 OF 4 — see `targetBracketsBlockingSyscalls` for the fork.** All four are reachable ONLY
 	// from the bracket: `__sched_syscall_regain` from the bracket's exit step, `__sysmon` from the lazy start
 	// (gate site 2), and the other two from `__sysmon`. `__sched_syscall_regain` is dead code that SURVIVES
@@ -2210,6 +2223,7 @@ export function installSchedRuntime(module StdModule, target Target)
 		buildSchedEnterSyscall(module)
 		buildSchedExitSyscall(module)
 	end 'theBracketIsCalled'
+
 	// The second wake, for the other kind of waiter — see `SchedWakeParkedDriversName` for why the two are
 	// different functions rather than one with a flag.
 	buildSchedWakeParkedDrivers(module)
@@ -2437,6 +2451,7 @@ function buildSchedPublish(module StdModule, name ByteArray, greenEnd SchedGreen
 		localRing then emitSchedPublishToRing(module, block: greenArm, gt: gt, ids: ids)
 		globalTail then emitSchedPublishToGlobalTail(module, block: greenArm, gt: gt, ids: ids)
 	end 'greenEndOf'
+
 	module.setTerminator(greenArm, op: StdOp.branch(doneBlock.id))
 
 	emitGtPublishToOwner(module, block: coroArm, gt: gt, ids: ids)
@@ -2715,8 +2730,10 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitStoreField(module, block: loopBody, record: emitProcSlotAddr(module, block: loopBody, index: iterId, ids: ids), offset: 0, value: p)
 	emitStoreField(module, block: loopBody, record: p, offset: POffId, value: iterId)
 	let one = emitConst(module, block: loopBody, value: 1, ids: ids)
+
 	// `rng = id + 1` — non-zero, because zero is a fixed point of xorshift. Reserved for the stealer.
 	emitStoreField(module, block: loopBody, record: p, offset: POffRng, value: emitBin(module, block: loopBody, a: iterId, b: one, opcode: StdBinOpcode.add, ids: ids))
+
 	// ⚠ **NO WAKE EVENT IS CREATED HERE ANY MORE (W213-C2) — the park is the M's** (`MOffParkEvent`), and one
 	// is created with each M by `emitSchedAllocM`. The same saving the syscall stack got at C1 and for the
 	// same reason: this loop runs once per PROCESSOR, so a 16-processor box used to open 16 kernel event
@@ -2744,6 +2761,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	emitSchedListPushLocked(module, block: loopOffer, headLabel: SchedPidleLabel, linkOffset: POffPidleNext, node: p, ids: ids)
 	module.setTerminator(loopOffer, op: StdOp.branch(loopNext.id))
+
 	// ⚠ **NO SYSCALL STACK IS COMMITTED HERE ANY MORE (W213-C1) — it is the M's, and it is committed by the
 	// OS thread that is about to BE one** (`emitSchedBecomeM`). That is not only a change of place: this loop
 	// runs once per PROCESSOR, so a 16-processor box used to commit 1 MB of scratch pages at bring-up for Ms
@@ -2779,6 +2797,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
 	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, ids: ids)
 	emitSchedListPushLocked(module, block: adopt, headLabel: SchedAllMLabel, linkOffset: MOffAllNext, node: m0, ids: ids)
+
 	// ⚠ **P[0] IS CLAIMED EXPLICITLY BECAUSE IT NEVER JOINED `__sched_pidle` AND SO IS NEVER POPPED.** Every
 	// other processor is marked taken by the pop that removes it; the main thread's skipped the list entirely,
 	// so its claim is spelled at the one site that knows that — inside this critical section, which is the
@@ -2786,6 +2805,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitSchedPidleClaimLocked(module, block: adopt, p: p0, ids: ids)
 	emitSchedLockLeave(module, block: adopt, ids: ids)
 	emitSchedBecomeM(module, block: adopt, m: m0, ids: ids)
+
 	// The main thread takes P[0] directly rather than through `MOffNextP`: it is not waking from a park, and
 	// the field is stamped above only so that every M is born with the processor it is going to run on.
 	emitStoreField(module, block: adopt, record: m0, offset: MOffNextP, value: emitConst(module, block: adopt, value: 0, ids: ids))
@@ -3463,6 +3483,7 @@ function buildSchedSteal(module StdModule)
 	let vHalf = emitBin(module, block: grabHdr, a: vLen, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let grabCount = emitBin(module, block: grabHdr, a: vLen, b: vHalf, opcode: StdBinOpcode.sub, ids: ids)
 	let grabZero = emitConst(module, block: grabHdr, value: 0, ids: ids)
+
 	// `<= 0` and not `== 0`: a torn read can make `vLen` negative, and a negative count would run the copy
 	// loop zero times and then answer a slot nobody wrote. Both bad readings land on the same arm.
 	let nothing = emitCmp(module, block: grabHdr, a: grabCount, b: grabZero, pred: StdCmpPred.le, ids: ids)
@@ -4074,6 +4095,7 @@ function buildSchedStartM(module StdModule)
 
 	let entryZero = emitConst(module, block: notStopping, value: 0, ids: ids)
 	let nothingHanded = emitCmp(module, block: notStopping, a: handedProc, b: entryZero, pred: StdCmpPred.eq, ids: ids)
+
 	// `haveProc` is the merge of the two ways to arrive holding a processor — handed one, or popped one — and
 	// carries it as its block arg. The popped arm may still answer 0, which is the "nowhere to run" road.
 	let chosenProc = ids.mint()
@@ -4635,6 +4657,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// pair consistent — `emitSchedMidleRemoveLocked` carries why the removal is needed at all, which is that
 	// the compiler's park is TIMED where Go's is not.
 	emitSchedLockEnter(module, block: afterWait, ids: ids)
+
 	// ⚠ Both halves are read HERE, in the block that dominates every exit the removal walk has, rather than
 	// carried as a block arg out of it: the walk's exits are its own blocks and it answers nothing, so a value
 	// defined in `wafterwait` is the only one all of them can see.
@@ -4801,6 +4824,7 @@ enum SpinningTransition
 	// inherits it — which is the whole point of the hand-over, since the reservation must span the entire
 	// `SetEvent` -> wake latency to suppress anything.
 	becomeSpinning
+
 	// A worker M that has stopped searching — it found a thread, or it is about to block on its event. Wins
 	// 1 -> 0 and counts itself out. A lost CAS means it never held one.
 	//
@@ -4820,6 +4844,7 @@ enum SpinningTransition
 	// on a P that its M has released is not merely untidy: the count never comes back down, so every later
 	// publish reads it as *"somebody is already looking"* and stops waking anybody.
 	stopSpinning
+
 	// A WAKER, on the MACHINE it has just taken exclusive possession of by popping it off `__sched_midle`
 	// under `__sched_lock` (W213-C2; it used to be on the P, won by taking `idleFlag` 1 -> 0). It reserved a
 	// credit at the gate; this hands that credit to the machine that is about to look. A LOST CAS means that M had already counted itself in — the reservation is then
@@ -5212,6 +5237,7 @@ function buildSchedRetake(module StdModule)
 	let stateMask = emitConst(module, block: haveProc, value: MSyscallStateMask, ids: ids)
 	let inCallOnly = emitConst(module, block: haveProc, value: MSyscallInCall, ids: ids)
 	let stateBits = emitBin(module, block: haveProc, a: stateNow, b: stateMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+
 	// EXACTLY `MSyscallInCall` — a machine whose stolen bit is also set has already had its processor taken and
 	// is inside `__sched_syscall_regain` waiting for another, which is the one state this pass must leave alone.
 	let notInCall = emitCmp(module, block: haveProc, a: stateBits, b: inCallOnly, pred: StdCmpPred.ne, ids: ids)
@@ -5290,6 +5316,7 @@ function buildSchedRetake(module StdModule)
 	// plain arm. The prior value has no reader.
 	let oneRetake = emitConst(module, block: tookIt, value: OneMore, ids: ids)
 	_ = emitFieldAccumulate(module, block: tookIt, record: heldProc, offset: POffRetakeCount, delta: oneRetake, multiM: false, ids: ids)
+
 	// The note is refreshed to the word this CAS just wrote, and the clock restarts. Neither is strictly
 	// required — the stolen bit alone keeps the next pass off this machine, because `rtproc` demands the state
 	// bits be EXACTLY `MSyscallInCall` — but leaving a note that names a word no longer in memory is the kind
@@ -5578,6 +5605,7 @@ function buildSchedSyscallRegain(module StdModule)
 	emitSchedLockLeave(module, block: gotOne, ids: ids)
 	let selfMachine = emitLoadCurrentM(module, block: gotOne, ids: ids)
 	emitSchedAdoptProc(module, block: gotOne, m: selfMachine, p: regained)
+
 	// The stolen bit comes down only now — see this function's header for the two readers that depend on it
 	// having stayed up, and for why these three ops need no atomic.
 	let stolenBit = emitConst(module, block: gotOne, value: MSyscallStolen, ids: ids)
@@ -5669,6 +5697,7 @@ function buildSchedWakeParkedDrivers(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"wpddone")
 
 	emitParams(module, block: entry, count: 1)
+
 	// ⚠ **A GT's OWNER IS NEVER `ParkedDriverNone`, WHICH IS WHAT KEEPS THAT VALUE USABLE AS THE SLOT's
 	// *"nobody is parked"* READING.** `buildGtSpawn` states the invariant at the store (*"a zero owner is not
 	// a benign default"*), a cell copies its owner off the sender, and a green thread owns itself. Were it

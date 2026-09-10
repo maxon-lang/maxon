@@ -55,6 +55,7 @@ type Churn
 	// gives the scavenger something to decommit while the scheduler is walking its queues.
 	export function grind(seed Integer) returns Integer
 		var sum = 0
+
 		for step in 1 to RoundsPerService 'work'
 			let s = "churn-{seed}-{step}"
 			sum = sum + s.count()
@@ -104,6 +105,7 @@ function main() returns ExitCode
 	// `W217`'s neighbourhood. `multicore-stress/service-torture.maxon` uses the direct form too, which is why the pin
 	// matrix has never seen this.
 	var workers = ChurnHandleArray.create()
+
 	for _ in 1 to ServiceCount 'spawnThem'
 		workers.push(spawn Churn.create())
 	end 'spawnThem'
@@ -112,6 +114,7 @@ function main() returns ExitCode
 	// compiler (`ProgramSignatures.substituteTupleThroughInstance`, `SignatureIndex.maxon:24171`), measured
 	// 2026-08-31 and pre-existing. Filed, not worked around silently.
 	var seed = 0
+
 	for w in workers 'grindThem'
 		seed = seed + 1
 		w.grind(seed)

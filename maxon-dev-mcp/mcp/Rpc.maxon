@@ -64,6 +64,7 @@ export function readRpcRequest(stdin Stdin) returns RpcReadResult
 
 	let root = doc.root
 	let rootNode = doc.get(root)
+
 	if rootNode.kind != JsonKind.jsonObject 'notObj'
 		return RpcReadResult.protocolError("request must be a JSON object, got {rootNode.kind.name}")
 	end 'notObj'
@@ -73,6 +74,7 @@ export function readRpcRequest(stdin Stdin) returns RpcReadResult
 	let jsonrpcVersion = try doc.getString(root, key: "jsonrpc") otherwise 'jv'
 		return RpcReadResult.protocolError("missing or non-string `jsonrpc` field")
 	end 'jv'
+
 	if not jsonrpcVersion.equals("2.0") 'badVersion'
 		return RpcReadResult.protocolError("unsupported jsonrpc version: {jsonrpcVersion}")
 	end 'badVersion'
@@ -106,16 +108,19 @@ end 'readRpcRequest'
 function resolveOptionalNode(doc JsonDoc, parent JsonNodeId, key String) returns JsonNodeId throws NotFound
 	let parentNode = doc.get(parent)
 	let n = parentNode.keys.count()
+
 	for i in 0 upto n 'scan'
 		let k = try parentNode.keys.get(i) otherwise 'kErr'
 			panic("resolveOptionalNode: keys.get OOB — i bounds-checked")
 		end 'kErr'
+
 		if k.equals(key) 'hit'
 			return try parentNode.children.get(i) otherwise 'cErr'
 				panic("resolveOptionalNode: children.get OOB — parallel arrays out of sync")
 			end 'cErr'
 		end 'hit'
 	end 'scan'
+
 	throw NotFound.notFound
 end 'resolveOptionalNode'
 
@@ -180,10 +185,12 @@ function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCo
 	errChildren.push(codeId)
 	errKeys.push("message")
 	errChildren.push(msgId)
+
 	if not repoRootEcho.isEmpty() 'haveTree'
 		errKeys.push("data")
 		errChildren.push(repoRootDataObject(envelope, repoRoot: repoRootEcho))
 	end 'haveTree'
+
 	let errId = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
 
 	var keys = StringArray.create()

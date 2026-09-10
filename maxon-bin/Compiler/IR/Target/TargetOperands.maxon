@@ -97,12 +97,15 @@ end 'packVRegBits'
 // Assemble a packed operand from its typed fields.
 function packOperand(vreg TargetVReg, kind OperandKind, position OperandPosition, constraintTag MachineWord, constraintArg MachineWord) returns Operand
 	var word = packVRegBits(vreg)
+
 	if operandKindIsDef(kind) 'isDef'
 		word = word or OperandKindBit
 	end 'isDef'
+
 	if operandPositionIsLate(position) 'isLate'
 		word = word or OperandPositionBit
 	end 'isLate'
+
 	word = word or (constraintTag shl OperandConstraintTagShift)
 	word = word or (constraintArg shl OperandConstraintArgShift)
 	return word
@@ -201,9 +204,11 @@ end 'operandReuseIndex'
 // bug the panic surfaces). Caller must have checked `operandIsReuseDef(o)`.
 export function operandReuseInputValueId(o Operand, buf OperandList) returns ValueId
 	let inputOperand = try buf.get(operandReuseIndex(o)) otherwise panic("operandReuseInputValueId: reuse index {operandReuseIndex(o)} out of operand range")
+
 	if not operandIsVirtual(inputOperand) 'physInput'
 		panic("operandReuseInputValueId: reuse input is a physical operand — no reuse op carries a physical input at coloring time")
 	end 'physInput'
+
 	return operandValueId(inputOperand)
 end 'operandReuseInputValueId'
 
@@ -217,6 +222,7 @@ end 'operandReuseInputValueId'
 // `implicitDefs`, not here.
 export function targetOpOperands(op TargetOp, buf OperandList)
 	buf.clear()
+
 	match op 'operands'
 		prologue then break 'operands'
 		epilogue then break 'operands'
@@ -242,17 +248,20 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		divideReg(divisor, _) then pushUse(buf, vreg: divisor)
 		pushReg or
 			popReg then panic("targetOpOperands: pushReg/popReg are POST-REGALLOC physical ops (inserted by the prologue/epilogue pass after coloring), so they must never reach the operand model")
+
 		// The spill/reload ops carry ONE register operand: a store READS `srcReg`, a reload
 		// DEFINES `destReg` (a fresh value). The slot is a memory location, not a register, so
 		// it contributes no operand — the frame layout it names is the encoder's concern.
 		storeSlotReg(_, srcReg) then pushUse(buf, vreg: srcReg)
 		loadRegSlot(destReg, _) then pushDef(buf, vreg: destReg)
+
 		// The word ALU ops are genuinely two-address on x64, so they share `subRegReg`'s
 		// exact operand shape: both sources read, `dest` a REUSE-of-operand-0 def.
 		andRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		orRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		xorRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		notReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
+
 		// The immediate forms are two-address too (`and dest, imm` modifies dest in place),
 		// so — unlike `leaRegRegImm32`/`imulRegRegImm32`, whose destination is INDEPENDENT
 		// of their source — `dest` is a REUSE-of-`lhs` def, not a plain one. Getting this
@@ -264,6 +273,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		shlRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		shrRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+
 		// The variable-count shifts take their count in CL and NOWHERE ELSE, so the count is
 		// not an explicit operand at all: StdToX64Conversion pre-moves it into physical RCX
 		// (as `idiv` pre-moves its dividend into RAX) and the op names RCX through its
@@ -271,22 +281,27 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		shlRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		shrRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+
 		// A boolean materialization reads EFLAGS — not a tracked register — and writes one
 		// fresh value. So: one plain def, no uses.
 		setccReg(dest, _) then pushDef(buf, vreg: dest)
+
 		// The data-section band. A RIP-relative `lea` reads NO register (RIP is not allocatable),
 		// so it is one plain def and nothing else — which is what makes `StdOp.globalAddr`
 		// rematerializable with no live input at all.
 		leaRegGlobal(dest, _) then pushDef(buf, vreg: dest)
+
 		// A load's `dest` is INDEPENDENT of its `base` — x64 `mov r, [m]` is not two-address — so
 		// this is `pushDefFromUse` (a plain def plus a use), NOT `pushReuseUnaryOperands`. Claiming
 		// a reuse here would tell the allocator the two MUST share a register, which is false and
 		// would cost a copy at every load; the inverse mistake (a reuse op declared independent) is
 		// the one that miscompiles, and it is why the two are never guessed.
 		loadRegBaseDisp(dest, base, _, _) then pushDefFromUse(buf, dest: dest, src: base)
+
 		// A store DEFINES nothing: both the address and the value are read. `pushCmpOperands` is
 		// the two-uses-no-def shape, which is exactly a store's.
 		storeBaseDispReg(base, _, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
+
 		// --- P1.0d.4: the SSE band ---
 		//
 		// ⭐ EVERY ONE OF THESE REUSES AN EXISTING OPERAND SHAPE, and that is the design
@@ -302,36 +317,44 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		subsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		mulsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		divsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+
 		// Sets flags only — two uses, no def.
 		ucomisdRegReg(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
+
 		// ONE plain def, NO uses — RIP is not allocatable, which is what makes it
 		// rematerializable anywhere. `leaRegGlobal`'s shape exactly.
 		movsdRegRip(dest, _) then pushDef(buf, vreg: dest)
+
 		// The two cross-class converts. PLAIN defs (dest independent of src) ⇒ no seed copy.
 		// The operand model states two registers and says nothing about their files; each
 		// value's class is answered from its own Std type.
 		cvtsi2sdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		cvttsd2siRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// The MATH INTRINSICS (P1.0d.4-C). PLAIN defs, NOT the two-address reuse the four SSE ALU
 		// ops above declare: `sqrtsd`/`roundsd` write dest[63:0] from SRC alone, so `dest` does not
 		// read its own previous value and the allocator needs no seed copy. Same shape as the
 		// converts — one def, one use, and the model says nothing about which file either is in.
 		sqrtsdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		roundsdRegReg(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// The BIT REINTERPRETATION (P1.7a's last slice) — the converts' shape exactly, and the
 		// clearest case of this band's rule: `movq r64, xmm` reads an XMM and writes a GPR, and the
 		// model still says only "one def, one use". Which FILE each lands in is the class column's
 		// answer, read off each value's own Std type.
 		movqGprXmm(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// ⚠ THE ONE FLOAT OP HERE THAT IS **NOT** A PLAIN DEF. `absF64RegReg`'s `psllq`/`psrlq` pair
 		// shifts IN PLACE, so `dest` must arrive holding `src` and reads its own previous value — the
 		// two-address shape `notReg` and the four SSE ALU ops declare, not `sqrtsd`'s. Claiming a plain
 		// def here would let the allocator put `dest` in a register `src` does not occupy and emit no
 		// copy, and the op would shift whatever happened to be there.
 		absF64RegReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
+
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
+
 		// `minsd`/`maxsd` (specs/min.md, specs/max.md) are TWO-ADDRESS like the four SSE ALU ops, not
 		// plain defs like `sqrtsd` beside them: each computes `dest <cmp> src ? dest : src`, so `dest`
 		// must arrive holding `lhs` and reads its own previous value. Declaring a plain def here would
@@ -340,10 +363,12 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// commutative on a NaN, so `lhs` and `rhs` are not interchangeable (see
 		// `TargetOp.minMaxSdRegReg`). `kind` names no register, so the operand model is one arm for both.
 		minMaxSdRegReg(dest, lhs, rhs, _) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+
 		// The sign-bit FLIP, `absF64RegReg`'s shape exactly: the `xorpd` works IN PLACE, so `dest` must
 		// arrive holding `src` — a REUSE def, not a plain one. Its scratch XMM rides the op's `implicitDefs`,
 		// not an operand slot.
 		negF64RegReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
+
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The COMPLETE operand model for the arm64 arms — the contract wave 1's encoder + allocator
@@ -372,6 +397,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Lsrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 		arm64Neg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Mvn(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// arm64 immediate ALU forms are 3-address (dest INDEPENDENT of src), so a PLAIN def-from-use
 		// — NOT the two-address reuse the x64 immediate forms declare.
 		arm64AddImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
@@ -385,6 +411,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Cmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
 		arm64CmpImm(reg, _) then pushUse(buf, vreg: reg)
 		arm64Cset(dest, _) then pushDef(buf, vreg: dest)
+
 		// The PIE address `lea`s read no allocatable register (the ADRP+ADD pair addresses a section),
 		// so each is one plain def — exactly like the x64 `leaRegGlobal`/`leaRegRdata`.
 		arm64LeaFuncAddr(dest, _) then pushDef(buf, vreg: dest)
@@ -399,34 +426,41 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Fcmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
 		arm64Scvtf(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Fcvtzs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// The MATH INTRINSICS (P1.0d.4-C) — 2-address plain defs, the same shape as `fsqrt`'s x64
 		// counterpart and as `scvtf`/`fcvtzs` beside them.
 		arm64Fsqrt(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Frint(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// `fabs` is a real 2-operand instruction, so — unlike its x64 counterpart `absF64RegReg`, which
 		// is an in-place shift pair — it is a PLAIN def beside `fsqrt`.
 		arm64Fabs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64FpLoadRdata(dest, _) then pushDef(buf, vreg: dest)
+
 		// Neither OS-call form names an explicit register operand — arguments are pre-moved into x0..
 		// and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` and
 		// `arm64BranchLink` do (both `break` above). The Linux `svc` additionally writes x8, which the
 		// same call clobber already covers.
 		arm64ImportCall or
 			arm64Syscall then break 'operands'
+
 		// `fcsel` (specs/min.md) — a 3-address PLAIN def with two uses, `arm64Fadd`'s shape exactly.
 		// It additionally READS the flags a preceding `arm64Fcmp` set, which no operand model on this
 		// target expresses (`arm64Cset` reads them too and is likewise a bare def); the isel emits the
 		// pair back to back and nothing between them writes NZCV.
 		arm64Fcsel(dest, ifTrue, ifFalse, _) then pushDefTwoUse(buf, dest: dest, a: ifTrue, b: ifFalse)
+
 		// P1.5-A1 (x64): `leaRegFunc` is ONE plain def, no uses — exactly like `leaRegRdata`. `callReg`
 		// carries ONE use, the callee register (unlike `callDirect`/`iatCall`, which have no explicit
 		// operand); its caller-saved clobber is metadata (`implicitDefs`), applied to values live ACROSS
 		// it by the liveness census, not an explicit operand — the same shape as `arm64BranchLinkReg`.
 		leaRegFunc(dest, _) then pushDef(buf, vreg: dest)
 		callReg(reg) then pushUse(buf, vreg: reg)
+
 		// The Linux `syscall` names no explicit register operand — its arguments are pre-moved into
 		// rdi.. and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` does.
 		x64Syscall then break 'operands'
+
 		// The jump tables name ONE explicit operand: the biased index they read (a use). The two scratch
 		// registers they write are NOT operands — they are fixed encoder registers whose clobber rides
 		// `implicitDefs`, so `forbidOperandsFromImplicit` keeps the index off them and the liveness census
@@ -434,26 +468,32 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// are the CFG/table, not registers.
 		x64JumpTable(indexReg, _, _, _) then pushUse(buf, vreg: indexReg)
 		arm64JumpTable(indexReg, _, _, _) then pushUse(buf, vreg: indexReg)
+
 		// The memory-indirect witness call names ONE explicit operand: the witness-table base register (a use);
 		// `disp` is a constant, and the caller-saved clobber rides `implicitDefs`, exactly like `callReg`.
 		callMem(baseReg, _) then pushUse(buf, vreg: baseReg)
+
 		// The arm64 stack-argument pair. An outgoing store names its value as a USE (nothing else — SP is not a
 		// `TargetVReg`); an incoming load names its destination as a plain DEF (its address is a frame fact, not
 		// a register). Declaring them here is what keeps a stack argument's source live to the store and the
 		// loaded parameter colourable like any other value.
 		arm64StoreOutgoingArg(_, srcReg) then pushUse(buf, vreg: srcReg)
 		arm64LoadIncomingArg(dest, _) then pushDef(buf, vreg: dest)
+
 		// The arm64 BIT REINTERPRETATION — `FMOV Xd, Dn`, one def one use, exactly like `fcvtzs`
 		// beside it and like x64's `movqGprXmm`.
 		arm64FmovGprFp(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// The two INBOUND reinterpretations — the same one-def-one-use model as their outbound twins,
 		// and again the model says nothing about which file either end is in. Written as two arms and
 		// never a range: they sit in DIFFERENT bands (one at the end of the x64 SSE band, one at the
 		// end of the union), so a range spanning them would swallow the whole arm64 band between.
 		movqXmmGpr(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64FmovFpGpr(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// A frame address: ONE plain def, no use — its `slot` is a frame index, not a register.
 		leaRegSlot(destReg, _) then pushDef(buf, vreg: destReg)
+
 		// ⭐ F1b: the two fill ladders have NO OPERANDS AT ALL, and that is the model, not an omission.
 		// Their destination and byte count arrive in FIXED PHYSICAL registers that the isel pre-moved into
 		// (exactly as a call's arguments do), and every register they touch is declared on `implicitDefs` —
@@ -461,6 +501,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// fill pattern, which is an immediate and never a register.
 		x64MemFill or
 			arm64MemFill then break 'operands'
+
 		// F2 — the atomics. Unlike the fill ladders one line up, these DO have operands: nothing is pre-moved
 		// into a fixed register except the CAS's comparand, which x86 pins to RAX and which therefore rides
 		// `x64LockCmpxchg`'s implicit mask rather than an operand slot.
@@ -469,27 +510,33 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// ZF, materialized by the `setccReg` the isel emits after it. `pushCmpOperands` is exactly that shape
 		// (two reads, no def), which is why it is reused here rather than a fourth two-use helper written.
 		x64LockCmpxchg(addrReg, srcReg) then pushCmpOperands(buf, lhs: addrReg, rhs: srcReg)
+
 		// `lock xadd` is TWO-ADDRESS: its register operand carries the addend IN and the prior value OUT, so
 		// `dest` must land in `src`'s register — a reuse-def over operand 0, with the allocator supplying the
 		// copy only when `src` outlives the op. Same model as `subRegReg`/`negReg`.
 		x64LockXadd(dest, src, addrReg) then pushReuseBinOperands(buf, dest: dest, lhs: src, rhs: addrReg)
+
 		// `lock add` is the discarding form: two reads, NO def at all — which is the whole register saving it
 		// exists for (see `x64AtomicAdd`).
 		x64LockAdd(addrReg, srcReg) then pushCmpOperands(buf, lhs: addrReg, rhs: srcReg)
+
 		// The two thread-identity reads: ONE plain def, no use. Their input is the OS thread they run on — a
 		// segment-relative address on Windows and a system register on Darwin, neither of which is an operand.
 		x64TebSelfPointer(dest) then pushDef(buf, vreg: dest)
+
 		// The GS-relative slot read: one register READ (the byte offset it indexes by) and one PLAIN def, which
 		// is `loadRegBaseDisp`'s shape exactly — same helper, same reason (the base dies here, so the def may
 		// land in its register).
 		x64GsLoadRegBase(dest, base) then pushDefFromUse(buf, dest: dest, src: base)
 		arm64ThreadPointer(dest, _) then pushDef(buf, vreg: dest)
+
 		// The arm64 LL/SC macro-ops: every operand stays VIRTUAL (the loop reads them wherever they were
 		// coloured) and the result is a PLAIN def, never a reuse — see `TargetDialect.arm64AtomicCas` for why
 		// the encoders must write that def LAST, which is what makes a plain def safe when it aliases a dying
 		// use's register.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then pushDefThreeUse(buf, dest: dest, a: addrReg, b: expectedReg, c: replacementReg)
 		arm64AtomicRmw(dest, addrReg, operandReg, _) then pushDefTwoUse(buf, dest: dest, a: addrReg, b: operandReg)
+
 		// --- EC16: the scaled-index band ---
 		//
 		// ⭐ EVERY ONE OF THESE REUSES AN EXISTING OPERAND SHAPE, exactly as the SSE band does, and for
@@ -505,20 +552,25 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		loadRegBaseIndexScale(dest, base, index, _, _, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
 		storeBaseIndexScaleReg(base, index, _, _, src, _) then pushThreeUse(buf, a: base, b: index, c: src)
 		arm64AddLsl(dest, base, index, _) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
+
 		// EC18 — `divideReg`'s model exactly: ONE explicit use and no explicit def. The other
 		// multiplicand (RAX) and both halves of the product (RAX, RDX) are IMPLICIT, declared as masks on
 		// the op rather than as operands, so the colorer sees the same shape it already sees for a divide.
 		imulHighReg(src) then pushUse(buf, vreg: src)
+
 		// `fneg` is a real 2-operand instruction — a PLAIN def beside `arm64Fabs`, for its reason.
 		arm64Fneg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+
 		// G3: `LDAR` is `loadRegBaseDisp`'s operand shape (a PLAIN def off one address use — the
 		// destination may legitimately reuse the base, which dies at the load) and `STLR` is
 		// `storeBaseDispReg`'s (two uses, no def).
 		arm64LoadAcquire(dest, base, _) then pushDefFromUse(buf, dest: dest, src: base)
 		arm64StoreRelease(base, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
+
 		// EC18's arm64 high multiply is a PLAIN 3-address op — two independent uses and a def that shares
 		// a register with neither, unlike `imulHighReg`'s implicit RAX/RDX pair.
 		arm64Smulh(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+
 		// ⭐ **NO OPERANDS AT ALL, AND THAT IS THE MODEL RATHER THAN AN OMISSION** — the counter's address is a
 		// link-time constant and its scratch registers are outside every allocatable pool, so it names nothing
 		// the allocator decides. It is what lets one shared arm serve both ISAs.

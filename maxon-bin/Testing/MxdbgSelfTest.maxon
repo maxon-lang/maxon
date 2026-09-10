@@ -122,6 +122,7 @@ end 'checkHeader'
 // would notice being wrong, because the rows themselves would still all be present and in order.
 function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 	let withdraw = reader.functionRecord(0)
+
 	if withdraw.name != WithdrawName or withdraw.codeStart != WithdrawStart or withdraw.codeEnd != WithdrawEnd or withdraw.frameSize != WithdrawFrame or withdraw.paramCount != WithdrawParams 'firstRecordLost'
 		broken.push("function 0 reads back as '{withdraw.name}' [0x{withdraw.codeStart:x}, 0x{withdraw.codeEnd:x}) frame=0x{withdraw.frameSize:x} params={withdraw.paramCount}")
 	end 'firstRecordLost'
@@ -131,6 +132,7 @@ function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 	end 'firstWindowWrong'
 
 	let parseBatch = reader.functionRecord(1)
+
 	if parseBatch.lineFirst != 3 or parseBatch.lineCount != 2 'secondWindowWrong'
 		broken.push("'{ParseBatchName}' claims rows [{parseBatch.lineFirst}, +{parseBatch.lineCount}) against the 2 that lie inside its range")
 	end 'secondWindowWrong'

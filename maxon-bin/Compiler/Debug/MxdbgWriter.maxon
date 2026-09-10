@@ -157,9 +157,11 @@ export type MxdbgWriter
 			// The LENGTH is measured by pushing rather than asked of the String: a pool slice is a byte
 			// range, and the count of bytes a String lays down is the only measure that can address it.
 			let offset = self.stringPool.count() as MxdbgIndex
+
 			for b in text.bytes() 'eachByte'
 				self.stringPool.push(b)
 			end 'eachByte'
+
 			let slice = MxdbgPoolSlice.create(offset, length: (self.stringPool.count() - offset) as MxdbgIndex)
 			self.interned.upsert(text, value: slice)
 
@@ -349,6 +351,7 @@ export type MxdbgWriter
 		windows.reserve(self.funcs.count())
 
 		var at = 0 as ElementIndex
+
 		for i in 0 upto self.funcs.count() 'eachFunc'
 			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.lineWindows: funcs.get OOB at {i} despite the upto bound")
 			at = self.firstRowAtOrPast(at, offset: f.codeStart)
@@ -368,8 +371,10 @@ export type MxdbgWriter
 	// the walk above, which is what makes that walk one sweep rather than one per function.
 	function firstRowAtOrPast(from ElementIndex, offset MxdbgCodeOffset) returns ElementIndex
 		var at = from
+
 		while at < self.lines.count() 'eachRow'
 			let row = try self.lines.get(at) otherwise panic("MxdbgWriter.firstRowAtOrPast: lines.get OOB at {at} despite the while guard")
+
 			if row.codeOffset >= offset 'atOrPast'
 				break
 			end 'atOrPast'
@@ -386,20 +391,26 @@ export type MxdbgWriter
 	// being ordered is a wrong answer at every later offset rather than a slow one.
 	function requireAscendingTables()
 		var previousRow = 0 as MxdbgCodeOffset
+
 		for i in 0 upto self.lines.count() 'eachRow'
 			let row = try self.lines.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: lines.get OOB at {i} despite the upto bound")
+
 			if row.codeOffset < previousRow 'rowOutOfOrder'
 				panic("MxdbgWriter: line row {i} is at 0x{row.codeOffset:x} behind 0x{previousRow:x} — the table is built by walking chunks in `.text` order, and both the reader's search and the window walk read it forward only")
 			end 'rowOutOfOrder'
+
 			previousRow = row.codeOffset
 		end 'eachRow'
 
 		var previousFunc = 0 as MxdbgCodeOffset
+
 		for i in 0 upto self.funcs.count() 'eachFunc'
 			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: funcs.get OOB at {i} despite the upto bound")
+
 			if f.codeStart < previousFunc 'funcOutOfOrder'
 				panic("MxdbgWriter: function {i} starts at 0x{f.codeStart:x} behind 0x{previousFunc:x} — the concat pass lays chunks out in `.text` order, and the window walk consumes both tables forward together")
 			end 'funcOutOfOrder'
+
 			previousFunc = f.codeStart
 		end 'eachFunc'
 	end 'requireAscendingTables'

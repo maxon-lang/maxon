@@ -29,6 +29,7 @@ public type TcpClient
 				default throws NetworkError.connectFailed
 			end 'matchConn'
 		end 'connErr'
+
 		return TcpClient{socket: sock}
 	end 'connect'
 
@@ -41,6 +42,7 @@ public type TcpClient
 		let bytes = data.addressableBytes()
 		var totalSent = 0
 		var remaining = bytes.length()
+
 		while remaining > 0 'send_loop'
 			// bufferOutOfBounds is impossible here: remaining <= bytes.length() by loop invariant.
 			let sent = try socket.sendFrom(bytes, totalSent, remaining) otherwise (e) 'sendErr'
@@ -49,12 +51,15 @@ public type TcpClient
 					default throws NetworkError.sendFailed
 				end 'matchSend'
 			end 'sendErr'
+
 			if sent == 0 'closed'
 				throw NetworkError.connectionClosed
 			end 'closed'
+
 			totalSent = totalSent + sent
 			remaining = remaining - sent
 		end 'send_loop'
+
 		return totalSent
 	end 'send'
 
@@ -68,6 +73,7 @@ public type TcpClient
 		let received = try socket.recv(managed) otherwise 'recvErr'
 			throw NetworkError.recvFailed
 		end 'recvErr'
+
 		if received == 0 'closed'
 			throw NetworkError.connectionClosed
 		end 'closed'
@@ -80,12 +86,15 @@ public type TcpClient
 		try managed.setLength(received + 1) otherwise 'lenErr2'
 			panic("TcpClient.recv: setLength(received+1) — extra byte allocated for null terminator")
 		end 'lenErr2'
+
 		try managed.setByte(received, 0) otherwise 'setErr'
 			panic("TcpClient.recv: setByte at null terminator — length just extended to received+1")
 		end 'setErr'
+
 		try managed.setLength(received) otherwise 'lenErr3'
 			panic("TcpClient.recv: setLength(received) — restoring original length always valid")
 		end 'lenErr3'
+
 		return String.init(managed)
 	end 'recv'
 

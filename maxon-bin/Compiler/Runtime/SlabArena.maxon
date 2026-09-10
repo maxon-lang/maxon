@@ -172,26 +172,32 @@ typealias ArenaChunkCount = int(1 to i64.max)
 type SlabArenaGeometry
 	// Chunks in one arena. Every other figure here is derived from it.
 	export let chunkCount as ArenaChunkCount
+
 	// The bitmap that describes them, in machine words.
 	export let bitmapWords as ParsedInt
+
 	// ⭐⭐ **THE COMMIT GRANULES IN ONE ARENA — S6's replacement for the WATERMARK, and the reason it had to
 	// go.** A watermark says *"`[0, committedChunks)` is committed"*, which is only expressible while commits
 	// go one way. The scavenger decommits a granule wherever its chunks happen to have gone free, so the
 	// committed set stops being a prefix the moment it runs; a bitmap is the honest shape of the same fact,
 	// and it costs 16 words on the reserving lane against the watermark's one.
 	export let granuleCount as ParsedInt
+
 	// The bitmap that describes THOSE, in machine words. A CEILING, so the last word may describe fewer than
 	// 64 granules — the non-reserving lane has 8 — and every walk bounds itself by `granuleCount` rather than
 	// by the word count for exactly that reason.
 	export let commitBitmapWords as ParsedInt
+
 	// Where the commit bitmap sits in the metadata chunk: immediately past the chunk bitmap, whose width is
 	// itself derived. Carried rather than spelled, because a lane-dependent width means a lane-dependent
 	// offset, and an offset computed at each of its four use sites is four chances to describe a different
 	// table.
 	export let commitBitmapOffset as ByteOffset
+
 	// The arena's own span — the address range its chunk grid covers, measured from the ALIGNED base
 	// `__slab_arena_new` starts it at. `__slab_arena_of` tests an address against it.
 	export let bytes as ParsedInt
+
 	// ⭐⭐ **WHAT `__slab_arena_new` ASKS `osReservePages` FOR — `bytes` PLUS THE ROOM THE ALIGN-UP NEEDS.**
 	// The base the OS answers is raised to the next commit granule (see `buildSlabArenaNew` for why it must
 	// be), which can move it by as much as `SlabArenaCommitGranuleBytes - 1`; the arena then runs `bytes`
@@ -200,6 +206,7 @@ type SlabArenaGeometry
 	// process had at that address, not a refusal. Carried rather than derived at the one call site so
 	// `checkArenaGeometryForLane` can assert the two against each other.
 	export let reservationBytes as ParsedInt
+
 	// ⭐ Which lane this geometry IS, carried rather than passed alongside. `checkArenaMapCoupling` asks a
 	// DIFFERENT question of each lane, and a geometry travelling beside a separate bool is a pair that can
 	// arrive mismatched — a 512 KiB arena checked against the reserving lane's rule would pass the wrong
@@ -538,6 +545,7 @@ function checkSlabArenaGeometry()
 	// The four fields of an address must TILE it. Short, and a page's worth of addresses at the top of the
 	// space would index nothing; long, and the L1 index would run past its table.
 	let mappedBits = SlabPageShift + ArenaMapLevelBits + ArenaMapLevelBits + ArenaMapL1Bits
+
 	if mappedBits != ArenaMapAddressBits 'addressBitsDisagree'
 		panic("slab arena map: {SlabPageShift} + {ArenaMapLevelBits} + {ArenaMapLevelBits} + {ArenaMapL1Bits} is {mappedBits} bits, not the {ArenaMapAddressBits} the map claims to cover")
 	end 'addressBitsDisagree'
@@ -583,6 +591,7 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// weaker "an arena has any payload chunks at all", which is why that is not asked separately.
 	let largestMapTableRun = arenaChunksFor(ArenaMapLevelEntries * ArenaWordBytes)
 	let payloadChunks = (geometry.chunkCount as ParsedInt) - ArenaMetadataChunks
+
 	if largestMapTableRun > payloadChunks 'mapTableRunUnsatisfiable'
 		panic("slab arena ({lane}): a {largestMapTableRun}-chunk reverse-map level does not fit the {payloadChunks} chunks an arena has after its {ArenaMetadataChunks} metadata chunk(s), so `__slab_arena_map_ensure` would abort on the first lookup")
 	end 'mapTableRunUnsatisfiable'
@@ -591,6 +600,7 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 	// its end is what can overflow — and nothing may silently start overlapping the payload of chunk 0 if
 	// either widens.
 	let metadataBytes = (geometry.commitBitmapOffset as ParsedInt) + geometry.commitBitmapWords * ArenaWordBytes
+
 	if metadataBytes > ArenaMetadataChunks * SlabPageBytes 'metadataOverflowsChunk'
 		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabPageBytes}")
 	end 'metadataOverflowsChunk'
@@ -669,6 +679,7 @@ end 'arenaLaneName'
 // reason in full: a change to one half leaves the other silently describing a different geometry.
 function requireShiftMatchesWidth(what String, shift ParsedInt, width ParsedInt)
 	let produced = 1 shl shift
+
 	if produced != width 'disagrees'
 		panic("slab arena: {what}: 1 shl {shift} is {produced}, not {width}")
 	end 'disagrees'
@@ -1362,6 +1373,7 @@ end 'buildSlabArenaScavenge'
 enum SlabBitRun
 	// The chunks become USED: `word = word bitAnd not bit`.
 	claim
+
 	// The chunks become FREE: `word = word bitOr bit`.
 	release
 end 'SlabBitRun'
@@ -1403,6 +1415,7 @@ function emitBitRunUpdate(module StdModule, func IrFunction, cur IrBlock, arenaB
 		claim gives emitBin(module, block: body, a: bit, b: emitConst(module, block: body, value: -1, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
 		release gives bit
 	end 'polarity'
+
 	let opcode = match mode 'combine'
 		claim gives StdBinOpcode.bitAnd
 		release gives StdBinOpcode.bitOr
@@ -1568,6 +1581,7 @@ function buildSlabArenaMapEnsure(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+
 	// The three merge blocks are created HERE rather than inside the emitter, because a caller that owns the
 	// block can go on emitting into it — an emitter that CREATED it could only hand it back inside a pair
 	// with the table base, and a block reached through an immutable field cannot be appended to (E3019).
@@ -1625,6 +1639,7 @@ function emitLazyMapLevel(module StdModule, func IrFunction, cur IrBlock, slotAd
 	let chunks = emitConst(module, block: allocate, value: arenaChunksFor(entryCount * ArenaWordBytes), ids: ids)
 	let table = ids.mint()
 	module.appendOp(allocate, op: StdOp.call(table, callee: SlabArenaAllocChunksName, args: argsOf(chunks)))
+
 	// ⭐ **ONE `memFill`, NOT A LOOP — AND THIS FILE'S PREMISE CHANGED UNDER IT MID-FLIGHT.** An earlier
 	// draft zeroed the table with a hand-built Std-IR word loop, justified against the per-byte fill loop
 	// then in the tree on the grounds that a word stride is eight times fewer iterations. **`StdOp.memFill`

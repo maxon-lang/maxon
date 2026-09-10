@@ -41,6 +41,7 @@ end 'CastCategory'
 // --- StdTypeInfo: metadata carried by each StdType case ---
 export type StdTypeInfo
 	export let isFloat as bool
+
 	// ⭐⭐ **DOES THIS TYPE READ ITS TOP BIT AS A VALUE BIT RATHER THAN A SIGN?** — the fact that makes
 	// `StdType` able to answer a COMPARISON's condition-code family, which is the one question about a
 	// compare that this tier cannot re-derive (see `lowerCompare`, and `stdTypeIsUnsigned` below).
@@ -57,6 +58,7 @@ export type StdTypeInfo
 	// enum would be a second declaration of the enum, free to omit a case the day one is appended.
 	export let isUnsigned as bool
 	export let castCategory as CastCategory
+
 	// The type's footprint IN MEMORY, in bytes — what a `.data` slot of it occupies and
 	// what `loadIndirect`/`storeIndirect` transfer. NOT its width in a register: an `i1`
 	// lives in a full 64-bit GPR but occupies ONE byte of storage, which is exactly what
@@ -184,6 +186,7 @@ export enum IntegerSignedness
 	// x64 `idiv`, arm64 `sdiv`, wasm `i64.div_s`/`i64.rem_s`. The reading every division in the
 	// language had before X10, and still the reading for every operand pair that admits a negative.
 	signed
+
 	// x64 `div` (with RDX ZEROED rather than sign-extended), arm64 `udiv`, wasm `i64.div_u`/`i64.rem_u`.
 	// Reached only when BOTH operands are non-negative and at least one says so by DECLARATION.
 	unsigned
@@ -426,6 +429,7 @@ export enum StdBinOpcode
 	div
 	min
 	max
+
 	// ⭐⭐ **THE HIGH 64 BITS OF THE 128-BIT SIGNED PRODUCT — the one operation a division by a
 	// compile-time constant cannot be replaced without (`EC18`, `StrengthReduceDivision`).** `n * M`
 	// at 128 bits, keeping bits 64..127. x64 spells it `imul r/m64` (the ONE-operand group-3 form,
@@ -474,6 +478,7 @@ export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 		div or
 			min or
 			max gives true
+
 		// EC18's high multiply is INTEGER-ONLY, which is the opposite exception and needs its own arm:
 		// there is no float 128-bit product, and `appendStdBinOp` would be right to refuse one.
 		mulHighSigned gives false
@@ -622,6 +627,7 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 			bitNot or
 			logicalNot or
 			siToFp gives false
+
 		// `fpToSi` reads the float half, and the five math intrinsics and the sign flip `fneg` are
 		// f64 → f64.
 		fpToSi or
@@ -631,12 +637,14 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 			sqrt or
 			abs or
 			fneg gives true
+
 		// The BITCAST reads an f64 and writes a GPR. It gets its own arm rather than extending the
 		// range above, because that range's answer is "true" for two different reasons — `fpToSi`
 		// converts out of the float domain and the intrinsics stay inside it — and this is a third:
 		// it leaves the domain without converting, so it needs its own arm rather than joining the run
 		// above — whose comment would otherwise stop describing its last member.
 		bitcastF64ToI64 gives true
+
 		// ⚠ THE INBOUND BITCAST IS THE ONLY MEMBER PAST `siToFp` THAT READS AN INTEGER, and it is the
 		// clearest case of this function being about the SOURCE: `bitcastI64ToF64`'s result is an f64,
 		// so anything reading the opcode's NAME for its answer gets `true` and colours the operand into
@@ -693,6 +701,7 @@ export let AtomicCasFailed = 0 as ParsedInt
 export type StdOpMeta
 	export let category as StdOpCategory
 	export let role as OpRole
+
 	// Side-effect-free: the op can be duplicated, reordered, or dropped when its
 	// result is unused.
 	//
@@ -725,19 +734,24 @@ export type StdOpMeta
 	// (which faults on divide-by-zero) sits inside the `arith` band. `div` simply
 	// declares `isPure: false` and nothing else changes.
 	export let isPure as bool
+
 	// The op cannot appear inside a callee body that the multi-block splice is asked
 	// to inline — it escapes the inliner's static-callee model. ORTHOGONAL to `isPure`: purity says
 	// whether the op may be moved, this says whether it may be spliced at all.
 	export let isUnsupportedInInlineBody as bool
+
 	// True for ops that access memory or have side effects the scheduler must
 	// treat as a barrier (loads, stores, calls, syscalls, atomics, locks).
 	export let isMemory as bool
+
 	// True for ops that write memory or have externally-observable side effects
 	// (must order with subsequent loads). Pure loads are memory but not stores.
 	export let isStore as bool
+
 	// True for ops with full call-barrier semantics (clobber caller-saved regs,
 	// may observe/modify arbitrary memory). Also true for `param`.
 	export let isCall as bool
+
 	// True if the op MAY clobber x64 EFLAGS / ARM64 NZCV once lowered. A LOWERING
 	// artifact, not a side effect — a flag-clobbering op is still `isPure`.
 	//
@@ -768,6 +782,7 @@ export type StdOpMeta
 	// backend a missed fusion on the other target; under-declaring is a silent wrong answer, because
 	// the flags a fused branch reads would already have been destroyed by an op the scan never saw.
 	export let clobbersFlags as bool
+
 	// A compare feeding a branch — the backends pair the two, so the classification
 	// must survive as metadata rather than being re-derived per target.
 	export let isCmp as bool
@@ -819,18 +834,22 @@ export enum ProfileHostCall
 	openProcess
 	nextThread
 	threadId
+
 	// The window in which another thread's stack is coherent, and the register file at the sample point.
 	suspendThread
 	resumeThread
 	threadContext
+
 	// Is this word inside a committed region, and give me the bytes. Asked in that order: a copy of a
 	// reserved-but-uncommitted page fails, and a failed copy is indistinguishable from a copy of zeros.
 	queryRegion
 	readProcessMemory
+
 	// The sampling tick. Two services rather than one because the timer is created ONCE and armed per
 	// interval, and because only a creation can ask for high resolution.
 	createHighResTimer
 	setAbsoluteTimer
+
 	// The module map that turns a sampled instruction pointer into a module plus an offset.
 	moduleSnapshot
 	moduleFirst
@@ -861,6 +880,7 @@ export union StdOp
 	// metadata cannot express that. Split the variant, or take `true` back. The guard is
 	// repeated at the idiom's own site so whoever adds it trips over it there.
 	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Binary op `resultId = lhs <opcode> rhs` over two virtual registers. M3 carries
 	// `add`/`sub`/`mul`, all `isPure` (integer add/sub/mul never trap — unlike the
 	// trapping `div` below, which declares `isPure: false`) and `clobbersFlags: true`
@@ -882,11 +902,13 @@ export union StdOp
 	// per-variant table that cannot express it — the same trap `const` documents above.
 	// Tightening it means splitting the variant.
 	binOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// Unary op `resultId = <opcode> operand` over one virtual register. M3 carries
 	// `neg`, which is `isPure` (integer negate never traps) and `clobbersFlags: true`
 	// (x64 `neg` writes EFLAGS). Declared at the end of the arith band, after `binOp`. `operandType`
 	// per `binOp` above.
 	unaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// Comparison `resultId = lhs <pred> rhs`, producing an i1. M4's `if` condition.
 	// `isCmp: true` (the metadata the x64 backend pairs with the following branch);
 	// `isPure: true` (a compare never traps); `clobbersFlags: true` (x64 `cmp` and
@@ -902,6 +924,7 @@ export union StdOp
 	// never determined the condition code; it only looked that way while every Std
 	// compare was a signed i64. See X64CondCode and specs/float-compare-branch.md.
 	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+
 	// Binary op with a CONSTANT right operand folded to an immediate: `resultId =
 	// lhs <opcode> imm`. Produced by `foldConstOperands` from a `binOp` whose rhs
 	// was a `const` (the const op is then DCE'd), so the literal never occupies a
@@ -934,6 +957,7 @@ export union StdOp
 	// once instead of guessed twice. See `specs/safety.md`
 	// `mod-guard-passes-a-wide-dividend-through-untouched`.
 	binOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// Comparison with a CONSTANT right operand folded to an immediate: `resultId =
 	// lhs <pred> imm`, producing an i1. Produced by `foldConstOperands` from a `cmp`
 	// whose rhs was a `const` (canonicalized there so the const lands on the rhs, with
@@ -949,6 +973,7 @@ export union StdOp
 	// (`recordFusableCompare`), which is the same fact written a second time.
 	// See `specs/comparison-operators.md` `compare-against-a-literal-keeps-the-operand-width`.
 	cmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+
 	// Integer division `resultId = lhs / rhs` (quotient), TRUNCATING toward
 	// zero, at the signedness `signedness` names (see `IntegerSignedness` — the front end decides it
 	// from BOTH operands' declared ranges, because a value's signedness is gone by this tier).
@@ -961,23 +986,28 @@ export union StdOp
 	// TRAP itself is delivered by the runtime fault handler (a Workstream-R / M6
 	// deliverable), NOT guarded by the compiler.
 	div(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// Integer modulo `resultId = lhs mod rhs` (remainder), matching `div`'s
 	// truncation and reading its `signedness` the same way. Same `isPure: false` (idiv faults) +
 	// `clobbersFlags: true` profile as `div` — it is the SAME x64 instruction, reading the REMAINDER
 	// out of RDX instead of the quotient out of RAX.
 	mod(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// --- band: control ---
 	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
 	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a
 	// terminator cannot be dropped or reordered); does not clobber flags (the x64
 	// `jcc` READS flags, it does not set them — the preceding `cmp` set them).
 	condBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Unconditional branch terminator to `targetBlockId` (a then/else block falling
 	// through to the merge block). Same non-pure, flag-neutral profile as condBranch.
 	branch(targetBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- band: call ---
 	// Return terminator. `retValId` names the value moved into the return register.
 	ret(retValId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Parameter materialization at function entry: `resultId` is the SSA value of
 	// parameter `index` (M5: the two coincide — a parameter is ValueId `index`), of
 	// type `paramType`. Emitted once per parameter at the entry block; the x64
@@ -987,6 +1017,7 @@ export union StdOp
 	// (per the StdOpMeta `isCall` contract, which names `param`), and `isPure: false`
 	// keeps it from being reordered or dropped.
 	param(resultId ValueId, index ParamCount, paramType StdType) = StdOpMeta{category: StdOpCategory.call, role: OpRole.param, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: true, clobbersFlags: false, isCmp: false}
+
 	// A direct function call `resultId = callee(args…)`. `callee` is the resolved
 	// function name; `args` are the argument SSA values in the callee's PARAMETER
 	// order (lowerCall has already reordered any labelled arguments to declaration
@@ -996,6 +1027,7 @@ export union StdOp
 	// — a call may read/write memory and must not move or drop). APPENDED at the END of
 	// the call band, after `param`.
 	call(resultId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// Void return terminator — the return of a function with no `returns` clause. A
 	// DISTINCT variant rather than a `ret` carrying some absent-value ValueId: `ValueId`
 	// has no "absent" value, and a sentinel one would be READ as a real use by
@@ -1005,6 +1037,7 @@ export union StdOp
 	// Carries no operand at all, so it reads nothing and rewrites nothing; the x64
 	// lowering emits the bare `ret` (the frame teardown is the prologue/epilogue pass's).
 	retVoid = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- band: memory (P1.0d.5b — top-level `var`) ---
 	//
 	// ⭐ THREE OPS, NOT A FUSED `globalLoad`/`globalStore` PAIR, and the split is the point.
@@ -1019,6 +1052,7 @@ export union StdOp
 	// [rip+disp32]` needs no input register at all) and `isMemory: false` (it computes an
 	// address; it does not TOUCH memory — nothing is loaded).
 	globalAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Read `valueType` bytes from `addrId + offset` into `resultId`.
 	//
 	// ⚠ **`isPure: false`, AND THAT IS THE CORRECT DECLARATION, NOT A CONSERVATISM.** A load
@@ -1035,10 +1069,12 @@ export union StdOp
 	// value above is right and must stay right; it is simply not what makes the property hold
 	// today. Do not "verify" it by running a spec: none can fail on it.
 	loadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Write `valueId` as `valueType` bytes to `addrId + offset`. `isStore: true` (it writes
 	// memory, so it must order against every later load — the metadata contract's own words),
 	// `isPure: false`. APPENDED at the END of the memory band, after `loadIndirect`.
 	storeIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- band: system (P1.0r — the allocator's page source) ---
 	//
 	// ⭐ THE FIRST PRODUCER OF THE `system` BAND, and the band is why this op is spelled this way
@@ -1065,6 +1101,7 @@ export union StdOp
 	// `isUnsupportedInInlineBody: true`: this lowers to an indirect call, which escapes the
 	// inliner's static-callee model.
 	osAllocPages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// Write `lenId` bytes starting at `bufId` to STDOUT (P1.2 wave A — `print`). A `system`-band op for
 	// the same two reasons `osAllocPages` is: it says WHAT is wanted (bytes to stdout) and lets each
 	// backend say HOW (x64-windows: `GetStdHandle`+`WriteFile` through the IAT; a wasm backend would
@@ -1083,6 +1120,7 @@ export union StdOp
 	// WASI Preview2's `blocking-write-and-flush` writes the WHOLE contents or fails, so `lenId` IS the
 	// count it wrote, and that is the ABI's guarantee rather than a synthesized stand-in.
 	osWriteStdout(resultId ValueId, bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// The RIP-relative ADDRESS of an `.rdata` constant — a String literal's 56-byte record (P1.2 wave
 	// A). The `.rdata` twin of `globalAddr`: identical operand shape (a `label` NAME, one plain def, no
 	// value use) and identical metadata (`isPure: true` — it recomputes an address that cannot change,
@@ -1091,6 +1129,7 @@ export union StdOp
 	// carries: `globalAddr` lowers to a `.data` relocation (`dataSectionRipRelDisp32`), this to an
 	// `.rdata` one (`ripRelDisp32`).
 	rdataAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- P1.4b: scalar error handling ---
 	//
 	// The `category` metadata places each variant logically (a `call`-band `tryCall`, a
@@ -1102,6 +1141,7 @@ export union StdOp
 	// registers through the parallel-copy resolver (never a naive `mov;mov`, which collapses a
 	// value/flag swap — see StdToX64Conversion.lowerTryCall).
 	tryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// The DUAL-REGISTER epilogue terminator: write `retValId` to the primary return register (R8 / x0)
 	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
 	// ONE place the second register is written, and `role: OpRole.errorReturn` — the placeholder
@@ -1110,6 +1150,7 @@ export union StdOp
 	// static-callee model. The flag has no reader yet, so this is a
 	// declaration awaiting one — but the value is the debugged one. APPENDED here, past `rdataAddr`.
 	errorReturn(retValId ValueId, errorFlagId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.errorReturn, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// Terminate the process with exit code `codeId` — the primitive a user `panic(...)` ends on (via the
 	// `__abort` runtime graph). A `system`-band op for the same two reasons `osAllocPages`/`osWriteStdout`
 	// are: it says WHAT is wanted (exit with a code) and lets each backend say HOW (x64-windows:
@@ -1117,6 +1158,7 @@ export union StdOp
 	// target-neutral tier; and it appends at the END of the union, where the append is LOUD. Full
 	// call-barrier metadata: it IS a diverging call once lowered.
 	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.5-A1: non-capturing function values ---
 	//
 	// The `category` metadata places each variant logically (a `memory`-band `funcAddr`, a
@@ -1130,6 +1172,7 @@ export union StdOp
 	// `globalAddr`→a `.data` reloc, `rdataAddr`→an `.rdata` one, this→a `.text` function-symbol fixup (x64
 	// `CallFixup`, resolved intra-`.text` by `resolveCallFixups`).
 	funcAddr(resultId ValueId, funcName ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// A call THROUGH a function VALUE — `resultId = calleeReg(args…)`. `calleeReg` is the SSA value holding
 	// the code pointer (from a `funcAddr`, a param, or a field load), NOT a name — the whole reason it is
 	// distinct from `call`. Metadata identical to `call`: full call-barrier semantics. The x64/arm64
@@ -1173,6 +1216,7 @@ export union StdOp
 	// scalars first. Both are METADATA, not value operands: `collectStdOpUses`/`remapStdOpUses` leave them
 	// untouched.
 	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// A SOFTWARE PANIC: abort with the interned message at `.rdata` label `label`, printing it plus a
 	// symbolized backtrace and exiting `PanicExitCode`.
 	//
@@ -1196,6 +1240,7 @@ export union StdOp
 	// Its `category: system` places it logically,
 	// independent of this tail position.
 	osPanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.5 mid-body-yield: the two OS-import primitives the green-thread SLEEP substrate needs ---
 	//
 	// Their `category: system` places them logically in the system band,
@@ -1216,10 +1261,12 @@ export union StdOp
 	// Std ops for any realistic QPF (≤ a few GHz) and centuries of uptime — so no 128-bit MUL/DIV, and no new
 	// Target op, is needed. It keeps the clock math in the Std tier the rewrite's thesis puts it in.
 	osReadClock(ticksPtrId ValueId, freqPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSleepMs(ms)` sleeps the OS thread for `ms` milliseconds (Windows `Sleep(ms)`) — the netpoller's real
 	// wait on the earliest timer deadline (never a busy-spin). One VALUE operand (the millisecond count), no
 	// result. APPENDED at the END of the union, after `osReadClock`.
 	osSleepMs(msId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.5 subprocess seed: the five OS-import primitives the green-thread SUBPROCESS substrate needs ---
 	//
 	// Their `category: system` places them logically in the system
@@ -1246,9 +1293,11 @@ export union StdOp
 	// op here with outgoing stack-argument space (`stdOpOutgoingArgBytes`), which is why it is declared FIRST.
 	// `envPtr` is 0 for the child that inherits — see `osProcessSpawnInherit` for why it is an operand at all.
 	osProcessSpawn(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osProcessExitCode(handle, codePtr)` = `GetExitCodeProcess(handle, codePtr)` — writes the child's DWORD exit
 	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
 	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osWaitHandles(handleArrayPtr, count, timeoutMs)` = `WaitForMultipleObjects(count, handleArrayPtr, FALSE,
 	// timeoutMs)` — the netpoll's block on the parked children (and the earliest timer delta), performed by the
 	// ONE M that holds the single-poller claim (`GtRuntime.GtProcPollerLabel`; this used to say "single-M block"
@@ -1256,14 +1305,17 @@ export union StdOp
 	// operands, no result: the netpoll re-scans each handle with `osWaitHandle(h, 0)` after the wait returns, so
 	// the aggregate wait result is not read.
 	osWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osCloseHandle(handle)` = `CloseHandle(handle)`. One VALUE operand, no result (the `BOOL` is ignored, like
 	// `osWriteStdout`'s).
 	osCloseHandle(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osWaitHandle(handle, timeoutMs)` = `WaitForSingleObject(handle, timeoutMs)` — the per-handle poll
 	// `__gt_proc_check` runs with `timeoutMs = 0` to test `== WAIT_OBJECT_0 (0)`. THE ONE op here that DEFINES a
 	// value (the wait result, a GPR i64 captured from RAX). Declared LAST so the four result-less ops stay
 	// contiguous (see the ⭐ note above).
 	osWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.5-B1a′ relocating morestack: the page-FREE twin of `osAllocPages` ---
 	//
 	// Its `category: system` places it logically in the system
@@ -1294,6 +1346,7 @@ export union StdOp
 	//
 	// Full call-barrier metadata: it IS an indirect call or a syscall once lowered, exactly like `osAllocPages`.
 	osFreePages(addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.1b slice 2: the DENSE-match jump table ---
 	//
 	// Its `StdOpCategory.control` is metadata — the switch IS a control-flow terminator, the Std twin of
@@ -1309,6 +1362,7 @@ export union StdOp
 	// inner `br_table`. Its array field is bound only in dedicated small matches, never in
 	// `collectStdOpUses`/`remapStdOpUses`'s big ones (which read/rewrite only `subjectId`).
 	switch(subjectId ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- P1.7a slice 2a: the FUSED witness call (constrained-type-parameter interface dispatch) ---
 	//
 	// Its `category: call` is metadata placing it logically in the
@@ -1333,6 +1387,7 @@ export union StdOp
 	// are baked as a `.text` VA by the fixed-base writers, as a funcref-table index by wasm, and as a dyld
 	// chained-fixup rebase by the always-PIE arm64-macOS.
 	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import primitives ---
 	//
 	// Each carries `category: system` (metadata placing it logically in the
@@ -1354,12 +1409,15 @@ export union StdOp
 	// `iocp` and SetFileCompletionNotificationModes sets FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. Five VALUE operands, no
 	// result (the two handles land in memory).
 	osPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osIocpCreate()` = `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)` — create the process-wide IOCP. No
 	// value operands; DEFINES the port handle (captured from RAX).
 	osIocpCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osEventCreate()` = `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET, initially-unsignaled event (the
 	// netpoll's wake). No value operands; DEFINES the event handle.
 	osEventCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osThreadCreate(entryPtr, arg)` = `CreateThread(NULL, 0, entryPtr, arg, 0, NULL)` — start an OS thread on
 	// `entryPtr` with `arg` as its single `lpParameter`. TWO VALUE operands (the `.text` entry address, from a
 	// `funcAddr`; and the argument word); DEFINES the thread handle.
@@ -1392,22 +1450,28 @@ export union StdOp
 	// the publish doors' green arms wake or spawn, and every M in every green-threaded program is minted
 	// through this op. `buildIoInit`'s completion thread is still lazy and still Windows-only.
 	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire at a main-thread mutation
 	// site (the completion thread acquires it DIRECTLY in the hand-assembled loop, not through this op). One VALUE operand, no result.
 	osLockEnter(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osLockLeave(lockPtr)` = `LeaveCriticalSection(lockPtr)`. One VALUE operand, no result.
 	osLockLeave(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` = `ReadFile(handle, buf, cap, bytesOutPtr, ovl)` — issue the
 	// overlapped read. FIVE args (`ovl` is the 5th, a stack arg); DEFINES the BOOL result (captured from RAX): nonzero =
 	// SYNCHRONOUS completion (with FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, no IOCP packet posts — `[bytesOutPtr]` has the
 	// count and the caller must NOT yield); zero = the read is queued OR failed — the caller reads `osLastError` to
 	// distinguish ERROR_IO_PENDING (yield) from ERROR_BROKEN_PIPE (EOF) from a real error.
 	osReadOverlapped(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osLastError()` = `GetLastError()` — the thread's last-error, read IMMEDIATELY after a failing `osReadOverlapped` (no
 	// intervening call clobbers it — the shim's TIB writes do not touch the TEB's LastError word). No value operands; DEFINES the code.
 	osLastError(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr)` =
 	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, TRUE, creationFlags, NULL, cwdPtr, startupPtr, procInfoPtr)` — the
 	// `osProcessSpawn` twin with bInheritHandles=TRUE, so a child inherits the pipe write end its STARTUPINFO names as
@@ -1429,12 +1493,14 @@ export union StdOp
 	// a child running with the parent's environment while its caller was told it had another. A NULL still
 	// means "inherit the parent's", so 0 remains what a caller with nothing to say passes.
 	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read (P1.5 slice
 	// 1a-ii, the in-flight-reader-promise DROP path). Two VALUE operands (the pipe read handle + the OVERLAPPED whose
 	// operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED completion packet the
 	// completion thread drains, which is how the drop arm knows the completion thread is DONE with the GT before it
 	// frees it. x64-windows only, like every IOCP op.
 	osCancelIo(handleId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osGetPid()` = `GetCurrentProcessId()` on Windows, `getpid()` on arm64-macOS — the current process id,
 	// DEFINING the result (captured from the return register). It has TWO producers, which is why it sits in
 	// the IOCP band and answers a question that has nothing to do with one: the pipe-name uniquifier mints it
@@ -1452,6 +1518,7 @@ export union StdOp
 	// upper half UNSPECIFIED. `specs/process-id.md:fits-in-a-dword` is what makes that difference
 	// visible rather than a stale high word passing as a plausible id.
 	osGetPid(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// --- P1.5 dogfood slice 1b: the STREAMING subprocess stdin pipe + synchronous write ---
 	//
 	// Both carry `category: system` (metadata placing them logically in the system band, independent of
@@ -1467,6 +1534,7 @@ export union StdOp
 	// `[childReadPtr]`; SetHandleInformation strips inheritance from the parent write end. Four VALUE operands,
 	// no result (the two handles land in memory).
 	osPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// `osWriteFile(handle, buf, len, bytesOutPtr)` = `WriteFile(handle, buf, len, bytesOutPtr, NULL)` — a
 	// SYNCHRONOUS write to the child's stdin pipe (the sync outbound pipe is not overlapped, so the write
 	// blocks until the pipe buffer accepts the bytes). FOUR args (`bytesOutPtr` is the 4th, a valid out-param
@@ -1474,6 +1542,7 @@ export union StdOp
 	// the BOOL result (captured from RAX) — nonzero success, zero a broken pipe. Distinct from `osWriteStdout`,
 	// which writes to the process's OWN stdout via GetStdHandle and takes no explicit handle.
 	osWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
 	// --- The `__Builtins` WALL clock: the calendar read `__clock_now_unix_s` is built on ---
 	//
 	// Its `category: system` places it logically in the
@@ -1495,6 +1564,7 @@ export union StdOp
 	// arithmetic and a future POSIX backend supplies only the read. Full call-barrier metadata: it IS an
 	// indirect call once lowered, exactly like `osReadClock`.
 	osReadWallClock(ftPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- P1.7a slice 2b-v: the THROWING fused witness call ---
 	//
 	// Its `category: call` places it logically in the call band, independent of this tail
@@ -1513,6 +1583,7 @@ export union StdOp
 	// unchanged in that respect. Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C, exactly as
 	// `witnessCall` is; each fills the witness blob's slots in the form its image format can carry.
 	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- R4.1: the file-IO runtime's OPEN primitive ---
 	//
 	// Its `category: system` places it logically in the system band, independent of this tail position.
@@ -1539,6 +1610,7 @@ export union StdOp
 	// three non-Windows lowerings are absent rather than stubbed. A stub would be a silent wrong answer on
 	// a lane nothing checks.
 	osFileOpenRead(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileClose(handle)` = `CloseHandle(handle)`. No result: the BOOL is ignored, exactly as
 	// `osWriteStdout` ignores `WriteFile`'s — a close that fails leaves nothing a caller could do.
 	//
@@ -1546,6 +1618,7 @@ export union StdOp
 	// with no way to close leaks an OS handle for the process lifetime, and that leak is invisible to the
 	// exit-101 memory gate. Declared after `osFileOpenRead`.
 	osFileClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- R4.2: the rest of the file-IO primitives ---
 	//
 	// All seven carry `category: system`, placing them logically in the system band independent of this
@@ -1565,6 +1638,7 @@ export union StdOp
 	// would be a different call with different semantics. DEFINES
 	// the BOOL result; the byte count lands in memory at `bytesOutPtr`.
 	osReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileOpenWrite(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_WRITE, FILE_SHARE_READ |
 	// FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or
 	// `INVALID_HANDLE_VALUE`) in `result` — `osFileOpenRead`'s shape with three constants changed.
@@ -1576,20 +1650,24 @@ export union StdOp
 	// `openWriteExecutable` has an op of its own — see `osFileOpenWriteExecutable` at the tail of
 	// this union.
 	osFileOpenWrite(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileSize(result, handle, sizeOutPtr)` = `GetFileSizeEx(handle, sizeOutPtr)` — the 64-bit size is
 	// written to `[sizeOutPtr]` and the BOOL verdict is `result`. The OUT-PARAM shape (like `osReadClock`)
 	// rather than the direct-return one, because that is how the Win32 API answers: a 64-bit size cannot
 	// share RAX with a success flag.
 	osFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileDelete(result, pathPtr)` = `DeleteFileA(pathPtr)`, the BOOL in `result` (non-zero = deleted).
 	// The failure CLASSIFICATION is not here — `ManagedFileRuntime` reads `osLastError` and picks the
 	// variant, for the reason `osFileOpenRead` states.
 	osFileDelete(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileRename(result, oldPathPtr, newPathPtr)` = `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING |
 	// MOVEFILE_WRITE_THROUGH)`, the BOOL in `result`. Both flags are load-bearing: the atomic
 	// replace makes publishing the destination torn-read-safe, and write-through
 	// flushes the metadata so a crash straight after cannot lose the new name.
 	osFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileFindFirst(result, pathPtr, findDataPtr)` = `FindFirstFileA(pathPtr, findDataPtr)` — the search
 	// HANDLE (or `INVALID_HANDLE_VALUE`) in `result`, and the 320-byte `WIN32_FIND_DATAA` record written to
 	// `[findDataPtr]`. The caller owns that buffer and MUST `osFileFindClose` the handle.
@@ -1599,9 +1677,11 @@ export union StdOp
 	// `dwFileAttributes` word (is this a directory?). Importing a second entry point to ask a question this
 	// record already answers would be two ways to ask one thing — and they can disagree.
 	osFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileFindClose(handle)` = `FindClose(handle)`. No result, exactly as `osFileClose` has none and for
 	// the same reason: a close that fails leaves a caller nothing to do.
 	osFileFindClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- R4.3: the four primitives a DIRECTORY needs and a file does not ---
 	//
 	// All four carry `category: system`, placing them logically in the system band independent of this tail
@@ -1620,10 +1700,12 @@ export union StdOp
 	// yields the raw BOOL for the reason `osFileOpenRead` yields the raw handle: the errno arithmetic is the
 	// same on every platform even though the CALL is not, so a future POSIX lane supplies only the call.
 	osFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osDirCreate(result, pathPtr)` = `CreateDirectoryA(pathPtr, NULL)`, the BOOL in `result` (non-zero =
 	// created). The `lpSecurityAttributes` NULL is the only argument the op does not carry, exactly as
 	// `osFileOpenRead` does not carry its five fixed `CreateFileA` constants.
 	osDirCreate(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osDirCurrentPath(result, bufLen, bufPtr)` = `GetCurrentDirectoryA(bufLen, bufPtr)`.
 	//
 	// ⚠ **ITS RESULT HAS THREE MEANINGS, WHICH IS WHY THE RETRY LOOP IS IN BUILDER-BUILT Std AND NOT HERE.**
@@ -1632,6 +1714,7 @@ export union StdOp
 	// UNDEFINED and the call must be repeated. A backend that hid the loop would be making that decision
 	// three tiers below the only code that knows what to allocate.
 	osDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osFileAttributes(result, pathPtr)` = `GetFileAttributesA(pathPtr)` — the raw `dwFileAttributes` mask,
 	// or `INVALID_FILE_ATTRIBUTES` (`0xFFFFFFFF`) when the path names nothing.
 	//
@@ -1643,6 +1726,7 @@ export union StdOp
 	// handle the caller would then have to `FindClose`, so routing it through the find record would COST a
 	// search handle to answer "is this a directory?".
 	osFileAttributes(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
 	//
 	// `category: system` places it logically beside `osPanic`,
@@ -1658,6 +1742,7 @@ export union StdOp
 	// It shares `osPanic`'s metadata exactly: `isCall: true` so a caller reserves the shadow space the call
 	// needs, defines no value, and never returns.
 	osPanicValue(messagePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The COMMAND LINE ---
 	//
 	// `category: system` places it logically beside the file-IO band, independent of this tail position.
@@ -1681,6 +1766,7 @@ export union StdOp
 	// ⚠ It takes NO operands. `GetCommandLineA` reads the PEB, so there is nothing to pass and nothing that
 	// can differ between two calls in one process.
 	osCommandLine(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- STANDARD INPUT, and the PROCESS's OWN PATH (W5) ---
 	//
 	// `category: system` places both logically beside the file-IO band, independent of this tail position.
@@ -1701,6 +1787,7 @@ export union StdOp
 	// takes the PARENT's `STD_OUTPUT_HANDLE` into its STARTUPINFO, and one op that reads a selector is the honest
 	// shape where three ops differing only in an immediate would be three copies of one marshalling.
 	osStdHandle(resultId ValueId, whichId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osExecutablePath(result, bufLen, bufPtr)` — the running image's absolute path, written into the caller's
 	// buffer. `GetModuleFileNameA(NULL, bufPtr, bufLen)` on Windows; on arm64-macOS a runtime chunk over
 	// `_NSGetExecutablePath` + `realpath` (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`, which carries
@@ -1728,6 +1815,7 @@ export union StdOp
 	// loops, and the classification would be invisible to every pass between here and the encoder. Each
 	// backend translates its own convention into this op's, and the doubling walk above stays one graph.
 	osExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- W35: the OTHER standard stream ---
 	//
 	// `category: system` places it logically beside `osWriteStdout`, independent of this tail
@@ -1745,6 +1833,7 @@ export union StdOp
 	// `X64Runtime.emitPrintString` against `StringRuntime.buildPrintString`: two unrelated mechanisms one
 	// letter apart.)
 	osWriteStderr(resultId ValueId, bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- STACK PROMOTION: the address of a record this frame owns outright ---
 	//
 	// Its `category` is `memory` (it computes an address, exactly as `globalAddr` does) and that
@@ -1778,6 +1867,7 @@ export union StdOp
 	// `promoteStackRecords` therefore does nothing on that target, and `StdToWasm`'s arms panic rather than
 	// guess.
 	stackRecordAddr(resultId ValueId, slot SpillSlot) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- The DebugStream PRODUCER's three host primitives (Workstream O3) ---
 	//
 	// ⭐ Their `category: system` places them logically in the OS band, independent of this tail
@@ -1881,6 +1971,7 @@ export union StdOp
 	// says the non-zero value IS the kill-after deadline. Without it a timed-out spawn leaves a live child and a
 	// pipe nobody drains.
 	osProcessTerminate(handleId ValueId, exitCodeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The socket slice: the eight `ws2_32` primitives behind `__ManagedSocket` ---
 	//
 	//
@@ -1905,6 +1996,7 @@ export union StdOp
 	// a DNS query. ⛔ A guard would need a `.data` word and a compare-exchange; it is not written because
 	// nothing needs it, and that is different from it existing.
 	osSocketStartup(resultId ValueId, wsaDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketResolve(result, hostPtr, hintsPtr, outPtr)` = `getaddrinfo(hostPtr, NULL, hintsPtr, outPtr)`,
 	// the returned int in `result` (0 = success, anything else = resolution failed).
 	//
@@ -1916,10 +2008,12 @@ export union StdOp
 	// ⭐ **IT DOES NOT CLASSIFY ITS OWN FAILURE**, for `osFileOpenRead`'s stated reason: the
 	// `resolveFailed`-vs-`connectFailed` decision is made in builder-built Std by `ManagedSocketRuntime`.
 	osSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketFreeAddrInfo(addrInfoPtr)` = `freeaddrinfo(addrInfoPtr)`. No result — the call returns void, and
 	// it exists in the same slice as the resolve for `osFileClose`'s reason: a `getaddrinfo` with no matching
 	// free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
 	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, the raw SOCKET (or
 	// `INVALID_SOCKET`, -1) in `result`. NO value operands: all three arguments are fixed Win32 constants, so
 	// the op is a pure def in the shape `osReadClock`'s direct-return siblings use.
@@ -1929,22 +2023,27 @@ export union StdOp
 	// whose completions nothing drains is strictly worse than a blocking one. The async lane changes this op's
 	// lowering when it arrives, which is exactly why the flags are not operands.
 	osSocketCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
 	// in `result` (0 = success). The length is fixed because the caller always hands an IPv4 `sockaddr_in`;
 	// an IPv6 slice takes a length operand rather than widening this one silently.
 	osSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketSend(result, sock, bufPtr, len)` = `send(sock, bufPtr, len, 0)`, bytes sent (or
 	// `SOCKET_ERROR`, -1) in `result`. Flags are always 0; a partial send is a NORMAL answer the caller loops
 	// on, not a failure — `stdlib/TcpClient.send` documents exactly that loop.
 	osSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketRecv(result, sock, bufPtr, len)` = `recv(sock, bufPtr, len, 0)`, bytes received in `result`.
 	// ⭐ **ZERO IS A GRACEFUL PEER CLOSE, NOT AN ERROR** — `specs/managed-socket.md` says `recv` "Returns 0 if
 	// the peer closed gracefully", so only a negative answer is a failure. Keeping that split out of the op
 	// keeps it out of the backend.
 	osSocketRecv(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osSocketClose(sock)` = `closesocket(sock)`. No result: the int is ignored for `osFileClose`'s reason —
 	// a close that fails leaves nothing a caller could do, and `close()` is documented as non-throwing.
 	osSocketClose(sockId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The MACHINE query behind `__Builtins.cpuCount()` ---
 	//
 	// Its `category: system` places it logically in the system band, independent of this tail
@@ -1983,6 +2082,7 @@ export union StdOp
 	// a stub would be a silent wrong answer about the machine on a lane that cannot ask it. Full call-barrier
 	// metadata: it IS an indirect call once lowered.
 	osCpuCount(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The THREAD-CPU clock behind `__Builtins.threadCpuTicks()` ---
 	//
 	// Its `category: system` places it logically in the system band, independent of this tail
@@ -2027,6 +2127,7 @@ export union StdOp
 	// A stub would be a silent wrong answer about a cost, on a lane that cannot ask for it. Full
 	// call-barrier metadata: it IS an indirect call once lowered.
 	osThreadCpuTicks(handleId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- F1a: the DECOMMIT an OS-direct allocation and a scavenger need ---
 	//
 	// It carries `category: system`, placing it logically in the system band independent of this
@@ -2068,6 +2169,7 @@ export union StdOp
 	// same choice for the same reason (`sysFault` is its separate, debug-only, mprotect path), so the asymmetry is
 	// deliberate rather than an omission — a decommitted range is simply not a range a caller may touch.
 	osDecommitPages(addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- F1b: the BYTE FILL the zeroing contract and the free poison both run on ---
 	//
 	// `category: memory` places it logically in the memory band, independent of this tail position. (F1c has
@@ -2108,6 +2210,7 @@ export union StdOp
 	// every heap-touching runtime body a prologue it does not need. `isMemory`/`isStore` are the true facts:
 	// it writes memory, so it must order against every load and store around it.
 	memFill(destId ValueId, byteCountId ValueId, value ParsedInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// --- F1c: RESERVE address space, and COMMIT a range inside a reservation ---
 	//
 	// Both carry `category: system`, placing them logically in the system band independent of this tail
@@ -2167,6 +2270,7 @@ export union StdOp
 	// and `isStore: true` because a commit replaces the contents of the range it names.
 	osCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	osReservePages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- F2: the ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
 	//
 	// All three carry `category: system`, placing them logically in the system band independent of
@@ -2226,6 +2330,7 @@ export union StdOp
 	// ZF, AArch64 leaves it in the flags the retry loop exits on — so a prior-value result would cost an
 	// EXTRA reload on both.
 	atomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// **`atomicRmw(result, addr, operand, opcode)`** — an atomic read-modify-write of the word at `addr`.
 	// ⚠ **`result` IS THE PRIOR VALUE**, the opposite convention to `atomicCas` above and the one every RMW
 	// instruction on both ISAs already answers in (`lock xadd` leaves the prior value in its register
@@ -2238,6 +2343,7 @@ export union StdOp
 	// instruction on both ISAs (`lock xadd DWORD`, `LDAXR W`) and a different alignment obligation, and
 	// nothing the compiler emits has a sub-word counter; the day one does, the width is a field appended here.
 	atomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// **`currentThreadToken(result)`** — a per-OS-thread-stable, **NON-ZERO** identity word. Two live
 	// consumers are already visible for it and they are the reason it is ONE op rather than each site's own
 	// inline sequence: a recursive lock's OWNER field, read in both `__slab_lock_acquire` and
@@ -2285,6 +2391,7 @@ export union StdOp
 	// nothing calls this a second time, which is why there is no matching `TlsFree` op — the slot
 	// lives for the process.
 	tlsAlloc(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// **`tlsSetValue(index, value)`** = `TlsSetValue(index, value)` — publish this OS thread's P pointer.
 	// ⚠ **THE WRITE IS AN API CALL WHERE THE READ IS TWO LOADS, AND THAT ASYMMETRY IS DELIBERATE.** The
 	// `gs:`-relative read below is only valid for the first 64 slots; `TlsSetValue` is valid for every slot
@@ -2292,6 +2399,7 @@ export union StdOp
 	// in the whole program's life (once in `__gt_init`, once per worker entry), so it is the cold
 	// half and buys correctness for nothing.
 	tlsSetValue(indexId ValueId, valueId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// **`tlsSlotLoad(result, tebOffset)`** — read this OS thread's TLS slot: `mov result, gs:[tebOffset]`,
 	// where `tebOffset` is the PRECOMPUTED `index * 8 + 0x1480` a caller loaded from a `.data` word. TWO
 	// LOADS AND NO CALL, which is the whole point: `TlsGetValue` is an exported function with a range check,
@@ -2314,6 +2422,7 @@ export union StdOp
 	// this op would sit INVISIBLY between an arm64 compare and its fused `b.cond` and the branch would
 	// read the gate's flags instead of the compare's.
 	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
 	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
 	//
@@ -2323,6 +2432,7 @@ export union StdOp
 	// the worker loop — would put the scheduler's newest logic in the one form that gets no register
 	// allocation and no frame checking.
 	osSetEvent(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The PROCESS-PRIORITY door behind `__Builtins.enterBackgroundPriority()` ---
 	//
 	// Its `category: system` places it logically in the system band, independent
@@ -2366,6 +2476,7 @@ export union StdOp
 	// `ProcessRuntime.ProcessBackgroundPriorityName` explicitly, ahead of the `__proc_` band the other two
 	// reach by prefix. Full call-barrier metadata: it IS two indirect calls once lowered, on both lanes.
 	osEnterBackgroundPriority(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	//
 	// ⭐⭐ **`osFileOpenWriteExecutable(result, pathPtr)` — `osFileOpenWrite` WITH THE EXECUTE BITS (MAC4).**
 	// It is `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)` on Windows, byte for byte the same call
@@ -2385,6 +2496,7 @@ export union StdOp
 	// target-specific number. Two ops, each naming an INTENT, leaves each backend to spell that intent in
 	// its own vocabulary.
 	osFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The WHOLE environment, which `osEnvRead` cannot reach ---
 	//
 	// Both carry `category: system`, placing them logically in the system band independent of this tail
@@ -2422,6 +2534,7 @@ export union StdOp
 	// Full call-barrier metadata: both ARE indirect calls once lowered.
 	osEnvBlock(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 	osEnvBlockFree(blockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The ORDERED memory band (G3) — the one publication a second OS thread reads ---
 	//
 	// Both carry `category: memory`, placing them logically beside `loadIndirect`/`storeIndirect`
@@ -2462,6 +2575,7 @@ export union StdOp
 	// false` is exact on both lanes: `mov`, `STLR` and `LDAR` write no condition flags.
 	loadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	storeRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// --- WHAT KIND OF OBJECT IS THIS STANDARD-STREAM HANDLE? ---
 	//
 	// It carries `category: system`, placing it logically in the system band independent of this
@@ -2491,6 +2605,7 @@ export union StdOp
 	// position rather than `osEnvRead`'s. Every other call-barrier flag is set: it IS an indirect call once
 	// lowered.
 	osHandleFileType(resultId ValueId, handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- The CONSUMER's half of a named section: CREATE one, and give a mapping back ---
 	//
 	// Both carry `category: system`, placing them logically in the OS band independent of this tail
@@ -2508,6 +2623,7 @@ export union StdOp
 	// `osMapNamedSegment`, which takes a HANDLE and so serves a created section exactly as it serves an
 	// opened one.
 	osCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// `osUnmapNamedSegment(base, size)` = `UnmapViewOfFile(base)` / `munmap(base, size)`. No result — the
 	// status is ignored for `osCloseHandle`'s reason.
 	//
@@ -2519,6 +2635,7 @@ export union StdOp
 	// from the base alone and the operand is dead in its lowering; `munmap` is given one and there is no other
 	// party that knows it — the SEGMENT holds the size, and this op is how it reaches the call.
 	osUnmapNamedSegment(baseId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// ⭐⭐ **`osUnpublishNamedSegment(namePtr)` — REMOVE THE PUBLISHED NAME. THE ONE STEP WIN32 DOES FOR FREE
 	// AND POSIX DOES NOT.** A Win32 section object is refcounted by its handles and views: the last
 	// `CloseHandle` takes the name with it. A POSIX shared object OUTLIVES every descriptor and every
@@ -2535,6 +2652,7 @@ export union StdOp
 	// monitor has published it; a child that unpublished on exit would leave a second child with nothing
 	// to open. `stdlib/SharedMemory.maxon` is the creating end and the only caller.
 	osUnpublishNamedSegment(namePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// ⭐⭐ **ONE `--coverage` COUNTER INCREMENT: `counters[pointId] = counters[pointId] + 1`, ATOMICALLY,
 	// NAMING NO VALUE.** `pointId` is the whole-program counter slot (`Project.covPoints`), so the op needs
 	// no address operand and no result — the address is a link-time constant and the increment is
@@ -2564,6 +2682,7 @@ export union StdOp
 	// ⭐ `isUnsupportedInInlineBody: true` because a spliced callee body would give ONE `pointId` N distinct
 	// code offsets, and the sidecar record holds exactly one.
 	covPoint(pointId CovPointId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+
 	// ⭐⭐⭐ **THE SAMPLING PROFILER'S WHOLE HOST SURFACE, AS ONE FAMILY OP.**
 	// `osHostSample(result, service, a0…a5) -> the host call's own answer in the result register`, where
 	// `service` is what is wanted (`ProfileHostCall`) and never the import that serves it. Its `category: system`
@@ -2618,6 +2737,7 @@ export enum SyscallClass
 	// May block for an unbounded time on something OUTSIDE the scheduler — a device, a peer, a child, a user.
 	// BRACKETED: `__sysmon` may take this machine's processor away while the call is in flight.
 	blocking
+
 	// Blocks only on the scheduler's own machinery, or is bounded and short. NOT bracketed.
 	schedulerBound
 end 'SyscallClass'
@@ -2670,12 +2790,14 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osWriteStdout gives SyscallClass.blocking
 		osWriteStderr gives SyscallClass.blocking
 		osWriteFile gives SyscallClass.blocking
+
 		// ⭐⭐ **THE READS ARE THIS BRACKET'S SUBJECT.** `__con_read_stdin` is a plain synchronous read of
 		// standard input with no park (`ConsoleRuntime`), so a green thread inside it holds its OS thread in
 		// the kernel until the user presses return — which is what `specs/sched-syscall-handoff.md`'s
 		// ordering case measures. The overlapped spelling completes synchronously on every POSIX lane.
 		osReadFile gives SyscallClass.blocking
 		osReadOverlapped gives SyscallClass.blocking
+
 		// The file-system family. Every one of them can reach a cold disk, a network share or a stalled device.
 		osFileOpenRead gives SyscallClass.blocking
 		osFileOpenWrite gives SyscallClass.blocking
@@ -2688,15 +2810,18 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osDirCreate gives SyscallClass.blocking
 		osDirCurrentPath gives SyscallClass.blocking
 		osFileAttributes gives SyscallClass.blocking
+
 		// The file-MAPPING pair, which fault pages in from the same devices.
 		osOpenNamedSegment gives SyscallClass.blocking
 		osMapNamedSegment gives SyscallClass.blocking
+
 		// Spawning a child image, making a pipe and peeking a child's pipe all wait on another process.
 		osProcessSpawn gives SyscallClass.blocking
 		osProcessSpawnInherit gives SyscallClass.blocking
 		osPipeCreate gives SyscallClass.blocking
 		osPipeCreateOutbound gives SyscallClass.blocking
 		osPipePeek gives SyscallClass.blocking
+
 		// The socket family. Resolution waits on DNS, `connect`/`send`/`recv` on a peer, the close on whatever
 		// linger was set to, and the startup loads and initialises the provider stack.
 		osSocketStartup gives SyscallClass.blocking
@@ -2713,6 +2838,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osLockInit gives SyscallClass.schedulerBound
 		osLockEnter gives SyscallClass.schedulerBound
 		osLockLeave gives SyscallClass.schedulerBound
+
 		// ⛔⛔ **THE THREE WAITS ARE A SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
 		// reached ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
 		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
@@ -2731,17 +2857,20 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osWaitHandle gives SyscallClass.schedulerBound
 		osWaitHandles gives SyscallClass.schedulerBound
 		osSleepMs gives SyscallClass.schedulerBound
+
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages gives SyscallClass.schedulerBound
 		osFreePages gives SyscallClass.schedulerBound
 		osCommitPages gives SyscallClass.schedulerBound
 		osReservePages gives SyscallClass.schedulerBound
 		osDecommitPages gives SyscallClass.schedulerBound
+
 		// Process teardown and the two panics: they do not return, so there is nothing to hand a processor back
 		// to.
 		osExit gives SyscallClass.schedulerBound
 		osPanic gives SyscallClass.schedulerBound
 		osPanicValue gives SyscallClass.schedulerBound
+
 		// The clocks, the handles, the events and the machine queries: bounded and short, every one.
 		osReadClock gives SyscallClass.schedulerBound
 		osReadWallClock gives SyscallClass.schedulerBound
@@ -2750,6 +2879,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osCpuCount gives SyscallClass.schedulerBound
 		osGetPid gives SyscallClass.schedulerBound
 		osStdHandle gives SyscallClass.schedulerBound
+
 		// ⚠ A "file" op that is NOT in the blocking family above, and the distinction is the ARGUMENT: the
 		// path-taking `osFileAttributes` can reach a cold disk, while this one answers the type of an
 		// ALREADY-OPEN handle out of the file object the kernel is holding.
@@ -2763,6 +2893,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osLastError gives SyscallClass.schedulerBound
 		osEventCreate gives SyscallClass.schedulerBound
 		osSetEvent gives SyscallClass.schedulerBound
+
 		// ⚠ **`osThreadCreate` IS THE ONE THAT LOOKS LIKE IT BELONGS ABOVE AND DOES NOT.** Its only emitter is
 		// `__sched_startm`'s spawn arm, which runs INSIDE `__sched_lock` — so bracketing it would be this
 		// header's deadlock reached by a second road. It is bounded in any case: creating a thread commits a
@@ -2770,6 +2901,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osThreadCreate gives SyscallClass.schedulerBound
 		osProcessExitCode gives SyscallClass.schedulerBound
 		osProcessTerminate gives SyscallClass.schedulerBound
+
 		// ⚠ Freeing an address-info list walks a structure this process already holds; the RESOLUTION that
 		// filled it is the blocking half, and it is classified as such above.
 		osSocketFreeAddrInfo gives SyscallClass.schedulerBound
@@ -2782,16 +2914,20 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		tlsAlloc gives SyscallClass.schedulerBound
 		tlsSetValue gives SyscallClass.schedulerBound
 		tlsSlotLoad gives SyscallClass.schedulerBound
+
 		// A section CREATE reaches the memory manager and can touch the page file, exactly as the OPEN and the
 		// MAP above it do; the UNMAP tears a mapping down without waiting on anything, which is `osCloseHandle`'s
 		// position.
 		osCreateNamedSegment gives SyscallClass.blocking
+
 		// The unmap tears a mapping down and the unpublish removes a directory entry; neither waits on
 		// anything, which is `osCloseHandle`'s position.
 		osUnmapNamedSegment or
 			osUnpublishNamedSegment gives SyscallClass.schedulerBound
+
 		// A counter increment enters no kernel at all — it is one atomic instruction against a fixed address.
 		covPoint gives SyscallClass.schedulerBound
+
 		// ⚠ **ONE OP, THIRTEEN SERVICES, SO THE ANSWER MUST BE THE WIDEST MEMBER'S.** Copying a stack window
 		// out of a suspended thread can fault a paged-out page and a module walk reads another process's
 		// loader data, both of which are `osMapNamedSegment`'s position; the thread-control and timer
@@ -2829,14 +2965,19 @@ export enum StdArithShape
 	// No arithmetic at all: a terminator, a call, a memory access, an address, an OS primitive, or one
 	// of the two trapping divisions. Nothing any arithmetic pass acts on.
 	neither
+
 	// A `binOp` — `lhs`, `rhs`, `opcode` and `operandType` are meaningful.
 	binaryArith
+
 	// A `cmp` — `lhs`, `rhs`, `pred` and `operandType` are meaningful.
 	comparison
+
 	// A `unaryOp` — `lhs` (the one operand), `unaryOpcode` and `operandType` are meaningful.
 	unary
+
 	// A `binOpImm` — `lhs`, `imm`, `opcode` and `operandType` are meaningful.
 	binaryArithImm
+
 	// A `cmpImm` — `lhs`, `imm`, `pred` and `operandType` are meaningful.
 	comparisonImm
 end 'StdArithShape'
@@ -2847,19 +2988,26 @@ export type StdArithOperands
 	// real opcode and `StdCmpPred.eq` a real predicate. Every reader asks a `shape` predicate first.
 	var shape as StdArithShape
 	export var resultId as ValueId
+
 	// The FIRST value operand, and the only one a `unary` or an immediate form has.
 	export var lhs as ValueId
+
 	// The SECOND value operand — `binaryArith` and `comparison` only (`hasSecondValueOperand`).
 	export var rhs as ValueId
+
 	// `binaryArith` and `binaryArithImm`.
 	export var opcode as StdBinOpcode
+
 	// `comparison` and `comparisonImm`.
 	export var pred as StdCmpPred
+
 	// `unary` only.
 	export var unaryOpcode as StdUnaryOpcode
+
 	// The two IMMEDIATE forms only — an ENCODED LITERAL, not a value operand, which is why
 	// `remapOperandsThrough` leaves it alone and `computesSameValueAs` compares it directly.
 	export var imm as Imm32
+
 	// Set by EVERY shape: it is the type the operation READS, and it is what tells a pass whether this
 	// is float arithmetic (which the two fold passes may not touch — see each pass's own float guard).
 	export var operandType as StdType
@@ -3064,12 +3212,14 @@ export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		shl or
 			shr or
 			shrLogical gives false
+
 		// EC18 — `mulhi(a, b)` is `mulhi(b, a)`: the 128-bit product is commutative and taking its top
 		// half does not change that. ⚠ Answering it here costs `commutesForCoalescing` nothing, because
 		// that reader asks `integerBinOpIsTwoAddress` as well and x64's `imul r/m64` is a FIXED-REGISTER
 		// form rather than a two-address one — so no swap is ever taken on this opcode today. The answer
 		// is still the opcode's own, and stating it any other way would make this roster lie.
 		mulHighSigned gives true
+
 		// The three FLOAT-ONLY opcodes:
 		//   • `div` — `a / b` is not `b / a`.
 		//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when
@@ -3093,11 +3243,13 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
 		unaryOp(resultId, operand, opcode, operandType) then operands.recordUnaryOp(resultId, only: operand, unaryOpcodeRead: opcode, readType: operandType)
 		cmp(resultId, lhs, rhs, pred, operandType) then operands.recordCmp(resultId, left: lhs, right: rhs, cmpPred: pred, readType: operandType)
+
 		// The IMMEDIATE forms — what `foldConstOperands` PRODUCES, which is why that pass cannot want
 		// them as INPUT (its question, "is an operand a const?", has no second operand to ask it of).
 		// They are still real arithmetic, and CSE reads them as such.
 		binOpImm(resultId, lhs, imm, opcode, operandType) then operands.recordBinOpImm(resultId, left: lhs, immediate: imm, binOpcode: opcode, readType: operandType)
 		cmpImm(resultId, lhs, imm, pred, operandType) then operands.recordCmpImm(resultId, left: lhs, immediate: imm, cmpPred: pred, readType: operandType)
+
 		// Everything from the two DIVISIONS to the end of the union. Two bands are worth naming, because
 		// each is excluded for its OWN reason rather than by falling off the end of the list:
 		//   • `div`/`mod` — `isPure: false`. x64 `idiv` faults on a zero divisor and on `i64.min / -1`,
@@ -3202,6 +3354,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osFileOpenWriteExecutable then operands.recordNeither()
 		osEnvBlock or
 			osEnvBlockFree then operands.recordNeither()
+
 		// The ordered memory band (G3) — memory accesses, so no arithmetic shape, exactly as their plain
 		// twins have none.
 		loadAcquire or
@@ -3248,6 +3401,7 @@ end 'requireArithOpIsPure'
 module type StdLoadOperands
 	var load as bool
 	export var resultId as ValueId
+
 	// The ADDRESS the load reads through. `offset` is a field displacement from it, never a separate
 	// value — which is what lets a reader compare two loads through one address by offset alone.
 	export var addrId as ValueId
@@ -3398,6 +3552,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		osFileOpenWriteExecutable then load.recordNotALoad()
 		osEnvBlock or
 			osEnvBlockFree then load.recordNotALoad()
+
 		// ⛔⛔ **AN ACQUIRE LOAD IS `recordNotALoad`, AND THAT IS THE WHOLE POINT OF IT.** This classifier's
 		// one reader is `loopInvariantCodeMotion`, which HOISTS a load whose address the loop does not
 		// write. A green thread's status word is written by another OS THREAD, never by the loop that spins
@@ -3442,6 +3597,7 @@ let sharedEmptyUseIds = ValueIdArray.create()
 
 export type StdValueUseSet
 	var member as BoolArray
+
 	// ⭐ THE SECOND READING THE SAME WALK CAN GIVE: which ids were inserted MORE THAN ONCE — "this
 	// value has another reader", which is the admission test of every fold that CONSUMES a value
 	// rather than merely reading it (EC16's scaled-index address is the first).
@@ -3457,6 +3613,7 @@ export type StdValueUseSet
 	// thing the instrument exists to prevent, not because it is large.
 	var tracksRepeats as bool
 	var repeated as BoolArray
+
 	// ⭐⭐ THE THIRD READING THE SAME WALK CAN GIVE: WHICH ids were inserted, in first-insertion order —
 	// the question a dense membership column cannot answer without scanning the whole value space. It is
 	// what a caller that REFILLS ONE SET PER OP needs, and it buys two things:
@@ -3498,6 +3655,7 @@ export type StdValueUseSet
 		if self.recordsIds 'sparse'
 			for id in self.insertedIds 'eachInserted'
 				try self.member.set(id, value: false) otherwise panic("StdValueUseSet.clear: member.set OOB at {id} against a column of {self.member.count()} — every recorded id was inserted, and `insert` grows the column to hold it")
+
 				if id < self.repeated.count() 'alsoCounted'
 					try self.repeated.set(id, value: false) otherwise panic("StdValueUseSet.clear: repeated.set OOB at {id} after a bounds test")
 				end 'alsoCounted'
@@ -3522,9 +3680,11 @@ export type StdValueUseSet
 		if not self.tracksRepeats 'notCounting'
 			panic("StdValueUseSet.containsRepeat: this set was built by `create()`, which records membership only — a reader that needs multiplicity must build it with `createTrackingRepeats()`")
 		end 'notCounting'
+
 		if valueId >= self.repeated.count() 'neverRepeated'
 			return false
 		end 'neverRepeated'
+
 		return try self.repeated.get(valueId) otherwise panic("StdValueUseSet.containsRepeat: repeated.get OOB at {valueId}")
 	end 'containsRepeat'
 
@@ -3552,6 +3712,7 @@ export type StdValueUseSet
 		if valueId >= self.member.count() 'neverInserted'
 			return false
 		end 'neverInserted'
+
 		return try self.member.get(valueId) otherwise panic("StdValueUseSet.contains: member.get OOB at {valueId}")
 	end 'contains'
 
@@ -3564,6 +3725,7 @@ export type StdValueUseSet
 		if not self.recordsIds 'notRecording'
 			panic("StdValueUseSet.insertedIdCount: this set was built by `create()`, which records membership only — a reader that needs the ids themselves must build it with `createRecordingIds()`")
 		end 'notRecording'
+
 		return self.insertedIds.count()
 	end 'insertedIdCount'
 
@@ -3571,6 +3733,7 @@ export type StdValueUseSet
 		if not self.recordsIds 'notRecording'
 			panic("StdValueUseSet.insertedIdAt: this set was built by `create()`, which records membership only — a reader that needs the ids themselves must build it with `createRecordingIds()`")
 		end 'notRecording'
+
 		return try self.insertedIds.get(position) otherwise panic("StdValueUseSet.insertedIdAt: insertedIds.get OOB at {position} against a column of {self.insertedIds.count()}")
 	end 'insertedIdAt'
 
@@ -3584,6 +3747,7 @@ export type StdValueUseSet
 		if self.recordsIds 'sparse'
 			return self.insertedIds.count() == 0
 		end 'sparse'
+
 		return self.member.count() == 0
 	end 'isEmpty'
 end 'StdValueUseSet'
@@ -3643,39 +3807,51 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		param then break 'u'
 		call(_, _, args) then insertUseArgs(referenced, args: args)
 		retVoid then break 'u'
+
 		// `globalAddr` reads nothing — its `label` is a NAME, not a value, so it has no
 		// operand at all (its result is a def). The other two read the address they are
 		// handed, and a store reads the value it writes as well.
 		globalAddr then break 'u'
 		loadIndirect(_, addrId, _, _) then referenced.insert(addrId)
 		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
+
 		// The size is a real value operand — the only one this op reads; its result is a def.
 		osAllocPages(_, sizeId) then referenced.insert(sizeId)
+
 		// Both the buffer and the length are real value operands; the byte count is a def.
 		osWriteStdout(_, bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
+
 		// `rdataAddr` reads nothing — its `label` is a NAME, not a value (its result is a def), exactly
 		// like `globalAddr`.
 		rdataAddr then break 'u'
+
 		// A throwing call reads its arguments exactly as `call` does; `resultId`/`errorFlagId` are DEFS.
 		tryCall(_, _, _, args) then insertUseArgs(referenced, args: args)
+
 		// The dual-register terminator reads BOTH the primary value and the error flag it writes out.
 		errorReturn(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+
 		// The exit code is the one value operand `osExit` reads.
 		osExit(codeId) then referenced.insert(codeId)
+
 		// `funcAddr` reads nothing — its `funcName` is a NAME, not a value (its result is a def), exactly
 		// like `globalAddr`/`rdataAddr`.
 		funcAddr then break 'u'
+
 		// An indirect call reads the callee register AND its arguments; `resultId` is a def, and
 		// `resultType`/`argFloatMask` are metadata (not value operands).
 		callIndirect(_, calleeReg, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
+
 		// A range panic reads nothing — its `label` is a NAME (an `.rdata` symbol), not a value, and it
 		// defines nothing.
 		osPanic then break 'u'
+
 		// Both out-param ADDRESSES are real value operands (the builder's `globalAddr` results); this op
 		// defines nothing. The `ms` count is the one value `osSleepMs` reads. Both must be reported here or
 		// the allocator would free the address/count registers early and the OS call would read garbage.
 		osReadClock(ticksPtrId, freqPtrId) then insertUsePair(referenced, a: ticksPtrId, b: freqPtrId)
 		osSleepMs(msId) then referenced.insert(msId)
+
 		// P1.5 subprocess: each reads its operands and (except `osWaitHandle`) defines nothing. `osWaitHandle`'s
 		// `resultId` is a DEF, so it is skipped here exactly as `osAllocPages`'s result id is.
 		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
@@ -3683,23 +3859,29 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
 		osCloseHandle(handle) then referenced.insert(handle)
 		osWaitHandle(_, handle, timeoutMs) then insertUsePair(referenced, a: handle, b: timeoutMs)
+
 		// The region base AND its length are both value operands; it defines nothing (like `osExit`/`osCloseHandle`).
 		// The size is reported even though x64-windows reads it nowhere — this set is target-neutral, and a POSIX
 		// `munmap` would find its length register freed early if it were not.
 		osFreePages(addr, size) then insertUsePair(referenced, a: addr, b: size)
+
 		// The assembled message's address is the one value operand a rendered panic reads; it defines
 		// nothing (the label-carrying `osPanic` reads nothing at all).
 		osPanicValue(messagePtr) then referenced.insert(messagePtr)
+
 		// No operands: `GetCommandLineA` reads the PEB.
 		osCommandLine then break 'u'
+
 		// The jump table reads ONLY the biased index `subjectId`; `denseTargetBlockIds`/`defaultBlockId` are
 		// block ids (the CFG, carried on the op), NOT value operands, and are deliberately not bound here (a
 		// tail-slot Array binding in this big match is the decref-corruption trap `switch` documents).
 		switch(subjectId, _, _) then referenced.insert(subjectId)
+
 		// A witness call reads the WITNESS-TABLE ADDRESS and its arguments — the exact shape of `callIndirect`
 		// (`witnessAddr` in place of the callee register), so it reports uses the same way. `resultId` is a def;
 		// `methodIndex`/`resultType`/`argFloatMask` are metadata (not value operands).
 		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+
 		// P1.5 dogfood slice 1a: each IOCP op reports its VALUE operands; its `resultId` (where present) is a DEF,
 		// skipped here exactly as `osWaitHandle`'s is. `osIocpCreate`/`osEventCreate`/`osLastError` read nothing (a
 		// pure result def, like `osAllocPages`'s but with no size operand).
@@ -3715,22 +3897,28 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
 		osCancelIo(handle, ovl) then insertUsePair(referenced, a: handle, b: ovl)
 		osGetPid then break 'u'
+
 		// P1.5 dogfood slice 1b: the streaming stdin pipe reads four value operands (its two out-pointers are
 		// still live operands); `osWriteFile` reads handle+buf+len+bytesOutPtr, its `resultId` a def skipped here.
 		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) then insertUseQuad(referenced, a: namePtr, b: saPtr, c: childReadPtr, d: parentWritePtr)
 		osWriteFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
+
 		// The out-param ADDRESS is the one value operand the wall-clock read has, and it must be reported or
 		// the allocator would free its register before the OS call writes through it — the same obligation
 		// `osReadClock`'s two addresses carry. It defines nothing.
 		osReadWallClock(ftPtr) then referenced.insert(ftPtr)
+
 		// P1.7a slice 2b-v: the THROWING witness call reads exactly what `witnessCall` reads — the witness-table
 		// address and its arguments — through the SAME helper. Both its results (`resultId`, `errorFlagId`) are
 		// defs, exactly as `tryCall`'s two are.
 		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+
 		// R4.1: the file OPEN reads its path BUFFER address; `resultId` is a def and is skipped here.
 		osFileOpenRead(_, pathPtr) then referenced.insert(pathPtr)
+
 		// The close reads its HANDLE and defines nothing.
 		osFileClose(handle) then referenced.insert(handle)
+
 		// R4.2. Each reads its VALUE operands (an out-param ADDRESS is a live operand for the reason
 		// `osReadWallClock`'s is: the allocator must not free its register before the OS writes through it);
 		// every `resultId` is a def and is skipped here.
@@ -3740,13 +3928,16 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osEnvBlock then break 'u'
 		osEnvBlockFree(blockPtr) then referenced.insert(blockPtr)
 		osHandleFileType(_, handle) then referenced.insert(handle)
+
 		// The name and the size are both genuine register reads the OS call needs; the create's `resultId` is a
 		// DEF, skipped here exactly as `osMapNamedSegment`'s is. The unmap reads the view base and defines nothing.
 		osCreateNamedSegment(_, namePtr, size) then insertUsePair(referenced, a: namePtr, b: size)
 		osUnmapNamedSegment(base, size) then insertUsePair(referenced, a: base, b: size)
 		osUnpublishNamedSegment(namePtr) then referenced.insert(namePtr)
+
 		// `pointId` is a counter SLOT, not a ValueId — the op reads no value at all.
 		covPoint then break 'u'
+
 		// All six argument words are genuine register reads the host call makes, whatever the service does
 		// with them; the `resultId` is a DEF, skipped here as every other call's is. `call` is a compile-time
 		// selector, not a value.
@@ -3760,25 +3951,31 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osDirCreate(_, pathPtr) then referenced.insert(pathPtr)
 		osDirCurrentPath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 		osFileAttributes(_, pathPtr) then referenced.insert(pathPtr)
+
 		// W5, widened at the subprocess rung. ⚠ **THIS ARM READ "No operands: the `STD_INPUT_HANDLE` selector
 		// is a backend immediate, so this reads nothing at all" — and the line beneath it already reported one.**
 		// The SELECTOR is a value operand now (`OutputDestination.inherit` asks for the other two streams), and
 		// reporting it is not optional: unreported, the allocator would free its register before `GetStdHandle`
 		// read it. Its `resultId` is a def and is skipped here.
 		osStdHandle(_, which) then referenced.insert(which)
+
 		// Both the buffer ADDRESS and the LENGTH are live value operands, for the reason `osDirCurrentPath`'s
 		// pair are: the allocator must not free either register before the OS writes through the first.
 		osExecutablePath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
+
 		// W35: `osWriteStdout`'s arm one stream over, and it reads exactly what that one reads.
 		osWriteStderr(_, bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
+
 		// A promoted record's address reads NOTHING — its `slot` is a frame index, not a value, exactly as
 		// `globalAddr`'s `label` is a name. Its `resultId` is a def.
 		stackRecordAddr then break 'u'
+
 		// O3: the segment open reads three pointers/counts, the map reads a handle and a size, and the tick
 		// read has no operand at all.
 		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osMapNamedSegment(_, handle, size) then insertUsePair(referenced, a: handle, b: size)
 		osTickCountMs then break 'u'
+
 		// The four attached-subprocess host primitives, each reporting exactly its VALUE operands; the two that
 		// answer in RAX (`osPipePeek`, `osEnvRead`) have `resultId` as a DEF, skipped here exactly as
 		// `osWaitHandle`'s is.
@@ -3786,6 +3983,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osPipePeek(_, handle, availPtr) then insertUsePair(referenced, a: handle, b: availPtr)
 		osEnvRead(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osProcessTerminate(handle, exitCode) then insertUsePair(referenced, a: handle, b: exitCode)
+
 		// The eight socket host primitives, each reporting exactly its VALUE operands; the six that answer in
 		// RAX have `resultId` as a DEF, skipped here exactly as `osPipePeek`'s is.
 		// ⚠ `osSocketCreate` reads NOTHING — its three arguments are fixed Win32 constants the lowering
@@ -3798,32 +3996,40 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSocketSend(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketRecv(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketClose(sock) then referenced.insert(sock)
+
 		// `osCpuCount` takes NO operands — it asks the host a question rather than reading a value, so it
 		// joins `osSocketCreate` and `osGetPid` as one of the few system ops with nothing to collect.
 		osCpuCount then break 'u'
+
 		// The out-param ADDRESS is the one value operand the thread-CPU read has, and it must be reported for
 		// `osReadWallClock`'s reason: the allocator would otherwise free its register before the OS call
 		// writes through it. It defines nothing.
 		osThreadCpuTicks(handle, outPtr) then insertUsePair(referenced, a: handle, b: outPtr)
+
 		// F1a: base and length are BOTH real value operands of the decommit — the same pair `osFreePages`
 		// reports, and reported for the same reason: the allocator would otherwise free the length's register
 		// before the OS call reads it.
 		osDecommitPages(addr, size) then insertUsePair(referenced, a: addr, b: size)
+
 		// F1b: the destination and the length are the two value operands a fill reads; the fill BYTE is a
 		// compile-time constant on the op, so it is not one. It defines nothing.
 		memFill(dest, byteCount, _) then insertUsePair(referenced, a: dest, b: byteCount)
+
 		// F1c: a commit reads base and length, for the decommit's reason; a reservation reads only the length,
 		// exactly as `osAllocPages` does. `resultId` is a DEF on both, so it is skipped here exactly as
 		// `osAllocPages`'s result id is.
 		osCommitPages(_, addr, size) then insertUsePair(referenced, a: addr, b: size)
 		osReservePages(_, sizeId) then referenced.insert(sizeId)
+
 		// F2: every operand of an atomic is a genuine value READ — the address, plus the words compared and
 		// stored — so all of them must be reported, or the allocator frees a register the instruction still
 		// needs. Each `resultId` is a DEF, reported by `stdOpDefinedValue` instead.
 		atomicCas(_, addr, expected, replacement) then insertUseTriple(referenced, a: addr, b: expected, c: replacement)
 		atomicRmw(_, addr, operand, _) then insertUsePair(referenced, a: addr, b: operand)
+
 		// The thread token reads no VALUE at all — its input is the OS thread it is asked on. It defines one.
 		currentThreadToken then break 'u'
+
 		// G1: `tlsAlloc` asks the OS for a slot and reads no value; the other three each read every operand
 		// they are given. `tlsSlotLoad`'s `tebOffset` is a genuine register read — it is the ADDRESS the `gs:`
 		// load indexes by — so omitting it would free a register the instruction still needs.
@@ -3831,9 +4037,11 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		tlsSetValue(index, value) then insertUsePair(referenced, a: index, b: value)
 		tlsSlotLoad(_, tebOffset) then referenced.insert(tebOffset)
 		osSetEvent(handle) then referenced.insert(handle)
+
 		// The priority door takes NO operands — it asks the OS to change this process and then asks what it
 		// became, exactly as `osCpuCount` asks a question rather than reading a value.
 		osEnterBackgroundPriority then break 'u'
+
 		// G3: the ordered band reads exactly what its plain twin reads — the address, plus the value a
 		// store writes. Both `resultId`s are DEFS, reported by `stdOpDefinedValue`.
 		loadAcquire(_, addrId, _, _) then referenced.insert(addrId)
@@ -3852,20 +4060,25 @@ end 'collectStdOpUses'
 // maximum def id is the maximum id, and a use can only name an id that some def already introduced.
 export function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
+
 		for arg in block.blockArgs 'eachArg'
 			maxId = maxValueId(maxId, other: arg.valueId)
 		end 'eachArg'
 	end 'eachBlock'
+
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
+
 		match stdOpDefinedValue(op) 'defines'
 			none then break 'defines'
 			defines(definedId) then maxId = maxValueId(maxId, other: definedId)
 			definesPair(first, second) then maxId = maxValueId(maxId, other: maxValueId(first, other: second))
 		end 'defines'
 	end 'eachOp'
+
 	return maxId + 1
 end 'nextFreeValueId'
 
@@ -3892,6 +4105,7 @@ end 'maxValueId'
 module union DefinedValueLookup
 	none
 	defines(valueId ValueId)
+
 	// ⭐⭐ **TWO DEFS, AND THE SECOND ONE IS WHY THIS ARM EXISTS — IT CLOSED A LATENT MISCOMPILE.**
 	// `tryCall`/`witnessTryCall` write a PRIMARY result AND an ERROR FLAG. Reported by the primary alone —
 	// which is what this reader used to do, in as many words — `nextFreeValueId` can return an id that a
@@ -3934,11 +4148,13 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		errorReturn or
 			osExit gives DefinedValueLookup.none
 		osAllocPages(resultId, _) gives DefinedValueLookup.defines(resultId)
+
 		// W35: a stream write DEFINES the byte count the OS reports — it used to define nothing, back when
 		// its one consumer was a void `print`.
 		osWriteStdout(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		funcAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
 		callIndirect(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+
 		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
 		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -3949,14 +4165,18 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 			osProcessExitCode or
 			osWaitHandles or
 			osCloseHandle gives DefinedValueLookup.none
+
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
 		osFreePages gives DefinedValueLookup.none
+
 		// The jump table defines no value — a terminator branches, it does not produce a result.
 		switch gives DefinedValueLookup.none
+
 		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
 		// throwing form defines that result AND an error flag, and reports BOTH — see `definesPair`.
 		witnessCall(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) gives DefinedValueLookup.definesPair(resultId, second: errorFlagId)
+
 		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
 		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
 		osPipeCreate gives DefinedValueLookup.none
@@ -3971,16 +4191,21 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osProcessSpawnInherit gives DefinedValueLookup.none
 		osCancelIo gives DefinedValueLookup.none
 		osGetPid(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound gives DefinedValueLookup.none
 		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+
 		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
 		osReadWallClock gives DefinedValueLookup.none
+
 		// R4.1: the file OPEN captures `CreateFileA`'s HANDLE out of RAX, so unlike the two reads above it
 		// DOES define a value — the direct-return shape, not the out-param one.
 		osFileOpenRead(resultId, _) gives DefinedValueLookup.defines(resultId)
+
 		// The close defines NOTHING — `CloseHandle`'s BOOL is ignored, so there is no result to capture.
 		osFileClose gives DefinedValueLookup.none
+
 		// R4.2. Split exactly as R4.1's pair is: the five ops whose Win32 entry point answers in RAX — a
 		// BOOL verdict or a search HANDLE — capture it; `osFileFindClose` discards `FindClose`'s BOOL for
 		// the reason `osFileClose` discards `CloseHandle`'s. The 64-bit answers of `osReadFile`/`osFileSize`
@@ -4001,6 +4226,7 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileFindFirst(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileFindClose gives DefinedValueLookup.none
+
 		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
 		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
 		// attribute mask. None has a void twin, so none takes `none`.
@@ -4008,28 +4234,35 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
+
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives DefinedValueLookup.none
 		osCommandLine(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
 		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
 		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
 		osStdHandle(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+
 		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
 		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+
 		// A promoted record's address is a def like `globalAddr`'s.
 		stackRecordAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+
 		// O3: each of the three defines the OS answer it captures from RAX.
 		osOpenNamedSegment(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osMapNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osTickCountMs(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// The four attached-subprocess host primitives: the two whose Win32 entry point answers in RAX capture
 		// it; the two whose BOOL is ignored define nothing, exactly as `osCloseHandle` does.
 		osHandleSetInherit gives DefinedValueLookup.none
 		osPipePeek(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osEnvRead(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osProcessTerminate gives DefinedValueLookup.none
+
 		// The eight socket host primitives: the six whose ws2_32 entry point answers in RAX capture it; the two
 		// whose answer is discarded define nothing, exactly as `osCloseHandle` does.
 		osSocketStartup(resultId, _) gives DefinedValueLookup.defines(resultId)
@@ -4041,22 +4274,28 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osSocketRecv(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osSocketClose gives DefinedValueLookup.none
 		osCpuCount(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// The thread-CPU read defines nothing — its answer lands in the caller's out-param word, exactly as
 		// the wall-clock read's does.
 		osThreadCpuTicks gives DefinedValueLookup.none
+
 		// F1a: the decommit defines no value. `VirtualFree`'s BOOL is discarded exactly as `osFreePages`
 		// discards it — a failed decommit leaves a caller nothing to do.
 		osDecommitPages gives DefinedValueLookup.none
+
 		// F1b: a fill defines no value — it is a store, and a store answers nothing.
 		memFill gives DefinedValueLookup.none
+
 		// F1c: both DO define one, and the definition is what makes the failure checkable — see the ops.
 		osCommitPages(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osReservePages(resultId, _) gives DefinedValueLookup.defines(resultId)
+
 		// F2: all three define their result — the CAS its SUCCESS BOOLEAN, the RMW the PRIOR value, the token
 		// the identity word. The two atomics carry OPPOSITE conventions; see each op for which and why.
 		atomicCas(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		atomicRmw(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		currentThreadToken(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// G1: the two READING ops define their answer (the slot index, the stored word); the two WRITING ones
 		// define nothing — `tlsSetValue` publishes into the OS thread's slot and `osSetEvent` into a kernel
 		// object, exactly as `osLockEnter`/`osLockLeave` do.
@@ -4065,6 +4304,7 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		tlsSlotLoad(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osSetEvent gives DefinedValueLookup.none
 		osEnterBackgroundPriority(resultId) gives DefinedValueLookup.defines(resultId)
+
 		// G3: the ordered load defines the word it read; the ordered store defines nothing — `loadIndirect`
 		// and `storeIndirect` exactly.
 		loadAcquire(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
@@ -4160,37 +4400,47 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		param gives op
 		call(resultId, callee, args) gives StdOp.call(resultId, callee: callee, args: remappedArgs(args, subst: subst))
 		retVoid gives op
+
 		// The exact mirror of `collectStdOpUses`'s three arms: `globalAddr` reports no use,
 		// so it rewrites nothing and is handed back unchanged.
 		globalAddr gives op
 		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(resultId, addrId: remappedValue(addrId, subst: subst), offset: offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
+
 		// The exact mirror of `collectStdOpUses`'s arm: the size is the one read, so it is the one rewrite.
 		osAllocPages(resultId, sizeId) gives StdOp.osAllocPages(resultId, sizeId: remappedValue(sizeId, subst: subst))
+
 		// The mirror of `collectStdOpUses`: both operands are reads, so both are rewritten; `resultId` is a
 		// def and is carried through unremapped, exactly as every other defining system op's is.
 		osWriteStdout(resultId, bufId, lenId) gives StdOp.osWriteStdout(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
+
 		// `rdataAddr` reports no use (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr` arms.
 		rdataAddr gives op
+
 		// The exact mirror of `collectStdOpUses`: `tryCall` rewrites its args (its two results are defs),
 		// `errorReturn` rewrites both operands it reads, `osExit` rewrites its code operand.
 		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: remappedArgs(args, subst: subst))
 		errorReturn(retValId, errorFlagId) gives StdOp.errorReturn(remappedValue(retValId, subst: subst), errorFlagId: remappedValue(errorFlagId, subst: subst))
 		osExit(codeId) gives StdOp.osExit(remappedValue(codeId, subst: subst))
+
 		// `funcAddr` reports no use (its `funcName` is a name), so it rewrites nothing and is handed back
 		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr`/`funcAddr` arms.
 		funcAddr gives op
+
 		// The exact mirror of `collectStdOpUses`: `callIndirect` rewrites its callee register and its args
 		// (its result is a def); `resultType`/`argFloatMask` are metadata carried through unchanged.
 		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
+
 		// `osPanic` reads no value (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the mirror of `funcAddr`/`rdataAddr`.
 		osPanic gives op
+
 		// The exact mirror of `collectStdOpUses`: `osReadClock` rewrites both out-param addresses it reads,
 		// `osSleepMs` rewrites its millisecond count. Both define nothing.
 		osReadClock(ticksPtrId, freqPtrId) gives StdOp.osReadClock(remappedValue(ticksPtrId, subst: subst), freqPtrId: remappedValue(freqPtrId, subst: subst))
 		osSleepMs(msId) gives StdOp.osSleepMs(remappedValue(msId, subst: subst))
+
 		// The exact mirror of `collectStdOpUses`'s subprocess arms: rewrite exactly the operands they read;
 		// `osWaitHandle`'s `resultId` is a def, so it passes through unmapped.
 		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
@@ -4198,19 +4448,23 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
 		osWaitHandle(resultId, handle, timeoutMs) gives StdOp.osWaitHandle(resultId, handleId: remappedValue(handle, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
+
 		// The exact mirror of `collectStdOpUses`'s arm: the base and the length are the two reads, so both are
 		// rewritten — including on x64-windows, where the length then lowers to nothing.
 		osFreePages(addr, size) gives StdOp.osFreePages(remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: subst))
 		osCommandLine(resultId) gives StdOp.osCommandLine(resultId)
+
 		// The exact mirror of `collectStdOpUses`'s `switch` arm: only the biased index `subjectId` is a value
 		// operand, so it is the one rewrite; the block-id table and default carry through verbatim. Binding
 		// the middle-slot Array is safe — a trailing non-Array field (`defaultBlockId`) follows it, exactly
 		// the condition that lets `call` bind its trailing args here.
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: subst), denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
+
 		// The exact mirror of `collectStdOpUses`'s `witnessCall` arm: rewrite the witness-table address and the
 		// args (its result is a def; `methodIndex`/`resultType`/`argFloatMask` are metadata carried through).
 		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
+
 		// The exact mirror of `collectStdOpUses`'s P1.5 IOCP arms: rewrite exactly the value operands they read;
 		// the result-only ops (`osIocpCreate`/`osEventCreate`/`osLastError`) rewrite nothing.
 		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst))
@@ -4225,19 +4479,24 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osGetPid gives op
+
 		// P1.5 dogfood slice 1b: the streaming stdin pipe + write, rewriting exactly the value operands they read.
 		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) gives StdOp.osPipeCreateOutbound(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), childReadPtrId: remappedValue(childReadPtr, subst: subst), parentWritePtrId: remappedValue(parentWritePtr, subst: subst))
 		osWriteFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osWriteFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
+
 		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
 		// one rewrite. It defines nothing.
 		osReadWallClock(ftPtr) gives StdOp.osReadWallClock(remappedValue(ftPtr, subst: subst))
+
 		// The exact mirror of `collectStdOpUses`'s `witnessTryCall` arm: rewrite the witness-table address and the
 		// args; both results are defs and every remaining field is metadata carried through.
 		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
+
 		// R4.1: rewrite the path buffer; `resultId` is a def and is carried through unremapped, exactly as
 		// every other defining system op's is.
 		osFileOpenRead(resultId, pathPtr) gives StdOp.osFileOpenRead(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileClose(handle) gives StdOp.osFileClose(remappedValue(handle, subst: subst))
+
 		// R4.2: the exact mirrors of `collectStdOpUses`'s seven arms — every value operand it reports read is
 		// rewritten here, and every `resultId` is a def carried through unremapped.
 		osReadFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osReadFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
@@ -4249,6 +4508,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osCreateNamedSegment(resultId, namePtr, size) gives StdOp.osCreateNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osUnmapNamedSegment(base, size) gives StdOp.osUnmapNamedSegment(remappedValue(base, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osUnpublishNamedSegment(namePtr) gives StdOp.osUnpublishNamedSegment(remappedValue(namePtr, subst: subst))
+
 		// Nothing to rewrite: a counter names no value. Re-minted rather than passed through, for the reason
 		// every arm here re-mints — a returned union must be this call's own box.
 		covPoint(pointId) gives StdOp.covPoint(pointId)
@@ -4262,20 +4522,25 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osDirCreate(resultId, pathPtr) gives StdOp.osDirCreate(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osDirCurrentPath(resultId, bufLen, bufPtr) gives StdOp.osDirCurrentPath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 		osFileAttributes(resultId, pathPtr) gives StdOp.osFileAttributes(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+
 		// W5. The exact mirrors of `collectStdOpUses`'s two arms: the handle read has no value operand to
 		// rewrite, and the path fill rewrites exactly the pair it reads.
 		osStdHandle(resultId, which) gives StdOp.osStdHandle(resultId, whichId: remappedValue(which, subst: subst))
 		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
+
 		// W35: `osWriteStdout`'s arm one stream over.
 		osWriteStderr(resultId, bufId, lenId) gives StdOp.osWriteStderr(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
+
 		// Reports no use (its `slot` is a frame index), so it rewrites nothing and is handed back unchanged —
 		// the mirror of `globalAddr`/`rdataAddr`/`funcAddr`.
 		stackRecordAddr gives op
+
 		// O3: the two operand-carrying primitives remap theirs; the tick read has none, so it is handed back
 		// unchanged like `stackRecordAddr` above.
 		osOpenNamedSegment(resultId, namePtr, bufPtr, bufLen) gives StdOp.osOpenNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), bufLenId: remappedValue(bufLen, subst: subst))
 		osMapNamedSegment(resultId, handle, size) gives StdOp.osMapNamedSegment(resultId, handleId: remappedValue(handle, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osTickCountMs gives op
+
 		// The exact mirror of `collectStdOpUses`'s four attached-subprocess arms: rewrite exactly the operands
 		// they read; both results are defs and pass through unmapped.
 		osHandleSetInherit(handle) gives StdOp.osHandleSetInherit(remappedValue(handle, subst: subst))
@@ -4290,26 +4555,33 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketSend(resultId, sock, bufPtr, len) gives StdOp.osSocketSend(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketRecv(resultId, sock, bufPtr, len) gives StdOp.osSocketRecv(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketClose(sock) gives StdOp.osSocketClose(remappedValue(sock, subst: subst))
+
 		// No operands to remap; the def is carried through unchanged, exactly as `osSocketCreate`'s is.
 		osCpuCount(resultId) gives StdOp.osCpuCount(resultId)
+
 		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
 		// one rewrite. It defines nothing.
 		osThreadCpuTicks(handle, outPtr) gives StdOp.osThreadCpuTicks(remappedValue(handle, subst: subst), outPtrId: remappedValue(outPtr, subst: subst))
+
 		// F1a: the exact mirror of `collectStdOpUses`'s arm — base and length are the reads, so both are the
 		// rewrites; the op defines nothing to carry through.
 		osDecommitPages(addr, size) gives StdOp.osDecommitPages(remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
+
 		// F1b: the exact mirror of `collectStdOpUses`'s arm — the destination and the length are the reads, so
 		// both are the rewrites, and the constant fill byte rides through untouched.
 		memFill(dest, byteCount, value) gives StdOp.memFill(remappedValue(dest, subst: subst), byteCountId: remappedValue(byteCount, subst: subst), value: value)
+
 		// F1c: the exact mirror of `collectStdOpUses`'s two arms — the reads are the rewrites, and each result id
 		// is a DEF carried through unchanged, exactly as `osAllocPages`'s is.
 		osCommitPages(resultId, addr, size) gives StdOp.osCommitPages(resultId, addrId: remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osReservePages(resultId, sizeId) gives StdOp.osReservePages(resultId, sizeId: remappedValue(sizeId, subst: subst))
+
 		// F2: the exact mirror of `collectStdOpUses`'s three arms — every read is a rewrite, each result id is
 		// a DEF carried through unchanged, and the RMW's opcode rides along untouched (it names no value).
 		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(resultId, addrId: remappedValue(addr, subst: subst), expectedId: remappedValue(expected, subst: subst), replacementId: remappedValue(replacement, subst: subst))
 		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(resultId, addrId: remappedValue(addr, subst: subst), operandId: remappedValue(operand, subst: subst), opcode: opcode)
 		currentThreadToken(resultId) gives StdOp.currentThreadToken(resultId)
+
 		// G1: the exact mirror of `collectStdOpUses`'s four arms — every read is a rewrite, every result id is
 		// a DEF carried through unchanged.
 		tlsAlloc(resultId) gives StdOp.tlsAlloc(resultId)
@@ -4317,6 +4589,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		tlsSlotLoad(resultId, tebOffset) gives StdOp.tlsSlotLoad(resultId, tebOffsetId: remappedValue(tebOffset, subst: subst))
 		osSetEvent(handle) gives StdOp.osSetEvent(remappedValue(handle, subst: subst))
 		osEnterBackgroundPriority(resultId) gives StdOp.osEnterBackgroundPriority(resultId)
+
 		// G3: the exact mirror of `collectStdOpUses`'s two arms — every read is a rewrite, the load's result
 		// id is a DEF carried through unchanged, and neither `offset` nor `valueType` names a value.
 		loadAcquire(resultId, addrId, offset, valueType) gives StdOp.loadAcquire(resultId, addrId: remappedValue(addrId, subst: subst), offset: offset, valueType: valueType)
@@ -4357,6 +4630,7 @@ end 'remappedValue'
 // a correctness requirement.
 module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, replacement ValueId)
 	var next = subst.count()
+
 	while next <= resultId 'grow'
 		subst.push(next)
 		next = next + 1
@@ -4367,9 +4641,11 @@ end 'recordValueSubstitution'
 
 function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
 	var out = ValueIdArray.create()
+
 	for a in args 'each'
 		out.push(remappedValue(a, subst: subst))
 	end 'each'
+
 	return out
 end 'remappedArgs'
 
@@ -4416,6 +4692,7 @@ function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valu
 	match stdOpDefinedValue(op) 'before'
 		none then requireClonedDefines(cloned, expected: DefinedValueLookup.none)
 		defines(v) then requireClonedDefines(cloned, expected: DefinedValueLookup.defines(clonedValue(v, subst: valueSubst)))
+
 		// A `tryCall`/`witnessTryCall` is the only two-def shape and `scanLeafBody` refuses a callee holding
 		// one, so the cloner never sees it — which is why it has no arm there and none here either.
 		definesPair then panic("remapStdOpForClone: a two-def op reached the cloner — only `tryCall` and `witnessTryCall` define a pair, and both are calls, which `scanLeafBody` refuses a callee for")
@@ -4466,9 +4743,11 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		mod(resultId, lhs, rhs, signedness) then return StdOp.mod(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, signedness: signedness)
 		condBranch(condId, thenBlockId, elseBlockId) then return StdOp.condBranch(condId, thenBlockId: clonedBlock(thenBlockId, subst: blockSubst), elseBlockId: clonedBlock(elseBlockId, subst: blockSubst))
 		branch(targetBlockId) then return StdOp.branch(clonedBlock(targetBlockId, subst: blockSubst))
+
 		// A return DEFINES nothing and names no block: the splice replaces it with a branch to the
 		// continuation rather than cloning it, and it reaches here only through a body op scan.
 		ret then return op
+
 		// A `param` is never copied (its value is the call site's argument) and a call of any kind
 		// disqualifies the callee, so neither can reach a clone.
 		param or
@@ -4548,6 +4827,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osSocketClose or
 			osCpuCount or
 			osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+
 		// The appended page/fill/atomic band (F1, F2) and the thread/TLS band (G1), placed consciously: the
 		// three `scanLeafBody` ADMITS are cloned like any body op — a fill defines nothing, the two atomics
 		// define their result — and the rest are `isUnsupportedInInlineBody` import calls it refuses.
@@ -4566,6 +4846,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
 		osEnvBlock or
 			osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+
 		// G3: cloned like their plain twins — an ordered load defines its result, an ordered store defines
 		// nothing. Inlining copies the op unchanged, which preserves its ordering with it.
 		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
@@ -4612,9 +4893,11 @@ end 'clonedBlock'
 // so a clone that reached only the default would leave every case arm branching into the callee.
 function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
 	var out = BlockIdArray.create()
+
 	for id in ids 'each'
 		out.push(clonedBlock(id, subst: subst))
 	end 'each'
+
 	return out
 end 'clonedBlocks'
 
@@ -4653,9 +4936,11 @@ module function substituteValuesInFunc(module StdModule, func IrFunction, subst 
 		end 'edgesUnchanged'
 
 		var newEdges = BranchEdgeArray.create()
+
 		for edge in pred.branchEdges 'eachEdge'
 			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
 		end 'eachEdge'
+
 		pred.branchEdges = newEdges
 	end 'eachPred'
 end 'substituteValuesInFunc'
@@ -4671,6 +4956,7 @@ function anyEdgeArgIsRemapped(block IrBlock, subst ValueIdArray) returns bool
 			end 'moved'
 		end 'eachArg'
 	end 'eachEdge'
+
 	return false
 end 'anyEdgeArgIsRemapped'
 
@@ -4706,6 +4992,7 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 		end 'nothingToRemove'
 
 		var kept = OpIndexArray.create()
+
 		for opIdx in block.opRefs 'eachRef'
 			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed) 'removed'
 				continue
@@ -4713,6 +5000,7 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 
 			kept.push(opIdx)
 		end 'eachRef'
+
 		block.opRefs = kept
 	end 'eachBlock'
 end 'removeOpsDefining'
@@ -4725,6 +5013,7 @@ function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdVal
 			return true
 		end 'found'
 	end 'eachRef'
+
 	return false
 end 'blockDefinesADoomedValue'
 
@@ -4733,6 +5022,7 @@ function opDefinesADoomedValue(module StdModule, opIdx OpIndex, doomed StdValueU
 	return match stdOpDefinedValue(op) 'defines'
 		none gives false
 		defines(valueId) gives doomed.contains(valueId)
+
 		// ⚠ A TWO-DEF op is a `tryCall`/`witnessTryCall` — a CALL, `isPure: false`, which no caller
 		// can doom (a const DCE retires `const`s and identity `binOpImm`s; CSE's roster answers `neither`
 		// for every call). It is CHECKED rather than assumed, because dooming ONE half of a pair would
@@ -4779,6 +5069,7 @@ export function assertNoSugarOps(module StdModule)
 	for func in module.functions 'eachFunc'
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("assertNoSugarOps: live op index {opIdx} not in module.ops")
+
 			if op.rawValue.category == StdOpCategory.sugar 'isSugar'
 				panic("Std→Target: a `sugar`-category StdOp survived into the backend in function '{String.from(func.name)}' — lowerToMachineForm did not run, or does not handle this op")
 			end 'isSugar'
@@ -4810,6 +5101,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 	end 'noTerminatorOp'
 
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectStdBlockSuccessorIds: the terminator of block {block.id} is not in module.ops")
+
 	match op 'term'
 		const or
 			binOp or

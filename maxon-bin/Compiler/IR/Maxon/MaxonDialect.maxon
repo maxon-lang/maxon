@@ -180,6 +180,7 @@ export union MaxonType
 	unresolved
 	structRef(id TypeNameId)
 	string
+
 	// A non-capturing FUNCTION VALUE (P1.5-A1) — a bare code pointer, no environment. `id` is the
 	// interned name that GOVERNS the value's signature: the FUNCTION's own name for a `functionRef`
 	// (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name for a declared
@@ -201,6 +202,7 @@ export union MaxonType
 	// carries no ownership: a code pointer is never allocated, refcounted or dropped.
 	//
 	function(id TypeNameId)
+
 	// A TYPE-PARAMETER reference (P1.6-A) — `T` inside `type Box uses T`. It is OPAQUE: a trivial
 	// type parameter lowers to an 8-byte machine word (`valueTagToStdType` → i64) exactly as
 	// `structRef`/`string`/`function` do, so a generic type's method bodies compile ONCE against `T`
@@ -212,12 +214,14 @@ export union MaxonType
 	// and a `T` result meet a concrete comparison.
 	//
 	typeParameter(id TypeParamId)
+
 	// A generic INSTANCE `Base with Args` (P1.6-A) — `Box with Integer`, the resolved form of a
 	// generic-instance typealias. It is a POINTER to the base struct's box (a machine word, i64), so
 	// a value of an instance type is a struct reference like any other. `id` keys the
 	// `GenericInstanceRegistry` for its `(baseId, argTypes)` payload (OUT OF LINE — see
 	// `GenericInstanceId`).
 	genericInstance(id GenericInstanceId)
+
 	// ⭐ **A `Character` — ONE EXTENDED GRAPHEME CLUSTER (P1.8 slice B).** Represented by the SAME fused
 	// 56-byte record a `String` is (`StringRuntime`'s layout), holding the cluster's UTF-8 bytes: a
 	// Character IS an owned byte range with a length, and the compiler has exactly one of those. That is why it
@@ -235,6 +239,7 @@ export union MaxonType
 	// (`valueTagToStdType` → i64) exactly as every other arm's is, so MaxonType stays width-free.
 	//
 	character
+
 	// ⭐⭐ **AN EXISTENTIAL — A VALUE HELD AT ITS INTERFACE TYPE (P1.7a-existentials slice 1).** `id` is the
 	// interned INTERFACE name (`Backend`), which is what the dispatch resolves its method slot against and
 	// what a widening checks conformance to.
@@ -259,6 +264,7 @@ export union MaxonType
 	// lines above.
 	//
 	interfaceRef(id TypeNameId)
+
 	// ⭐⭐ **`cstring` — A NUL-TERMINATED BYTE POINTER, AND ITS OWN TYPE BECAUSE A `__Builtins.*` PARAMETER
 	// DECLARES IT AND MUST REJECT AN ORDINARY INT.** It is a raw address — no length, no capacity, no
 	// ownership — and it LOWERS to the same machine word every other address does, so nothing about its
@@ -328,27 +334,34 @@ export enum ValueTypeTag
 	unresolved
 	void
 	structRef
+
 	// The tag of a `String` value — a pointer to the fused 56-byte record (see MaxonType's `string`
 	// arm for why it is not `named`).
 	string
+
 	// The tag of a non-capturing FUNCTION VALUE — a pointer to a `.text` code address (see MaxonType's
 	// `function` arm for why it is not `named`).
 	function
+
 	// The tag of a TYPE-PARAMETER value (P1.6-A) — a reference to `T` inside a generic type (see
 	// MaxonType's `typeParameter` arm). Opaque: it lowers to an i64 and agrees with any concrete type.
 	typeParameter
+
 	// The tag of a generic-INSTANCE value (P1.6-A) — a pointer to the base struct's box (see MaxonType's
 	// `genericInstance` arm). APPENDED AT THE END, past `typeParameter`.
 	genericInstance
+
 	// The tag of a `Character` value — one extended grapheme cluster, a pointer to the same fused
 	// byte record a String uses (see MaxonType's `character` arm for why it is not `string`).
 	// APPENDED AT THE END, past `genericInstance`, for the reason every other append here is.
 	character
+
 	// The tag of an EXISTENTIAL value — a value held at its interface type (see MaxonType's `interfaceRef`
 	// arm). It tags the fat pointer's VALUE half; the witness half is a second value paired with it
 	// (`Parser.valueWitnessIds`). APPENDED AT THE END, past `character`, for the reason every other append
 	// here is.
 	interfaceRef
+
 	// The tag of a `cstring` value — a NUL-terminated byte POINTER (see MaxonType's `cstring` arm for why it
 	// is not `integer`). APPENDED AT THE END, past `interfaceRef`, for the reason every other append here is.
 	cstring
@@ -389,11 +402,13 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 	return match t 'k'
 		named(id) gives id
 		structRef(id) gives id
+
 		// A function value's `id` is the interned NAME governing its signature (see MaxonType's
 		// `function` arm), so it rides the name column exactly as `named`/`structRef` do — which is
 		// what lets it intern, remap and hash by the same machinery. It is NOT collapsed into the
 		// `named to structRef` range: `exitCode`/`unresolved` and now `string` sit between them.
 		function(id) gives id
+
 		// A type-parameter reference and a generic instance both carry an id (a `(declaring type,
 		// parameter name)` DIGEST and a GenericInstanceId respectively, P1.6-A/W14); both ride the name
 		// column so a value of that type round-trips through `maxonTypeOfTag` — which is what makes the
@@ -406,15 +421,19 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 			float gives UnnamedTypeId
 		exitCode or
 			unresolved gives UnnamedTypeId
+
 		// A String is a builtin with no interned name — its identity is the `string` tag, not a name.
 		string gives UnnamedTypeId
+
 		// A Character is a builtin with no interned name either — its identity is the `character` tag.
 		character gives UnnamedTypeId
+
 		// An existential carries the interned INTERFACE name, so it rides the name column exactly as
 		// `named`/`structRef` do — which is what lets it intern, remap and hash by the same machinery, and
 		// what the dispatch resolves its method slot against. NOT collapsed into a range: other arms sit
 		// between it and every other id-bearing arm.
 		interfaceRef(id) gives id
+
 		// A `cstring` is a raw address and names no type — it carries no id, exactly as `string` does.
 		cstring gives UnnamedTypeId
 	end 'k'
@@ -493,11 +512,13 @@ export let NoGenericInstance = i64.max as GenericInstanceId
 // callee's `FuncSignature.paramTypes`).
 export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) returns ParamCount
 	var n = 0 as ParamCount
+
 	for pt in paramTypes 'each'
 		if maxonTypeTag(pt) == tag 'matches'
 			n = n + 1
 		end 'matches'
 	end 'each'
+
 	return n
 end 'countParamsWithTag'
 
@@ -540,19 +561,23 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		exitCode then return MaxonType.exitCode
 		unresolved then return MaxonType.unresolved
 		void then panic("maxonTypeOfTag: a `void` tag names no value, so there is no MaxonType to rebuild — a void call's result is only ever a discarded statement result (Parser.parseCall), never a bound value")
+
 		// A struct reference rebuilds from the same name column `named` does — the struct's name id
 		// IS what makes `p.x` resolvable, since it is what `Parser.emitFieldLoad` looks the layout up
 		// by. `Parser.parseBinding` is the caller that matters: `let p = Point.create(…)` types the
 		// binding from this, and the binding's type is the only record of WHICH struct `p` is.
 		structRef then return MaxonType.structRef(nameId)
+
 		// A String builtin rebuilds from the tag alone — it carries no name (its `nameId` is
 		// `UnnamedTypeId`). `Parser.parseBinding` is the caller that matters: `let s = "hello"` types
 		// the binding from this.
 		string then return MaxonType.string
+
 		// A function value rebuilds from its governing name id — the FUNCTION's own name (functionRef)
 		// or a function-typealias name (declared place). `Parser.parseBinding` is the caller that
 		// matters: `let f = double` types the binding from this so `f(21)` can find its return type.
 		function then return MaxonType.function(nameId)
+
 		// A type-parameter reference / generic instance rebuilds from the id column exactly as `named`
 		// does (P1.6-A) — the id is a `(declaring type, parameter name)` DIGEST / a GenericInstanceId
 		// (see MaxonType). A binding of a `T`-typed value (`let v = b.get()`) types from this. ⚠ W14
@@ -560,10 +585,12 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// arm is rebuilt from ONE column int, and a digest is one column int.
 		typeParameter then return MaxonType.typeParameter(nameId as TypeParamId)
 		genericInstance then return MaxonType.genericInstance(nameId as GenericInstanceId)
+
 		// A Character rebuilds from the tag alone — it carries no name, exactly as a String does.
 		// `Parser.parseBinding` is the caller that matters: `let c = 'é'`, and the `for c in s` loop
 		// variable, both type their binding from this.
 		character then return MaxonType.character
+
 		// An existential rebuilds from its interned INTERFACE name id exactly as `structRef` rebuilds from
 		// its struct's. `Parser.parseBinding` is the caller that matters: `var t = s` over an interface-typed
 		// `s` types the binding from this, and the binding's type is the only record of WHICH interface `t`
@@ -659,6 +686,7 @@ enum OpCategory
 	varAccess
 	awaiting
 	closureProducer
+
 	// The `own.*` ownership ops (`move` / `borrow` / `drop` / `retain` / `release`,
 	// M6). They are a BAND OF `MaxonOp`, not a separate dialect or tier: `IrModule`
 	// is generic over exactly ONE op type, so an op living in the Maxon block stream
@@ -852,6 +880,7 @@ export enum MaxonUnaryOp
 	round
 	sqrt
 	abs
+
 	// ⭐⭐ **FLOAT NEGATION IS A SIGN-BIT FLIP, AND IT IS ITS OWN OP — `abs`'s twin.** `abs` CLEARS bit 63;
 	// this FLIPS it, and like `abs` it computes nothing else, so `-(+0.0)` is `-0.0`, `-(-0.0)` is `+0.0`,
 	// `-inf` mirrors and a NaN keeps its payload with its sign reversed — IEEE-754's `negate`, which the
@@ -868,6 +897,7 @@ export enum MaxonUnaryOp
 	// re-read: `foldIntUnaryOp` refuses it for `abs`'s reason and `unaryOpProducesACallResult` answers
 	// false, both through the ranges they already had.
 	fneg
+
 	// ⭐ **NOT ARITHMETIC AND NOT A CONVERSION — a REINTERPRETATION.** `floatToBits` reads an f64 and
 	// answers the i64 its 64 bits already spell, computing nothing: `trunc` asks what NUMBER a float
 	// names, this asks what its ENCODING is. It is a unary op for the same shape reason the five
@@ -876,6 +906,7 @@ export enum MaxonUnaryOp
 	// `bitcastF64ToI64` describes itself.
 	//
 	floatToBits
+
 	// The INVERSE reinterpretation (`__Builtins.bitsToFloat`), and the mirror of every sentence above:
 	// it reads an i64 and answers the f64 those 64 bits already spell. It is the only member of this
 	// enum that ENTERS the float domain without converting — `promoteToFloat` computes the double
@@ -886,6 +917,7 @@ export enum MaxonUnaryOp
 	// answers BITS. Without this arm `float.fromString` could not be the same conversion as a float
 	// literal's, and the tree carried two readers that disagreed (`Parser.BuiltinsBitsToFloatName`).
 	bitsToFloat
+
 	// ⭐⭐ **THE SIGN-EXTENSION FAMILY — RESTORE A VALUE JUST READ OUT OF A NARROW SIGNED SLOT
 	// (`enum-narrow-storage`).** `signExtendI8` reads a word whose low 8 bits are an i8 and answers the i64
 	// that i8 denotes; the other two do the same at 16 and 32 bits. Compiler-inserted, never written by a
@@ -1035,15 +1067,18 @@ export enum CalleeMint
 	// entry — for all three, a diagnostic's noun is a question about the NAME, answered by the name-keyed
 	// map above where the name is not the author's.
 	notMinted
+
 	// `int.fromString` → `__int_fromString`, minted by `Parser.primitiveStaticCallee`.
 	// `Parser.primitiveStaticSourceSpelling` is the inverse, and it lives beside the mint so the two cannot
 	// drift; every consumer asks THAT rather than decoding the name for itself.
 	primitiveStatic
+
 	// `greet()` → `greet(name: __paramDefault#greet#0())`, minted by `Parser.fillArgsFromParamDefaults`
 	// (BATCH2 slice 4). The call is entirely the compiler's — the author wrote NO argument at all, let
 	// alone this callee — which is exactly the fact `requireCalleeIsNotReservedName` cannot read off a
 	// `__` name, since a `__` callee is otherwise something the author typed.
 	paramDefaultHelper
+
 	// ⭐ `FilePath from "C:\x.txt"` → `FilePath.init(…)`, minted by
 	// `Parser.parseStringLiteralInitConstruction` (N1a).
 	//
@@ -1054,6 +1089,7 @@ export enum CalleeMint
 	// accepted from user code where a written-out `FilePath.init("…")` is refused. The mint is what tells
 	// those two spellings apart — they build the identical callee, so no name-keyed rule can.
 	stringLiteralInit
+
 	// ⭐ `Bag.create()`'s `Self{}` → `Self{items: __fieldDefault#Bag#items()}`, minted by
 	// `Parser.fillFieldDefaultFromHelper` (S2f). It is `paramDefaultHelper` one door over and carries that arm's
 	// exact reason: the author
@@ -1061,6 +1097,7 @@ export enum CalleeMint
 	// cannot read "the compiler owns this `__` name" off the name, and a diagnostic quoting the callee would
 	// name a symbol absent from the program (`Project.fieldDefaultCalleeSpelling` is the decode).
 	fieldDefaultHelper
+
 	// ⭐⭐ **THE QUALIFIER IS THE COMPILER'S AND THE MEMBER IS THE AUTHOR'S — `p.toString()` ⇒
 	// `FilePath.toString` (F31). This one says something
 	// weaker and it is the weaker fact that is needed: a method dispatch spells its callee's HEAD out of the
@@ -1079,6 +1116,7 @@ export enum CalleeMint
 	// the author named nothing; here the author named the MEMBER, so visibility (E3008) still answers for it,
 	// and that reader asks a roster rather than `!= notMinted`.
 	resolvedTypeQualifier
+
 	// ⭐ **`a to b` / `a upto b` OUTSIDE A FOR-IN HEADER ⇒ `Range.create` / `OpenRange.create`**, minted by
 	// `Parser.emitRangeValue`.
 	//
@@ -1101,6 +1139,7 @@ export union ImmortalBoxSlotValue
 	// width; and the element's drop callee, EMPTY when the element owns nothing —
 	// `ImmortalRecordKind.emptyContainer`'s encoding, for its reason.
 	emptyArray(elementSize ElementStride, elementDestroy ByteArray)
+
 	// ⭐⭐ **ANOTHER IMAGED BOX — a nested struct, a `Map`/`Set` box, a payload-free union case's tag box.**
 	// An INDEX into the op's node arena rather than the node itself, because a union carrying one would make
 	// the type name itself, which Maxon refuses outright (E4014).
@@ -1195,29 +1234,35 @@ export union MaxonOp
 	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
 	// its band's end: every existing destructuring reads its operands positionally.
 	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
 	// time). `valueType` is the literal's source-level type (integer, or a
 	// named ranged alias). `result` is the freshly-minted ValueId it defines.
 	literal(result ValueId, value ParsedInt, valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Value-returning return terminator. Always placed as a block terminator via
 	// setTerminator, never as a regular body op. `retVal` is the value to return.
 	ret(retVal ValueId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Void return terminator — `return` with no expression. A DISTINCT variant
 	// rather than a `ret` carrying some empty-value sentinel: `ValueId` has no
 	// "absent" value, and a sentinel is exactly what the project forbids.
 	retVoid = MaxonOpMeta{category: OpCategory.plain}
+
 	// Binary operation over two already-materialized SSA values:
 	// `result = lhs <op> rhs`. M2 emitted this only for `+`; M3 also carries `-`
 	// and `*` (MaxonBinOp.add/sub/mul). It stands alone (matched by variant), so
 	// category `plain` — declared at the end of the plain band.
 	binOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Unary operation over one already-materialized SSA value: `result = <op> operand`.
 	// M3 emits this for prefix `-` (MaxonUnaryOp.neg). Like `binOp` it stands alone
 	// (matched by variant), so category `plain` — declared at the end of the plain band, after
 	// `binOp`.
 	unaryOp(result ValueId, operand ValueId, op MaxonUnaryOp) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Comparison over two already-materialized SSA values: `result = lhs <op> rhs`,
 	// producing a boolean (i1). M4 emits this for `==`/`!=`/`<`/`>`/`<=`/`>=`. Its
 	// result feeds an `if`'s `condBranch`; the Std→x64 lowering FUSES the pair into
@@ -1240,6 +1285,7 @@ export union MaxonOp
 	// two readings are the SAME instruction there (see the rule's ⚠⚠ note), so `signed` is the answer
 	// rather than the absence of one.
 	compare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, signedness IntegerSignedness) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Two-way conditional branch terminator: if `cond` (an i1) holds, transfer to
 	// `thenBlockId`, else to `elseBlockId`. M4's `if` sets this as a block's
 	// terminator (via emitTerminator). `cond` is the SSA value a `compare` defined;
@@ -1248,9 +1294,11 @@ export union MaxonOp
 	// `OpCategory` classifies call/effect shape, not control flow — that is the Std
 	// tier's `control` band); appended at the END of the plain band.
 	condBranch(cond ValueId, thenBlockId BlockId, elseBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// Unconditional branch terminator to `targetBlockId`. Emitted when a then/else
 	// block falls through to the merge (continuation) block rather than returning.
 	branch(targetBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- band: varAccess (P1.0d.5b — top-level `var`) ---
 	//
 	// The FIRST occupants of the `varAccess` band, which has been declared and empty since
@@ -1274,13 +1322,16 @@ export union MaxonOp
 	// not a value), per the MaxonOp header's value/name split, and it is the storage label
 	// `ProgramSignatures` derived — see `SignatureIndex.dataLabelFor`.
 	globalAddr(result ValueId, label ByteArray) = MaxonOpMeta{category: OpCategory.varAccess}
+
 	// Read a `valueType` value from `addr + offset`. `valueType` is the SOURCE-level type
 	// (integer/boolean); the width collapse to `StdType` happens only in lowering, per the
 	// MaxonType contract.
 	loadIndirect(result ValueId, addr ValueId, offset ByteOffset, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
+
 	// Write `value` to `addr + offset`. A STATEMENT, not an expression — it defines no
 	// result, so unlike its two band-mates it mints no ValueId.
 	storeIndirect(addr ValueId, offset ByteOffset, value ValueId, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
+
 	// A `String` LITERAL (P1.2 wave A): `result` is a pointer to an IMMORTAL 56-byte rdata record.
 	// `bytes` is the literal's DECODED UTF-8 payload — the parser has already resolved every escape
 	// (`decodeEscapes`), so what rides here is the exact byte sequence the record's blob will hold.
@@ -1295,6 +1346,7 @@ export union MaxonOp
 	// It carries NO ownership: a literal is never allocated, refcounted or dropped, so category
 	// `plain` (it stands alone, matched by variant).
 	stringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- P1.4b: scalar error handling (dual-register `(value, errorFlag)` ABI) ---
 	//
 	// Their `OpCategory` is metadata independent of this tail position.
@@ -1307,6 +1359,7 @@ export union MaxonOp
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
 	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
 	// heap-box POINTER (a payload-bearing/boxed union), and `errorIsBoxed` is which — the ONE bit the
@@ -1316,12 +1369,14 @@ export union MaxonOp
 	// (it is already non-zero, so `flag != 0` still reads "error in flight"). `propagateError` carries an
 	// ALREADY-encoded flag, kept DISTINCT so the +1 never doubles up. Category `plain`, like the other terminators.
 	throwError(errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
+
 	// PROPAGATE a caught error flag verbatim — an uncaught `try f()` inside a throwing function
 	// re-publishes the callee's flag to its own caller. TERMINATOR. `errorFlag` is ALREADY the
 	// `ordinal + 1` encoding (it came out of a `tryCall`), so lowering re-emits it into the error
 	// register with NO re-encoding — the whole reason it is distinct from `throwError` (which carries
 	// an ordinal and does the +1). Category `plain`.
 	propagateError(errorFlag ValueId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// ABORT the process, printing `message` then a symbolized backtrace — the primitive a user `panic("…")`
 	// ends on (including an `otherwise panic(…)` handler and a match `default panic(…)`). It is a BODY op,
 	// not a terminator: the parser emits it followed by a dead return terminator (control never returns, so
@@ -1343,6 +1398,7 @@ export union MaxonOp
 	// NUL-terminated line, and neither leaves lowering guessing at the location, because the interpolation
 	// carries the very same prefix as its first fragment.
 	panicAbort(message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
+
 	// --- P1.5-A1: non-capturing function values ---
 	//
 	// Their `OpCategory` metadata places each variant
@@ -1356,6 +1412,7 @@ export union MaxonOp
 	// a coarse "does this produce a heap closure?" membership test will want. functionRef allocates
 	// nothing, so it is not that.
 	functionRef(result ValueId, funcName ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+
 	// A call THROUGH a function VALUE — `f(21)`, `h.op(21)`, `pick()(21)`. `callee` is a `ValueId` holding
 	// the code pointer (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a distinct op. It
 	// has full call-barrier semantics like `call`, so category `callFree` (the same band as `call`/`tryCall`).
@@ -1379,6 +1436,7 @@ export union MaxonOp
 	// that forces the indirection (a tail-slot `Array` binding in a large match corrupts the scrutinee's
 	// decref). A design fact about how this op is CONSUMED, recorded where it is DECLARED.
 	indirectCall(result ValueId, callee ValueId, args ValueIdArray) = MaxonOpMeta{category: OpCategory.callFree}
+
 	// --- P1.5-B1a: async / await (green-thread scheduler) ---
 	//
 	// Their `OpCategory.awaiting` (the band declared and empty since
@@ -1397,9 +1455,11 @@ export union MaxonOp
 	// two written tokens); a MINTED callee (`int.fromString` → `__int_fromString`) is REFUSED at the parse
 	// door rather than carried here, so every reader downstream may read this name as the author's own.
 	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
 	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// --- P1.5-B2b: error-carrying `try await` ---
 	//
 	// Its `OpCategory.awaiting` (shared with `await`) is metadata
@@ -1413,6 +1473,7 @@ export union MaxonOp
 	// flag exactly as it does for a `tryCall`. Category `awaiting`, the same band as `await` — it IS `await`
 	// plus the flag def.
 	tryAwait(result ValueId, errorFlag ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// --- P1.6-B1: `sizeof(Type)` ---
 	//
 	// Its `OpCategory.plain` (it stands alone, matched by variant — like
@@ -1424,6 +1485,7 @@ export union MaxonOp
 	// runtime load of the enclosing instance's layout descriptor `elementLogicalSize@56` slot (the
 	// dictionary-passing model — see LayoutDescriptor). `result` is the integer it defines.
 	sizeofType(result ValueId, targetType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- P1.7 slice 2: `b"…"` byte-string literals ---
 	//
 	// Its `OpCategory.plain` (it stands alone, matched by variant — like `stringLiteral`) is metadata
@@ -1452,6 +1514,7 @@ export union MaxonOp
 	// resolved, each source codepoint mapped to one byte, a codepoint above 0xFF already rejected E1004).
 	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
 	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- P1.1b slice 2: the DENSE-match jump table ---
 	//
 	// Its `OpCategory.plain` is metadata independent of this tail position — like the other
@@ -1472,6 +1535,7 @@ export union MaxonOp
 	// by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-Array-corrupts-the-decref trap
 	// `indirectCall` documents.
 	switch(subject ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- P1.7a slice 2a: constrained-type-parameter interface DISPATCH ---
 	//
 	// Its `OpCategory.callFree` (shared with `call`/`indirectCall` — it
@@ -1513,6 +1577,7 @@ export union MaxonOp
 	// requirement's declared FORMALS from it so a call's per-argument ABI comes from the CALLEE's signature
 	// rather than from whatever the actuals happen to be typed.
 	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+
 	// --- P1.7a slice 2b-v: the THROWING witness dispatch ---
 	//
 	// `OpCategory.callFree` places it logically beside
@@ -1528,6 +1593,7 @@ export union MaxonOp
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
 	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+
 	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
 	//
 	// `OpCategory.panicking` places it logically
@@ -1545,6 +1611,7 @@ export union MaxonOp
 	// know a String's layout. It is a USE; the op defines nothing and never returns. Like `panicAbort` it is
 	// a BODY op followed by a dead return terminator.
 	panicAbortValue(messagePtr ValueId) = MaxonOpMeta{category: OpCategory.panicking}
+
 	// --- try-block: the error flag as a VALUE (a bare `throw` ROUTED to a block handler) ---
 	//
 	// `OpCategory.plain` places it beside `literal`/`stringLiteral` — it stands alone, is matched by variant,
@@ -1559,6 +1626,7 @@ export union MaxonOp
 	// cannot drift from a returned one's, which is the property the parser-side alternative could not have
 	// had: spelling `ordinal + ErrorFlagOrdinalBias` in the parser would be the ABI written at two tiers.
 	errorFlagEncode(result ValueId, errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- SV1 wave 3: the two ops a SERVICE is made of ---
 	//
 	// `OpCategory.awaiting` places both logically beside `asyncCall`/`await` — the band of ops that hand
@@ -1576,6 +1644,7 @@ export union MaxonOp
 	// through the ordinary `call <T>.<factory>` this op's `state` operand comes from, and `<T>.__loop` is
 	// the compiler's own name, which that pass tracks nothing under.
 	serviceSpawn(result ValueId, typeName ByteArray, state ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// ⭐⭐ **`serviceSend(result, callee, handle, request)` — ENQUEUE ONE MESSAGE, INLINE, AND RETURN.**
 	// `callee` is the message's own qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of
 	// the handle box, `request` the request-union BOX the parser built at the send site exactly as
@@ -1599,6 +1668,7 @@ export union MaxonOp
 	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
 	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
 	serviceSend(result ValueId, callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
 	// THROUGH (SV2).** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
 	// the parser marks it (`markValuePromise`), slots it into the request union's `__reply` payload as an
@@ -1619,6 +1689,7 @@ export union MaxonOp
 	// say so: the message is credited to `UnusedExportCheck` by the `serviceSend` beside this op, and the
 	// name here may be `<T>.shutdown` — the compiler's pill, which no file declares.
 	serviceReplyCell(result ValueId, messageName ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
+
 	// --- W197: a module-level `let` holding a constructed struct of scalars ---
 	//
 	// `OpCategory.plain` places it beside `stringLiteral` — it takes the address
@@ -1643,6 +1714,7 @@ export union MaxonOp
 	// because the payload and the registration are identical either way — an arena of one node with no
 	// columns IS the scalar shape.
 	immortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- A module-level `let` holding an array of string LITERALS ---
 	//
 	// `OpCategory.plain` places it beside `constArrayLiteral`'s imaged arm — it takes the address of a
@@ -1660,6 +1732,7 @@ export union MaxonOp
 	// say which of the two they are; this shape has no heap spelling and its payload is N SEPARATE literals,
 	// which one `bytes` field cannot hold without inventing an encoding for it.
 	immortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+
 	// --- WP-3: `--coverage` counter points ---
 	//
 	// ⭐⭐ **ONE EXECUTION OF THE STATEMENT OR BRANCH ARM THIS OP HEADS.** `pointId` is the point's
@@ -1732,10 +1805,12 @@ export let NoErrorFlag = 0 as ParsedInt
 export enum MaxonCalleeKind
 	// A DIRECT call's callee name — the one overload resolution may REWRITE (`withRewrittenCallee`).
 	direct
+
 	// A function VALUE's target name (`functionRef`). A resolution may NOT rewrite it: there are no arguments
 	// to pick an overload from. Its OWN case rather than `noCallee`, so a resolver can REFUSE an overloaded
 	// name here instead of silently binding whichever member registered first.
 	functionValue
+
 	// The op binds no callee name at all.
 	noCallee
 end 'MaxonCalleeKind'
@@ -1797,6 +1872,7 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		throwError gives MaxonCalleeKind.noCallee
 		propagateError gives MaxonCalleeKind.noCallee
 		panicAbort gives MaxonCalleeKind.noCallee
+
 		// A panic binds no callee under either spelling — the runtime it ends on is not a user name.
 		panicAbortValue gives MaxonCalleeKind.noCallee
 		indirectCall gives MaxonCalleeKind.noCallee
@@ -1807,23 +1883,30 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		switch gives MaxonCalleeKind.noCallee
 		witnessDispatch gives MaxonCalleeKind.noCallee
 		witnessTryDispatch gives MaxonCalleeKind.noCallee
+
 		// The error-flag ENCODE is arithmetic on a value the parser already holds — it calls nothing.
 		errorFlagEncode gives MaxonCalleeKind.noCallee
+
 		// A `spawn` names a TYPE, not a function: the factory it calls is an ordinary `call` op emitted
 		// beside it, and the two functions the lowering names are the compiler's own.
 		serviceSpawn gives MaxonCalleeKind.noCallee
+
 		// A SEND names the message it delivers, which is what credits an export reachable no other way.
 		serviceSend gives MaxonCalleeKind.direct
+
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` emitted
 		// beside it is what credits the export, and this op's name may be the compiler's own `<T>.shutdown`.
 		serviceReplyCell gives MaxonCalleeKind.noCallee
+
 		// An imaged struct record names a CONSTANT, not a function.
 		immortalStructRecord gives MaxonCalleeKind.noCallee
+
 		// An imaged string table names CONSTANTS. Its `elementDestroy` is a function NAME, but it reaches
 		// `.text` as a relocation the lowering records rather than as a call this op makes — and
 		// `MmRuntime.noteRelocatedFunctionUsage` is what roots it, exactly as it roots an imaged empty
 		// container's.
 		immortalStringTable gives MaxonCalleeKind.noCallee
+
 		// A coverage counter names a `.data` SLOT, not a function.
 		covPoint gives MaxonCalleeKind.noCallee
 	end 'op'
@@ -1856,6 +1939,7 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
+
 		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
 		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
 		// an overloaded message at the `spawn`, so `resolveOneOverloadedCall` returns at its
@@ -1890,6 +1974,7 @@ export function withRewrittenArgs(op MaxonOp, args ValueIdArray) returns MaxonOp
 		call(result, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the two direct-call variants carry one, and every caller reaches this from their own match arms")
+
 		// ⚠ `serviceSend` supplies none either: its arguments were moved into the request BOX at the parser,
 		// so there is no argument list left on the op for `LiteralArgPromotion` to substitute into.
 	end 'op'

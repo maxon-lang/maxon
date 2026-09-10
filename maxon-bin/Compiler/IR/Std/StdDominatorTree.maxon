@@ -31,15 +31,18 @@ export typealias BlockPositionColumn = Array with BlockRefIndex
 export type StdDominatorTree
 	// `func.blockRefs.count()` — the node count every column below spans.
 	export var blockCount as BlockRefIndex
+
 	// Whether the ENTRY can reach this block. An unreachable block has no dominator (nothing on the way
 	// to it is on a path from the entry, because there is no such path), so `idom` is meaningless for it
 	// and `children` never names it. The parser mints unreachable blocks routinely (`Terminator.dead`
 	// for code after a fully-terminated `if`/`else`), and `reorderFuncBlocksRpo` still EMITS them, so
 	// this is an ordinary state rather than a defect to report.
 	var reachable as BoolArray
+
 	// Block position -> the position of its immediate dominator. The entry is its OWN, which is the
 	// standard encoding and what terminates `intersect`'s walk. Meaningless where `reachable` is false.
 	var idom as BlockPositionColumn
+
 	// The dominator tree as an adjacency: `children.neighbour(p, k)` is the k-th block whose immediate
 	// dominator is `p`. The entry's self-edge is deliberately NOT in it — a tree walk that re-entered
 	// the entry would not terminate.
@@ -47,6 +50,7 @@ export type StdDominatorTree
 	// The member `EC13`'s dominator WALK reads: a consumer walks the tree from `StdEntryBlockPosition`
 	// down this adjacency, which visits exactly the reachable blocks in dominator order.
 	export var children as CsrGraph
+
 	// ⭐ **THE CFG ITSELF, KEPT RATHER THAN REBUILT — the two adjacencies the dominator solve already
 	// needed.** `EC14`'s LICM asks the SAME function three more graph questions (where the back edges
 	// are, which blocks a natural loop holds, which of a header's predecessors is the preheader), and
@@ -56,6 +60,7 @@ export type StdDominatorTree
 	// every op of every block.
 	export var succ as CsrGraph
 	export var pred as CsrGraph
+
 	// The reachable blocks in reverse postorder. Kept for the same reason: `EC14` analyses a loop's
 	// blocks in an order where every value's DEF is visited before its uses, which is exactly this one
 	// (dominance implies reverse-postorder precedence), and the solve above has already computed it.
@@ -153,6 +158,7 @@ export type StdDominatorTree
 
 			let successor = graph.neighbour(position as CsrIndex, k: nextChild) as BlockRefIndex
 			let seenBefore = try self.reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
+
 			if not seenBefore 'firstVisit'
 				try self.reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
 				stackNode.push(successor)
@@ -185,6 +191,7 @@ export type StdDominatorTree
 		try solved.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.solveImmediateDominators: solved.set OOB at the entry")
 
 		var changed = true
+
 		while changed 'untilStable'
 			changed = false
 
@@ -224,6 +231,7 @@ export type StdDominatorTree
 		end 'noSolvedPredecessor'
 
 		let wasSolved = try solved.get(position) otherwise panic("StdDominatorTree.meetSolvedPredecessorsOf: solved.get OOB at {position}")
+
 		if wasSolved and (try self.idom.get(position) otherwise panic("StdDominatorTree.meetSolvedPredecessorsOf: idom.get OOB at {position}")) == candidate 'unchanged'
 			return false
 		end 'unchanged'
@@ -282,6 +290,7 @@ export let StdEntryBlockPosition = 0 as BlockRefIndex
 // compares depths — so they are one value rather than two the caller has to keep in step.
 type RpoOrder
 	export var order as BlockPositionColumn
+
 	// Block position -> its index in `order`. Meaningless for an unreachable block, which `indexOf` is
 	// never asked about: the solve only ever compares two blocks that already have a dominator.
 	var rpoIndex as BlockPositionColumn
@@ -297,6 +306,7 @@ type RpoOrder
 		rpoIndex.resize(blockCount)
 
 		var remaining = postorder.count()
+
 		while remaining > 0 'reverse'
 			remaining = remaining - 1
 			let position = try postorder.get(remaining) otherwise panic("RpoOrder.fromPostorder: postorder.get OOB at {remaining}")

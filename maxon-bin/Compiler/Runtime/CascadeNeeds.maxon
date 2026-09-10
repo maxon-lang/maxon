@@ -33,10 +33,12 @@
 export union CascadeNode
 	declaredStruct(layout StructLayout)
 	declaredUnion(layout EnumLayout)
+
 	// A monomorphized generic instance (`Box with String`). Registered by BOTH drivers since W162: an
 	// instance has a `__clone_<mangled>` beside its `__destruct_<mangled>`, so the two closures walk one
 	// node space. (It was destructor-side only while a non-`Array` instance had no per-instance cloner.)
 	genericInstance(id GenericInstanceId)
+
 	// ⭐ **THE TWO DICTIONARY NODES, LAST AND ADJACENT ON PURPOSE.** Each is a SECOND node over a layout or an
 	// instance the list above already carries, because the plain cascade and the dictionary one classify the
 	// same field list DIFFERENTLY — a slot standing at a bare type parameter is released through the
@@ -47,6 +49,7 @@ export union CascadeNode
 	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`, W183) — a TUPLE of the enclosing generic's
 	// own parameters is a `structRef` and reaches none of the instance family.
 	declaredStructDictionary(layout StructLayout)
+
 	// A generic instance's DECLARATION VIEW (BATCH41) — a nested declaration-view field names its DICTIONARY
 	// destructor rather than its plain one, which is the second way this classification differs.
 	genericInstanceDictionary(id GenericInstanceId)
@@ -70,6 +73,7 @@ export type CascadeWorklist
 	// Every registered node, in registration order — which is the order each closure's own scan used
 	// before this engine existed, so the expansion order is unchanged from the fixpoint's first pass.
 	var nodes as CascadeNodeArray
+
 	// Symbol ⇒ the node positions it names — the only direction
 	// `discovered` can ask in (a nested cascade is discovered as a CALLEE SYMBOL; the field classifier
 	// that produced it has already discarded which declaration it came from). A BUCKET, not a single
@@ -79,10 +83,12 @@ export type CascadeWorklist
 	// claimant is exactly what the old all-types re-scan did, so the bucket keeps the behaviour
 	// identical instead of silently picking one.
 	var bySymbol as CascadeNodeIndexBucketMap
+
 	// FIFO of node positions discovered but not yet expanded; `head` is the read cursor. Never
 	// compacted — `head` only advances and `pending` only grows, so a node's position is stable.
 	var pending as CascadeNodeIndexArray
 	var head as CascadeNodeIndex
+
 	// Parallel to `nodes`: already queued? This is what makes termination STRUCTURAL rather than
 	// argued — a node enters `pending` at most once, so the drain is bounded by the node count no
 	// matter what a caller discovers, and each node's fields are classified exactly once.

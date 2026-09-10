@@ -112,6 +112,7 @@
 // fold nothing.
 export function foldConstants(module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "foldConstants: {module.funcCount()} function(s)")
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -151,6 +152,7 @@ function foldConstantsInFunc(module StdModule, func IrFunction)
 	var constMap = ConstValueMap.create()
 
 	evaluateOps(module, opIndices: opIndices, constMap: constMap)
+
 	// AFTER the op walk, because a `cmp` this pass folded is exactly how a branch condition becomes a
 	// known constant, and BEFORE the prune, which is what retires the condition `const` the branch
 	// fold stops reading.
@@ -193,6 +195,7 @@ function evaluateOps(module StdModule, opIndices OpIndexArray, constMap ConstVal
 
 		// The FOLDED op, not the original — recording the result is what feeds the next op's operands.
 		classifyFoldableDef(folded, def: def)
+
 		if def.isConstDef() 'isConst'
 			constMap.upsert(def.definedId, value: def.constant)
 		end 'isConst'
@@ -343,6 +346,7 @@ function evaluateFloatBinOp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId
 
 	return match foldFloatBinOp(maxonBinOpOfStdOpcode(opcode), lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs)) 'e'
 		folded(value) gives foldedFloatConst(op, resultId: resultId, bits: value)
+
 		// The `±0.0` divisor — `foldFloatBinOp` rides the host's own divide-by-zero trap to get here.
 		notFoldable gives op
 	end 'e'
@@ -625,6 +629,7 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 
 		let termIdx = block.terminatorIndex()
 		let term = terminatorOpAt(module, termIdx: termIdx)
+
 		if foldConstantBranchIn(module, block: block, termIdx: termIdx, term: term, constMap: constMap) 'folded'
 			foldedAny = true
 		end 'folded'
@@ -656,6 +661,7 @@ function foldConstantBranchIn(module StdModule, block IrBlock, termIdx OpIndex, 
 			div or
 			mod gives false
 		condBranch(condId, thenBlockId, elseBlockId) gives foldCondBranch(module, block: block, termIdx: termIdx, condId: condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, constMap: constMap)
+
 		// Every other terminator — `branch`, `ret`, `retVoid`, `errorReturn`, `switch`, `osExit` — carries
 		// no condition to know. ⚠ `switch` is the one with a foldable SUBJECT (a constant index selects a
 		// fixed arm); it is a jump-table fold, not a branch fold, and is left for the rung that takes it.
@@ -853,6 +859,7 @@ end 'edgesWithoutTarget'
 // re-point it at whatever survived further down.
 function dropUnreachableBlocks(module StdModule, func IrFunction)
 	let blockCount = func.blockRefs.count()
+
 	if blockCount == 0 'noBlocks'
 		return
 	end 'noBlocks'
@@ -886,8 +893,10 @@ function dropUnreachableBlocks(module StdModule, func IrFunction)
 	end 'walk'
 
 	var kept = BlockRefArray.create()
+
 	for position in 0 upto blockCount 'eachBlock'
 		let survives = try reachable.get(position) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {position}")
+
 		if survives 'keep'
 			kept.push(try func.blockRefs.get(position) otherwise panic("dropUnreachableBlocks: blockRefs.get OOB at {position}"))
 		end 'keep'
@@ -902,6 +911,7 @@ typealias BlockRefIndexArray = Array with BlockRefIndex
 // Mark a block position reachable and queue it, once. Both columns are the caller's.
 function markReachable(reachable BoolArray, stack BlockRefIndexArray, position BlockRefIndex)
 	let seenBefore = try reachable.get(position) otherwise panic("markReachable: reachable.get OOB at {position}")
+
 	if seenBefore 'alreadySeen'
 		return
 	end 'alreadySeen'

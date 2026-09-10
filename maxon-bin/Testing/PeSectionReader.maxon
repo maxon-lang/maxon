@@ -100,6 +100,7 @@ export union SectionPinExpectation
 	// One payload, compared as a run from byte 0 — see `compareSectionPrefix` for why a PREFIX and not an
 	// equality.
 	contiguousRun(bytes ByteArray)
+
 	// N independently-placed blobs, each found at or after the end of the previous one.
 	locatedPayloads(payloads ByteArrayArray)
 end 'SectionPinExpectation'
@@ -121,6 +122,7 @@ export union TypedValueError implements Error
 			unknownEscape(escape) gives "unknown escape sequence '{escape}' in a {Utf8TypeName} value"
 			emptyTextPayload gives "a `{Utf8TypeName}` line decodes to NO bytes, which pins nothing — the empty run occurs in every image ever linked, so the line could not fail. Give it the payload it means, or delete it"
 			mixedPinForms gives "the block mixes `{Utf8TypeName}` lines with scalar/array lines, and the two cannot be combined — a `{Utf8TypeName}` line names ONE interned blob and is located independently, while scalar and array lines describe fields of a SINGLE payload compared from byte 0, so a mixed block does not say whether its lines are one payload or several. Write them as separate blocks"
+
 			// ⚠ **THE ROSTER IS BUILT FROM THE TABLE, NOT TRANSCRIBED BESIDE IT.** A spec author reading this
 			// message needs to know which names exist, and it said `i8/i16/i32/i64/f64` for as long as `u8`
 			// had been accepted — a stale list is worse than none, because it reads as an authority. So the
@@ -147,6 +149,7 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 	end 'notDos'
 
 	let peOffset = imageReadU32(image, at: PeSignatureOffsetField)
+
 	if imageReadU32(image, at: peOffset as ByteOffset) != PeSignature 'notPe'
 		throw PeReadError.notAPeFile(path)
 	end 'notPe'
@@ -158,6 +161,7 @@ export function readPeSectionData(path FilePath, sectionName String) returns Byt
 
 	for i in 0 upto sectionCount 'eachSection'
 		let header = firstSectionHeader + i * SectionHeaderSize
+
 		if imageNameAt(image, at: header as ByteOffset, maxBytes: SectionNameBytes) != sectionName 'notThisOne'
 			continue
 		end 'notThisOne'
@@ -198,11 +202,14 @@ end 'readPeSectionData'
 export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
 	var out = ByteArray.create()
 	var payloads = ByteArrayArray.create()
+
 	// Tracked rather than inferred from `out.count()`: an array line with no elements contributes zero
 	// bytes, and "a scalar line was written" is the question the mixed-form refusal asks.
 	var sawFieldLine = false
+
 	for rawLine in block.split("\n") 'eachLine'
 		let line = rawLine.trim()
+
 		if line.isEmpty() 'blank'
 			continue
 		end 'blank'
@@ -236,6 +243,7 @@ export function parseTypedSectionValues(block String) returns SectionPinExpectat
 		sawFieldLine = true
 		let elementType = arrayElementTypeName(typeName)
 		let byteCount = try typedValueByteCount(elementType)
+
 		if elementType == typeName 'oneScalarValue'
 			appendLittleEndian(out, value: try parseTypedValueBits(typeName, text: valueText), byteCount: byteCount)
 			continue
@@ -243,6 +251,7 @@ export function parseTypedSectionValues(block String) returns SectionPinExpectat
 
 		for rawElement in valueText.split(TypedValueArraySeparator) 'eachElement'
 			let element = rawElement.trim()
+
 			if element.isEmpty() 'trailingSeparator'
 				continue
 			end 'trailingSeparator'
@@ -301,6 +310,7 @@ function byteRunMatchesAt(haystack ByteArray, needle ByteArray, start ByteOffset
 	for i in 0 upto needle.count() 'eachByte'
 		let want = try needle.get(i) otherwise panic("byteRunMatchesAt: needle.get OOB at {i} despite the upto bound")
 		let got = try haystack.get(start + i) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
+
 		if want != got 'differs'
 			return false
 		end 'differs'
@@ -366,8 +376,10 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 	let bodyEnd = raw.count() - 1
 	var out = ByteArray.create()
 	var i = 1 as ByteOffset
+
 	while i < bodyEnd 'eachByte'
 		let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
+
 		if ch != PinBackslash 'aPlainByte'
 			out.push(ch)
 			i = i + 1
@@ -397,15 +409,19 @@ function pinEscapeByte(marker Byte) returns Byte throws TypedValueError
 	if marker == LowerNMarker 'newline'
 		return NewlineByte
 	end 'newline'
+
 	if marker == LowerTMarker 'tab'
 		return TabByte
 	end 'tab'
+
 	if marker == LowerRMarker 'carriageReturn'
 		return CarriageReturnByte
 	end 'carriageReturn'
+
 	if marker == DigitZeroMarker 'nul'
 		return NulByte
 	end 'nul'
+
 	if marker == PinBackslash or marker == SingleQuoteByte or marker == DoubleQuoteByte or marker == LeftBraceByte or marker == RightBraceByte 'selfEscape'
 		return marker
 	end 'selfEscape'
@@ -472,6 +488,7 @@ function parseTypedValueBits(typeName String, text String) returns ParsedInt thr
 		let value = try float.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 		return __Builtins.floatToBits(value)
 	end 'float'
+
 	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 end 'parseTypedValueBits'
 
@@ -520,12 +537,15 @@ end 'typedValueTypes'
 // reason the table exists at all.
 function typedValueTypeRoster() returns String
 	var out = StringBuilder.create()
+
 	for (iter, row) in typedValueTypes().withIterator() 'eachRow'
 		if iter.index() > 0 'separator'
 			out.append("/")
 		end 'separator'
+
 		out.append(row.name)
 	end 'eachRow'
+
 	return out.build()
 end 'typedValueTypeRoster'
 
@@ -545,6 +565,7 @@ function appendLittleEndian(out ByteArray, value ParsedInt, byteCount BytePos)
 	// once, explicitly, here — the same cast `GlobalDataTable.appendScalar` makes for the same
 	// reason, in the code this gate exists to check independently.
 	let bits = value as MachineWord
+
 	for i in 0 upto byteCount 'eachByte'
 		out.push((bits shr (i * 8)) and 0xFF)
 	end 'eachByte'
@@ -563,11 +584,14 @@ end 'appendLittleEndian'
 
 export function formatHexBytes(bytes ByteArray) returns String
 	var out = StringBuilder.create()
+
 	for (iter, b) in bytes.withIterator() 'each'
 		if iter.index() > 0 'separator'
 			out.append(" ")
 		end 'separator'
+
 		out.append(hexByte(b))
 	end 'each'
+
 	return out.build()
 end 'formatHexBytes'

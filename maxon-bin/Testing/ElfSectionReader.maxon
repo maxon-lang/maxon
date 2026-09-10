@@ -113,6 +113,7 @@ export function readElfSectionData(path FilePath, sectionName String) returns By
 	let sectionHeaderTable = imageReadU64(image, at: EhdrShoffOffset)
 	let sectionHeaderSize = imageReadU16(image, at: EhdrShentsizeOffset)
 	let sectionCount = imageReadU16(image, at: EhdrShnumOffset)
+
 	if sectionCount == 0 'noHeaders'
 		throw ElfReadError.noSectionHeaders(path)
 	end 'noHeaders'
@@ -124,15 +125,18 @@ export function readElfSectionData(path FilePath, sectionName String) returns By
 
 	for i in 0 upto sectionCount 'eachSection'
 		let header = sectionHeaderTable + i * sectionHeaderSize
+
 		// A string-table entry is bounded only by the image, so the image's length is its bound;
 		// the walk stops at the NUL or at end-of-file, whichever comes first.
 		let name = imageNameAt(image, at: ((nameTableBase + imageReadU32(image, at: ((header + ShdrNameOffset) as ByteOffset))) as ByteOffset), maxBytes: image.count())
+
 		if name != sectionName 'notThisSection'
 			continue
 		end 'notThisSection'
 
 		let size = imageReadU64(image, at: ((header + ShdrSizeOffset) as ByteOffset))
 		let fileOffset = imageReadU64(image, at: ((header + ShdrFileOffsetOffset) as ByteOffset))
+
 		if not imageRangeFits(image, start: fileOffset as ByteOffset, count: size as BytePos) 'runsPastEof'
 			throw ElfReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'

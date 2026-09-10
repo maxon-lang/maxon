@@ -45,6 +45,7 @@ public type URL implements Equatable, Stringable
 		if not hasHost 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
+
 		return host
 	end 'host'
 
@@ -52,6 +53,7 @@ public type URL implements Equatable, Stringable
 		if not hasPort 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
+
 		return port
 	end 'port'
 
@@ -59,6 +61,7 @@ public type URL implements Equatable, Stringable
 		if not hasUserinfo 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
+
 		return userinfo
 	end 'userinfo'
 
@@ -66,6 +69,7 @@ public type URL implements Equatable, Stringable
 		if not hasQuery 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
+
 		return query
 	end 'query'
 
@@ -73,6 +77,7 @@ public type URL implements Equatable, Stringable
 		if not hasFragment 'absent'
 			throw URLError.fieldNotPresent
 		end 'absent'
+
 		return fragment
 	end 'fragment'
 
@@ -112,8 +117,10 @@ public type URL implements Equatable, Stringable
 		// Every component below is cut out by slicing these bytes, and `slice` hands back a buffer,
 		// so it genuinely needs one. Hoisted: Stage 4b materializes it once per parse, not per cut.
 		let urlBytes = trimmed.addressableBytes()
+
 		// First byte: if it's ':', that's invalid (://missing-scheme)
 		let firstByte = trimmed.byteAtOrPanic(0)
+
 		if firstByte == 58 'colonFirst'
 			throw URLError.invalidScheme
 		end 'colonFirst'
@@ -122,17 +129,21 @@ public type URL implements Equatable, Stringable
 		var colonPos = 0
 		var foundColon = false
 		var scanPos = 0
+
 		while scanPos < len 'schemeSearch'
 			let b = trimmed.byteAtOrPanic(scanPos)
+
 			if b == 58 'colon'
 				colonPos = scanPos
 				foundColon = true
 				break
 			end 'colon'
+
 			// Stop scanning at characters that can't be in a scheme
 			if b == 47 or b == 63 or b == 35 'delimiter'
 				break
 			end 'delimiter'
+
 			scanPos = scanPos + 1
 		end 'schemeSearch'
 
@@ -141,14 +152,18 @@ public type URL implements Equatable, Stringable
 			if not urlIsAlpha(firstByte) 'notAlpha'
 				throw URLError.invalidScheme
 			end 'notAlpha'
+
 			// Remaining chars must be valid scheme chars
 			var vi = 1
+
 			while vi < colonPos 'validateScheme'
 				if not urlIsSchemeChar(trimmed.byteAtOrPanic(vi)) 'badChar'
 					throw URLError.invalidScheme
 				end 'badChar'
+
 				vi = vi + 1
 			end 'validateScheme'
+
 			// Extract and lowercase the scheme
 			let schemeSlice = try urlBytes.slice(0, colonPos) otherwise panic("URL.parse: scheme slice — colonPos from scan, always <= len")
 			var rawScheme = String.init(schemeSlice)
@@ -165,11 +180,14 @@ public type URL implements Equatable, Stringable
 
 					// Find end of authority: first '/', '?', '#', or end
 					var authEnd = pos
+
 					while authEnd < len 'findAuthEnd'
 						let ab = trimmed.byteAtOrPanic(authEnd)
+
 						if ab == 47 or ab == 63 or ab == 35 'delim'
 							break
 						end 'delim'
+
 						authEnd = authEnd + 1
 					end 'findAuthEnd'
 
@@ -179,11 +197,13 @@ public type URL implements Equatable, Stringable
 					// Check for userinfo: scan for '@'
 					var atPos = authStart
 					var foundAt = false
+
 					while atPos < authEnd 'findAt'
 						if trimmed.byteAtOrPanic(atPos) == 64 'at'
 							foundAt = true
 							break
 						end 'at'
+
 						atPos = atPos + 1
 					end 'findAt'
 
@@ -197,32 +217,40 @@ public type URL implements Equatable, Stringable
 					// Parse host
 					if authStart < authEnd 'hasHostChars'
 						let hostFirstByte = trimmed.byteAtOrPanic(authStart)
+
 						if hostFirstByte == 91 'ipv6'
 							// IPv6: scan for ']'
 							var bracketEnd = authStart + 1
 							var foundBracket = false
+
 							while bracketEnd < authEnd 'findBracket'
 								if trimmed.byteAtOrPanic(bracketEnd) == 93 'closeBracket'
 									foundBracket = true
 									break
 								end 'closeBracket'
+
 								bracketEnd = bracketEnd + 1
 							end 'findBracket'
+
 							if not foundBracket 'noBracket'
 								throw URLError.invalidHost
 							end 'noBracket'
+
 							let hostSlice = try urlBytes.slice(authStart, bracketEnd + 1) otherwise panic("URL.parse: IPv6 host slice — bracketEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = bracketEnd + 1
 						end 'ipv6' else 'notIpv6'
 							// Regular host: scan until ':' or end of authority
 							var hostEnd = authStart
+
 							while hostEnd < authEnd 'findHostEnd'
 								if trimmed.byteAtOrPanic(hostEnd) == 58 'colon2'
 									break
 								end 'colon2'
+
 								hostEnd = hostEnd + 1
 							end 'findHostEnd'
+
 							let hostSlice = try urlBytes.slice(authStart, hostEnd) otherwise panic("URL.parse: host slice — hostEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = hostEnd
@@ -233,24 +261,32 @@ public type URL implements Equatable, Stringable
 					if authStart < authEnd 'maybePort'
 						if trimmed.byteAtOrPanic(authStart) == 58 'colonPort'
 							authStart = authStart + 1
+
 							// Port: remaining chars in authority must be digits
 							if authStart < authEnd 'hasPortDigits'
 								var portVal = 0
 								var pi = authStart
+
 								while pi < authEnd 'parsePort'
 									let pb = trimmed.byteAtOrPanic(pi)
+
 									if not urlIsDigit(pb) 'notDigit'
 										throw URLError.invalidPort
 									end 'notDigit'
+
 									portVal = portVal * 10 + (pb - 48)
+
 									if portVal > 65535 'overflow'
 										throw URLError.invalidPort
 									end 'overflow'
+
 									pi = pi + 1
 								end 'parsePort'
+
 								hasPort = true
 								portNum = portVal
 							end 'hasPortDigits'
+
 							// If no digits after ':', port is absent (edge case: http://host:/)
 						end 'colonPort'
 					end 'maybePort'
@@ -262,13 +298,17 @@ public type URL implements Equatable, Stringable
 
 		// 6. Parse path: collect until '?', '#', or end
 		let pathStart = pos
+
 		while pos < len 'parsePath'
 			let pb = trimmed.byteAtOrPanic(pos)
+
 			if pb == 63 or pb == 35 'delim2'
 				break
 			end 'delim2'
+
 			pos = pos + 1
 		end 'parsePath'
+
 		if pos > pathStart 'hasPath'
 			let pathSlice = try urlBytes.slice(pathStart, pos) otherwise panic("URL.parse: path slice — pathStart and pos within len")
 			path = String.init(pathSlice)
@@ -280,12 +320,15 @@ public type URL implements Equatable, Stringable
 				hasQuery = true
 				pos = pos + 1
 				let queryStart = pos
+
 				while pos < len 'parseQuery'
 					if trimmed.byteAtOrPanic(pos) == 35 'hash'
 						break
 					end 'hash'
+
 					pos = pos + 1
 				end 'parseQuery'
+
 				let querySlice = try urlBytes.slice(queryStart, pos) otherwise panic("URL.parse: query slice — queryStart and pos within len")
 				query = String.init(querySlice)
 			end 'questionMark'
@@ -328,10 +371,13 @@ public type URL implements Equatable, Stringable
 
 		if hasHost 'hasAuthority'
 			result = "{result}//"
+
 			if hasUserinfo 'hasUser'
 				result = "{result}{userinfo}@"
 			end 'hasUser'
+
 			result = "{result}{host}"
+
 			if hasPort 'hasPort'
 				result = "{result}:{port}"
 			end 'hasPort'
@@ -418,6 +464,7 @@ public type URL implements Equatable, Stringable
 			end 'refHasAuthority' else 'refNoAuthority'
 				if r.path.isEmpty() 'emptyPath'
 					tPath = base.path
+
 					if r.hasQuery 'refHasQuery'
 						tQuery = r.query
 						tHasQuery = true
@@ -434,9 +481,11 @@ public type URL implements Equatable, Stringable
 							tPath = urlRemoveDotSegments(merged)
 						end 'relativePath'
 					end 'checkAbsolute'
+
 					tQuery = r.query
 					tHasQuery = r.hasQuery
 				end 'hasRefPath'
+
 				// Authority comes from base
 				tHost = base.host
 				tHasHost = base.hasHost
@@ -445,6 +494,7 @@ public type URL implements Equatable, Stringable
 				tPort = base.port
 				tHasPort = base.hasPort
 			end 'refNoAuthority'
+
 			// Scheme comes from base
 			tScheme = base.scheme
 		end 'refRelative'
@@ -471,49 +521,61 @@ public type URL implements Equatable, Stringable
 		if scheme != other.scheme 'schemeDiff'
 			return false
 		end 'schemeDiff'
+
 		if path != other.path 'pathDiff'
 			return false
 		end 'pathDiff'
+
 		if hasHost != other.hasHost 'hasHostDiff'
 			return false
 		end 'hasHostDiff'
+
 		if hasHost 'compareHost'
 			if host != other.host 'hostDiff'
 				return false
 			end 'hostDiff'
 		end 'compareHost'
+
 		if hasPort != other.hasPort 'hasPortDiff'
 			return false
 		end 'hasPortDiff'
+
 		if hasPort 'comparePort'
 			if port != other.port 'portDiff'
 				return false
 			end 'portDiff'
 		end 'comparePort'
+
 		if hasUserinfo != other.hasUserinfo 'hasUIDiff'
 			return false
 		end 'hasUIDiff'
+
 		if hasUserinfo 'compareUI'
 			if userinfo != other.userinfo 'uiDiff'
 				return false
 			end 'uiDiff'
 		end 'compareUI'
+
 		if hasQuery != other.hasQuery 'hasQDiff'
 			return false
 		end 'hasQDiff'
+
 		if hasQuery 'compareQ'
 			if query != other.query 'qDiff'
 				return false
 			end 'qDiff'
 		end 'compareQ'
+
 		if hasFragment != other.hasFragment 'hasFragDiff'
 			return false
 		end 'hasFragDiff'
+
 		if hasFragment 'compareFrag'
 			if fragment != other.fragment 'fragDiff'
 				return false
 			end 'fragDiff'
 		end 'compareFrag'
+
 		return true
 	end 'equals'
 end 'URL'

@@ -172,6 +172,7 @@ let ExitCodeBuiltinName = b"ExitCode"
 // here branches on.
 export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
 	let primitive = primitiveTagOfTypeName(name)
+
 	if primitive != ValueTypeTag.unresolved 'aPrimitive'
 		return primitive
 	end 'aPrimitive'
@@ -179,6 +180,7 @@ export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
 	if name.equals(StringConformerName) 'isString'
 		return ValueTypeTag.string
 	end 'isString'
+
 	if name.equals(ExitCodeBuiltinName) 'isExitCode'
 		return ValueTypeTag.exitCode
 	end 'isExitCode'
@@ -214,9 +216,11 @@ export union AliasSlotIdentity
 	// The W14 DIGEST of `(declaring type, parameter name)` — not an interner id at all, which is why it needs
 	// a column of its own rather than the name slot.
 	typeParamToken(token TypeParamId)
+
 	// The whole-program `GenericInstanceId` keying `GenericInstanceRegistry`. Validated by the classifier, so
 	// no reader has to know that `NoGenericInstance` exists.
 	genericInstance(id GenericInstanceId)
+
 	// The tag and the name are the whole of the slot — every primitive, every `named`/`structRef`/`function`/
 	// `interfaceRef`, and `void`.
 	nameOnly
@@ -370,9 +374,11 @@ module function resolveTypes(project Project, module MaxonModule)
 		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath)
 
 		var resolvedParams = MaxonTypeArray.create()
+
 		for pt in func.maxonParamTypes 'eachParam'
 			resolvedParams.push(resolveType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath))
 		end 'eachParam'
+
 		func.maxonParamTypes = resolvedParams
 
 		// ⚠ **NOT one of the derived per-callee maps A2l routed through `FunctionNameIndex`, and the
@@ -416,6 +422,7 @@ function reportDeferredNameDiagnostics(project Project)
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for unusedIndex in 0 upto project.unusedTypeAliasDiagnostics.count() 'eachUnused'
 		let entry = try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")
+
 		// ⭐ **A DECLARATION THAT WAS ALREADY REFUSED IS NOT ALSO REPORTED AS UNUSED.** Of course it is
 		// unused — nothing accepted it — so the second diagnostic adds no fact and points the reader at
 		// the symptom instead of the cause. TWO tests, because there are two ways a declaration earns a
@@ -473,10 +480,12 @@ end 'reportDeferredNameDiagnostics'
 function declarationAlreadyReported(project Project, entry DeferredNameDiagnostic, upTo ElementIndex) returns bool
 	for i in 0 upto upTo 'each'
 		let reported = try project.diagnostics.get(i) otherwise panic("declarationAlreadyReported: i < upTo <= diagnostics.count() but get({i}) failed")
+
 		if reported.line == entry.line and reported.filePath.toString().equals(entry.filePath.toString()) 'sameDeclaration'
 			return true
 		end 'sameDeclaration'
 	end 'each'
+
 	return false
 end 'declarationAlreadyReported'
 
@@ -501,10 +510,12 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 	for (name, alias) in project.functionTypeAliases 'eachAlias'
 		var resolvedParams = MaxonTypeArray.create()
 		var preErasedNames = ByteArrayArray.create()
+
 		for param in alias.paramTypes 'eachParam'
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
 			// and nowhere else, so a name it spells means what that file means by it.
 			resolvedParams.push(resolveType(project, signatures: signatures, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), readerFilePath: alias.declFilePath))
+
 			// ⚠ **READ, NOT DERIVED — and it used to be derived, differently.** This tier once asked
 			// `signatures.containsEnumInAnyFile(param.typeName)` while the declared-function tier asked
 			// `Parser.aggregateNameOf`, so one parameter got two classifications: a per-instance ranged alias
@@ -513,6 +524,7 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 			// comparison over two different classifications would only have made the disagreement a refusal.
 			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
+
 		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), readerFilePath: alias.declFilePath), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
 	end 'eachAlias'
 end 'resolveFunctionAliasShapes'
@@ -579,9 +591,11 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
 		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
 		let gotParam = try got.paramTypes.get(i) otherwise panic("shapesAgreeUnder: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
+
 		if not resolvedTypesMatch(registry, signatures: signatures, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
 			return false
 		end 'paramMismatch'
+
 		// ⭐⭐ **AND THE PRE-ERASURE IDENTITY, WHICH `resolvedTypesMatch` STRUCTURALLY CANNOT ASK.** `resolveType`
 		// collapses a boxed union/enum (and a per-instance ranged alias) to bare `integer`, so `function(Shade)`
 		// and `function(Color)` are the SAME resolved parameter list and every enum agreed with every other.
@@ -625,6 +639,7 @@ end 'shapesAgreeUnder'
 // resolution, which is precisely what the shared renderer already knows how to print.
 export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	var unerasedParams = MaxonTypeArray.create()
+
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
 		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames, signatures: signatures))
 	end 'eachParam'
@@ -633,6 +648,7 @@ export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNa
 		void gives MaxonReturnType.void
 		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames, signatures: signatures))
 	end 'r'
+
 	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames, signatures: signatures)
 end 'formatFunctionShapeDisplay'
 
@@ -702,6 +718,7 @@ end 'returnedValueType'
 // types agree.
 function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSignatures, declared MaxonType, got MaxonType, pending FunctionTypePairArray) returns bool
 	let declaredTag = maxonTypeTag(declared)
+
 	if declaredTag != maxonTypeTag(got) 'differentTag'
 		return false
 	end 'differentTag'
@@ -727,18 +744,22 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 			unresolved or
 			void gives false
 		string gives false
+
 		// ⚠ A SEPARATE ARM, not `string to character`: the two are NOT adjacent — `function`,
 		// `typeParameter` and `genericInstance` sit between them and every one of those `gives true`.
 		// A range spanning them would silently flip three tags, which is the trap `ValueTypeTag`'s own
 		// declaration warns about ("a range adopts whatever is inserted between its endpoints").
 		character gives false
+
 		// A `named` type and a struct are NOMINAL — two of them share a tag and are still different types.
 		// (`named` should not survive resolution, which erases a ranged alias and a boxed union to
 		// `integer`; comparing its id costs nothing and is the correct answer if one does.)
 		named gives true
 		structRef gives true
+
 		// Handled above, by descent — a `function`-tagged type never reaches this table.
 		function gives true
+
 		// A type PARAMETER's id is a `(declaring type, parameter name)` DIGEST and a generic INSTANCE's is
 		// its whole-program `GenericInstanceId`; two function types agree only if they take the same
 		// instances and the same type parameters, so both are compared the same way for their own reasons.
@@ -748,9 +769,11 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 		// sides happening to come from one declaration.
 		typeParameter or
 			genericInstance gives true
+
 		// An EXISTENTIAL is nominal in its INTERFACE: a `Base`-typed place and a `Derived`-typed value are
 		// two different types, so the ids must match. Compared for `named`/`structRef`'s reason.
 		interfaceRef gives true
+
 		// A `cstring` carries no name — every one of them is the same type, exactly as every `String` is.
 		cstring gives false
 	end 'k'
@@ -772,6 +795,7 @@ function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures Prog
 
 	let declaredName = functionTypeNameOf(registry, nameId: declaredId)
 	let gotName = functionTypeNameOf(registry, nameId: gotId)
+
 	if pairIsUnderComparison(pending, declaredName: declaredName, gotName: gotName) 'cycle'
 		return true
 	end 'cycle'
@@ -823,6 +847,7 @@ function pairIsUnderComparison(pending FunctionTypePairArray, declaredName ByteA
 			return true
 		end 'match'
 	end 'eachPending'
+
 	return false
 end 'pairIsUnderComparison'
 
@@ -830,9 +855,11 @@ end 'pairIsUnderComparison'
 // in the descent must stay untouched, because a sibling parameter compared after this one is not under it.
 function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns FunctionTypePairArray
 	var extended = FunctionTypePairArray.create()
+
 	for pair in pending 'eachPending'
 		extended.push(pair)
 	end 'eachPending'
+
 	extended.push(FunctionTypePair.create(declaredName, gotName: gotName))
 	return extended
 end 'pendingWithPair'
@@ -900,6 +927,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
+
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
 	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints))
 end 'syncResolvedSignature'
@@ -925,9 +953,11 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 	end 'alreadyExact'
 
 	var sourceParams = MaxonTypeArray.create()
+
 	for i in 0 upto declaredCount 'eachDeclared'
 		sourceParams.push(try func.maxonParamTypes.get(i) otherwise panic("sourceParamTypesOf: '{String.from(func.name)}' declares {declaredCount} parameter names but its type column holds only {func.maxonParamTypes.count()} — the compiler may APPEND a hidden parameter (a lifted closure's `__env`), never omit a declared one"))
 	end 'eachDeclared'
+
 	return sourceParams
 end 'sourceParamTypesOf'
 
@@ -952,6 +982,7 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		exitCode then return t
 		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath)
 		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
+
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
 		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
 		// that mapping is SYNTACTIC — it needs the enclosing declaration and no registry, so the
@@ -960,15 +991,18 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		// own body, arriving back here through a second `resolveTypes` over a re-resolved signature
 		// would find it idempotent. Nothing to do either way.
 		structRef then return t
+
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints `MaxonType.string`
 		// directly for the `String` builtin (syntactically, like `Self` → `structRef`), so it never
 		// arrives here as a `named` to resolve. This arm is what makes that concrete type idempotent
 		// under a second `resolveTypes` — there is nothing to do.
 		string then return t
+
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference`/`emitFunctionRef` mint
 		// `MaxonType.function` directly (a function alias re-tagged, or a functionRef's own name), so it
 		// never arrives as a `named` to resolve. Idempotent under a second `resolveTypes` — nothing to do.
 		function then return t
+
 		// Already concrete, and by the PARSER (P1.6-A): `Parser.parseTypeReference` mints a
 		// `typeParameter` for a `T` in scope and a `genericInstance` for a generic-instance alias
 		// reference, both directly. There is no substitution at this trivial slice — a `T` stays `T` (an
@@ -977,9 +1011,11 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		// source-derived digest since W14, so there is nothing here a resolution could resolve.
 		typeParameter then return t
 		genericInstance then return t
+
 		// Already concrete — `Parser.parseTypeReference` mints a `character` directly for the
 		// `Character` builtin name, exactly as it mints `string` for `String`.
 		character then return t
+
 		// Already concrete — `Parser.parseTypeReference` mints an `interfaceRef` directly for a name the
 		// whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named` that
 		// turns out to be an interface. Resolution leaves it untouched, as it leaves `structRef`.
@@ -1194,6 +1230,7 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// cannot arrive. The stale copy is kept visible rather than deleted because it is the second time this
 	// file's own header has had to record that a reservation moved and a justification elsewhere did not.
 	let builtinTag = builtinTypeNameTag(name)
+
 	if builtinTag == ValueTypeTag.exitCode 'isExitCode'
 		return maxonTypeOfTag(builtinTag, nameId: id)
 	end 'isExitCode'
@@ -1370,6 +1407,7 @@ function barePrimitiveAliasNameFor(spelling String) returns String
 	if spelling == "int" 'anInt'
 		return "MyInt"
 	end 'anInt'
+
 	if spelling == "float" 'aFloat'
 		return "MyFloat"
 	end 'aFloat'
@@ -1381,6 +1419,7 @@ function barePrimitiveExampleRangeFor(spelling String) returns String
 	if spelling == "int" 'anInt'
 		return "0 to 100"
 	end 'anInt'
+
 	if spelling == "float" 'aFloat'
 		return "0.0 to 1.0"
 	end 'aFloat'

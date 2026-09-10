@@ -168,6 +168,7 @@ test 'no corpus directory holds a source that is not a test'
 	// case. Asking only about the corpus would have left the rule this project states about itself
 	// enforced nowhere.
 	var offenders = sweepableSourcesUnder(readableDir(FixturesDir))
+
 	for source in sweepableSourcesUnder(readableDir(ProjectDir)) 'eachHere'
 		offenders.push(source)
 	end 'eachHere'
@@ -222,6 +223,7 @@ end 'checkFixture'
 // the thing that never ran.
 export function runFixture(caseName String) returns CollectedOutput
 	let binary = testedCompilerPath()
+
 	if not File.exists(binary) 'noBinary'
 		panic("fixtures.test: the gate could not run — there is no compiler at {binary.toString()}. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
@@ -270,6 +272,7 @@ function extraArgvIn(caseDir FilePath, caseName String) returns StringArray
 	var extras = StringArray.create()
 
 	let path = caseDir.join("{ExtraArgvFileName}")
+
 	if not File.exists(path) 'takesNoArguments'
 		return extras
 	end 'takesNoArguments'
@@ -278,6 +281,7 @@ function extraArgvIn(caseDir FilePath, caseName String) returns StringArray
 
 	for line in text.split("\n") 'eachLine'
 		let argument = line.trim()
+
 		if argument.isEmpty() 'blankLine'
 			continue
 		end 'blankLine'
@@ -304,6 +308,7 @@ end 'expectedExitCodeIn'
 // `holds` is what the missing file would have said, which is what a reader needs in order to write it.
 function requiredFixtureText(caseDir FilePath, fileName String, caseName String, holds String) returns String
 	let path = caseDir.join("{fileName}")
+
 	if not File.exists(path) 'noExpectation'
 		panic("fixtures.test: the gate could not run — the '{caseName}' case has no {fileName}, so nothing says {holds}. A case directory with no expectation proves nothing, and reads exactly like one that passed.")
 	end 'noExpectation'
@@ -320,6 +325,7 @@ end 'requiredFixtureText'
 // each site repeating it is how the sentence that explains it comes to exist in only some of them.
 function readableDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not Directory.isDirectory(path) 'notThere'
 		panic("fixtures.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
@@ -355,6 +361,7 @@ function countCaseFiles() returns FixtureCaseTally
 
 	for entry in listing(readableDir(ProjectDir)) 'eachEntry'
 		let name = entry.filename()
+
 		if name.endsWith(TestSourceSuffix) and name != SharedHelperFileName 'aCaseFile'
 			files = files + 1
 		end 'aCaseFile'
@@ -380,6 +387,7 @@ function sweepableSourcesUnder(root FilePath) returns StringArray
 
 	for entry in listing(root) 'eachEntry'
 		let name = entry.filename()
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			if name == ProjectProductsDirName 'buildProducts'
 				continue
@@ -388,6 +396,7 @@ function sweepableSourcesUnder(root FilePath) returns StringArray
 			for nested in sweepableSourcesUnder(entry) 'eachNested'
 				sweepable.push(nested)
 			end 'eachNested'
+
 			continue
 		end 'aDirectory'
 
@@ -403,6 +412,7 @@ end 'sweepableSourcesUnder'
 // above an `isEmpty` on the very text a reader has to act on.
 function listedLines(paths StringArray) returns String
 	var listed = ""
+
 	for path in paths 'eachPath'
 		listed.append("\n  {path}")
 	end 'eachPath'

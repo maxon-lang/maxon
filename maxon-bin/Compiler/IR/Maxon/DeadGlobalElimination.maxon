@@ -140,6 +140,7 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 		// a value and terminators are the returns and branches), so the body ops are the whole of it.
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("liveGlobalLabels: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("liveGlobalLabels: opRef {opIdx} not in module.ops")
 				noteGlobalLabel(op, live: live)
@@ -190,6 +191,7 @@ export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool
 			condBranch or
 			branch then return false
 		globalAddr then return true
+
 		// `loadIndirect` … `witnessTryDispatch`: the load and the store that FOLLOW a `globalAddr` take the
 		// address as a VALUE — the label is on the op above and nowhere else — and no later variant names
 		// a data label at all.
@@ -210,11 +212,14 @@ export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool
 			switch or
 			witnessDispatch or
 			witnessTryDispatch then return false
+
 		// A rendered panic's message is a VALUE, not a data label — it is `panicAbort` that names one, and
 		// that is an `.rdata` blob the Std tier interns, never a `.data` global.
 		panicAbortValue then return false
+
 		// The error-flag encode's operand is a VALUE and its result is one; it names no data label at all.
 		errorFlagEncode then return false
+
 		// The mailbox is per-STRUCT and lives in the heap, deliberately — a `.data` word for it would need a
 		// `MultiMSharing` class and would re-mint every golden's `data {` table. A reply cell is a slab-cut GT
 		// struct for the same reason. So no service op names a label (`MailboxRuntime`'s header carries the

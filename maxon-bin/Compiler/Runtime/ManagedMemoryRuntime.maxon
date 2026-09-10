@@ -212,6 +212,7 @@ let StringTableRecordPrefix = "__strtab_rec_"
 export type ImmortalStringTable
 	export let recordLabel as String
 	export let bufferLabel as String
+
 	// One immortal String record per element, IN SLOT ORDER — which is the order the relocations must be
 	// recorded in, because a slot's index is its offset.
 	export let elementLabels as StringArray
@@ -248,6 +249,7 @@ export function registerImmortalStringTableRecord(globalData GlobalDataTable, te
 	end 'notAPointerSlot'
 
 	var elementLabels = StringArray.create()
+
 	for text in texts 'eachElement'
 		elementLabels.push(registerStringLiteralRecord(globalData, bytes: text, debugStream: debugStream))
 	end 'eachElement'
@@ -263,9 +265,11 @@ end 'registerImmortalStringTableRecord'
 // the dedup argument at the door above. Every slot is OVERWRITTEN with a real address by the writers.
 function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns ByteArray
 	var buffer = ByteArray.create()
+
 	for label in elementLabels 'eachSlot'
 		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as ParsedInt, byteCount: ManagedArrayElementBytes as BytePos))
 	end 'eachSlot'
+
 	return buffer
 end 'stringTableBufferBytes'
 
@@ -987,15 +991,19 @@ export function cursorSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ManagedCursorAdvanceName) 'advance'
 		return CursorAdvanceMethod
 	end 'advance'
+
 	if callee.equals(ManagedCursorRetreatName) 'retreat'
 		return CursorRetreatMethod
 	end 'retreat'
+
 	if callee.equals(ManagedCursorSeekName) 'seek'
 		return CursorSeekMethod
 	end 'seek'
+
 	if callee.equals(ManagedCursorPeekName) 'peek'
 		return CursorPeekMethod
 	end 'peek'
+
 	panic("cursorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `{String.from(ManagedMemoryCursorBuiltinBaseName)}` member — this map is asked ONLY behind `isThrowingCursorRuntimeCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every cursor member `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'cursorSourceMethodName'
 
@@ -1055,38 +1063,49 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ManagedMemCreateName) 'create'
 		return ManagedMemoryCreateMethod
 	end 'create'
+
 	if callee.equals(ManagedSetLengthName) 'setLength'
 		return ManagedMemorySetLengthMethod
 	end 'setLength'
+
 	if callee.equals(ManagedSetByteName) 'setByte'
 		return ManagedMemorySetByteMethod
 	end 'setByte'
+
 	if callee.equals(ManagedByteAtName) 'byteAt'
 		return ByteAtMethod
 	end 'byteAt'
+
 	if callee.equals(ManagedMemGrowName) 'grow'
 		return ManagedMemoryGrowMethod
 	end 'grow'
+
 	if callee.equals(ManagedMemSetName) 'set'
 		return ArraySetMethod
 	end 'set'
+
 	if callee.equals(ManagedFillName) 'fill'
 		return ManagedMemoryFillMethod
 	end 'fill'
+
 	if callee.equals(ManagedMemSwapName) 'swap'
 		return ManagedMemorySwapMethod
 	end 'swap'
+
 	if callee.equals(ManagedMemShiftRightName) 'shiftRight'
 		return ManagedMemoryShiftRightMethod
 	end 'shiftRight'
+
 	if callee.equals(ManagedMemShiftLeftName) 'shiftLeft'
 		return ManagedMemoryShiftLeftMethod
 	end 'shiftLeft'
+
 	// ⚠ The cursor's PRODUCER is a buffer member, so it is spelled here; its five consumers have a receiver
 	// of their own and are `cursorSourceMethodName`'s.
 	if callee.equals(ManagedCursorCreateName) 'createCursor'
 		return ManagedMemoryCreateCursorMethod
 	end 'createCursor'
+
 	panic("managedMemorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a `__ManagedMemory` runtime callee — this map is asked ONLY behind `isManagedMemoryMemberCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every buffer member `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedMemorySourceMethodName'
 
@@ -1116,18 +1135,23 @@ export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ManagedGetName) 'get'
 		return GetMethod
 	end 'get'
+
 	if callee.equals(ManagedSetName) 'set'
 		return ArraySetMethod
 	end 'set'
+
 	if callee.equals(ManagedFirstName) 'first'
 		return ArrayFirstMethod
 	end 'first'
+
 	if callee.equals(ManagedRemoveName) 'remove'
 		return RemoveMethod
 	end 'remove'
+
 	if callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) 'slice'
 		return SliceMethod
 	end 'slice'
+
 	panic("arrayAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Array` accessor — this map is asked ONLY behind `isThrowingArrayAccessorCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every accessor `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user")
 end 'arrayAccessorSourceMethodName'
 
@@ -1178,6 +1202,7 @@ function claimArrayErrorOrdinals(project Project, declaration EnumLayout)
 	var arrayErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ArrayErrorOrdinalInstaller)
 	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrayErrorIndexOutOfBoundsOrdinal)
 	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrayErrorEmptySlotOrdinal)
+
 	// `ArrayError` declares exactly these two, so this walk is already total — which is the ONE shape that
 	// makes the call look redundant and is exactly why it is not: the day a third case is declared, this is
 	// what says so rather than admitting it unwatched.
@@ -1187,6 +1212,7 @@ end 'claimArrayErrorOrdinals'
 function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 	var memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)
 	memoryErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: MemoryIndexOutOfBoundsOrdinal)
+
 	// The two this runtime never throws — see the ordinal block beside `MemoryIndexOutOfBoundsOrdinal`.
 	memoryErrors.neverThrown(ManagedMemoryEmptySlotCaseName, ordinal: MemoryEmptySlotOrdinal)
 	memoryErrors.neverThrown(ManagedMemorySliceOutOfBoundsCaseName, ordinal: MemorySliceOutOfBoundsOrdinal)
@@ -1202,6 +1228,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	if not usage.usesManagedMemory 'noArray'
 		return
 	end 'noArray'
+
 	// `__mm_incref` is built by `installMmRuntime` (under `usesIncref || usesManagedMemory`), not here: the parser
 	// now emits `__mm_incref` too (the `try … otherwise` phi reconciliation) in programs that touch no
 	// array, so its install can no longer live behind `usesManagedMemory` alone — see that function's note.
@@ -1215,6 +1242,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedPush(module)
 	buildManagedGet(module)
 	buildManagedGetUnchecked(module)
+
 	// ⚠ **TWO IN-BOUNDS ENTRIES WERE INSTALLED HERE AND BUILT BY `Runtime/VectorRuntime.maxon` (ARR6), AND
 	// BOTH THE FILE AND THE ENTRIES ARE GONE (W190)** — the bounds ELISION was `Vector`'s, and it retired with
 	// the members that reached it. See `Parser.elementAccessCallee`'s grave.
@@ -1237,6 +1265,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildArrayHash(module, name: ManagedHashName)
 	buildArrayEquals(module, name: ManagedEqName)
 	buildManagedDecref(module)
+
 	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
 	// R4.6, three relocators) — part of the all-or-nothing `usesManagedMemory` install for the reason the header
 	// gives: `__`-prefixed functions are excluded from the goldens, so an unreferenced one costs nothing a
@@ -1259,6 +1288,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedCursorNavigator(module, name: ManagedCursorAdvanceName, step: CursorStep.forward)
 	buildManagedCursorNavigator(module, name: ManagedCursorRetreatName, step: CursorStep.backward)
 	buildManagedCursorNavigator(module, name: ManagedCursorSeekName, step: CursorStep.absolute)
+
 	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedElementCopy` implies `usesManagedMemory` (they are
 	// `__managed_`-prefixed), so this install is always reached when the bit is set.
@@ -1267,12 +1297,14 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedCloneManaged(module)
 		buildManagedAppendManaged(module)
 	end 'managedCopy'
+
 	// The OPAQUE-`T` copy wrappers (P1.7 slice 3b-vi-b-β) — installed under their OWN bit, which also implies
 	// `usesManagedElementCopy` (`recordCallUsage`), so the α helpers they branch to are already built above.
 	if usage.usesOpaqueElementCopy 'opaqueCopy'
 		buildManagedSliceOpaque(module)
 		buildManagedAppendOpaque(module)
 	end 'opaqueCopy'
+
 	// The two SOLENESS walks — under their OWN bit, so a program that hands nothing to a green thread
 	// does not carry them. Both entries are installed together for the reason `buildManagedSole` states: they
 	// are one operation split only by whether the elements are managed, and a `String` field reaches the
@@ -1281,6 +1313,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedSole(module, name: ManagedSoleName, walksElements: false)
 		buildManagedSole(module, name: ManagedSoleManagedName, walksElements: true)
 	end 'soleWalk'
+
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installManagedMemoryRuntime'
 
@@ -1294,6 +1327,7 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 	if not usage.usesDropTypeParam 'noDrop'
 		return
 	end 'noDrop'
+
 	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.destroyThroughWord)
 end 'installDropTypeParamRuntime'
 
@@ -1305,6 +1339,7 @@ export function installRetainTypeParamRuntime(module StdModule, usage RuntimeUsa
 	if not usage.usesRetainTypeParam 'noRetain'
 		return
 	end 'noRetain'
+
 	buildRecordGatedAction(module, symbolName: RetainTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.retainThroughWord)
 end 'installRetainTypeParamRuntime'
 
@@ -1315,6 +1350,7 @@ export function installDropExistentialRuntime(module StdModule, usage RuntimeUsa
 	if not usage.usesDropExistential 'noDrop'
 		return
 	end 'noDrop'
+
 	buildRecordGatedAction(module, symbolName: DropExistentialName, wordOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.destroyThroughWord)
 end 'installDropExistentialRuntime'
 
@@ -1325,6 +1361,7 @@ export function installRetainExistentialRuntime(module StdModule, usage RuntimeU
 	if not usage.usesRetainExistential 'noRetain'
 		return
 	end 'noRetain'
+
 	buildRecordGatedAction(module, symbolName: RetainExistentialName, wordOffset: WitnessRetainFuncOffset, action: RecordGatedAction.retainThroughWord)
 end 'installRetainExistentialRuntime'
 
@@ -1349,9 +1386,11 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 		if isManagedMemoryRuntimeCallee(func.name) 'arr'
 			let stamped = throwsClauseIsThrowing(func.throwsTypeName)
 			let named = isThrowingManagedMemoryRuntimeCallee(func.name)
+
 			if stamped and not named 'stampedNotNamed'
 				panic("installManagedMemoryRuntime: '{String.from(func.name)}' stamps a `throws ArrayError` clause but isThrowingManagedMemoryRuntimeCallee does NOT name it — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
 			end 'stampedNotNamed'
+
 			if named and not stamped 'namedNotStamped'
 				panic("installManagedMemoryRuntime: isThrowingManagedMemoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
 			end 'namedNotStamped'
@@ -1370,9 +1409,11 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 			if isThrowingArrayAccessorCallee(func.name) 'accessorHasSourceMethod'
 				requireQuotableSourceSpelling(arrayAccessorSourceMethodName(func.name), callee: func.name)
 			end 'accessorHasSourceMethod'
+
 			if isManagedMemoryMemberCallee(func.name) 'bufferHasSourceMethod'
 				requireQuotableSourceSpelling(managedMemorySourceMethodName(func.name), callee: func.name)
 			end 'bufferHasSourceMethod'
+
 			if isThrowingCursorRuntimeCallee(func.name) 'cursorHasSourceMethod'
 				requireQuotableSourceSpelling(cursorSourceMethodName(func.name), callee: func.name)
 			end 'cursorHasSourceMethod'
@@ -1387,6 +1428,7 @@ union RecordGatedAction
 	// DESTROY `value` through the loaded word with a `callIndirect` — `__drop_type_param`,
 	// `__drop_existential`. A void `(i64, i64) -> void`, so the taken path falls into the shared exit.
 	destroyThroughWord
+
 	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`,
 	// `__retain_type_param`.
 	// A `(i64, i64) -> i64` that ANSWERS WITH WHAT THE WORD HANDED BACK, which is the whole difference: the
@@ -1518,6 +1560,7 @@ end 'emitManagedByteBuffer'
 union CopyChunk
 	// One `i64` load and one `i64` store per trip — what `[0, byteCount and -8)` is covered by.
 	word
+
 	// One `u8` load and one `u8` store per trip — the `[byteCount and -8, byteCount)` tail, and the only
 	// width that can finish a range whose length is not a multiple of eight.
 	byte
@@ -1987,12 +2030,15 @@ end 'emitElementByteLen'
 type PackedElementPlacement
 	// Buffer-relative byte where the field's first (and, when packed, only) byte sits.
 	export var byteOffset as ValueId
+
 	// Bits to shift the loaded word right by to bring the field to bit 0. Always 0 for a byte-strided
 	// element, because its bit position is a multiple of 8.
 	export var shiftBits as ValueId
+
 	// `(1 << bits) - 1`, computed as `-1 >>logical (64 - bits)` so the machine-word width is not a special
 	// case. All ones for a byte-strided 8-byte element, which is what makes the mask a no-op there.
 	export var widthMask as ValueId
+
 	// How many BYTES the field touches: 1 for every packed width (they divide a byte, so a field cannot
 	// straddle), and exactly `element_size` for a byte-strided element.
 	export var byteSpan as ValueId
@@ -2071,6 +2117,7 @@ end 'emitFieldPlacement'
 export union SingleOpStride
 	// One machine word per element — every `int`, every pointer, every managed element.
 	word
+
 	// One byte per element — every `ByteArray` and every 1-byte enum slot.
 	byte
 end 'SingleOpStride'
@@ -2122,9 +2169,11 @@ export union StrideDispatchPlan
 	// The stride is not known at compile time — an opaque element in a shared generic body, an array reached
 	// through an interface or an existential, a receiver this tier could not type. The runtime fork stands.
 	runtimeFork
+
 	// The stamp is known and selects this single-op arm. The other arm, the fork and the `element_size@24`
 	// load are all dead and none of them is emitted.
 	singleArm(stride SingleOpStride)
+
 	// The stamp is known and selects NEITHER arm: a 2- or 4-byte element, an unset stride, and every
 	// SUB-BYTE PACKED width (a NEGATIVE stamp — `LayoutDescriptor.elementStrideOf` owns that encoding).
 	// Every fast arm is dead, so the site keeps the runtime call and nothing is expanded around it.
@@ -2171,6 +2220,7 @@ end 'StrideDispatchPlan'
 // the runtime would not.
 export function strideDispatchPlanForStamp(stamp ElementStride) returns StrideDispatchPlan
 	let stampBytes = stamp as ParsedInt
+
 	if stampBytes == singleOpStrideBytes(SingleOpStride.word) 'oneMachineWord'
 		return StrideDispatchPlan.singleArm(SingleOpStride.word)
 	end 'oneMachineWord'
@@ -2491,6 +2541,7 @@ function emitPackedElementMove(module StdModule, func IrFunction, cur IrBlock, d
 	var body = loop.body
 
 	var step = loop.index
+
 	if fromTheTop 'highestElementFirst'
 		let lastOffset = emitBin(module, block: body, a: count, b: emitConst(module, block: body, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 		step = emitBin(module, block: body, a: lastOffset, b: loop.index, opcode: StdBinOpcode.sub, ids: ids)
@@ -3293,6 +3344,7 @@ function buildManagedPush(module StdModule)
 	let required = emitBin(module, block: entry, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let grown = ids.mint()
 	module.appendOp(entry, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: required)))
+
 	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
@@ -3348,6 +3400,7 @@ function buildManagedGetUnchecked(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
+
 	// `emitLoadElem` adds its own byte loop and branches to this exit on completion, so the block must
 	// exist before it runs — the same order `emitLoadElemAndOkReturn` creates its `checkDtor` in.
 	var done = module.addBlock(func, label: b"done")
@@ -3586,6 +3639,7 @@ function buildManagedResize(module StdModule)
 
 	let es = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+
 	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING (P1.7 slice 3a).** A shrink drops the
 	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
@@ -3643,6 +3697,7 @@ function buildManagedClear(module StdModule)
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+
 	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING (P1.7 slice 3a).** `clear` drops the
 	// whole live region, so each managed element must be destroyed or it leaks; the destroy MUST run before the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
@@ -4369,6 +4424,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 	// A BlockId rather than a rebound block handle: threading an `IrBlock` through a reassigned `var` trips
 	// the struct-aliasing policy (E3078), and a terminator names an id anyway.
 	var limitEntryId = checkHigh.id
+
 	if isWrite 'writerMustOwnItsBuffer'
 		var detach = module.addBlock(func, label: b"detach")
 		limitEntryId = detach.id
@@ -4381,6 +4437,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 
 	let declaredLimit = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordCapacityOffset if isWrite else ManagedRecordLengthOffset, ids: ids)
 	var limit = declaredLimit
+
 	if addressesBytes 'byteAddressed'
 		let es = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 		limit = emitElementByteLen(module, block: checkHigh, count: declaredLimit, es: es, ids: ids)
@@ -5021,6 +5078,7 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	let cursor = 0 as ValueId
 
 	var target = 1 as ValueId
+
 	if not takesTarget 'relativeToTheCurrentPosition'
 		let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
 		let one = emitConst(module, block: entry, value: 1, ids: ids)
@@ -5167,6 +5225,7 @@ function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, s
 	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(CascadeAction.clone), ids: ids)
 
 	let cloned = ids.mint()
+
 	// Both ABI masks are 0 for the reason `emitElementDestructorCall`'s are: a stamped `copyFunc@32` is a
 	// `(box) -> newBox`, so its one argument is a whole-machine-word POINTER — never a float, never sub-word.
 	module.appendOp(visit, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(loop.element)))
@@ -5297,11 +5356,13 @@ end 'buildManagedCloneManaged'
 // hold, and a second element-bearing view shape would otherwise need this same line added back.
 function buildManagedSole(module StdModule, name ByteArray, walksElements bool)
 	var paramTypes = oneI64Param()
+
 	if walksElements 'perElementWalk'
 		paramTypes.push(StdType.i64)
 	end 'perElementWalk'
 
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+
 	// ⚠ BOTH entries reserve two parameter id slots, so `soleFn` is either parameter 1 or nothing at all —
 	// `buildListClone`'s rule, and it is what keeps the name from denoting a temporary in the other entry.
 	var ids = ValueMinter.create(2)
@@ -5331,6 +5392,7 @@ function buildManagedSole(module StdModule, name ByteArray, walksElements bool)
 	end 'eachElement' else 'noElementWalk'
 		module.setTerminator(countable, op: StdOp.branch(done.id))
 	end 'noElementWalk'
+
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)

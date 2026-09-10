@@ -179,6 +179,7 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	module.appendOp(entry, op: StdOp.osStdHandle(handle, whichId: which))
 	let rawFileType = ids.mint()
 	module.appendOp(entry, op: StdOp.osHandleFileType(rawFileType, handleId: handle))
+
 	// MASKED, for `StdOp.osHandleFileType`'s stated reason: the answer is a DWORD, so the upper half of the
 	// register carries whatever the callee left there and a raw 64-bit compare against 2 would call a real
 	// console a redirect. `__md_exists` records the identical hazard for `GetFileAttributesA`.
@@ -219,10 +220,12 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	// bytes and a terminator into a five-byte buffer.
 	let foldMask = emitConst(module, block: compareDumb, value: AsciiCaseFoldMaskByte, ids: ids)
 	var termWord = 0 as ValueId
+
 	for position in 0 upto DumbTermLength 'eachTermByte'
 		let raw = ids.mint()
 		module.appendOp(compareDumb, op: StdOp.loadIndirect(raw, addrId: scratch, offset: position as ParsedInt, valueType: StdType.u8))
 		let folded = emitBin(module, block: compareDumb, a: raw, b: foldMask, opcode: StdBinOpcode.bitOr, ids: ids)
+
 		if position == 0 'theLowByte'
 			termWord = folded
 			continue

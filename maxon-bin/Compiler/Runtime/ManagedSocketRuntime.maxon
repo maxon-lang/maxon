@@ -266,12 +266,15 @@ export function managedSocketSourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ManagedSocketTcpConnectName) 'tcpConnect'
 		return ManagedSocketTcpConnectMethod
 	end 'tcpConnect'
+
 	if callee.equals(ManagedSocketSendFromName) 'sendFrom'
 		return ManagedSocketSendFromMethod
 	end 'sendFrom'
+
 	if callee.equals(ManagedSocketRecvName) 'recv'
 		return ManagedSocketRecvMethod
 	end 'recv'
+
 	panic("managedSocketSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedSocket` callee — this map is asked ONLY behind `isThrowingManagedSocketRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedSocket*Method` constant. `installManagedSocketRuntime`'s drift guard asks this for every throwing `__ms_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedSocketSourceMethodName'
 
@@ -363,6 +366,7 @@ enum SocketResolveShape
 	// `AddrInfoAddrOffset` is correct for both of its lanes and would be wrong for the lane that does not
 	// use it — which is one more reason the fork is a graph and not an offset table.
 	addrInfoList
+
 	// The Linux lanes: this file's own `__ms_resolve4`, over the existing file and socket ops.
 	builtinResolver
 end 'SocketResolveShape'
@@ -762,6 +766,7 @@ function buildManagedSocketClose(module StdModule)
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids)
 	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+
 	// `entry` dominates `doClose`, so the decoded socket is simply in scope there — the dominance argument
 	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
 	let socket = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
@@ -832,6 +837,7 @@ function claimManagedSocketOrdinals(project Project, declaration EnumLayout)
 	socketErrors.claim(ManagedSocketConnectFailedCaseName, ordinal: ManagedSocketConnectFailedOrdinal)
 	socketErrors.claim(ManagedSocketSendFailedCaseName, ordinal: ManagedSocketSendFailedOrdinal)
 	socketErrors.claim(ManagedSocketRecvFailedCaseName, ordinal: ManagedSocketRecvFailedOrdinal)
+
 	// A graceful peer close is a plain 0 RETURN from `recv`, so the runtime never throws this — see the
 	// ordinal block at the top of this file.
 	socketErrors.neverThrown(ManagedSocketConnectionClosedCaseName, ordinal: ManagedSocketConnectionClosedOrdinal)
@@ -868,11 +874,14 @@ export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage
 		if not isManagedSocketRuntimeCallee(func.name) 'notOurs'
 			continue
 		end 'notOurs'
+
 		let named = isThrowingManagedSocketRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+
 		if stamped and not named 'stampedNotNamed'
 			panic("installManagedSocketRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedSocketRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
 		end 'stampedNotNamed'
+
 		if named and not stamped 'namedNotStamped'
 			panic("installManagedSocketRuntime: isThrowingManagedSocketRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
 		end 'namedNotStamped'

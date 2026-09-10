@@ -65,10 +65,12 @@
 type ServiceBlockingGraph
 	// Node ⇒ the service type's declared name.
 	var serviceNames as ByteArrayArray
+
 	// The edges, as the parallel columns `buildCsr` consumes: `edgeOwners[i]` is the service whose message
 	// blocks, `edgeAwaited[i]` the service it blocks on.
 	var edgeOwners as CsrColumn
 	var edgeAwaited as CsrColumn
+
 	// Per edge: the MESSAGE that blocks, and where the blocking `await` is written.
 	var edgeMessages as ByteArrayArray
 	var edgeSites as ServiceAwaitSiteArray
@@ -118,6 +120,7 @@ type ServiceBlockingGraph
 		for index in 0 upto self.edgeOwners.count() 'eachEdge'
 			let ownerAt = try self.edgeOwners.get(index) otherwise panic("ServiceBlockingGraph.edgeIndexBetween: edgeOwners.get OOB at {index}")
 			let awaitedAt = try self.edgeAwaited.get(index) otherwise panic("ServiceBlockingGraph.edgeIndexBetween: edgeAwaited.get OOB at {index}")
+
 			if ownerAt == owner and awaitedAt == awaited 'theStepThePathTook'
 				return index
 			end 'theStepThePathTook'
@@ -156,8 +159,10 @@ let NoServiceNode = i64.max as CsrIndex
 module function checkServiceCallCycles(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	let graph = buildServiceBlockingGraph(signatures, funcNames: funcNames, survey: survey)
 	let onCycle = nodesOnACycle(graph.adjacency())
+
 	for node in 0 upto graph.nodeCount() 'eachService'
 		let lies = try onCycle.get(node) otherwise panic("checkServiceCallCycles: node {node} is outside the {onCycle.count()}-node answer the graph was built over")
+
 		if lies 'liesOnACycle'
 			reportServiceCallCycle(project, graph: graph, node: node)
 			return
@@ -179,6 +184,7 @@ function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames Funct
 	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
 		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, survey: survey)
 	end 'eachAwaitedService'
+
 	return graph
 end 'buildServiceBlockingGraph'
 
@@ -200,18 +206,22 @@ end 'messageOwnerNameOf'
 function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	let awaitedName = graph.serviceNameOf(awaited)
 	var seeds = BoolArray.create()
+
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		seeds.push(false)
 	end 'eachFunc'
+
 	survey.awaits.seedFunctionsAwaiting(awaitedName, seeds: seeds)
 
 	let blocks = markSeededCallers(survey.edges, seeds: seeds, nodeCount: survey.funcCount())
+
 	for funcIndex in 0 upto survey.funcCount() 'eachBlockedFunc'
 		if not (try blocks.get(funcIndex) otherwise panic("addBlockingEdgesTo: blocks.get OOB at {funcIndex} below count {blocks.count()}")) 'blocksOnNothing'
 			continue
 		end 'blocksOnNothing'
 
 		let ownerName = survey.serviceOf(funcIndex)
+
 		if ownerName.isEmpty() 'notAMessage'
 			continue
 		end 'notAMessage'
@@ -225,6 +235,7 @@ end 'addBlockingEdgesTo'
 // nothing — see `ServiceBlockingGraph.nodeOfService` for why that is a real answer.
 function noteBlockingEdge(graph ServiceBlockingGraph, owner ByteArray, awaited CsrIndex, message ByteArray, site ServiceAwaitSite)
 	let ownerNode = graph.nodeOfService(owner)
+
 	if ownerNode == NoServiceNode 'spawnsNoSuchService'
 		return
 	end 'spawnsNoSuchService'
@@ -239,6 +250,7 @@ end 'noteBlockingEdge'
 // without saying which.
 function blockingSiteFor(funcIndex FuncIndex, awaitedName ByteArray, awaits ServiceAwaitRoster) returns ServiceAwaitSite
 	let own = awaits.rowWhere(funcIndex, awaitedName: awaitedName)
+
 	if own != NoAwaitRow 'awaitsItHere'
 		return awaits.siteAt(own)
 	end 'awaitsItHere'
@@ -266,6 +278,7 @@ module function opIsACallGraphEdge(op MaxonOp) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		noCallee gives false
 		direct gives true
+
 		// A `functionRef` names a function VALUE rather than a call — nothing runs at that op, and the
 		// `indirectCall` that eventually runs it is a target this walk cannot follow (see the header's
 		// incompleteness note).
@@ -353,6 +366,7 @@ end 'reportServiceCallCycle'
 // `.rdata` literal is promoted to an owned copy at the bind) and carries its own bytes.
 function serviceCallCycleMessage(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex) returns String
 	var message = "service call cycle — these messages can deadlock waiting on each other:"
+
 	for index in 0 upto cycle.count() 'eachHop'
 		message.append(serviceCallCycleHopLine(graph, cycle: cycle, start: start, index: index))
 	end 'eachHop'

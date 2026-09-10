@@ -456,8 +456,10 @@ typealias CallBarrierCountColumn = Array with CallBarrierCount
 // would have to name all four at each of five call sites.
 type CseScratch
 	export var table as CseExpressionTable
+
 	// The expression of the op being classified.
 	export var current as StdArithOperands
+
 	// The expression of a table entry being compared against it. A SECOND record, because a comparison
 	// needs both sides at once and each `classifyArithOperands` overwrites the record it is given.
 	export var candidate as StdArithOperands
@@ -473,6 +475,7 @@ end 'CseScratch'
 // payload-free one, and this sits on a path walked once per arithmetic op in the module.
 type CseLookup
 	var hit as bool
+
 	// Meaningless until `hit` says otherwise, and not readable as a sentinel — ValueId 0 is a real
 	// value. `canonicalValue` panics rather than answering for a miss.
 	var canonicalId as ValueId
@@ -526,22 +529,27 @@ type CseExpressionTable
 	// is a real entry.
 	var bucketHasEntry as BoolArray
 	var bucketHead as CseEntryIndexColumn
+
 	// One entry per expression in scope, in the order they were recorded — which is what `mark` indexes
 	// and `rollbackTo` unwinds. Parallel columns: which bucket the entry is in (needed to unwind it),
 	// which op computed it, the next entry sharing that bucket, and the call count it was recorded at.
 	var entryBucket as CseBucketIndexColumn
 	var entryOpIndex as OpIndexArray
+
 	// ⚠ **A CHAIN ENDS AT THE ENTRY THAT POINTS AT ITSELF.** Not a sentinel index and not a second
 	// `BoolArray`: an entry's own position is a value the column can always hold, cannot collide with
 	// another entry, and needs no separate "is there a next" question to stay correct as entries are
 	// appended in front of each other.
 	var entryNext as CseEntryIndexColumn
+
 	// How many CALLS had been walked on the current dominator path when each entry was recorded — the
 	// one thing `findEqual` asks about the code between two equal expressions. See `noteCall`.
 	var entryCalls as CallBarrierCountColumn
+
 	// How many buckets the CURRENT function's table has. Fixed for the whole function scope — see
 	// `bucketCountFor` for why `rollbackTo` depends on that.
 	export var bucketCount as CseBucketCount
+
 	// Calls walked so far on the path from the entry block to the op being classified. Saved and
 	// restored around every block scope by the dominator walk, exactly as the entry columns are.
 	export var callsOnPath as CallBarrierCount
@@ -617,6 +625,7 @@ type CseExpressionTable
 		self.entryCalls.push(self.callsOnPath)
 
 		let bucketIsOccupied = try self.bucketHasEntry.get(bucket) otherwise panic("CseExpressionTable.record: bucketHasEntry.get OOB at {bucket}")
+
 		if bucketIsOccupied 'extendsAChain'
 			self.entryNext.push(try self.bucketHead.get(bucket) otherwise panic("CseExpressionTable.record: bucketHead.get OOB at {bucket}"))
 		end 'extendsAChain' else 'startsAChain'
@@ -647,6 +656,7 @@ type CseExpressionTable
 		outcome.recordMiss()
 
 		let bucketIsOccupied = try self.bucketHasEntry.get(bucket) otherwise panic("CseExpressionTable.findEqual: bucketHasEntry.get OOB at {bucket}")
+
 		if not bucketIsOccupied 'emptyBucket'
 			return
 		end 'emptyBucket'

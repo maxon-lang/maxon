@@ -158,6 +158,7 @@ let NoAllocationId = 0 as ParsedInt
 // `BufferOwnership.appendRecordSlot`'s discipline, applied to the header the record is addressed through.
 export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) returns ByteArray
 	var header = ByteArray.create()
+
 	if debugStream 'tracedBuild'
 		header.append(scalarImage(NoAllocationId, byteCount: HeaderSlotBytes))
 	end 'tracedBuild'
@@ -170,6 +171,7 @@ export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) 
 	if header.count() != boxPrefixBytes(debugStream) 'sizeDrift'
 		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {boxPrefixBytes(debugStream)} `__mm_alloc` prepends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
 	end 'sizeDrift'
+
 	return header
 end 'immortalBoxHeaderBytes'
 
@@ -624,12 +626,15 @@ end 'isCompilerInternalCallee'
 export enum ReservedCalleeReason
 	// An ordinary callee: the name is the program's to declare, and this gate has nothing to say about it.
 	notReserved
+
 	// `__`-prefixed. E2051 forbids DECLARING one, so no signature can ever arrive for it.
 	compilerInternalPrefix
+
 	// A builtin-conformance impl the compiler synthesizes (`int.compare`, `String.hash`). It wears no prefix
 	// — a witness-table reloc needs a real `.text` symbol — and no file declares it, so it is compiler-owned
 	// for a reason the name's SHAPE cannot show.
 	synthesizedConformanceImpl
+
 	// The FAULT PROBE (`maxon_force_segfault`). It wears no prefix either, and for a reason of its own: the
 	// name is the FRAME a backtrace prints, so it is a user-visible string both compilers spell the same way
 	// and it cannot be renamed to fit a shape test. No file declares it — `FaultProbeRuntime` builds it at the
@@ -768,18 +773,23 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildMmDecref(module)
 	buildMmFree(module, multiM: usage.usesGt, perThread: usage.usesMmCounters and usage.usesGt)
 	buildMmLeakCheck(module, usage: usage)
+
 	if usage.usesIncref or usage.usesManagedMemory 'incref'
 		buildMmIncref(module)
 	end 'incref'
+
 	if usage.usesRetain 'retain'
 		buildMmRetain(module)
 	end 'retain'
+
 	if usage.usesMmOwn 'own'
 		buildMmOwn(module)
 	end 'own'
+
 	if usage.usesMmOwnDeep 'ownDeep'
 		buildMmOwnDeep(module)
 	end 'ownDeep'
+
 	if usage.usesMmIsNull 'isNull'
 		buildMmIsNull(module)
 	end 'isNull'
@@ -893,9 +903,11 @@ end 'sixI64Params'
 // made once.
 export function fourteenI64Params() returns StdTypeArray
 	var types = sixI64Params()
+
 	for _ in 0 upto SpawnContractExtraParams 'each'
 		types.push(StdType.i64)
 	end 'each'
+
 	return types
 end 'fourteenI64Params'
 
@@ -1211,11 +1223,13 @@ export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMin
 	let sizeConst = emitConst(module, block: block, value: text.count() + 1, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+
 	for k in 0 upto text.count() 'each'
 		let ch = try text.get(k) otherwise panic("emitLiteralCString: text.get OOB at {k}")
 		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
 		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
 	end 'each'
+
 	return buf
 end 'emitLiteralCString'
 
@@ -1439,10 +1453,13 @@ export let OneFewer = -1 as ParsedInt
 export type CountedLoop
 	// The loop header. The caller never emits into it — `openCountedLoop` has already terminated it.
 	export var header as IrBlock
+
 	// Where the caller emits this iteration's work.
 	export var body as IrBlock
+
 	// Where control lands once the count is exhausted. UN-terminated: the exit is the caller's.
 	export var done as IrBlock
+
 	// The induction variable — the header's block arg, readable in `body` and in every block it threads into.
 	export var index as ValueId
 
@@ -1529,9 +1546,11 @@ export let SingleStep = 1 as Imm32
 export type WordTailSplit
 	// Where the caller emits its runs. Reached only when `byteCount > 0`.
 	export var run as IrBlock
+
 	// The continuation, un-terminated: the caller's last run branches into it. The empty-range door also
 	// lands here, so a caller threads exactly one exit.
 	export var done as IrBlock
+
 	// `byteCount and -8` — the end of the word run and the start of the byte tail, the one boundary both
 	// runs read.
 	export var wordEnd as ValueId
@@ -1686,6 +1705,7 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	let total = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let allocation = ids.mint()
+
 	// ⚠ **THE UNCOUNTED SLAB ENTRY IN A COUNTED BUILD.** These bytes are about to be reported as a TRACKED
 	// box, and the two layers `PhaseProbe` sums must be disjoint — see `SlabAllocBoxName`.
 	let slabCallee = SlabAllocBoxName if usage.usesMmCounters else SlabAllocName
@@ -1710,8 +1730,10 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	var payloadOffset = headerConst
 	var base = allocation
 	var packedId = 0 as ValueId
+
 	if module.debugStream 'stampPackedId'
 		let one = emitConst(module, block: block, value: OneMore, ids: ids)
+
 		// ⚠ The mint wants the id it just TOOK, and `emitGlobalAccumulate` answers the one before it (that
 		// function's header says why the prior value is the contract), so the step is re-applied here. Ids
 		// still run 1, 2, 3 in allocation order.
@@ -1729,6 +1751,7 @@ function buildMmAlloc(module StdModule, usage RuntimeUsage)
 
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
+
 	// ⭐ THE REFCOUNT IS NOT WRITTEN, AND ITS ABSENCE IS THE ZEROING CONTRACT DOING ITS JOB. The slab
 	// guarantees zeroed memory — a VIRGIN slot because its pages came straight from the OS, a RECYCLED one
 	// because `__slab_alloc`'s recycled arm re-zeroes the whole slot on the way out — and 0 is exactly the
@@ -2685,9 +2708,11 @@ export function installUnionDestructors(module StdModule, project Project, signa
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout) 'noManaged'
 			continue
 		end 'noManaged'
+
 		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
 			continue
 		end 'notReferenced'
+
 		synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
 	end 'each'
 end 'installUnionDestructors'
@@ -2769,6 +2794,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 			usage.usesHeap = true
 			declareStructFieldDropNeeds(usage, layout: layout, typeNames: project.typeNames, signatures: signatures)
 		end 'referenced'
+
 		// The record's DICTIONARY cascade's own bits (W183) — the struct arm of the instance pair below, and
 		// like it the only walk that can turn on `__drop_type_param`'s install bit for this record.
 		if usage.neededDestructors.contains(dictionaryDestructorSymbol(layout.name)) 'dictionaryReferenced'
@@ -2795,10 +2821,12 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		let mangled = signatures.mangleGenericInstance(id)
+
 		if usage.neededDestructors.contains(destructorSymbol(mangled)) 'referenced'
 			usage.usesHeap = true
 			declareInstanceFieldDropNeeds(usage, id: id, signatures: signatures)
 		end 'referenced'
+
 		// The DICTIONARY cascade's own bits (BATCH41). It frees its box like every other cascade, and it is
 		// the ONE cascade that calls `__drop_type_param` — a runtime entry with its own install bit, which no
 		// other walk here can turn on because no other cascade names it.
@@ -2818,6 +2846,7 @@ function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, ty
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		// ⭐ **AN EXISTENTIAL FIELD NAMES NO CALLEE, so it is the one kind that cannot be derived and is
 		// declared directly** (P1.7a-existentials slice 2). Its drop is `__drop_existential(witness, value)`,
 		// read out of the witness table at run time, which `managedFieldDropCallee` refuses to answer for at
@@ -2826,6 +2855,7 @@ function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, ty
 			usage.usesDropExistential = true
 			continue
 		end 'existential'
+
 		recordCallUsage(managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), usage: usage)
 	end 'eachField'
 end 'declareStructFieldDropNeeds'
@@ -2846,12 +2876,15 @@ end 'declareStructDictionaryDropNeeds'
 function declareUnionPayloadDropNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
+
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("declareUnionPayloadDropNeeds: payloadsAt count disagrees with get at {fi}")
 			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
+
 			if not payloadClassOwesDrop(class) 'scalar'
 				continue
 			end 'scalar'
+
 			recordCallUsage(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), usage: usage)
 		end 'eachField'
 	end 'eachCase'
@@ -2875,6 +2908,7 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		declareDropKindNeeds(usage, kind: instanceFieldDropKind(signatures, id: id, index: i))
 	end 'eachField'
 end 'declareInstanceFieldDropNeeds'
@@ -2954,6 +2988,7 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 	let destructorsBefore = usage.neededDestructors.count()
 	let clonersBefore = usage.neededCloners.count()
 	let soleWalksBefore = usage.neededSoleWalks.count()
+
 	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
 		recordCallUsage(reloc.funcName, usage: usage)
 	end 'eachRdataSlot'
@@ -3016,6 +3051,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 
 	for (_, layout) in project.structTypes 'eachStruct'
 		work.register(destructorSymbol(layout.name), node: CascadeNode.declaredStruct(layout))
+
 		// The record's DICTIONARY cascade is a second node over the same layout, registered unconditionally
 		// for the instance pair's reason: registering is cheap and says nothing, and only a SEEDED symbol is
 		// ever expanded.
@@ -3034,6 +3070,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		let mangled = signatures.mangleGenericInstance(id)
 		work.register(destructorSymbol(mangled), node: CascadeNode.genericInstance(id))
+
 		// The DICTIONARY destructor is a second node over the same instance, registered unconditionally for
 		// `register`'s own reason: registration is cheap and says nothing, while EXPANDING is what turns on a
 		// type's runtime bits, and only a seeded symbol is ever expanded.
@@ -3044,6 +3081,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 
 	while work.hasPending() 'drain'
 		let node = work.take()
+
 		match node 'node'
 			declaredStruct(layout) then addNestedStructDestructors(usage, layout: layout, typeNames: project.typeNames, signatures: signatures, work: work)
 			declaredStructDictionary(layout) then addNestedStructDictionaryDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
@@ -3075,6 +3113,7 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, typ
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		// ⭐ **AN EXISTENTIAL FIELD CONTRIBUTES NO *NESTED* SYMBOL, BECAUSE IT NAMES NONE (P1.7a-existentials
 		// slice 2).** Its drop is `__drop_existential`, which reads the destructor out of the witness table at
 		// run time — so there is no callee here to close the set over. The destructors those tables can name
@@ -3083,6 +3122,7 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, typ
 		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
 			continue
 		end 'existential'
+
 		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), work: work)
 	end 'eachField'
 end 'addNestedStructDestructors'
@@ -3105,12 +3145,15 @@ end 'addNestedStructDictionaryDestructors'
 function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
+
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("addNestedUnionDestructors: payloadsAt count disagrees with get at {fi}")
 			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
+
 			if not payloadClassOwesDrop(class) 'scalar'
 				continue
 			end 'scalar'
+
 			insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
 		end 'eachField'
 	end 'eachCase'
@@ -3141,10 +3184,12 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		// An existential field names no nested symbol — `addNestedStructDestructors`' arm, for its reason.
 		if signatures.genericInstanceFieldIsExistential(id, index: i) 'existential'
 			continue
 		end 'existential'
+
 		insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i), work: work)
 	end 'eachField'
 end 'addNestedInstanceDestructors'
@@ -3190,9 +3235,11 @@ function insertIfDestructorSymbol(usage RuntimeUsage, callee ByteArray, work Cas
 	if not bytesStartWith(callee, prefix: DestructorPrefix) 'notDestructor'
 		return
 	end 'notDestructor'
+
 	if usage.neededDestructors.contains(callee) 'present'
 		return
 	end 'present'
+
 	usage.neededDestructors.insert(callee)
 	work.discovered(callee)
 end 'insertIfDestructorSymbol'
@@ -3226,10 +3273,12 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 	module.appendOp(drop, op: StdOp.loadIndirect(tag, addrId: box, offset: UnionTagOffset, valueType: StdType.i64))
 
 	var cur = drop
+
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
 			continue
 		end 'scalarCase'
+
 		let caseBlock = module.addBlock(func, label: b"case")
 		let nextTest = module.addBlock(func, label: b"casetest")
 		let tagConst = ids.mint()
@@ -3299,13 +3348,16 @@ end 'installStructDictionaryDestructors'
 union StructRuntimeEntryKind
 	// `__destruct_<Struct>` — admitted only for a layout that owns a managed field.
 	destructor
+
 	// ⭐ `__destruct_dict_<Struct>(descriptor, box)` (W183) — admitted only for a layout resting a slot at a
 	// bare type parameter, which is the one slot `structHasManagedField` cannot see. Its instance twin is
 	// `installGenericInstanceDictionaryDestructors`.
 	dictionaryDestructor
+
 	// `__sole_<Struct>` — admitted for every referenced layout, managed fields or not: a scalar-only
 	// box still has an owner count to prove, which is exactly what a cross to another green thread needs.
 	soleWalk
+
 	// `__clone_<Struct>` — admitted for any referenced layout, managed fields or not.
 	cloner
 end 'StructRuntimeEntryKind'
@@ -3356,6 +3408,7 @@ function installStructRuntimeEntries(module StdModule, project Project, signatur
 	// took (⚖ ruling of 2026-08-26, canonical note at `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`),
 	// because the cause here is different: the array being walked is not the one being mutated.
 	let internedTuples = signatures.tupleLayouts()
+
 	for layout in internedTuples 'eachInternedTuple'
 		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
 			continue
@@ -3414,12 +3467,15 @@ end 'installOneStructDestructor'
 // tagless box shape over a substituted field list.
 function synthesizeStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
+
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldOwesDrop(layout.name, index: i) 'scalarField'
 			continue
 		end 'scalarField'
+
 		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures)))
 	end 'eachField'
+
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
 end 'synthesizeStructDestructor'
 
@@ -3447,12 +3503,14 @@ end 'installOneStructDictionaryDestructor'
 // every other — which is what makes it safe for a record a shared frame is not the last owner of.
 function synthesizeStructDictionaryDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
+
 	for i in 0 upto layout.fieldCount() 'eachField'
 		match dictionaryStructFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures) 'released'
 			none then continue
 			released(kind) then drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: kind))
 		end 'released'
 	end 'eachField'
+
 	emitFieldCascadeDestructor(module, symbolName: dictionaryDestructorSymbol(layout.name), drops: drops, takesDescriptor: true)
 end 'synthesizeStructDictionaryDestructor'
 
@@ -3498,6 +3556,7 @@ function structFieldDropKind(layout StructLayout, index FieldIndex, typeNames Ty
 	if signatures.structFieldIsExistential(layout.name, index: index) 'fatPointer'
 		return FieldDropKind.existential
 	end 'fatPointer'
+
 	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, typeNames: typeNames, signatures: signatures))
 end 'structFieldDropKind'
 
@@ -3512,12 +3571,15 @@ end 'structFieldDropKind'
 // re-optimized. No `project` needed — the instance's every fact is answered inside `signatures`.
 function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
+
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalarField'
 			continue
 		end 'scalarField'
+
 		drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), kind: instanceFieldDropKind(signatures, id: id, index: i)))
 	end 'eachField'
+
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(signatures.mangleGenericInstance(id)), drops: drops)
 end 'synthesizeGenericInstanceDestructor'
 
@@ -3531,6 +3593,7 @@ function instanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceI
 	if signatures.genericInstanceFieldIsExistential(id, index: index) 'fatPointer'
 		return FieldDropKind.existential
 	end 'fatPointer'
+
 	return FieldDropKind.direct(signatures.genericInstanceFieldDropCallee(id, index: index))
 end 'instanceFieldDropKind'
 
@@ -3543,9 +3606,11 @@ export function installGenericInstanceDestructors(module StdModule, signatures P
 		if not signatures.genericInstanceHasManagedField(id) 'noManaged'
 			continue
 		end 'noManaged'
+
 		if not needed.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
+
 		synthesizeGenericInstanceDestructor(module, id: id, signatures: signatures)
 	end 'each'
 end 'installGenericInstanceDestructors'
@@ -3573,12 +3638,14 @@ end 'installGenericInstanceDestructors'
 // safe to coexist for one record shape: at refcount zero exactly one of them runs.
 function synthesizeGenericInstanceDictionaryDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
+
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
 			none then continue
 			released(kind) then drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), kind: kind))
 		end 'released'
 	end 'eachField'
+
 	emitFieldCascadeDestructor(module, symbolName: dictionaryDestructorSymbol(signatures.mangleGenericInstance(id)), drops: drops, takesDescriptor: true)
 end 'synthesizeGenericInstanceDictionaryDestructor'
 
@@ -3620,9 +3687,11 @@ export function installGenericInstanceDictionaryDestructors(module StdModule, si
 		if not signatures.instanceRestsARetainedSlot(id) 'noRetainedSlot'
 			continue
 		end 'noRetainedSlot'
+
 		if not needed.contains(dictionaryDestructorSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
+
 		synthesizeGenericInstanceDictionaryDestructor(module, id: id, signatures: signatures)
 	end 'each'
 end 'installGenericInstanceDictionaryDestructors'
@@ -3635,11 +3704,13 @@ export union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
 	direct(callee ByteArray)
+
 	// ⭐ An INTERFACE-TYPED field (P1.7a-existentials slice 2): a two-slot fat pointer whose conformer — and
 	// therefore whose destructor — is a RUN-TIME fact, so no static callee exists to name. The witness half
 	// at `+InterfaceWitnessHalfOffset` is loaded beside the value half and both go to
 	// `__drop_existential(witness, value)`, which reads the table's `destroyFunc@8`.
 	existential
+
 	// ⭐⭐ **A field of a DECLARATION VIEW released through the DICTIONARY the cascade was handed (BATCH41)** —
 	// `callee(descriptor + blockOffset, value)`. Two field shapes take it and they are one act, which is why
 	// they are one arm rather than two: a slot still standing at a bare type parameter goes to
@@ -3704,9 +3775,11 @@ function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drop
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
 	var cur = drop
+
 	for spec in drops 'eachDrop'
 		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: spec.offset, kind: spec.kind, ids: ids, func: func)
 	end 'eachDrop'
+
 	module.setTerminator(cur, op: StdOp.branch(free.id))
 
 	let freed = ids.mint()
@@ -3724,15 +3797,19 @@ end 'emitFieldCascadeDestructor'
 function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter, func IrFunction)
 	let payloads = layout.payloadsAt(ci)
 	var cur = startBlock
+
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("emitManagedFieldDrops: payloadsAt count disagrees with get at {fi}")
 		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
+
 		if not payloadClassOwesDrop(class) 'scalarField'
 			continue
 		end 'scalarField'
+
 		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
 		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), kind: FieldDropKind.direct(callee), ids: ids, func: func)
 	end 'eachField'
+
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
 end 'emitManagedFieldDrops'
 
@@ -3763,11 +3840,13 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
 
 	let dropped = ids.mint()
+
 	match kind 'k'
 		direct(callee) then module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
 		existential then emitExistentialFieldDrop(module, block: dropBlock, box: box, offset: offset, value: ptr, dropped: dropped, ids: ids)
 		throughDescriptor(callee, descriptor, blockOffset) then emitDictionaryFieldDrop(module, block: dropBlock, callee: callee, descriptor: descriptor, blockOffset: blockOffset, value: ptr, dropped: dropped, ids: ids)
 	end 'k'
+
 	module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
 
 	return contBlock
@@ -3872,10 +3951,12 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 
 	while work.hasPending() 'drain'
 		let node = work.take()
+
 		match node 'node'
 			declaredStruct(layout) then noteStructCascadeNeeds(usage, layout: layout, project: project, signatures: signatures, work: work, action: action)
 			declaredUnion(layout) then noteUnionCascadeNeeds(usage, layout: layout, project: project, signatures: signatures, work: work, action: action)
 			genericInstance(id) then noteInstanceCascadeNeeds(usage, id: id, signatures: signatures, work: work, action: action)
+
 			// ⭐ A DICTIONARY node names a drop cascade and no cloner at all (BATCH41, and W183 for the
 			// declared-record twin), so the clone closure has nothing to expand through either of them. They
 			// are registered by the shared node space rather than by either driver, so these arms are where
@@ -3935,6 +4016,7 @@ function noteInstanceCascadeNeeds(usage RuntimeUsage, id GenericInstanceId, sign
 		noteFieldCascadeNeeds(usage, strategy: signatures.elementRecordFieldCascadeStrategy(id, action: action), work: work, action: action)
 		return
 	end 'theOneArgumentThunk'
+
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
 		return
 	end 'noSynthesizedCloner'
@@ -3943,6 +4025,7 @@ function noteInstanceCascadeNeeds(usage RuntimeUsage, id GenericInstanceId, sign
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		noteFieldCascadeNeeds(usage, strategy: signatures.genericInstanceFieldCascadeStrategy(id, index: i, action: action), work: work, action: action)
 	end 'eachField'
 end 'noteInstanceCascadeNeeds'
@@ -3954,6 +4037,7 @@ function noteStructCascadeNeeds(usage RuntimeUsage, layout StructLayout, project
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructCascadeNeeds: fieldTypes.get OOB at {i}")
 		noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false, action: action), work: work, action: action)
 	end 'eachField'
@@ -3963,11 +4047,14 @@ end 'noteStructCascadeNeeds'
 function noteUnionCascadeNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist, action CascadeAction)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
+
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("noteUnionCascadeNeeds: payloadsAt count disagrees with get at {fi}")
+
 			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 				continue
 			end 'scalar'
+
 			noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action), work: work, action: action)
 		end 'eachField'
 	end 'eachCase'
@@ -4061,6 +4148,7 @@ export function installUnionCascades(module StdModule, project Project, signatur
 	if needed.count() == 0 'noneReferenced'
 		return
 	end 'noneReferenced'
+
 	for (_, layout) in project.enumTypes 'each'
 		if needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'referenced'
 			synthesizeUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
@@ -4079,17 +4167,21 @@ export function installGenericInstanceCascades(module StdModule, project Project
 	if needed.count() == 0 'noneReferenced'
 		return
 	end 'noneReferenced'
+
 	for id in 0 upto signatures.genericInstanceCount() 'each'
 		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS AN ENTRY (G18)** — the one-argument
 		// thunk, which is why the layout gate is a disjunct here rather than the loop's first word. Asked once
 		// and reused below, so the roster and the routing read one answer.
 		let isElementRecordThunk = signatures.isManagedElementRecordInstance(id)
+
 		if not (isElementRecordThunk or signatures.genericInstanceHasBaseLayout(id)) 'noSynthesizedCascade'
 			continue
 		end 'noSynthesizedCascade'
+
 		if not needed.contains(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
+
 		if isElementRecordThunk 'theOneArgumentThunk'
 			synthesizeElementRecordCascade(module, id: id, signatures: signatures, action: action)
 			continue
@@ -4183,10 +4275,12 @@ end 'emitFieldCascadeCloner'
 // another green thread with nothing that reads as a bug at either site.
 function structManagedFieldCascades(layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
 	var specs = ManagedFieldCascadeArray.create()
+
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structManagedFieldCascades: fieldTypes.get OOB at {i}")
 		specs.push(ManagedFieldCascade.create(layout.offsetOfField(i), strategy: managedFieldCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false, action: action)))
 	end 'eachField'
@@ -4198,10 +4292,12 @@ end 'structManagedFieldCascades'
 // `project`: every fact about an instance is answered inside `signatures`, over `signatures`' own interner.
 function instanceManagedFieldCascades(id GenericInstanceId, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
 	var specs = ManagedFieldCascadeArray.create()
+
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
+
 		specs.push(ManagedFieldCascade.create(signatures.genericInstanceFieldOffset(id, index: i), strategy: signatures.genericInstanceFieldCascadeStrategy(id, index: i, action: action)))
 	end 'eachField'
 
@@ -4211,6 +4307,7 @@ end 'instanceManagedFieldCascades'
 // One declared struct's cascade for `action`, over the shared field list above.
 function synthesizeStructCascade(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, action CascadeAction)
 	let specs = structManagedFieldCascades(layout, typeNames: typeNames, signatures: signatures, action: action)
+
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: specs, project: project)
 		soleWalk then emitFieldCascadeSoleWalk(module, symbolName: soleWalkSymbol(layout.name), walks: specs)
@@ -4258,6 +4355,7 @@ end 'synthesizeStructCascade'
 function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures, action CascadeAction)
 	let specs = instanceManagedFieldCascades(id, signatures: signatures, action: action)
 	let mangled = signatures.mangleGenericInstance(id)
+
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: String.from(mangled), clones: specs, project: project)
 		soleWalk then emitFieldCascadeSoleWalk(module, symbolName: soleWalkSymbol(mangled), walks: specs)
@@ -4302,10 +4400,12 @@ end 'synthesizeUnionCloner'
 function emitUnionManagedCaseChain(module StdModule, func IrFunction, cur IrBlock, box ValueId, layout EnumLayout, dest IrBlock, project Project, signatures ProgramSignatures, action CascadeAction, ids ValueMinter) returns IrBlock
 	let tag = emitLoadField(module, block: cur, record: box, offset: UnionTagOffset, ids: ids)
 	var chain = cur
+
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
 			continue
 		end 'scalarCase'
+
 		let caseBlock = module.addBlock(func, label: b"case")
 		let nextTest = module.addBlock(func, label: b"casetest")
 		let tagConst = emitConst(module, block: chain, value: layout.tagOfIndex(ci), ids: ids)
@@ -4324,14 +4424,18 @@ end 'emitUnionManagedCaseChain'
 function emitManagedFieldCascades(module StdModule, func IrFunction, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, action CascadeAction, ids ValueMinter)
 	let payloads = layout.payloadsAt(ci)
 	var cur = startBlock
+
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("emitManagedFieldCascades: payloadsAt count disagrees with get at {fi}")
+
 		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 			continue
 		end 'scalar'
+
 		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
 		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, action: action, ids: ids)
 	end 'eachField'
+
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
 end 'emitManagedFieldCascades'
 
@@ -4352,6 +4456,7 @@ function emitManagedFieldCascade(module StdModule, func IrFunction, cur IrBlock,
 		clone then emitClonedFieldStore(module, block: visitBlock, box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, ids: ids)
 		soleWalk then emitSoleCall(module, block: visitBlock, ptr: oldPtr, strategy: strategy, ids: ids)
 	end 'action'
+
 	module.setTerminator(visitBlock, op: StdOp.branch(contBlock.id))
 
 	return contBlock
@@ -4458,9 +4563,11 @@ function emitFieldCascadeSoleWalk(module StdModule, symbolName ByteArray, walks 
 	emitSoleBoxCall(module, block: entry, box: box, ids: ids)
 
 	var cur = entry
+
 	for spec in walks 'eachField'
 		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: spec.offset, strategy: spec.strategy, action: CascadeAction.soleWalk, ids: ids)
 	end 'eachField'
+
 	module.setTerminator(cur, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -4539,6 +4646,7 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+
 	// `!= 0` and not `> 0`: an over-release drives the count NEGATIVE, and a gate that only caught
 	// under-release would report a clean run for a compiler emitting too many drops — the more
 	// dangerous of the two bugs, since it is a use-after-free waiting for a free list to exist.
@@ -4559,6 +4667,7 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 		let gtIsLeaked = ids.mint()
 		module.appendOp(checkGt, op: StdOp.cmp(gtIsLeaked, lhs: gtCount, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
 		module.setTerminator(checkGt, op: StdOp.condBranch(gtIsLeaked, thenBlockId: gtLeaked.id, elseBlockId: clean.id))
+
 		// A GT leak reports its OWN code — distinct from the heap 101 — so the diagnosis points at the GT
 		// counter, not the heap one.
 		let gtLeakCode = RuntimeAbort.greenThreadLeak.rawValue as ParsedInt

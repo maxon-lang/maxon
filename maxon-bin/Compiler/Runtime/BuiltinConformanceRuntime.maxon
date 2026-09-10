@@ -159,6 +159,7 @@ function emitEquatableWitnessEquals(module StdModule, block IrBlock, eqWitness V
 	let formals = twoF64Params() if operandsAreFloat else twoI64Params()
 	var lhs = a
 	var rhs = b
+
 	if operandsAreFloat 'reinterpretSlotBits'
 		lhs = emitUnary(module, block: block, operand: a, opcode: StdUnaryOpcode.bitcastI64ToF64, operandType: StdType.i64, ids: ids)
 		rhs = emitUnary(module, block: block, operand: b, opcode: StdUnaryOpcode.bitcastI64ToF64, operandType: StdType.i64, ids: ids)
@@ -344,6 +345,7 @@ function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, im
 	var referenced = FunctionNameSet.create()
 
 	let synthesizable = undefinedImplNames(module, impls: impls)
+
 	if synthesizable.count() == 0 'nothingToSynthesize'
 		return referenced
 	end 'nothingToSynthesize'
@@ -389,6 +391,7 @@ function undefinedImplNames(module StdModule, impls ByteArrayArray) returns Byte
 	// their arrays by BORROW — neither the function records nor the candidate names are retained to answer a
 	// byte compare.
 	var definedCandidates = FunctionNameSet.create()
+
 	for func in module.functions 'eachFunc'
 		for impl in impls 'eachImpl'
 			if func.name.equals(impl) 'definesCandidate'
@@ -399,11 +402,13 @@ function undefinedImplNames(module StdModule, impls ByteArrayArray) returns Byte
 	end 'eachFunc'
 
 	var undefined = ByteArrayArray.create()
+
 	for impl in impls 'eachCandidate'
 		if not definedCandidates.contains(impl) 'notDefined'
 			undefined.push(impl)
 		end 'notDefined'
 	end 'eachCandidate'
+
 	return undefined
 end 'undefinedImplNames'
 
@@ -446,6 +451,7 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			ret or
 			param then break 'op'
 		call(_, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+
 		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
 		// stores, and the two OS primitives that name no Maxon function.
 		retVoid or
@@ -456,10 +462,12 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osWriteStdout or
 			rdataAddr then break 'op'
 		tryCall(_, _, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+
 		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
 		errorReturn or
 			osExit then break 'op'
 		funcAddr(_, funcName) then noteBuiltinImplReference(funcName, impls: impls, referenced: referenced)
+
 		// `callIndirect`/`witnessCall` consume a code pointer some `funcAddr` or `.rdata` slot already
 		// produced, so they name no symbol; nor do the appended `os*` primitives or `switch`.
 		callIndirect or
@@ -488,11 +496,14 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile then break 'op'
+
 		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
 		osReadWallClock then break 'op'
+
 		// The THROWING witness call consumes a `.rdata` code pointer and names no symbol, exactly as
 		// `witnessCall` does not.
 		witnessTryCall then break 'op'
+
 		// Every file op takes buffers and handles and names no Maxon function (R4.1 + R4.2).
 		osFileOpenRead or
 			osFileClose or
@@ -507,22 +518,28 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osDirCreate or
 			osDirCurrentPath or
 			osFileAttributes then break 'op'
+
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue then break 'op'
 		osCommandLine then break 'op'
+
 		// W5. Both take an immediate selector or a caller's buffer and name no Maxon function.
 		osStdHandle then break 'op'
 		osExecutablePath then break 'op'
+
 		// W35. A stream write takes a buffer and a length and names no Maxon function — `osWriteStdout`'s
 		// own case, one stream over.
 		osWriteStderr then break 'op'
+
 		// A frame address names no Maxon function.
 		stackRecordAddr then break 'op'
+
 		// O3: the three DebugStream host primitives call Win32 IMPORTS, never a Maxon function — the file
 		// band's reason one line up.
 		osOpenNamedSegment or
 			osMapNamedSegment or
 			osTickCountMs then break 'op'
+
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too, for the band's reason one
 		// line up.
@@ -540,14 +557,18 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osSocketClose or
 			osCpuCount or
 			osThreadCpuTicks then break 'op'
+
 		// F1a: the decommit calls a Win32 import or a raw syscall, never a Maxon function — the band's reason
 		// one line up.
 		osDecommitPages then break 'op'
+
 		// F1b: a fill is inline machine code and names no callee at all, so it references no builtin impl.
 		memFill then break 'op'
+
 		// F1c: a reserve and a commit reach the same kind of import or syscall, so neither names a Maxon callee.
 		osCommitPages or
 			osReservePages then break 'op'
+
 		// F2 + G1: the two atomics and the `gs:` TLS read are inline machine code; the thread token, the two TLS
 		// entry points and the event signal are a raw syscall or an import. No member of this range names a Maxon
 		// callee. (Count them off the range rather than off this sentence.)
@@ -908,8 +929,10 @@ function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout
 	// branches STRAIGHT INTO the cascade's own verdict blocks rather than minting a second `ret` of a tag
 	// those blocks already return.
 	emitOrderingTest(module, block: entry, a: receiver, b: receiver, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: selfIsNanBlock, elseBlock: selfNotNanBlock, ids: ids)
+
 	// `self` is NaN: both NaN ⇒ `equalTo`; else `self` is the bottom ⇒ `lessThan`.
 	emitOrderingTest(module, block: selfIsNanBlock, a: other, b: other, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: equalBlock, elseBlock: lessBlock, ids: ids)
+
 	// `self` is not NaN: `other` NaN ⇒ `self` outranks the bottom ⇒ `greaterThan`; else both are ordered.
 	emitOrderingTest(module, block: selfNotNanBlock, a: other, b: other, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: greaterBlock, elseBlock: orderedBlock, ids: ids)
 

@@ -8,10 +8,12 @@ public type CommandLine
 	public static function args() returns StringArray
 		let count = __Builtins.commandLineCount()
 		var result = StringArray.create()
+
 		for i in 0 upto count 'loop'
 			let managed = __Builtins.commandLineArg(i)
 			result.push(String.init(managed))
 		end 'loop'
+
 		return result
 	end 'args'
 
@@ -38,11 +40,13 @@ public type CommandLine
 	/// Throws StringError.notFound if no matching option is found.
 	public static function getOptionValue(name String) returns String throws StringError
 		let prefix = "--{name}="
+
 		for arg in args() 'scan'
 			if arg.startsWith(prefix) 'match'
 				return try optionValue(arg)
 			end 'match'
 		end 'scan'
+
 		throw StringError.notFound
 	end 'getOptionValue'
 end 'CommandLine'

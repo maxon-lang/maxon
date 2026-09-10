@@ -34,12 +34,15 @@ union PassKind
 	// Phase 2: Maxon-level. Chunk C bodies (placeholders in M1).
 	resolveTypes
 	semanticCheck
+
 	// Phase 2b: the cross-file unused-export audit (E3092/E3093/E3094). Scheduled AFTER `semanticCheck`
 	// and therefore reached only on a project with no diagnostics at all — which is what supplies its
 	// structural gate for free (see UnusedExportCheck's header).
 	checkUnusedExports
+
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
+
 	// Phase 3.4: Std → Std ranged-typealias narrowing guards (P1.9). Turns the parser's recorded
 	// range-check sites into compile-time E3005s and runtime panic guards. It runs right after the
 	// lowering (value ids are freshest and unrenumbered) and BEFORE `foldConstOperands`, which then
@@ -47,6 +50,7 @@ union PassKind
 	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
 	// block-arg/const passes exactly.
 	insertRangeChecks
+
 	// Phase 3.44: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
 	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
 	//
@@ -78,6 +82,7 @@ union PassKind
 	// the loops this pass makes hotter. It also runs before `pruneDeadBlockArgs`, which then drops the
 	// continuation result arg of a void `set` nothing reads.
 	inlineManagedPrimitives
+
 	// Phase 3.45: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
 	// callee where it is — and, for a leaf whose ranged-parameter guard can panic, leaving one slow arm
 	// per site that re-issues the original call so the panic still comes out of the callee's own frame.
@@ -105,6 +110,7 @@ union PassKind
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
 	inlineLeaves
+
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
 	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
@@ -172,6 +178,7 @@ union PassKind
 	foldConstOperands
 	commonSubexpressionElimination
 	loopInvariantCodeMotion
+
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
 	//
 	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
@@ -184,6 +191,7 @@ union PassKind
 	//
 	// WHOLE-MODULE (see `classifyPass`): a call site cannot be judged without the callee's summary.
 	promoteStackRecords
+
 	// Phase 3.7: Std → Std VALUE-TUPLE RETURN CONVENTION (`ValueTupleReturn`).
 	//
 	// ⭐ **AFTER THE PROMOTION, AND FOR THE SAME REASON THE PROMOTION IS LAST**: both decide on the FINAL
@@ -216,13 +224,16 @@ function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
+
 		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
 		checkUnusedExports gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRangeChecks gives PassClassification.perFunction
+
 		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
 		// nothing about the callee's body is consulted — the body is not even in the module yet.
 		inlineManagedPrimitives gives PassClassification.perFunction
+
 		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
 		// contains, and a caller cannot be judged without every callee it names in view.
 		inlineLeaves gives PassClassification.wholeModule
@@ -230,13 +241,16 @@ function classifyPass(pass PassKind) returns PassClassification
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
+
 		// Intra-function by construction: an expression is compared only against ones computed in blocks
 		// that DOMINATE it, and dominance is a fact about one function's CFG (see the pass's SCOPE note).
 		strengthReduceDivision gives PassClassification.perFunction
 		commonSubexpressionElimination gives PassClassification.perFunction
+
 		// Intra-function by construction: a natural loop, its preheader and the values it defines are all
 		// inside one function, and nothing about a callee is consulted.
 		loopInvariantCodeMotion gives PassClassification.perFunction
+
 		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
 		// convention are all facts about the CALL GRAPH, and a call site cannot be judged without the
 		// callee's row.
@@ -361,6 +375,7 @@ export type PassPipeline
 	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
+
 	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113, A1s-throwsbox):
 	// `Parser.throwsTypeIsBoxedUnion` — the catch-site DECODE that decides whether an error flag is an ordinal
 	// or a box pointer — resolves a `throws` clause through `ProgramSignatures.enumOf`, so the check that a
@@ -373,12 +388,14 @@ export type PassPipeline
 	// arrangement for cross-cutting state, and because the query is memoized: `compileToCodeResult` has
 	// already forced it, so binding it here costs a reference and no work.
 	export var signatures as ProgramSignatures
+
 	// ⭐ **THE CHECKED NAME INDEX, BUILT ONCE FOR BOTH STAGES.** It is a FIELD rather than a `run`-local
 	// because the pipeline is now RUN TWICE — the Maxon-tier stage, then the lowering stage, with the
 	// runtime-needs derivation in the seam (`buildMaxonTierPasses`) — and one index is exactly what its own
 	// header claims: the Maxon function array is frozen across the whole pipeline, so a second build would
 	// re-derive an identical answer and re-run its duplicate refusal at a point nothing can have changed.
 	export var funcNames as FunctionNameIndex
+
 	// ⭐⭐ **DOES THIS PROGRAM RUN GREEN THREADS?** — the one fact `promoteStackRecords` cannot derive from
 	// the Std module, and the one that decides whether STACK PROMOTION is legal at all in this compile.
 	//
@@ -465,6 +482,7 @@ export type PassPipeline
 		for pass in passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
 			try self.dispatch(pass)
+
 			if projectHasErrors(self.project) 'errorGate'
 				throw CompileError.compileError
 			end 'errorGate'
@@ -496,9 +514,11 @@ export type PassPipeline
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
+
 			// The whole module, and no start index: see `foldConstants`' own header for why the appended
 			// runtime band has nothing for it to fold.
 			foldConstants then foldConstants(self.stdModule)
+
 			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
 			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
 			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
@@ -508,6 +528,7 @@ export type PassPipeline
 			// which divisions live there and why they are worth a second run.
 			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
 			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
+
 			// The whole module, and no start index: like `foldConstants`, its other caller would be the
 			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)

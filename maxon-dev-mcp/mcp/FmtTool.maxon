@@ -25,6 +25,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath
 	end 'badSrc'
 
 	let binary = compilerBinaryPath(repoRoot)
+
 	if not File.exists(binary) 'noBinary'
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{binary.path}` does not exist. Build it first via the `build` tool.")
@@ -43,6 +44,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: spawn failed: {err.displayReason()}")
 	end 'spawn'
+
 	let elapsed = Clock.elapsedMs(timing)
 
 	let formatted = try File.readText(resolved.mainFile) otherwise 'readBackErr'
@@ -82,11 +84,13 @@ function buildFmtOutcome(formatted String, changed bool, includeFormatted bool, 
 	children.push(successId)
 	keys.push("durationMs")
 	children.push(durId)
+
 	if includeFormatted 'withFormatted'
 		let formattedId = doc.add(JsonNode.stringNode(formatted))
 		keys.push("formatted")
 		children.push(formattedId)
 	end 'withFormatted'
+
 	keys.push("changed")
 	children.push(changedId)
 	keys.push("rawTail")

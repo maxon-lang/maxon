@@ -37,6 +37,7 @@
 module type ServiceSpawnCandidate
 	export let typeName as ByteArray
 	export let member as ByteArray
+
 	// ⭐ **WHERE THE `spawn` IS WRITTEN (SV2) — the note every whole-program service rule needs.** A service
 	// rule fires on a METHOD, and whether that method's type is a service is decided by a `spawn` the author
 	// may have written in a different file; a diagnostic that could not name it would be telling the reader
@@ -61,14 +62,18 @@ module typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
 module union ServiceTargetVerdict
 	// `<member>` is a static factory of the declared type `<T>` returning `<T>`. `<T>` is a service.
 	startsAService
+
 	// No file declares `type <T>`. (An `enum`/`union` lands here too: a service is a `type`, because its
 	// state is what the message loop owns and a union's value is its own tag.)
 	typeIsNotAStruct
+
 	// `<T>` is declared and nothing declares `<T>.<member>`.
 	memberIsNotDeclared
+
 	// `<T>.<member>` is an INSTANCE method. `spawn` calls its factory DIRECTLY — there is no service yet for
 	// a message to reach — so the target must be a `static`.
 	memberTakesAReceiver
+
 	// `<T>.<member>` is a static whose recorded return type is not `<T>`'s own struct box (`void` included).
 	// A factory that does not hand one back has produced no state for the loop to own.
 	//
@@ -81,6 +86,7 @@ module union ServiceTargetVerdict
 	// and the sentence therefore says what the TEST is rather than asserting the author's factory returns
 	// something it does not.
 	memberDoesNotReturnTheType
+
 	// `type <T> uses … where <T> is <Interface>` — an instance method of a CONSTRAINED generic carries one
 	// hidden witness pointer per constraint, and `<T>.__loop` is synthesized with no `self` of its own to
 	// source one from. E2015: not built, not refused forever.
@@ -121,6 +127,7 @@ module union ServiceRosterKnowledge
 	// Before the factory call. A reply declared at a type parameter is neither carriable nor uncarriable
 	// yet, so it is DEFERRED rather than judged against an opaque type.
 	declarationOnly
+
 	// After it. Every type parameter is fixed, and the deferred question is answered.
 	atInstance(instance ServiceStateInstance)
 end 'ServiceRosterKnowledge'
@@ -163,12 +170,15 @@ end 'serviceLoopSymbolFor'
 module union ServiceRosterVerdict
 	// Every message can become one variant of the request union.
 	rosterIsDispatchable
+
 	// A message declared more than once. One variant carries one payload shape, so an overloaded message has
 	// no single shape to become — and the dispatch `match` would have no arm to pick between them. E2015.
 	messageIsOverloaded(methodName ByteArray, declarationCount FieldIndex)
+
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
 	messageParameterIsNotTransferable(methodName ByteArray, paramName ByteArray, noun String)
+
 	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL (SV2).** A reply travels in TWO WORDS — the value, and
 	// one error word holding the fused ordinal of `{ServiceError, throwsOf(<message>)}` — so a `float`
 	// result (which returns in XMM0) or a payload-carrying error union (whose flag is a heap BOX POINTER)
@@ -205,6 +215,7 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 
 	let factoryKey = qualifiedMethodName(typeName, methodName: member)
 	let decls = signatures.overloadedDeclsOf(factoryKey)
+
 	if decls.count() == 0 'noSuchMember'
 		return ServiceTargetVerdict.memberIsNotDeclared
 	end 'noSuchMember'
@@ -216,6 +227,7 @@ module function classifyServiceTarget(signatures ProgramSignatures, typeName Byt
 	// one name is already refused (`requireOverloadableName`), and a set disagreeing about the return type
 	// is E3005 at its own declaration.
 	let factory = serviceFirstDeclOf(decls, key: factoryKey)
+
 	if factory.takesReceiver 'anInstanceMethod'
 		return ServiceTargetVerdict.memberTakesAReceiver
 	end 'anInstanceMethod'
@@ -240,6 +252,7 @@ end 'serviceReturnTypeNames'
 // what remains is `int`, `bool`, a container instance) names nothing and answers `false`.
 function serviceTypeNames(signatures ProgramSignatures, t MaxonType, typeName ByteArray) returns bool
 	let tag = maxonTypeTag(t)
+
 	if tag != ValueTypeTag.structRef and tag != ValueTypeTag.named 'namesNoType'
 		return false
 	end 'namesNoType'
@@ -279,16 +292,19 @@ end 'spawnTargetLayoutOf'
 // diagnostic that fires at a `spawn` in a different file from the method it names.
 module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		let methodName = layout.messageMethodAt(i)
 		let messageKey = qualifiedMethodName(typeName, methodName: methodName)
 		let decls = signatures.overloadedDeclsOf(messageKey)
+
 		if decls.count() > 1 'overloaded'
 			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
 		end 'overloaded'
 
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
 		let replyNoun = uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge)
+
 		if not replyNoun.isEmpty() 'replyCannotBeCarried'
 			return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
@@ -296,6 +312,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		for p in 0 upto decl.paramTypes.count() 'eachParam'
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
 			let noun = untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath)
+
 			if not noun.isEmpty() 'cannotCross'
 				return ServiceRosterVerdict.messageParameterIsNotTransferable(methodName, paramName: serviceParamName(decl, index: p), noun: noun)
 			end 'cannotCross'
@@ -317,6 +334,7 @@ function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray
 	end 'fireAndForget'
 
 	let resultNoun = uncarriableReplyResultNoun(signatures, returnType: decl.returnType, declFilePath: declFilePath, knowledge: knowledge)
+
 	if not resultNoun.isEmpty() 'theValueWord'
 		return resultNoun
 	end 'theValueWord'
@@ -333,6 +351,7 @@ function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType Max
 	end 'nothingComesBack'
 
 	let declared = signatures.declaredSlotType(serviceReturnedType(returnType), into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+
 	match knowledge 'known'
 		atInstance(instance) then return uncarriableReplyNounOfType(signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance))
 		declarationOnly then break 'known'
@@ -363,6 +382,7 @@ end 'uncarriableReplyNounOfType'
 // placed above `ServiceError`'s slice, which a FLOAT-backed enum's IEEE-754 bit patterns really can be.
 function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey ByteArray) returns String
 	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return ""
+
 	// An UNDECLARED error type is a program `SemanticCheck` refuses with E3113; answering nothing here leaves
 	// that refusal undisturbed rather than accusing the reply of a shape the declaration does not have.
 	if not signatures.containsEnumInAnyFile(errorName.toByteArray()) 'notAnErrorType'
@@ -413,6 +433,7 @@ end 'serviceReturnedType'
 // is.
 function untransferableParameterNoun(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath) returns String
 	let resolved = signatures.declaredSlotType(declared, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+
 	if typeIsPromiseStorage(signatures, t: resolved) 'aPromise'
 		return PromiseParameterNoun
 	end 'aPromise'
@@ -420,11 +441,13 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 	match maxonTypeTag(resolved) 'tag'
 		function then return "a function value, whose captured environment is a box a second thread would share"
 		interfaceRef then return InterfaceParameterNoun
+
 		// ⭐⭐ **THE ASYMMETRY A GENERIC SERVICE IS BUILT ON: a `T` RETURN IS LEGAL AND A `T` PARAMETER IS
 		// NOT.** The reply is produced inside the handler, where the instance's descriptor says what `T` is;
 		// the send is written where the handle stands and MOVES its argument, and an opaque `T` does not tell
 		// that site whether what it is moving owns heap at all.
 		typeParameter then return TypeParameterParameterNoun
+
 		// ⭐⭐ **A BARE `named` MAY STILL BE AN INTERFACE, AND THIS IS WHERE THAT IS ASKED (MEASURED).**
 		// `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an interface —
 		// but only in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`.
@@ -434,6 +457,7 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		// arm: `export function measure(s Shape)` on a spawned type compiled straight through to the wave-3
 		// E2015 with no transferability finding at all.
 		named then return declaredInterfaceParameterNoun(signatures, resolved: resolved)
+
 		// Every remaining tag names a value with ONE owner and a layout the send site knows: a scalar, an
 		// exit code, a struct box, a String, a container instance, a character. Each MOVES.
 		boolean or
@@ -444,11 +468,13 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 			void or
 			structRef or
 			string then return ""
+
 		// An instance whose arguments still name a type parameter (`Array with T` inside `type Box uses T`)
 		// is the SAME opacity one arm up wearing a container: the send knows neither the element's layout
 		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and MOVES.
 		genericInstance then return TypeParameterParameterNoun if typeIsFixedByAnInstantiation(signatures, t: resolved) else ""
 		character then return ""
+
 		// ⭐ **A `cstring` MAY NOT CROSS A SEND.** It is a raw address into a buffer the SENDER owns, with no
 		// length and no ownership — the receiving green thread would read bytes another may free or grow.
 		// The cure is to send the value the pointer came out of, which does carry its own storage.
@@ -526,6 +552,7 @@ let SpawnTeachingSentence = "`spawn` starts a SERVICE from a static factory of a
 // target this classification accepted, which is a compiler bug and not a sentence.
 module function serviceTargetRefusalMessage(verdict ServiceTargetVerdict, typeName ByteArray, member ByteArray) returns String
 	let written = "`spawn {String.from(typeName)}.{String.from(member)}(…)`"
+
 	match verdict 'why'
 		startsAService then panic("serviceTargetRefusalMessage: asked for the words of an ACCEPTED spawn target — `{String.from(typeName)}.{String.from(member)}` starts a service, and the caller refuses only the other arms")
 		typeIsNotAStruct then return "{written} does not start a service: nothing declares `type {String.from(typeName)}`. {SpawnTeachingSentence}"
@@ -785,6 +812,7 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	let decl = serviceFirstDeclOf(decls, key: key)
 
 	var payloads = PayloadFieldArray.create()
+
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
 		payloads.push(PayloadField.create(serviceParamName(decl, index: p), declaredType: signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
@@ -828,6 +856,7 @@ end 'serviceMessageHasAReply'
 module function serviceReplySlotIndex(payloads PayloadFieldArray) returns ServiceReplySlotIndex
 	for slot in 0 upto payloads.count() 'eachSlot'
 		let field = try payloads.get(slot) otherwise panic("serviceReplySlotIndex: payloads.get OOB at {slot} on a list walked to its own count")
+
 		if fieldIsTheServiceReplySlot(field) 'theReplySlot'
 			return ServiceReplySlotIndex.at(slot)
 		end 'theReplySlot'
@@ -883,6 +912,7 @@ end 'ServiceReplySlotIndex'
 module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns ParsedInt
 	let layout = serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)
 	let index = layout.indexOfCase(ServiceErrorStoppedCaseName)
+
 	if index >= layout.caseCount() 'noStoppedCase'
 		panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
 	end 'noStoppedCase'
@@ -913,6 +943,7 @@ end 'serviceReplyHandlerPlacement'
 // read through the same function. A second derivation is an arm running for a case that was not raised.
 module function serviceReplyHandlerFusedShift(signatures ProgramSignatures, errorName ByteArray) returns ParsedInt
 	let placement = serviceReplyHandlerPlacement(signatures, errorName: errorName)
+
 	if not placement.fusable 'refusedAtTheSpawn'
 		panic("serviceReplyHandlerFusedShift: `{String.from(errorName)}` cannot be placed on a reply's fused error line — `classifyServiceRoster` refuses such a message at the `spawn` (E3140), so no loop is ever synthesized for one")
 	end 'refusedAtTheSpawn'
@@ -948,6 +979,7 @@ end 'addServiceRequestCase'
 module function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
+
 	// ⭐⭐ **THE COMPANION TAKES ITS SERVICE'S `uses` LIST, WHICH IS WHAT MAKES `<T>.handle with <Args>`
 	// WRITABLE.** One companion still serves every instantiation — this adds no second declaration — but a
 	// base with no parameters admits no `with`, so an author had no spelling for the instance a `spawn`
@@ -1026,6 +1058,7 @@ end 'serviceSpawnSiteOf'
 module function serviceMessageOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ServiceMessageOwner
 	for typeName in serviceTypeRoster(signatures) 'eachService'
 		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
+
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
 			if caseIndex == ServiceShutdownCaseIndex 'theCompilersOwnPill'
 				continue
@@ -1067,6 +1100,7 @@ end 'serviceRequestLayoutOf'
 
 module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
 	var services = ByteArrayArray.create()
+
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
 			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
@@ -1085,6 +1119,7 @@ module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArra
 
 		services.push(candidate.typeName)
 	end 'eachCandidate'
+
 	return services
 end 'serviceTypeRoster'
 
@@ -1097,6 +1132,7 @@ function serviceNameAlreadyListed(services ByteArrayArray, typeName ByteArray) r
 			return true
 		end 'found'
 	end 'each'
+
 	return false
 end 'serviceNameAlreadyListed'
 
@@ -1156,6 +1192,7 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 	// for it would be a second name for one type with nothing to keep the two answers equal.
 	for typeName in services 'eachReplyErrorType'
 		let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+
 		for i in 0 upto layout.messageMethodCount() 'eachMessage'
 			mintServiceReplyErrorType(signatures, messageKey: qualifiedMethodName(typeName, methodName: layout.messageMethodAt(i)))
 		end 'eachMessage'
@@ -1223,6 +1260,7 @@ function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey Byte
 	// Asked of the REGISTRY rather than of the roster, for pass 1's reason: a warm rebuild arrives with a
 	// fresh roster and a filled registry.
 	let name = serviceReplyErrorsCompanionName(messageKey)
+
 	if signatures.containsEnumInAnyFile(name) 'alreadyMinted'
 		return
 	end 'alreadyMinted'

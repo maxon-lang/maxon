@@ -457,20 +457,24 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	let sharded = usage.usesGt
 
 	buildSlabStateBase(module, sharded: sharded)
+
 	if sharded 'remoteQueue'
 		buildSlabDrainRemote(module)
 	end 'remoteQueue'
+
 	buildSlabRoundedSize(module)
 	buildSlabMetaAlloc(module)
 	buildSlabMetaFree(module)
 	buildSlabRefill(module, sharded: sharded)
 	buildSlabAllocEntry(module, name: SlabAllocName, countRaw: usage.usesMmCounters, zeroed: true, sharded: sharded)
 	buildSlabAllocEntry(module, name: SlabAllocRawName, countRaw: usage.usesMmCounters, zeroed: false, sharded: sharded)
+
 	// The uncounted twin, in a counted build only — the one `__slab_alloc` caller whose bytes are already
 	// reported as a TRACKED box (see `MmRuntime.SlabAllocBoxName`).
 	if usage.usesMmCounters 'boxTwin'
 		buildSlabAllocEntry(module, name: SlabAllocBoxName, countRaw: false, zeroed: true, sharded: sharded)
 	end 'boxTwin'
+
 	buildSlabSpanReturn(module, sharded: sharded)
 	buildSlabSpanDestroy(module)
 	buildSlabScavenge(module, sharded: sharded)
@@ -571,6 +575,7 @@ end 'requireArenaCanServe'
 
 function requireArenaCanServeOnLane(what String, chunks ParsedInt, hasPageReservation bool)
 	let available = slabArenaAllocatableChunks(hasPageReservation)
+
 	if chunks > available 'unsatisfiable'
 		panic("slab runtime: {what} needs {chunks} chunk(s) and an arena on {arenaLaneLabel(hasPageReservation)} has {available} after its metadata, so `__slab_arena_alloc_chunks` would abort at run time")
 	end 'unsatisfiable'
@@ -934,9 +939,11 @@ function buildSlabStateBase(module StdModule, sharded bool)
 	module.appendOp(commit, op: StdOp.call(base, callee: SlabArenaAllocChunksName, args: argsOf(chunks)))
 	let stateBytes = emitConst(module, block: commit, value: slabStateBytes(), ids: ids)
 	module.appendOp(commit, op: StdOp.memFill(base, byteCountId: stateBytes, value: 0))
+
 	if sharded 'theSlowPathLock'
 		module.appendOp(commit, op: StdOp.osLockInit(emitSlabLockAddr(module, block: commit, state: base, ids: ids)))
 	end 'theSlowPathLock'
+
 	// LAST: the `.data` word is what every other thread tests to decide the region exists, so publishing it
 	// before the lock inside it is initialised would hand a second thread an uninitialised CRITICAL_SECTION.
 	emitStoreField(module, block: commit, record: stateAddr, offset: 0, value: base)
@@ -1127,6 +1134,7 @@ function buildSlabMetaAlloc(module StdModule)
 	let slotBytes = emitConst(module, block: bumpPath, value: MspanSlotBytes, ids: ids)
 	let advanced = emitBin(module, block: bumpPath, a: bump, b: slotBytes, opcode: StdBinOpcode.add, ids: ids)
 	let limit = emitLoadField(module, block: bumpPath, record: state, offset: SlabStateMetaEndOffset, ids: ids)
+
 	// The initial state is `bump == 0` and `limit == 0`, so the first call fails this test and takes the
 	// fresh-chunk arm — the `.data` zero IS the initialisation, exactly as it is for the arena list head.
 	let fits = emitCmp(module, block: bumpPath, a: advanced, b: limit, pred: StdCmpPred.le, ids: ids)
@@ -1233,6 +1241,7 @@ function buildSlabRefill(module StdModule, sharded bool)
 	let geom = emitClassGeometry(module, block: grow, classIdx: classIdx, ids: ids)
 	let slotSize = emitGeomSlotSize(module, block: grow, geom: geom, ids: ids)
 	let totalSlots = emitGeomTotalSlots(module, block: grow, geom: geom, ids: ids)
+
 	// Class 0 is the ladder's sentinel: size 0, no objects. Only a zero-byte request reaches it, and it can
 	// only reach it through the class lookup, so this is where such a request is refused — on the COLD path,
 	// which is why the class lookup needs no guard of its own.
@@ -1366,9 +1375,11 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	// fill that follows subsumes the link, which is why there is no separate first-word clear.
 	let following = emitLoadField(module, block: recycled, record: freeList, offset: 0, ids: ids)
 	emitStoreField(module, block: recycled, record: span, offset: MspanFreeListOffset, value: following)
+
 	if zeroed 'restoreTheZeroingContract'
 		module.appendOp(recycled, op: StdOp.memFill(freeList, byteCountId: slotSize, value: 0))
 	end 'restoreTheZeroingContract'
+
 	module.setTerminator(recycled, op: StdOp.branch(consumed.id))
 	recycled.branchEdges.push(BranchEdge.create(consumed.id, argIds: argsOf(freeList)))
 
@@ -1379,6 +1390,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	let regionBytes = emitBin(module, block: virgin, a: slotSize, b: totalSlots, opcode: StdBinOpcode.mul, ids: ids)
 	let baseAddr = emitLoadField(module, block: virgin, record: span, offset: MspanBaseAddrOffset, ids: ids)
 	let bumpEnd = emitBin(module, block: virgin, a: baseAddr, b: regionBytes, opcode: StdBinOpcode.add, ids: ids)
+
 	// ⚠ **INV-1 TRAPS LOUDLY.** Handing out a slot past the span's end writes into whatever the arena placed
 	// in the next chunk, and the corruption surfaces somewhere else, much later, as a slot handed out twice.
 	//

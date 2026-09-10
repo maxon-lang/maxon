@@ -25,6 +25,7 @@
 /// wrapper outcome.
 export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
 	let node = src.get(srcId)
+
 	match node.kind 'k'
 		jsonNull then return dst.add(JsonNode.nullNode())
 		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
@@ -38,12 +39,15 @@ end 'copyJsonNode'
 function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
 	var ids = JsonNodeIdArray.create()
 	let n = node.children.count()
+
 	for i in 0 upto n 'each'
 		let childId = try node.children.get(i) otherwise 'cErr'
 			panic("copyJsonArray: children.get OOB — i bounded by n")
 		end 'cErr'
+
 		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
 	end 'each'
+
 	return dst.add(JsonNode.arrayNode(ids))
 end 'copyJsonArray'
 
@@ -51,15 +55,19 @@ function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNod
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 	let n = node.keys.count()
+
 	for i in 0 upto n 'each'
 		let k = try node.keys.get(i) otherwise 'kErr'
 			panic("copyJsonObject: keys.get OOB — i bounded by n")
 		end 'kErr'
+
 		let childId = try node.children.get(i) otherwise 'cErr'
 			panic("copyJsonObject: children.get OOB — parallel arrays out of sync")
 		end 'cErr'
+
 		keys.push(k)
 		children.push(copyJsonNode(src, srcId: childId, dst: dst))
 	end 'each'
+
 	return dst.add(JsonNode.objectNode(keys, children: children))
 end 'copyJsonObject'

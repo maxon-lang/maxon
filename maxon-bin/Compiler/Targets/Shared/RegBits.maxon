@@ -102,6 +102,7 @@ end 'bitsetRemove'
 // buffer — pass the same one across blocks so the walk allocates nothing in the hot path.
 export function bitsetCollectRow(words BitWordArray, base BitWordIndex, wordsPerRow BitWordCount, out ValueIdArray)
 	out.clear()
+
 	for w in 0 upto wordsPerRow 'eachWord'
 		appendSetBitsOfWord(try words.get(base + w) otherwise panic("bitsetCollectRow: word out of range"), bitBase: w shl BitWordShift, out: out)
 	end 'eachWord'
@@ -110,6 +111,7 @@ end 'bitsetCollectRow'
 // The set bits of ONE word, emitted as `bitBase + position` — the inner loop of the row walk above.
 function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArray)
 	var remaining = word
+
 	while remaining != 0 'eachSetBit'
 		// Isolate the lowest set bit, emit its index, then clear it (Kernighan): the loop body
 		// runs once per LIVE value, never once per value id.
@@ -127,29 +129,36 @@ end 'appendSetBitsOfWord'
 export function trailingZeroCount(word MachineWord) returns WordBitIndex
 	var w = word
 	var count = 0 as WordBitIndex
+
 	if (w and 0xFFFFFFFF) == 0 'hi32'
 		w = w shr 32
 		count = count + 32
 	end 'hi32'
+
 	if (w and 0xFFFF) == 0 'hi16'
 		w = w shr 16
 		count = count + 16
 	end 'hi16'
+
 	if (w and 0xFF) == 0 'hi8'
 		w = w shr 8
 		count = count + 8
 	end 'hi8'
+
 	if (w and 0xF) == 0 'hi4'
 		w = w shr 4
 		count = count + 4
 	end 'hi4'
+
 	if (w and 0x3) == 0 'hi2'
 		w = w shr 2
 		count = count + 2
 	end 'hi2'
+
 	if (w and 0x1) == 0 'hi1'
 		count = count + 1
 	end 'hi1'
+
 	return count
 end 'trailingZeroCount'
 
@@ -165,10 +174,13 @@ end 'trailingZeroCount'
 function popcountWord(word MachineWord) returns WordBitCount
 	// Each 2-bit field becomes the count of the bits it held.
 	var w = word - ((word shr 1) and PopcountPairMask)
+
 	// Sum adjacent pairs into 4-bit fields.
 	w = (w and PopcountNibbleMask) + ((w shr 2) and PopcountNibbleMask)
+
 	// Sum adjacent nibbles into BYTE fields. Each byte now holds 0..8.
 	w = (w + (w shr 4)) and PopcountByteMask
+
 	// Fold the eight byte counts down into byte 0. Their total is at most 64, so no field can carry
 	// out of its byte and the low byte is the whole popcount.
 	w = w + (w shr 8)
@@ -214,6 +226,7 @@ export let RegisterFileSize = 63
 export type RegisterFile
 	// One past the highest register NUMBER of this file (32 for x64, 63 for arm64) — a bit width.
 	export let size as RegCount
+
 	// The FIRST vector register's number — the GPR/vector boundary (16 for x64, 31 for arm64).
 	export let firstVector as RegNum
 
@@ -333,6 +346,7 @@ let FirstXmmRegisterNumber = 16 as RegNum
 // do not widen the constant to satisfy it.
 export function assertRegisterFileMatchesEnum()
 	let x64File = x64RegisterFile()
+
 	if x64File.size != X64Register.allCases.count() 'fileSize'
 		panic("assertRegisterFileMatchesEnum: x64RegisterFile().size is {x64File.size} but the X64Register enum has {X64Register.allCases.count()} cases — every x64 class mask is now the wrong width, so a register outside it is unaddressable and the caller-saved clobber assert drifts. Move x64RegisterFile().size and the enum together.")
 	end 'fileSize'
@@ -479,5 +493,6 @@ export function lowestClearRegister(blocked RegMask) returns RegNum
 			return regNum
 		end 'free'
 	end 'scan'
+
 	return RegisterFileSize
 end 'lowestClearRegister'

@@ -47,14 +47,17 @@ function bytesContainSubsequence(haystack ByteArray, needle ByteArray) returns b
 
 	for start in 0 upto haystack.count() - needle.count() + 1 'eachStart'
 		var matched = true
+
 		for i in 0 upto needle.count() 'eachByte'
 			let h = try haystack.get(start + i) otherwise panic("bytesContainSubsequence: haystack.get OOB at {start + i} below count {haystack.count()}")
 			let n = try needle.get(i) otherwise panic("bytesContainSubsequence: needle.get OOB at {i} below count {needle.count()}")
+
 			if h != n 'differs'
 				matched = false
 				break
 			end 'differs'
 		end 'eachByte'
+
 		if matched 'found'
 			return true
 		end 'found'
@@ -102,15 +105,18 @@ end 'functionValueNeedsEnvThunk'
 export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns ByteArrayArray
 	var seen = FnRefThunkSet.create()
 	var targets = ByteArrayArray.create()
+
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectFnRefThunkTargets: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("collectFnRefThunkTargets: opIdx {opIdx} not in module.ops")
 				noteIfFunctionRef(op, seen: seen, targets: targets, funcSignatures: funcSignatures)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return targets
 end 'collectFnRefThunkTargets'
 
@@ -138,6 +144,7 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 			panicAbort then break 'op'
 		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
+
 		// P1.5-B1a/B2b: an async spawn takes the DIRECT function's address in lowering (not a `functionRef`
 		// through the uniform `(userargs, env)` ABI — the trampoline calls it with user args only), so it
 		// names no thunk target; `await`/`try await` reference no function value.
@@ -146,16 +153,21 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 			tryAwait then break 'op'
 		sizeofType then break 'op'
 		constArrayLiteral then break 'op'
+
 		// The jump table names no function value — it branches on an integer index.
 		switch then break 'op'
+
 		// A witness dispatch names no function value — it dispatches through a runtime witness table, not a
 		// `funcAddr` thunk target (P1.7a slice 2a); nor does its throwing form.
 		witnessDispatch or
 			witnessTryDispatch then break 'op'
+
 		// A rendered panic names no function — its operand is a byte pointer.
 		panicAbortValue then break 'op'
+
 		// The error-flag encode names no function value — its operand is an enum tag or a box pointer.
 		errorFlagEncode then break 'op'
+
 		// No service op names a function VALUE. The two addresses a `serviceSpawn` lowers to (`<T>.__loop`,
 		// `<T>.__abandon`) and the one a `serviceReplyCell` lowers to (`__gt_reply_release_<message>`) are
 		// `StdOp.funcAddr`s the LOWERING mints, and every one is called through the uniform runtime ABI rather
@@ -176,9 +188,11 @@ function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArr
 	if not functionValueNeedsEnvThunk(funcName, funcSignatures: funcSignatures) 'noThunk'
 		return
 	end 'noThunk'
+
 	if seen.contains(funcName) 'already'
 		return
 	end 'already'
+
 	seen.insert(funcName)
 	targets.push(funcName)
 end 'noteFnRefTarget'
@@ -236,9 +250,11 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there — and panics
 	// only on the `named`/`unresolved` residues TypeResolution is required to have eliminated.)
 	var paramTypes = StdTypeArray.create()
+
 	for i in 0 upto userParamCount 'eachUserParamType'
 		paramTypes.push(maxonTypeToStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
 	end 'eachUserParamType'
+
 	// The trailing companion `__env` pointer is always an i64 machine word.
 	paramTypes.push(StdType.i64)
 
@@ -256,6 +272,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
 	var forwardArgs = ValueIdArray.create()
+
 	for i in 0 upto userParamCount 'eachArg'
 		forwardArgs.push(valueIdAtParamPosition(i))
 	end 'eachArg'

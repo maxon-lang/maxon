@@ -169,11 +169,14 @@ end 'DecodedEvent'
 module union DrainOutcome
 	// Entries were decoded, or an abandoned one was stepped over. Call again immediately.
 	decoded(events DecodedEventArray)
+
 	// Nothing is decodable and the producer is still alive: either the ring is empty, or its head entry is
 	// reserved and its producer is mid-payload. Waiting is the only correct move.
 	idle
+
 	// Nothing is decodable and the producer is GONE with the ring drained. There will be no more.
 	finished
+
 	// The producer does not speak this schema. Nothing was decoded and nothing ever will be.
 	schemaMismatch(message String)
 end 'DrainOutcome'
@@ -209,15 +212,19 @@ end 'sharedMemoryReason'
 module type DebugStreamDecoder
 	var segment as SharedSegment
 	let filter as FamilyFilter
+
 	// The two interned-name tables, read out of the TARGET's `.symtab` at creation. They travel in the
 	// executable rather than in the ring, which is what keeps an mm event 24 fixed bytes.
 	let tagNames as StringArray
 	let logNames as StringArray
+
 	// How far the ring has been consumed, as an absolute position. Everything emitted started below it.
 	var readCursor as RingPosition
+
 	// The DEPTH_INC / DEPTH_DEC nesting level, carried ACROSS drains: the markers that opened a level and
 	// the events inside it need not arrive in one batch.
 	var depth as TraceDepth
+
 	// Entries whose producer died between `__ds_reserve` and `__ds_commit`. Their payload will never be
 	// written, so they are unreadable — but they are counted and reported, never silently dropped, because
 	// a missing event is exactly the lie the commit protocol prevents.
@@ -293,6 +300,7 @@ module type DebugStreamDecoder
 		end 'schema'
 
 		let committedEnd = scanCommittedPrefix(writeCursor)
+
 		if committedEnd == readCursor 'nothingReadable'
 			return stalledOutcome(producerExited, writeCursor: writeCursor)
 		end 'nothingReadable'
@@ -333,8 +341,10 @@ module type DebugStreamDecoder
 	// `readCursor` on, that carry the commit bit. It stops at the first that does not and never looks past.
 	function scanCommittedPrefix(writeCursor RingPosition) returns RingPosition
 		var cursor = readCursor
+
 		while cursor < writeCursor 'eachEntry'
 			let header = entryHeaderAt(cursor)
+
 			if (header and DsEntryCommittedBit) == 0 'reservedNotCommitted'
 				break
 			end 'reservedNotCommitted'
@@ -359,6 +369,7 @@ module type DebugStreamDecoder
 		let firstChunk = byteCount if byteCount < toEnd else toEnd
 
 		var copy = segment.copyOut(ringSlotOf(from), byteCount: firstChunk as SegmentByteCount)
+
 		if firstChunk < byteCount 'wrapped'
 			copy.append(segment.copyOut(DsHeaderBytes as SegmentOffset, byteCount: (byteCount - firstChunk) as SegmentByteCount))
 		end 'wrapped'
@@ -460,6 +471,7 @@ function seedHeader(segment SharedSegment)
 	segment.writeWord(DsOffTagTableOffset as SegmentOffset, value: DsSharedMemoryBytes - DsTagReserveBytes)
 	segment.writeWord(DsOffTagTableCount as SegmentOffset, value: 0)
 	segment.writeWord(DsOffPeakUsed as SegmentOffset, value: 0)
+
 	// Seeded to "nobody has spoken". Only the producer writes here, and one too old to know the slot exists
 	// leaves it exactly at this value — which is what makes such a producer DETECTABLE rather than merely
 	// broken. See `producerSchema`.
@@ -493,6 +505,7 @@ end 'SchemaVerdict'
 // check that makes it merely refuse.
 function producerSchema(segment SharedSegment, writeCursor RingPosition) returns SchemaVerdict
 	let announced = segment.readWord(DsOffProducerVersion as SegmentOffset)
+
 	if announced == DsSchemaVersion 'agrees'
 		return SchemaVerdict.agreed
 	end 'agrees'
@@ -514,6 +527,7 @@ end 'producerSchema'
 // keyed off it would spin on this offset for ever, so it panics naming both the position and the word.
 function entrySizeOf(header MachineWord, at RingPosition) returns EntryByteCount
 	let size = (header shr DsEntrySizeShift) and DsEntrySizeMask
+
 	if size == 0 'ringCorrupt'
 		panic("DebugStream ring corrupt: the entry at cursor {at} declares size 0 (header 0x{header:016x})")
 	end 'ringCorrupt'
@@ -557,6 +571,7 @@ end 'parseFamilyFilter'
 /// advertising it are one fact.
 module function familyChoiceList() returns String
 	var choices = ""
+
 	for family in EventFamily.allCases 'each'
 		choices.append(family.name if choices.isEmpty() else "{FamilyChoiceSeparator}{family.name}")
 	end 'each'
@@ -579,6 +594,7 @@ function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArray
 	var names = StringArray.create()
 
 	var cursor = 0 as ByteOffset
+
 	match findByteRun(symdata, needle: magic, from: 0) 'located'
 		found(offset) then cursor = offset + magic.count()
 		absent then return names
@@ -590,6 +606,7 @@ function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArray
 	for _ in 0 upto count 'eachName'
 		let length = readBlobField(symdata, at: cursor)
 		cursor = cursor + DsNameBlobFieldBytes
+
 		if not imageRangeFits(symdata, start: cursor, count: length) 'runsPastTheSection'
 			break
 		end 'runsPastTheSection'
@@ -617,6 +634,7 @@ end 'readBlobField'
 // unresolvable index renders as `<field>=<n>` rather than throwing.
 function resolveInternedName(index NameIndex, names StringArray, fieldName String) returns String
 	let name = try names.get(index) otherwise ""
+
 	if index == 0 or name.isEmpty() 'unresolvable'
 		return "{fieldName}={index}"
 	end 'unresolvable'
@@ -843,8 +861,10 @@ function logTextIn(entry ByteArray, at ByteOffset, byteCount BytePos) returns St
 	end 'runsPastTheEntry'
 
 	var text = imageSlice(entry, start: at, count: byteCount)
+
 	while text.count() > 0 'trimTerminator'
 		let last = try text.get(text.count() - 1) otherwise break
+
 		if last != CarriageReturnByte and last != LineFeedByte 'notATerminator'
 			break
 		end 'notATerminator'

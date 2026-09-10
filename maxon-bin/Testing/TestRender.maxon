@@ -52,8 +52,10 @@ export enum ReportColorMode
 	// Colour only when the report is going somewhere that can render it — the default, resolved through
 	// `__Builtins.stdoutWantsAnsiColor()`. See `reportColorEnabled` for the three conditions.
 	auto
+
 	// Colour regardless — for a caller piping into something that renders escapes.
 	always
+
 	// Never colour. What every byte-pinned run passes.
 	never
 end 'ReportColorMode'
@@ -77,6 +79,7 @@ let ColorChoiceSeparator = "|"
 // second time, so the help cannot advertise a value the parser has stopped accepting.
 export function reportColorChoices() returns String
 	var choices = ""
+
 	for name in ReportColorMode.allCaseNames 'eachChoice'
 		if not choices.isEmpty() 'notTheFirst'
 			choices.append(ColorChoiceSeparator)
@@ -153,6 +156,7 @@ export function testFileBlock(file TestFileResults, color bool, showTiming bool)
 
 	for result in file.results 'eachResult'
 		let mark = passMarkFor(result.outcome, color: color)
+
 		// TRIMMED because the name is padded to a fixed column and the status may be empty (under
 		// `--no-timing` every passing line would otherwise end in a run of spaces). An SGR sequence ends
 		// with the reset, which is not whitespace, so a coloured line trims identically.
@@ -291,6 +295,7 @@ function failureDetail(path FilePath, result UnitTestResult, color bool) returns
 		for line in result.output.split("\n") 'eachLine'
 			detail.append("{ReportIndent}{line}\n")
 		end 'eachLine'
+
 		return detail
 	end 'itWroteSomething'
 
@@ -413,6 +418,7 @@ export function testRunJson(report TestRunReport, showTiming bool, emptyReason S
 	end 'stoppedClaimingWorkEarly'
 
 	var results = JsonNodeIdArray.create()
+
 	for file in report.files 'eachFile'
 		for result in file.results 'eachResult'
 			results.push(testResultNode(doc, path: file.file, result: result, showTiming: showTiming))

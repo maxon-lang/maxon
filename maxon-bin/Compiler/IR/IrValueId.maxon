@@ -104,6 +104,7 @@ end 'valueIsMarked'
 // implementation rather than each spelling the same quadratic loop.
 export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
 	var out = BlockIdArray.create()
+
 	if caseTargets.count() == 0 'noSlots'
 		return out
 	end 'noSlots'
@@ -119,6 +120,7 @@ export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId)
 	// (`IrFunction.nextBlockId` counts from zero), so this is the same sizing every other dense column in
 	// the allocator already takes — `FuncTopology.localByBlockId` is a column over exactly this id space.
 	var highest = exclude
+
 	for target in caseTargets 'eachSlotForTheBound'
 		if target > highest 'higher'
 			highest = target
@@ -127,15 +129,18 @@ export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId)
 
 	var seen = BoolArray.create()
 	seen.resize(highest + 1)
+
 	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
 	// real targets — no separate `!= exclude` compare per slot.
 	try seen.set(exclude, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past `exclude`, which the bound above folds in")
+
 	for target in caseTargets 'eachSlot'
 		if not (try seen.get(target) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")) 'fresh'
 			try seen.set(target, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")
 			out.push(target)
 		end 'fresh'
 	end 'eachSlot'
+
 	return out
 end 'distinctSwitchTargets'
 
@@ -150,6 +155,7 @@ export function blockIdArrayContains(list BlockIdArray, value BlockId) returns b
 			return true
 		end 'hit'
 	end 'each'
+
 	return false
 end 'blockIdArrayContains'
 

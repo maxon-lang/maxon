@@ -146,6 +146,7 @@ export type Diagnostic
 		if self.line == 0 'wholeProgram'
 			return "error {self.code.rawValue}: {self.message}{self.renderedNote()}"
 		end 'wholeProgram'
+
 		return "error {self.code.rawValue}: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}{self.renderedNote()}"
 	end 'render'
 
@@ -173,6 +174,7 @@ export union CompileError implements Error
 	directoryNotFound(path FilePath)
 	noSourceFiles(root FilePath)
 	readError(path FilePath)
+
 	// A `build` naming several paths this compiler cannot root — either they genuinely share no
 	// directory (two absolute paths on different Windows drives), or their common directory is a
 	// FILESYSTEM ROOT, which no `FilePath` can hold: `parent` cuts the separator off, so the step past
@@ -182,6 +184,7 @@ export union CompileError implements Error
 	// refused rather than rooted at a string `isAbsolute` disowns. Carries both ends of the
 	// disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
+
 	// The compiler could not locate its `stdlib/` directory by walking up from its own
 	// executable (see StdlibSource.locateStdlibDir). Every compile loads stdlib source and every
 	// pass tells stdlib from user code by that directory, so a missing stdlib is a loud, hard
@@ -310,9 +313,11 @@ export function endDiagnosticCapture() returns String
 	end 'notOpen'
 
 	var joined = StringBuilder.create()
+
 	for text in capturedDiagnosticText 'each'
 		joined.append(text)
 	end 'each'
+
 	closeDiagnosticCapture()
 
 	return joined.build()

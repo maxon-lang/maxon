@@ -112,46 +112,60 @@ export enum RdataPayloadKind
 	// A String literal's payload — its bytes and a NUL. The pad to `RdataPayloadAlignment` is the
 	// table's, applied to every kind alike by `appendRdataPayload`.
 	stringBlob
+
 	// A green-thread trace tag's text (`GtRuntime`). No terminator: the length rides beside it.
 	traceTag
+
 	// The DebugStream activation environment variable's name, as a cstring (`DebugStreamRuntime`).
 	envName
+
 	// Where a `--coverage` binary writes its `.mxcov`, as a cstring (`CoverageRuntime`). Baked at BUILD
 	// time rather than derived from argv[0] at run time: deriving it means a heap allocation on a path the
 	// dump must be able to take after a fault, for a fact the compiler already knows.
 	coveragePath
+
 	// --- STRUCTURE: bytes only a decoder can read, so a golden shows the label alone ---
 	// A float island: eight IEEE bytes. It needs no note — its LABEL is its value
 	// (`registerFloatConstant`).
 	floatConstant
+
 	// The 56-byte String record that POINTS at a blob (`buildStringRecordBytes`).
 	stringRecord
+
 	// A byte-string / const-array literal's blob (`registerByteArrayLiteralBlob`). ⚠ NOT text: a
 	// byte-string literal holding raw bytes and an `Array with int` literal both come through here, and
 	// rendering arbitrary bytes as characters would put an escape storm in a golden that says nothing
 	// about the case it is named after.
 	byteArrayBlob
+
 	// A dense-`match` jump table's i32 slots, zero at registration and patched by the writer.
 	jumpTable
+
 	// An interface conformance's method-slot table (`IrInterface.witnessTableLabel`).
 	witnessTable
+
 	// A generic instance's layout descriptor (`__layout_*`).
 	layoutDescriptor
+
 	// The slab allocator's size-to-class and geometry tables.
 	slabTable
+
 	// A Unicode character-database table (`UnicodeCategoryRuntime`).
 	unicodeTable
+
 	// The 48-byte Array record a module-level byte-array constant IS
 	// (`ManagedMemoryRuntime.registerImmortalByteArrayRecord`). Six machine words, and the bytes it names are a
 	// byte blob rather than text, so it renders as a bare label — the `byteArrayBlob` answer for the record
 	// over it.
 	byteArrayRecord
+
 	// The BOX a module-level `let` holding a constructed struct of scalars IS
 	// (`LowerMaxonToStd.lowerImmortalStructRecord`) — its declared fields at their declared offsets, behind
 	// the synthetic allocation header that marks it immortal. It is its own kind rather than a
 	// `byteArrayRecord` because the two share no layout: that one is six machine words a runtime reads by
 	// name, this one is whatever the author declared.
 	structRecord
+
 	// ⭐ The ELEMENT BUFFER of a module-level `let` holding an array of string literals
 	// (`ManagedMemoryRuntime.registerImmortalStringTableRecord`) — one slot per element, each holding the
 	// ADDRESS of that element's own immortal String record once a writer has baked it
@@ -308,6 +322,7 @@ export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool
 	for i in 0 upto prefix.count() 'each'
 		let b = try bytes.get(i) otherwise panic("bytesStartWith: i < prefix.count() <= bytes.count() by the guard above, but get({i}) failed")
 		let p = try prefix.get(i) otherwise panic("bytesStartWith: i < prefix.count() by the loop bound, but get({i}) failed")
+
 		if b != p 'differs'
 			return false
 		end 'differs'
@@ -364,6 +379,7 @@ let DataBlobPadByte = 0 as Byte
 // `.data` offset — a run's included.
 type DataBlobEntry
 	export let label as String
+
 	// The run as the table stores it: the registrant's bytes padded by `dataBlobStoredRun`.
 	// Mutable because `stampDataBlob` rewrites the contents of an already-placed run.
 	export var bytes as ByteArray
@@ -379,37 +395,45 @@ typealias DataBlobEntryArray = Array with DataBlobEntry
 export type GlobalDataTable
 	export var names as StringArray
 	export var values as ByteArrayArray
+
 	// Monotonic id for minting synthetic `__str_<id>` names for ad-hoc payloads.
 	export var nextStringId as MachineWord
 	export var nameIndex as GlobalNameIndexMap
+
 	// What each payload IS — see `RdataPayloadKind`. Parallel to `names`/`values` and pushed in the same
 	// call by `appendRdataPayload`, exactly as those two are — and `rdataImage`'s `requireColumnsAgree`
 	// checks all THREE lengths, so this column is proved alongside the two it rides with rather than
 	// merely asserted to ride with them.
 	export var payloadKinds as RdataPayloadKindArray
 	export var valueDedup as GlobalDedupMap
+
 	// The `.data` slots, IN LAYOUT ORDER — which is the order the image is written in and the
 	// order `RequiredData` pins. `layOutDataSection` is the single writer of both this array's
 	// order and every entry's `offset`.
 	export var dataSection as DataSectionEntryArray
 	export var dataIndex as DataSectionIndexMap
+
 	// ⭐ The contiguous reserved runs — see `DataBlobEntry`. Laid out BEFORE the scalar slots,
 	// which is what leaves `layOut`'s zero-padding claim intact: every run is stored padded to
 	// `MaxDataSlotBytes`, so the summed run length is a multiple of the widest slot and the first
 	// scalar still starts on a multiple of its own size. The claim gains a class ABOVE the four
 	// size classes rather than a hole between them.
 	var dataBlobs as DataBlobEntryArray
+
 	// A run's label → its index in `dataBlobs`, written at REGISTRATION because registration order
 	// IS run layout order: `layOut` reorders only the scalars.
 	var dataBlobIndex as DataSectionIndexMap
+
 	// Whether `layOut` has assigned the `.data` offsets. A run registered afterwards would be
 	// concatenated by `dataSectionImage` at an offset nothing assigned, so the door refuses.
 	var dataLaidOut as bool
+
 	// Each `.rdata` payload's offset, assigned AT REGISTRATION — see RdataOffsetMap and
 	// `registerRdataConstant`. `.rdata` needs no `layOut` twin: unlike `.data`, whose slots are
 	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
 	// are known the moment they are appended.
 	export var rdataOffsets as RdataOffsetMap
+
 	// ⭐⭐ **WHERE INSIDE ITS PAYLOAD EACH LABEL POINTS — 0 for every payload but an IMMORTAL RECORD, whose
 	// payload opens with the synthetic allocation header it is addressed through
 	// (`MmRuntime.immortalBoxHeaderBytes`).** The header and the record are ONE payload so the section
@@ -420,15 +444,18 @@ export type GlobalDataTable
 	// compares against; `rdataOffsetOf` — what every writer and relocation resolves through — adds this.
 	// A label absent here points at its payload's first byte.
 	export var rdataLabelOffsets as RdataOffsetMap
+
 	// The running total bytes registered so far — the offset the NEXT `.rdata` payload lands at,
 	// maintained beside every push rather than re-summed. It is a SECOND copy of a fact `values`
 	// already holds (the concatenated length), so `rdataImage`'s drift assert is what keeps the two
 	// honest: it walks the payloads and panics if any recorded offset disagrees with the actual image
 	// position. See `registerRdataConstant` for why the copy is worth its guard.
 	var rdataSizeSoFar as ByteOffset
+
 	// The `.rdata` slots every writer patches with another `.rdata` payload's runtime address — see
 	// PendingRdataAbsReloc. Empty for a program holding no image record at all.
 	export var pendingRdataAbsRelocs as PendingRdataAbsRelocArray
+
 	// ⭐ **WHICH BLOB EACH RECORD NAMES, keyed by the record's label** — the `buffer@0` subset of
 	// `pendingRdataAbsRelocs` above, indexed for LOOKUP. Written in the same call, by
 	// `recordStringBufferFixup`, so the two cannot come to disagree about a pairing.
@@ -439,6 +466,7 @@ export type GlobalDataTable
 	// Θ(references × literals) — the exact shape this file's header says the linear scans were
 	// rewritten to kill. The writer walks the list; only a reader wanting ONE pairing comes here.
 	export var recordBlobLabels as RecordBlobLabelMap
+
 	// ⚠⚠ **THE FLOAT LABELS ALREADY MINTED, KEYED BY BITS — AND THIS MEMO IS NOT A TIDINESS CHOICE, IT IS
 	// THE COST.** Deriving the label runs `float.textFromBits`, which is a shortest-ROUND-TRIP search: an
 	// exact bignum decimal expansion, then up to seventeen candidate re-reads to find the fewest digits that
@@ -458,13 +486,16 @@ export type GlobalDataTable
 	// where a real control reads +0.046%. Everything a scale delta is attributed to has to be A/B’d against a
 	// binary you built.
 	export var floatConstantLabels as FloatConstantLabelMap
+
 	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a `.rdata` slot with a
 	// `.text` function's VA — a witness-table method slot, or a managed-opaque-`T` descriptor's
 	// `destroyFunc@40`/`copyFunc@32`. See PendingRdataReloc. Empty for a program that conforms nothing to an
 	// interface and holds no managed-opaque-`T` array (all but the P1.7-generics corpus).
 	export var pendingRdataRelocs as PendingRdataRelocArray
+
 	// Every  slot holding a distance to ANOTHER  blob — see PendingRdataSelfRelReloc.
 	export var pendingRdataSelfRelRelocs as PendingRdataSelfRelRelocArray
+
 	// ⭐ **THE `.symtab` IMAGE — the FOURTH emitted section this table renders**, beside `.rdata`, `.data`
 	// and the string fixups. EMPTY for every ordinary build, and the section is then omitted entirely by
 	// the PE writer, so a normal program's binary is byte-for-byte what it was before this field existed.
@@ -474,6 +505,7 @@ export type GlobalDataTable
 	// payloads because nothing REFERENCES it: no relocation points into `.symtab` — the consumer parses
 	// the file — so there are no offsets to hand out and nothing for a label to name.
 	export var symdataImage as ByteArray
+
 	// ⭐ **THE DEBUGSTREAM TAG TABLE — `names[i]` is the type name wire tag `i` resolves to.** It lives
 	// here rather than beside its format because this is the object every writer and the one reader
 	// already hold: the LOWERING that interns a user type's name has it as `self.globalData`, the runtime
@@ -485,6 +517,7 @@ export type GlobalDataTable
 	// save them. Nothing renders the blob unless the flag is on, and `userTagIndex` refuses to grow the
 	// table in an untraced build, so the cost stops here.
 	export var debugStreamTags as DebugStreamNameTable
+
 	// ⭐⭐ **THE INTERNED-NAME TABLE — `names[i]` is what a Log event's u16 name field resolves to.** Its
 	// entries come from `__DebugStream.nameId("…")`, a compile-time NAME rather than a runtime value, which
 	// is what keeps the structured trace tier zero-alloc: the call becomes this index and the text exists
@@ -702,6 +735,7 @@ export type GlobalDataTable
 		// raw ones would report every odd-length payload as a collision with itself.
 		let existing = self.payloadOf(label)
 		let incoming = rdataStoredPayload(bytes)
+
 		if not existing.equals(incoming) 'differs'
 			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} and {incoming.count()} STORED bytes — each padded up to RdataPayloadAlignment, so a 13- and a 17-byte payload read here as 16 and 24) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
 		end 'differs'
@@ -773,12 +807,15 @@ export type GlobalDataTable
 		self.requireColumnsAgree()
 
 		var image = ByteArray.create()
+
 		for (iter, payload) in self.values.withIterator() 'each'
 			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
 			let offset = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataImage: '{label}' has no recorded offset — every label registerRdataConstant mints gets one in the same call")
+
 			if image.count() != offset 'drift'
 				panic("GlobalDataTable.rdataImage: '{label}' is recorded at offset {offset} but the image has reached {image.count()} — the offsets relocations resolve against and the bytes this places have drifted")
 			end 'drift'
+
 			image.append(payload)
 		end 'each'
 
@@ -876,6 +913,7 @@ export type GlobalDataTable
 	export function stampDataBlob(label String, bytes ByteArray)
 		let index = try self.dataBlobIndex.get(label) otherwise panic("GlobalDataTable.stampDataBlob: no .data run is labelled '{label}' — a stamp rewrites a run `registerDataBlob` reserved, so an unknown label means the reservation never ran or the two spell it differently")
 		var entry = try self.dataBlobs.get(index) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+
 		if bytes.count() != entry.bytes.count() 'lengthDiffers'
 			panic("GlobalDataTable.stampDataBlob: '{label}' reserves {entry.bytes.count()} bytes but the stamp carries {bytes.count()} — the reserved run is the registered length padded up to {MaxDataSlotBytes}, and resizing it would move every scalar global behind it")
 		end 'lengthDiffers'
@@ -910,6 +948,7 @@ export type GlobalDataTable
 		// multiple of the widest slot and the first scalar still meets its own size class. Runs are
 		// laid out in registration order, which is why `dataBlobIndex` can be written at the door.
 		var offset = 0 as ByteOffset
+
 		for i in 0 upto self.dataBlobs.count() 'eachRun'
 			var blob = try self.dataBlobs.get(i) otherwise panic("GlobalDataTable.layOut: dataBlobs.get OOB at {i} despite the upto bound")
 			blob.offset = offset
@@ -921,6 +960,7 @@ export type GlobalDataTable
 			// holds — `DataSectionEntry` is a `type`, so this is the very object the array stores,
 			// not a copy of it.
 			var entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
+
 			if self.dataBlobIndex.contains(entry.label) 'labelCollision'
 				panic("GlobalDataTable.layOut: '{entry.label}' is both a declared global and a reserved .data run — one label names one address, and `dataSectionOffsetOf` answers runs first, so the global would be unreachable")
 			end 'labelCollision'
@@ -944,10 +984,12 @@ export type GlobalDataTable
 	// global.
 	export function dataSectionImage() returns ByteArray
 		var image = ByteArray.create()
+
 		for blob in self.dataBlobs 'eachRun'
 			if image.count() != blob.offset 'runDrift'
 				panic("GlobalDataTable.dataSectionImage: run '{blob.label}' is laid out at offset {blob.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
 			end 'runDrift'
+
 			image.append(blob.bytes)
 		end 'eachRun'
 
@@ -955,8 +997,10 @@ export type GlobalDataTable
 			if image.count() != entry.offset 'drift'
 				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
 			end 'drift'
+
 			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
 		end 'each'
+
 		return image
 	end 'dataSectionImage'
 
@@ -1000,12 +1044,14 @@ let MaxDataSlotBytes = 8 as BytePos
 function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
 	var sorted = DataSectionEntryArray.create()
 	var size = MaxDataSlotBytes
+
 	while size > 0 'eachSizeClass'
 		for entry in declared 'each'
 			if stdTypeStorageBytes(entry.valueType) == size 'thisClass'
 				sorted.push(entry)
 			end 'thisClass'
 		end 'each'
+
 		size = size shr 1
 	end 'eachSizeClass'
 
@@ -1038,6 +1084,7 @@ end 'sortBySizeDescendingStable'
 // that reserved an odd length stamps the rounded run, not the length it asked for.
 function dataBlobStoredRun(bytes ByteArray) returns ByteArray
 	let storedCount = alignUp(bytes.count(), alignment: MaxDataSlotBytes)
+
 	if storedCount == bytes.count() 'alreadyAligned'
 		return bytes
 	end 'alreadyAligned'
@@ -1060,6 +1107,7 @@ end 'dataBlobStoredRun'
 // a reader that knows its own slot count. Nothing derives a count from a stored payload's length.
 function rdataStoredPayload(bytes ByteArray) returns ByteArray
 	let storedCount = alignUp(bytes.count(), alignment: RdataPayloadAlignment)
+
 	if storedCount == bytes.count() 'alreadyAligned'
 		return bytes
 	end 'alreadyAligned'

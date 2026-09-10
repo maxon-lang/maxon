@@ -68,6 +68,7 @@
 enum CommandLineShape
 	// Windows: ONE unsplit string, split here by the CRT's rules (see the scanner below).
 	unsplitString
+
 	// SysV: a pre-split vector the process start-up already holds. `argc` and `argv` reach the Std tier
 	// through the two `.data` words below, which the target's entry stub fills before `main` runs.
 	argumentVector
@@ -339,6 +340,7 @@ function buildCommandLineScanOne(module StdModule)
 	pushI64BlockArgs(literalQuote, values: threeArgs(lqAt, second: lqWrote, third: lqQuoted))
 	let litByte = emitConst(module, block: literalQuote, value: QuoteByte, ids: ids)
 	emitStoreByte(module, block: literalQuote, base: dest, index: lqWrote, value: litByte, ids: ids)
+
 	// BOTH quotes are consumed — that is what makes `""` one literal rather than two toggles.
 	emitResumeScan(module, block: literalQuote, scan: scan, at: lqAt, atDelta: 2, wrote: lqWrote, wroteDelta: 1, quoted: lqQuoted, ids: ids)
 
@@ -410,6 +412,7 @@ function buildCommandLineScanOne(module StdModule)
 	let oneBit = emitConst(module, block: runBeforeQuote, value: 1, ids: ids)
 	let half = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let parity = emitBin(module, block: runBeforeQuote, a: bqCount, b: oneBit, opcode: StdBinOpcode.bitAnd, ids: ids)
+
 	// An ODD run consumes the quote (`resume` steps past it) AND emits one; an EVEN run does neither, so the
 	// parity IS both numbers and there is no second test.
 	let resumeAt = emitBin(module, block: runBeforeQuote, a: bqAt, b: parity, opcode: StdBinOpcode.add, ids: ids)

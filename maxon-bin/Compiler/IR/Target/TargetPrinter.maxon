@@ -89,9 +89,11 @@ function printDataSection(globalData GlobalDataTable) returns String
 
 	var out = StringBuilder.create()
 	out.append("data {OpenBrace}\n")
+
 	for entry in globalData.dataSection 'each'
 		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {scalarConstantText(entry.value, isFloat: stdTypeIsFloat(entry.valueType))}\n")
 	end 'each'
+
 	out.append("{CloseBrace}\n")
 	return out.build()
 end 'printDataSection'
@@ -158,6 +160,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
+
 	// The data block is followed by a blank line, exactly as two functions are — so a program WITH
 	// globals reads as `data { … }` then its functions, and one WITHOUT is byte-for-byte unchanged.
 	var afterFirst = dataText.byteLength() > 0
@@ -180,6 +183,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 
 	for func in module.functions 'eachFunc'
 		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
+
 		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
 		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
 		// WRONG ANSWER rather than an error.
@@ -247,18 +251,21 @@ end 'printTargetModule'
 // caller's own `ByteArray`.
 function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered BoolArray) returns bool
 	var isNew = false
+
 	for (iter, requested) in runtimeNames.withIterator() 'each'
 		if not name.equals(requested.toByteArray()) 'noMatch'
 			continue
 		end 'noMatch'
 
 		let alreadyRendered = try rendered.get(iter.index()) otherwise panic("markNamedBy: flag read at {iter.index()} is outside a column sized by the same list")
+
 		if not alreadyRendered 'firstAnswer'
 			isNew = true
 		end 'firstAnswer'
 
 		try rendered.set(iter.index(), value: true) otherwise panic("markNamedBy: flag write at {iter.index()} is outside a column sized by the same list")
 	end 'each'
+
 	return isNew
 end 'markNamedBy'
 
@@ -277,8 +284,10 @@ function printChunkBytes(chunk FunctionCodeChunk) returns String
 	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {OpenBrace}\n")
 
 	let byteCount = chunk.code.count()
+
 	for (iter, b) in chunk.code.withIterator() 'eachByte'
 		let column = iter.index() mod ChunkBytesPerLine
+
 		if column == 0 'opensALine'
 			sb.append("{OpIndent}{hexOffset(iter.index() as CodeOffset)}{ChunkOffsetSeparator}")
 		end 'opensALine' else 'continuesOne'
@@ -309,14 +318,17 @@ end 'printChunkBytes'
 // failure mode.
 function hexOffset(offset CodeOffset) returns String
 	var digits = ChunkOffsetDigits
+
 	while (offset shr (digits * BitsPerHexDigit)) > 0 'tooWide'
 		digits = digits + 1
 	end 'tooWide'
 
 	var out = StringBuilder.create()
+
 	for i in 0 upto digits 'eachDigit'
 		out.append(hexDigit((((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask) as MachineWord)))
 	end 'eachDigit'
+
 	return out.build()
 end 'hexOffset'
 
@@ -413,9 +425,11 @@ function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns S
 			traceTag or
 			envName or
 			coveragePath gives payloadTextNote(globalData.payloadOf(name))
+
 		// A float island needs none — its LABEL is its value (`GlobalDataTable.registerFloatConstant`).
 		floatConstant gives ""
 		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
+
 		// STRUCTURE: bytes only a decoder can read, so the label stands alone.
 		byteArrayBlob or
 			jumpTable or
@@ -446,6 +460,7 @@ function quotedPayloadText(bytes ByteArray) returns String
 	out.append(DoubleQuoteText)
 
 	var shown = 0 as ElementIndex
+
 	for b in bytes 'eachByte'
 		if b == NulTerminator 'endOfText'
 			break
@@ -514,6 +529,7 @@ end 'escapedPayloadByte'
 function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered BoolArray)
 	for (iter, name) in runtimeNames.withIterator() 'eachName'
 		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
+
 		if not didRender 'noSuchFunction'
 			panic("printTargetModule: this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the golden would pin nothing. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated")
 		end 'noSuchFunction'
@@ -647,11 +663,14 @@ typealias BlockPrintNameSet = Set with String
 // header and a jump could come to disagree.
 function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
 	var occurrences = BlockLabelOccurrences.create()
+
 	for block in funcBlocks 'countLabels'
 		var seen = 0 as ElementIndex
+
 		if let counted = try occurrences.get(block.label) 'known'
 			seen = counted
 		end 'known'
+
 		occurrences.upsert(block.label, value: seen + 1)
 	end 'countLabels'
 
@@ -668,6 +687,7 @@ function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
 		if taken.contains(name) 'notInjective'
 			panic("buildBlockPrintNames: two blocks of one function would both print as '{name}' — a block label spelling '{BlockNameIdSeparator}' has collided with a disambiguated name, so a branch target could not be resolved from the printed text")
 		end 'notInjective'
+
 		taken.insert(name)
 
 		// `insert` throws on a key already present, which makes "two blocks of one function share an
@@ -761,6 +781,7 @@ function moduleTargetCpu(module TargetModule) returns CpuArch
 			return CpuArch.arm64
 		end 'arm64'
 	end 'eachOp'
+
 	return CpuArch.x64
 end 'moduleTargetCpu'
 
@@ -880,32 +901,40 @@ function opIsArm64Band(op TargetOp) returns bool
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel gives true
+
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
 		leaRegFunc or
 			callReg or
 			x64Syscall gives false
+
 		// The jump tables are per-ISA: `x64JumpTable` is an x64 op (module not arm64 for it), `arm64JumpTable`
 		// an arm64 one.
 		x64JumpTable gives false
 		arm64JumpTable gives true
+
 		// The memory-indirect witness call is an x64 op (P1.7a slice 2a).
 		callMem gives false
+
 		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives true
+
 		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
 		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to negF64RegReg` arm
 		// and are correctly `false` there — that range's endpoint is the x64 band's last member and it
 		// MOVED when `movqXmmGpr`, then `negF64RegReg`, were appended to it.
 		arm64FmovGprFp gives true
 		arm64FmovFpGpr gives true
+
 		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
 		leaRegSlot gives false
+
 		// F1b: the fill ladders are per-ISA, exactly as the jump tables above are — same question, same
 		// answer, and written as two arms rather than a range for that reason.
 		x64MemFill gives false
 		arm64MemFill gives true
+
 		// F2: per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
 		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
 		// exact: the x64 four are contiguous and the arm64 three follow them.
@@ -917,20 +946,24 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives true
+
 		// EC16: the scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
 		// are x64's, the shifted-register `add` is arm64's.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg gives false
 		arm64AddLsl gives true
+
 		// EC18's high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
 		// three-address `SMULH`, each its own op.
 		imulHighReg gives false
+
 		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
 		arm64Fneg gives true
 		arm64LoadAcquire or
 			arm64StoreRelease gives true
 		arm64Smulh gives true
+
 		// ⛔ **`false`, AND IT IS THE ANSWER RATHER THAN A DEFAULT.** The counter is ONE op shared by both ISAs,
 		// so `true` here would make a pure-x64 module holding one report as arm64 and print every op in it
 		// against the wrong register file.
@@ -997,6 +1030,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		sarRegCl(dest, lhs) gives "sarRegCl {vregName(dest)}, {vregName(lhs)}"
 		shrRegCl(dest, lhs) gives "shrRegCl {vregName(dest)}, {vregName(lhs)}"
 		setccReg(dest, cond) gives "setccReg {condCodeName(cond)}, {vregName(dest)}"
+
 		// The data-section band. The LABEL is printed, because it is what the golden pins: a fragment
 		// showing `leaRegGlobal rax, __data_counter` is what makes a wrong slot a reviewable diff.
 		leaRegGlobal(dest, label) gives "leaRegGlobal {vregName(dest)}, {String.from(label)}"
@@ -1010,28 +1044,34 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		movsdRegRip(dest, label) gives "movsdRegRip {vregName(dest)}, [rip + {String.from(label)}]"
 		cvtsi2sdRegReg(dest, src) gives "cvtsi2sdRegReg {vregName(dest)}, {vregName(src)}"
 		cvttsd2siRegReg(dest, src) gives "cvttsd2siRegReg {vregName(dest)}, {vregName(src)}"
+
 		// The MATH INTRINSICS. `roundsd`'s MODE is printed by its `FloatRoundMode` member name rather
 		// than its imm8: what the golden must pin is the ROUNDING, and `0x01` cannot be reviewed
 		// without the manual open beside it.
 		sqrtsdRegReg(dest, src) gives "sqrtsdRegReg {vregName(dest)}, {vregName(src)}"
 		roundsdRegReg(dest, src, mode) gives "roundsdRegReg.{mode.name} {vregName(dest)}, {vregName(src)}"
+
 		// The BIT REINTERPRETATION. Printed dest-first like every other x64 arm here, NOT in the
 		// encoder's inverted ModR/M order — a golden shows the data flow, and the field inversion is
 		// `encodeMovqGprXmm`'s private business.
 		movqGprXmm(dest, src) gives "movqGprXmm {vregName(dest)}, {vregName(src)}"
+
 		// Its INVERSE. Printed dest-first for the same reason, and here the two orders happen to
 		// coincide — this direction's ModR/M mapping is the ordinary one — which is exactly why the
 		// printer states the data flow rather than mirroring whatever the encoder does.
 		movqXmmGpr(dest, src) gives "movqXmmGpr {vregName(dest)}, {vregName(src)}"
+
 		// ⚠ THE OPERATION IS PRINTED, NOT THE INSTRUCTIONS. Every other x64 arm here names one
 		// mnemonic because it IS one; `absF64RegReg` assembles to a `psllq`/`psrlq` pair (see
 		// TargetDialect), and printing the pair would put the encoder's expansion in a golden the
 		// isel is what actually decided. What a fragment must pin is that `abs` reached the x64
 		// backend as one two-address op over these two vregs.
 		absF64RegReg(dest, src) gives "absF64RegReg {vregName(dest)}, {vregName(src)}"
+
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]{rdataPayloadNote(label, globalData: globalData)}"
+
 		// `minsd`/`maxsd` print their real mnemonic, unlike `absF64RegReg` above: each IS one
 		// instruction, so there is no encoder expansion for a golden to leak. The mnemonic's PREFIX is
 		// the `FloatMinMaxKind` member name spliced in — NOT the suffix construction `roundsd` uses
@@ -1042,10 +1082,12 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// semantic here — each answers with its second source on a NaN — so a fragment that showed only
 		// the destination could not catch a swap.
 		minMaxSdRegReg(dest, lhs, rhs, kind) gives "{kind.name}sd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+
 		// The sign-bit FLIP prints its OPERATION for `absF64RegReg`'s reason: it assembles to a
 		// `pcmpeqd`/`psllq`/`xorpd` triple, and what a golden must pin is that `fneg` reached the x64
 		// backend as one two-address op over these two vregs — not the encoder's expansion.
 		negF64RegReg(dest, src) gives "negF64RegReg {vregName(dest)}, {vregName(src)}"
+
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
@@ -1057,6 +1099,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
 		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
 		arm64MovImm(dest, value) gives "movImm {arm64VregName(dest)}, {value}"
+
 		// The frame-record offset is rendered ONLY when the frame has an outgoing stack-argument region to push
 		// it past — which is what having one MEANS, and which no function in the corpus does. Rendering an
 		// unconditional `+0` would be a golden's worth of noise about a region that does not exist, on every
@@ -1103,6 +1146,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fsqrt(dest, src) gives "fsqrt {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fabs(dest, src) gives "fabs {arm64VregName(dest)}, {arm64VregName(src)}"
+
 		// The arm64 arms print REAL MNEMONICS (`fcvtzs`, `scvtf`, …), and `FRINT<r>`'s rounding is part
 		// of its mnemonic rather than a printed operand — so the mode resolves to the letter the
 		// assembler would show.
@@ -1110,6 +1154,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
 		arm64ImportCall(slotIndex) gives "importCall {slotIndex}"
 		arm64Syscall(number) gives "syscall {number}"
+
 		// `fcsel` prints its condition, like `arm64Cset` and unlike `arm64Frint` (whose mode is part of
 		// its mnemonic). The condition is the whole NaN argument for `min` on this target — `mi` is what
 		// makes an unordered compare pick the second operand — so a fragment that hid it could not catch
@@ -1118,34 +1163,41 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		leaRegFunc(dest, funcName) gives "leaRegFunc {vregName(dest)}, [rip + {String.from(funcName)}]"
 		callReg(reg) gives "callReg {vregName(reg)}"
 		x64Syscall(number) gives "x64Syscall {number}"
+
 		// The jump tables render the biased index, the default, and the slot→target table run-length
 		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
 		// and the table stays readable even at the span cap.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
 		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
+
 		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
 		// carries — the address is a frame fact the encoder (outgoing) or the prologue pass (incoming) adds.
 		arm64StoreOutgoingArg(slot, srcReg) gives "storeOutgoingArg [sp + arg{slot}], {arm64VregName(srcReg)}"
 		arm64LoadIncomingArg(dest, slot) gives "loadIncomingArg {arm64VregName(dest)}, [arg{slot}]"
+
 		// The arm64 BIT REINTERPRETATION. Printed `fmov` — the real mnemonic, as every arm64 arm here
 		// is — and the operand NAMES disambiguate it from the FP→FP `fmov` the shared `movRegReg`
 		// emits: `arm64VregName` renders a GPR `x<n>` and an FP register `d<n>`, so `fmov x0, d1` and
 		// `fmov d0, d1` read as the two different instructions they are.
 		arm64FmovGprFp(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+
 		// Its INVERSE, and the reason the arm above is written the way it is: BOTH render the mnemonic
 		// `fmov`, so the two are told apart in a golden ONLY by which side prints `x<n>` and which
 		// `d<n>` — `fmov x0, d1` against `fmov d0, x1`. That is the real assembly and it is unambiguous;
 		// an invented mnemonic would be neither.
 		arm64FmovFpGpr(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+
 		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
 		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
 		leaRegSlot(destReg, slot) gives "leaRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
+
 		// F1b: the fill ladders print their NAME and their fill BYTE — never an operand list, because they
 		// have none (see `targetOpOperands`). The byte is the one thing that varies between two otherwise
 		// identical fills, so it is exactly what a golden needs to show.
 		x64MemFill(fillByte) gives "x64MemFill 0x{hexByte(fillByte as MachineWord)}"
 		arm64MemFill(fillByte) gives "arm64MemFill 0x{hexByte(fillByte as MachineWord)}"
+
 		// F2 — the atomics print their REAL MNEMONICS, for `x64DivideOpName`'s reason one screen up: what a
 		// golden is for is showing which instruction was emitted, and `lock xadd` versus `lock add` is exactly
 		// the difference the prior-value peephole makes. `[reg]` renders the memory operand, so the address is
@@ -1159,12 +1211,14 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		x64LockAdd(addrReg, srcReg) gives "lock add [{vregName(addrReg)}], {vregName(srcReg)}"
 		x64TebSelfPointer(dest) gives "mov {vregName(dest)}, gs:[0x{hexByte(WindowsTebSelfPointerOffset)}]"
 		x64GsLoadRegBase(dest, base) gives "mov {vregName(dest)}, gs:[{vregName(base)}]"
+
 		// The arm64 macro-ops print their name and their operands rather than the six-instruction sequence
 		// they expand to — the choice `x64MemFill`/`arm64MemFill` already make, and for their reason: a golden
 		// records the OPS the allocator coloured, and the encoder's internal branches are not ops.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) gives "arm64AtomicCas {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(expectedReg)}, {arm64VregName(replacementReg)}"
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives "arm64AtomicRmw.{opcode.name} {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(operandReg)}"
 		arm64ThreadPointer(dest, source) gives "arm64ThreadPointer {arm64VregName(dest)}, {source.name}"
+
 		// --- EC16: the scaled-index band ---
 		//
 		// Rendered in the SOURCE shape `[base + index*scale + disp]` rather than as the op's field list,
@@ -1174,10 +1228,12 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		leaRegBaseIndexScale(dest, base, index, scale) gives "leaRegBaseIndexScale {vregName(dest)}, [{vregName(base)} + {vregName(index)}*{memoryIndexScaleFactor(scale)}]"
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) gives "loadRegBaseIndexScale.{accessWidthName(width)} {sharedVregName(dest, cpu: cpu)}, [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}]"
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) gives "storeBaseIndexScaleReg.{accessWidthName(width)} [{sharedVregName(base, cpu: cpu)} + {sharedVregName(index, cpu: cpu)}*{memoryIndexScaleFactor(scale)} + {disp}], {sharedVregName(src, cpu: cpu)}"
+
 		// The arm64 twin prints as the INSTRUCTION it is (`add xd, xn, xm, lsl #k`), not as a bracketed
 		// address: on AArch64 this is arithmetic, and the shift — not the multiplier — is what the
 		// instruction's field holds.
 		arm64AddLsl(dest, base, index, scale) gives "arm64AddLsl {arm64VregName(dest)}, {arm64VregName(base)}, {arm64VregName(index)}, lsl #{memoryIndexScaleShift(scale)}"
+
 		// Prints its ONE explicit operand, exactly as `divideReg` does — RAX and RDX are the op's implicit
 		// masks and a golden that spelled them would be showing the model rather than the instruction.
 		imulHighReg(src) gives "imulHighReg {vregName(src)}"
@@ -1202,8 +1258,10 @@ function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) r
 	var afterFirst = false
 	var runStart = 0 as ElementIndex
 	var runTarget = try caseTargets.get(0) otherwise panic("formatJumpTableSlots: caseTargets.get(0) on non-empty")
+
 	for i in 1 upto caseTargets.count() 'each'
 		let target = try caseTargets.get(i) otherwise panic("formatJumpTableSlots: caseTargets.get OOB at {i}")
+
 		if target != runTarget 'runEnd'
 			appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: i - 1, target: runTarget, names: names)
 			afterFirst = true
@@ -1211,6 +1269,7 @@ function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) r
 			runTarget = target
 		end 'runEnd'
 	end 'each'
+
 	appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: caseTargets.count() - 1, target: runTarget, names: names)
 
 	return out.build()
@@ -1220,7 +1279,9 @@ function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart Element
 	if afterFirst 'separator'
 		out.append(", ")
 	end 'separator'
+
 	let label = blockPrintName(target, names: names)
+
 	if runStart == runEnd 'single'
 		out.append("[{runStart}]={label}")
 	end 'single' else 'span'

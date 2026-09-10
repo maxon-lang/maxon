@@ -99,8 +99,10 @@ export type MxdbgTypeTable
 	// Discovery order until `seal`, name order after it — and a sealed entry's position IS the type id
 	// every field and every local record carries.
 	var entries as MxdbgTypeEntryArray
+
 	// Where each name sits, so "is this type already described?" is one probe rather than a search.
 	var positionByName as MxdbgTypePositionMap
+
 	// Sorting is a ONE-WAY door: it fixes every id, so a type described past it would be numbered against
 	// a table that has already been written.
 	var sealed as bool
@@ -143,9 +145,11 @@ export type MxdbgTypeTable
 		pending.push(name)
 
 		var at = 0 as ElementIndex
+
 		while at < pending.count() 'eachPending'
 			let next = try pending.get(at) otherwise panic("MxdbgTypeTable.close: pending.get OOB at {at} despite the while guard")
 			at = at + 1
+
 			if self.positionByName.contains(next) 'alreadyDescribed'
 				continue
 			end 'alreadyDescribed'
@@ -155,9 +159,11 @@ export type MxdbgTypeTable
 			let desc = mxdbgDescribeType(project, name: next)
 			var referenced = ByteArrayArray.create()
 			referenced.reserve(desc.fields.count())
+
 			for field in desc.fields 'eachFieldType'
 				referenced.push(field.typeName)
 			end 'eachFieldType'
+
 			self.append(next, desc: desc)
 
 			for referredTo in referenced 'eachReferredTo'
@@ -178,9 +184,11 @@ export type MxdbgTypeTable
 
 	export function writeInto(writer MxdbgWriter)
 		self.seal()
+
 		for i in 0 upto self.entries.count() 'eachType'
 			let entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
 			writer.addType(String.from(entry.name), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align)
+
 			for field in entry.desc.fields 'eachField'
 				writer.addField(String.from(field.name), offset: field.offset, typeId: self.idOf(field.typeName))
 			end 'eachField'
@@ -200,11 +208,13 @@ export type MxdbgTypeTable
 		// borrow of it, and the map being rebuilt lives on the same record.
 		var names = ByteArrayArray.create()
 		names.reserve(self.entries.count())
+
 		for entry in self.entries 'eachName'
 			names.push(entry.name)
 		end 'eachName'
 
 		self.positionByName = MxdbgTypePositionMap.create()
+
 		for at in 0 upto names.count() 'eachPosition'
 			let name = try names.get(at) otherwise panic("MxdbgTypeTable.seal: names.get OOB at {at} despite the upto bound")
 			self.positionByName.upsert(name, value: at)
@@ -242,6 +252,7 @@ export function mxdbgTypeNameOf(project Project, ref MaxonType) returns ByteArra
 		typeParameter gives MxdbgTypeParameterName
 		genericInstance gives MxdbgGenericInstanceName
 		character gives MxdbgCharacterName
+
 		// A `cstring` is a raw byte POINTER and names no declared type, so the sidecar describes it by the
 		// keyword the source wrote — `string`'s arm, one pointer kind over.
 		cstring gives MxdbgCstringName
@@ -295,6 +306,7 @@ end 'mxdbgDescribeType'
 function mxdbgDescribeStruct(project Project, layout StructLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
 	fields.reserve(layout.fieldCount() as ElementIndex)
+
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
 		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, ref: fieldType)))
@@ -312,6 +324,7 @@ end 'mxdbgDescribeStruct'
 function mxdbgDescribeEnum(project Project, layout EnumLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
 	fields.reserve(layout.caseCount() as ElementIndex)
+
 	for i in 0 upto layout.caseCount() 'eachCase'
 		let tag = try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
 		let payload = try layout.casePayloads.get(i) otherwise panic("mxdbgDescribeEnum: casePayloads.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
@@ -350,6 +363,7 @@ end 'mxdbgCasePayloadName'
 // which is the whole reason it is an entry of its own rather than the primitive it lowers to.
 function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
 	var kind = MxdbgTypeKindIntRanged
+
 	match alias.underlying 'backing'
 		float then kind = MxdbgTypeKindFloatRanged
 		integer then break 'backing'

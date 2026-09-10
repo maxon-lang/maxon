@@ -157,6 +157,7 @@ export type MxcovData
 		end 'badMagic'
 
 		let version = imageReadU32(image, at: MxcovOffVersion as ByteOffset) as MxcovPointIndex
+
 		if version != MxcovFormatVersion 'wrongVersion'
 			throw MxcovReadError.unsupportedVersion(version)
 		end 'wrongVersion'
@@ -166,11 +167,13 @@ export type MxcovData
 		// small positive one a truncation check would wave through.
 		let pointCount = imageReadU32(image, at: MxcovOffPointCount as ByteOffset) as MxcovPointIndex
 		let need = covImageSize(pointCount)
+
 		if (image.count() as MxcovByteOffset) < need 'shorterThanItClaims'
 			throw MxcovReadError.truncated(pointCount, need: need, held: image.count() as MxcovByteOffset)
 		end 'shorterThanItClaims'
 
 		var counters = MxcovCounterArray.create()
+
 		for index in 0 upto pointCount 'eachCounter'
 			counters.push(imageReadU64(image, at: covCounterOffset(index as MxcovPointIndex) as ByteOffset) as MxcovCounter)
 		end 'eachCounter'

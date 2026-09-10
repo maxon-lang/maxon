@@ -132,6 +132,7 @@ type CarriedValues
 		end 'selfReference'
 
 		let alreadySeen = try self.seen.get(arg) otherwise panic("elimTrivialBlockArgs: block-arg {arg} is outside the block-arg id space")
+
 		if not alreadySeen 'first'
 			try self.seen.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: seen.set({arg}) OOB")
 			try self.only.set(arg, value: incoming) otherwise panic("elimTrivialBlockArgs: only.set({arg}) OOB")
@@ -139,6 +140,7 @@ type CarriedValues
 		end 'first'
 
 		let carried = try self.only.get(arg) otherwise panic("elimTrivialBlockArgs: only.get({arg}) OOB")
+
 		if incoming != carried 'realMerge'
 			try self.differs.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: differs.set({arg}) OOB")
 		end 'realMerge'
@@ -210,6 +212,7 @@ type FeedTriggers
 		// block-args.
 		for i in 0 upto pairs.count() 'eachSlot'
 			let incoming = pairs.incomingAt(i)
+
 			if incoming >= bound 'neverFolds'
 				continue
 			end 'neverFolds'
@@ -246,6 +249,7 @@ end 'FeedTriggers'
 // Fold every trivial block-arg in every function, in place.
 export function elimTrivialBlockArgs(module StdModule)
 	var removed = 0 as ValueId
+
 	// ⭐⭐ **AN INDEX LOOP, NOT `for … in`, AND THE REASON IS A ⚖ USER RULING (2026-08-26). THIS IS THE
 	// CANONICAL SITE; TWENTY-FOUR OTHERS POINT HERE.** `for func in module.functions` hands the body a BORROW
 	// of the element, and the E3070 SUBJECT of that borrow is the whole `module` record —
@@ -278,6 +282,7 @@ end 'elimTrivialBlockArgs'
 // folded away.
 function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
+
 	if bound == 0 'noBlockArgs'
 		// A straight-line function has no phis to fold, and no columns to size.
 		return 0
@@ -289,6 +294,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	// ONE pass over every edge slot in the function. Nothing has folded yet, so an incoming value
 	// stands for itself and no chain resolution is needed.
 	var carried = CarriedValues.create(bound)
+
 	for i in 0 upto pairs.count() 'eachSlot'
 		carried.note(pairs.argAt(i), incoming: pairs.incomingAt(i))
 	end 'eachSlot'
@@ -306,8 +312,10 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	queued.resize(bound)
 
 	var worklist = ValueIdArray.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+
 		for arg in block.blockArgs 'eachArg'
 			if carried.isTrivial(arg.valueId) 'trivial'
 				enqueue(arg.valueId, worklist: worklist, queued: queued)
@@ -331,6 +339,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 
 	var parent = ValueIdArray.create()
 	parent.resize(bound)
+
 	for v in 0 upto bound 'identity'
 		try parent.set(v, value: v) otherwise panic("elimTrivialBlockArgs: parent.set({v}) OOB against a column of {bound}")
 	end 'identity'
@@ -345,6 +354,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 		if isFolded(folded, v: arg) 'alreadyGone'
 			continue
 		end 'alreadyGone'
+
 		if not carried.isTrivial(arg) 'realMerge'
 			continue
 		end 'realMerge'
@@ -366,6 +376,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	// column. A polarity flag on the dropper would be one more thing the two passes could disagree
 	// about, and the slot alignment it maintains is the one thing that cannot survive a disagreement.
 	var kept = flagColumn(bound)
+
 	for v in 0 upto bound 'survivors'
 		if not isFolded(folded, v: v) 'survives'
 			setFlag(kept, v: v)
@@ -416,6 +427,7 @@ end 'relayFold'
 // when one of its feeders has just folded — which is the only event that can change its answer.
 function reread(carried CarriedValues, feeders CsrGraph, parent ValueIdArray, arg ValueId, bound ValueId)
 	carried.forget(arg)
+
 	for k in 0 upto feeders.degree(arg as CsrIndex) 'eachFeeder'
 		carried.note(arg, incoming: findRoot(parent, v: feeders.neighbour(arg as CsrIndex, k: k) as ValueId, bound: bound))
 	end 'eachFeeder'
@@ -425,6 +437,7 @@ end 'reread'
 // would be pushed once per edge, and the worklist — not the work — would be what grew.
 function enqueue(arg ValueId, worklist ValueIdArray, queued BoolArray)
 	let waiting = try queued.get(arg) otherwise panic("elimTrivialBlockArgs: queued.get({arg}) OOB")
+
 	if waiting 'alreadyWaiting'
 		return
 	end 'alreadyWaiting'
@@ -448,20 +461,26 @@ function findRoot(parent ValueIdArray, v ValueId, bound ValueId) returns ValueId
 	end 'notABlockArg'
 
 	var root = v
+
 	while root < bound 'toRoot'
 		let next = try parent.get(root) otherwise panic("elimTrivialBlockArgs: parent.get({root}) OOB against a column of {bound}")
+
 		if next == root 'isRoot'
 			break
 		end 'isRoot'
+
 		root = next
 	end 'toRoot'
 
 	var cur = v
+
 	while cur < bound 'compress'
 		let next = try parent.get(cur) otherwise panic("elimTrivialBlockArgs: parent.get({cur}) OOB against a column of {bound}")
+
 		if next == cur 'atRoot'
 			break
 		end 'atRoot'
+
 		try parent.set(cur, value: root) otherwise panic("elimTrivialBlockArgs: parent.set({cur}) OOB")
 		cur = next
 	end 'compress'

@@ -97,16 +97,20 @@ typealias ScopeMarkArray = Array with ScopeMark
 
 export type Scope
 	var vars as VarInfoMap
+
 	// Every declaration made while a frame was open, in declaration order —
 	// innermost frame on top. Drained back to a frame's mark by popScope.
 	var declNames as ByteArrayArray
+
 	// Parallel to `declNames`: did this declaration DISPLACE an existing binding of
 	// the same name? A dense bool column rather than an optional `VarInfo` per
 	// declaration, so the common (non-shadowing) case costs no heap object.
 	var declShadowed as BoolArray
+
 	// The displaced bindings, pushed only by the declarations `declShadowed` marks.
 	// popScope pops one per marked declaration, in reverse, and re-installs it.
 	var shadowedInfos as VarInfoArray
+
 	// One entry per open frame: the `declNames` height at pushScope.
 	var frameMarks as ScopeMarkArray
 	export var nextSlot as VarSlot
@@ -139,6 +143,7 @@ export type Scope
 		if self.isSelfField(name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
+
 		return self.declareShadowing(name, varType: varType, mutable: mutable)
 	end 'declare'
 
@@ -245,6 +250,7 @@ export type Scope
 		if self.isSelfField(info.name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(info.name))
 		end 'shadow'
+
 		self.install(info)
 		return info
 	end 'declareBinding'
@@ -263,10 +269,12 @@ export type Scope
 		end 'functionScope'
 
 		var shadowed = false
+
 		if let displaced = try vars.get(info.name) 'displaces'
 			shadowedInfos.push(displaced)
 			shadowed = true
 		end 'displaces'
+
 		declNames.push(info.name)
 		declShadowed.push(shadowed)
 		vars.upsert(info.name, value: info)
@@ -386,6 +394,7 @@ export type Scope
 	// `trivial`, so the classifier is always false and nothing is emitted.
 	export function popScope()
 		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
+
 		while declNames.count() > mark 'drain'
 			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
 			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
@@ -393,6 +402,7 @@ export type Scope
 			// Drained in reverse, so `name` still resolves to the binding THIS declaration
 			// installed — the one leaving scope, and the one a drop would be emitted for.
 			let leaving = try vars.get(name) otherwise panic("Scope.popScope: '{String.from(name)}' is in the frame's declaration list but not in `vars` — the two fell out of lockstep")
+
 			if not isTrivialOwnership(leaving.ownership) 'dropAtScopeExit'
 				panic("Scope.popScope: binding '{String.from(name)}' leaves scope owning a value, but the Own tier that emits its drop is not built yet (M6) — no binding is non-trivial before then")
 			end 'dropAtScopeExit'

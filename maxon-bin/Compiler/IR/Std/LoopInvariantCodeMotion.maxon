@@ -237,6 +237,7 @@ end 'hoistFromLoop'
 // nothing but the two answers in it.
 function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, preheader BlockRefIndex, scratch LicmScratch)
 	scanLoopEffects(module, func: func, scratch: scratch)
+
 	if not scratch.effects.admitsAnyHoist() 'aCallCrossesEveryHoistedRange'
 		return
 	end 'aCallCrossesEveryHoistedRange'
@@ -288,6 +289,7 @@ function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header Blo
 
 	for k in 0 upto tree.pred.degree(header as CsrIndex) 'eachPredecessor'
 		let predecessor = tree.pred.neighbour(header as CsrIndex, k: k)
+
 		if members.contains(predecessor) 'aLatch'
 			continue
 		end 'aLatch'
@@ -339,6 +341,7 @@ function markMustExecuteBlocks(tree StdDominatorTree, backEdges LoopBackEdges, h
 
 	for k in 0 upto backEdges.count() 'eachLatch'
 		let h = (try backEdges.heads.get(k) otherwise panic("markMustExecuteBlocks: heads.get OOB at {k}")) as BlockRefIndex
+
 		if h != header 'anotherLoop'
 			continue
 		end 'anotherLoop'
@@ -367,6 +370,7 @@ end 'blockLeavesTheLoop'
 type LoopEffects
 	// Any op declaring `isStore` or `isCall` — i.e. anything that can change a location. Rule 1.
 	var writesMemory as bool
+
 	// Any op declaring `isCall`. Rule 3.
 	var holdsACall as bool
 
@@ -557,6 +561,7 @@ function analyzeLoopBlock(module StdModule, block IrBlock, position BlockRefInde
 
 	for slot in 0 upto block.opRefs.count() 'eachOp'
 		let opIdx = try block.opRefs.get(slot) otherwise panic("analyzeLoopBlock: opRefs.get OOB at {slot}")
+
 		if not admitsOp(module, opIdx: opIdx, mustExecute: mustExecute, memoryIsStable: memoryIsStable, scratch: scratch) 'staysInTheLoop'
 			continue
 		end 'staysInTheLoop'
@@ -618,11 +623,13 @@ function admitsOp(module StdModule, opIdx OpIndex, mustExecute bool, memoryIsSta
 	let op = try module.ops.get(opIdx) otherwise panic("admitsOp: op index {opIdx} from block.opRefs not in module.ops")
 
 	classifyArithOperands(op, operands: scratch.arith)
+
 	if scratch.arith.isArithmetic() 'phase1'
 		return admitsPureComputation(op, scratch: scratch)
 	end 'phase1'
 
 	classifyLoadOperands(op, load: scratch.load)
+
 	if scratch.load.isLoad() and memoryIsStable 'phase2'
 		return admitsInvariantLoad(mustExecute, scratch: scratch)
 	end 'phase2'
@@ -718,8 +725,10 @@ type MustExecuteCounter
 	// it is a `DominatorChainCount` column and not a column of positions, whatever the two aliases have
 	// in common underneath.
 	var onChains as DominatorChainCountColumn
+
 	// Every position `onChains` is non-zero at — what `reset` has to clear, and nothing more.
 	var touched as BlockPositionColumn
+
 	// How many chains were climbed for the current loop — one per exit and one per latch.
 	var climbs as DominatorChainCount
 
@@ -747,12 +756,15 @@ type MustExecuteCounter
 
 		while moreToClimb 'climb'
 			let seen = try self.onChains.get(walk) otherwise panic("MustExecuteCounter.climbChainFrom: onChains.get OOB at {walk}")
+
 			if seen == 0 'firstChainThroughIt'
 				self.touched.push(walk)
 			end 'firstChainThroughIt'
+
 			try self.onChains.set(walk, value: seen + 1) otherwise panic("MustExecuteCounter.climbChainFrom: onChains.set OOB at {walk}")
 
 			moreToClimb = walk != header
+
 			if moreToClimb 'notTheHeaderYet'
 				walk = tree.immediateDominatorOf(walk)
 			end 'notTheHeaderYet'
@@ -796,6 +808,7 @@ type LoadWitnessTable
 	// to the discipline in one copy and not the other lets a witness from a PREVIOUS loop read as present,
 	// which is a load hoisted under Rule 2b on evidence that does not exist.
 	var proven as LoopValueStamps
+
 	// WHAT each of them proves. Two columns for one map, exactly as `ConstValueMap` is — "is there an
 	// entry" and "what it is" — because every `LoadCoverage` including 0 is a legitimate value and a
 	// single column would need one of them to mean "absent".
@@ -902,18 +915,24 @@ type LicmScratch
 	// value moving from one set to the other is exactly what the analysis records.
 	export var definedInLoop as LoopValueStamps
 	export var invariant as LoopValueStamps
+
 	// The loop currently being analysed, in both the forms the walks need — membership and a member list.
 	export var members as LoopMembership
+
 	// What that loop's ops do — Rules 1 and 3.
 	export var effects as LoopEffects
+
 	// Rule 2a's answer for that loop.
 	export var mustExecute as MustExecuteCounter
 	export var witness as LoadWitnessTable
+
 	// The op indices to move, in the order they were collected.
 	export var hoisted as OpIndexArray
+
 	// The positions within the CURRENT block's `opRefs` that are leaving it — ascending, and reused per
 	// block rather than allocated per block.
 	export var leaving as BlockOpPosArray
+
 	// The op being classified, in each of the two shapes it might have. Refilled per op and never
 	// re-created — the shape `StdArithOperands` states.
 	export var arith as StdArithOperands

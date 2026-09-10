@@ -109,6 +109,7 @@ test 'every fixture program is staged by name from a case file'
 	let cases = caseFileSources()
 
 	var unstaged = StringArray.create()
+
 	for fixtureName in fixtureNames() 'eachFixture'
 		if not cases.contains("stagedProgram(\"{fixtureName}\"") 'neverStaged'
 			unstaged.push(fixtureName)
@@ -148,6 +149,7 @@ end 'stagedProgram'
 // binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
 export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool) returns CollectedOutput
 	let binary = testedCompilerPath()
+
 	if not File.exists(binary) 'noBinary'
 		panic("parallel-compile.test: the gate could not run — there is no compiler at {binary.toString()}. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
@@ -157,6 +159,7 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 	arguments.push(staged.join("{StagedProgramFileName}").toString())
 	arguments.push(OutputOption)
 	arguments.push(builtExecutable(staged).toString())
+
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
 	end 'eachExtra'
@@ -164,6 +167,7 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 	var config = Configuration.create(Executable.path(binary))
 	config.arguments = arguments
 	config.workingDirectory = staged
+
 	if singleProcessor 'pinned'
 		config.environment = Environment.inheritUpdating([MaxProcsEnvName: "{SingleProcessor}"])
 	end 'pinned'
@@ -227,11 +231,13 @@ end 'executableSuffix'
 // processors than the fixture declares functions is refused loudly rather than pinned to a guess.
 export function defaultPoolNeedle(staged FilePath) returns String
 	let reported = __Builtins.cpuCount()
+
 	if reported < 1 'unreported'
 		panic("parallel-compile.test: the gate could not run — __Builtins.cpuCount() answered {reported}, below the floor its own contract promises.")
 	end 'unreported'
 
 	let declared = declaredFunctionCount(staged)
+
 	if reported > declared 'poolSmallerThanTheMachine'
 		panic("parallel-compile.test: the gate could not run — this host has {reported} processors and the staged program declares only {declared} functions, so the default pool's worker count is min(P, F) with F unknowable from here. Add functions to the fixture until it declares more than the host has processors.")
 	end 'poolSmallerThanTheMachine'
@@ -254,6 +260,7 @@ function declaredFunctionCount(staged FilePath) returns FunctionTally
 	let source = fileText(staged.join("{StagedProgramFileName}"))
 
 	var declared = 0 as FunctionTally
+
 	for line in source.split(LineFeed) 'eachLine'
 		if line.startsWith(FunctionDeclarationPrefix) 'declaresOne'
 			declared = declared + 1
@@ -293,8 +300,10 @@ export function requireIdenticalBytes(first FilePath, second FilePath) throws Te
 
 	var offset = 0
 	var identical = true
+
 	for octet in firstBytes 'eachByte'
 		let other = try secondBytes.get(offset) otherwise panic("parallel-compile.test: the gate could not run — offset {offset} is inside {first.toString()} and outside {second.toString()} after their lengths were found equal.")
+
 		if octet != other 'differs'
 			identical = false
 			break
@@ -314,6 +323,7 @@ end 'requireIdenticalBytes'
 function copyStagedTree(stored FilePath, into FilePath)
 	for entry in listing(stored) 'eachEntry'
 		let target = into.join("{storedToReal(entry.filename())}")
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			if not Directory.create(target) 'couldNotCreate'
 				panic("parallel-compile.test: the gate could not run — could not create the staging directory {target.toString()}.")
@@ -360,6 +370,7 @@ end 'purgeFilesIn'
 // a case is one the guard above sees.
 function fixtureNames() returns StringArray
 	var names = StringArray.create()
+
 	for entry in listing(readableDir(FixturesDirName)) 'eachEntry'
 		if Directory.isDirectory(entry) 'aProgram'
 			names.push(entry.filename())
@@ -372,6 +383,7 @@ end 'fixtureNames'
 // Every driver in this project, concatenated: the text the staging guard searches for each fixture's name.
 function caseFileSources() returns String
 	var sources = ""
+
 	for entry in listing(readableDir(ProjectDirName)) 'eachEntry'
 		if entry.filename().endsWith(TestSourceSuffix) 'aDriver'
 			sources.append(fileText(entry))
@@ -387,6 +399,7 @@ function liveSourcesUnder(root FilePath) returns StringArray
 
 	for entry in listing(root) 'eachEntry'
 		let name = entry.filename()
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			if name == ProjectProductsDirName 'buildProducts'
 				continue
@@ -395,6 +408,7 @@ function liveSourcesUnder(root FilePath) returns StringArray
 			for nested in liveSourcesUnder(entry) 'eachNested'
 				live.push(nested)
 			end 'eachNested'
+
 			continue
 		end 'aDirectory'
 
@@ -410,6 +424,7 @@ end 'liveSourcesUnder'
 // an `isEmpty` on the very text a reader has to act on.
 function listedLines(paths StringArray) returns String
 	var listed = ""
+
 	for path in paths 'eachPath'
 		listed.append("{LineFeed}  {path}")
 	end 'eachPath'
@@ -421,6 +436,7 @@ end 'listedLines'
 // working-directory contract in the header not being met.
 function readableDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("parallel-compile.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not Directory.isDirectory(path) 'notThere'
 		panic("parallel-compile.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
@@ -432,9 +448,11 @@ end 'readableDir'
 // not a failure, and absolute because it is handed to a child process as its working directory.
 function writableDir(spelled String) returns FilePath
 	var prefix = ""
+
 	for component in spelled.split(PortablePathSeparator) 'eachComponent'
 		prefix = component if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{component}"
 		let ancestor = try FilePath.from(prefix) otherwise panic("parallel-compile.test: the gate could not run — '{prefix}' is not a spellable path")
+
 		if not Directory.create(ancestor) 'couldNotCreate'
 			panic("parallel-compile.test: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
 		end 'couldNotCreate'

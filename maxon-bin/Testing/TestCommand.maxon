@@ -77,6 +77,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 	end 'notADirectory'
 
 	var target = detectHostTarget()
+
 	match resolveTargetFlag(args.targetSpec) 'targetSel'
 		resolved(t) then target = t
 		unrecognized(spec) then return reportUnknownTarget(spec)
@@ -120,6 +121,7 @@ end 'runTest'
 // The project under test: the positional argument, or the working directory when there was none.
 function testProjectDir(args MaxonArgs) returns FilePath throws FilePathError
 	let spelled = args.solePositional()
+
 	if spelled.isEmpty() 'theWorkingDirectory'
 		return Directory.currentPath()
 	end 'theWorkingDirectory'
@@ -166,6 +168,7 @@ function selectionFor(groups TestFileGroupArray, total ReportedTestCount, filter
 
 	// One slot per DISCOVERED test, indexed by run index — see `TestSelection`.
 	var selected = TestSelection.create()
+
 	for _ in 0 upto total 'oneSlotPerTest'
 		selected.push(false)
 	end 'oneSlotPerTest'
@@ -193,6 +196,7 @@ function filterPatterns(filter String) returns StringArray
 
 	for part in filter.split(FilterPatternSeparator) 'eachPattern'
 		let trimmed = part.trim()
+
 		if trimmed.isEmpty() 'namesNothing'
 			continue
 		end 'namesNothing'
@@ -379,6 +383,7 @@ function prepareTestBuildRoot(projectDir FilePath) returns FilePath throws TestS
 	// between `join`'s String and FilePath overloads (the reason `SpecTestRunner.specTempRootDir` spells
 	// its own directory name that way).
 	let buildRoot = projectDir.join("{ProjectProductsDirName}").join("{TestBuildDirName}")
+
 	if not Directory.create(buildRoot) 'couldNotCreateIt'
 		throw TestStagingError.refused("could not create the test build directory {reportPathDisplay(buildRoot)}")
 	end 'couldNotCreateIt'

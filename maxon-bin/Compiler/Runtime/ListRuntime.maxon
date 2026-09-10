@@ -348,41 +348,52 @@ export function listAccessorSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ListFirstName) 'first'
 		return ArrayFirstMethod
 	end 'first'
+
 	if callee.equals(ListGetName) 'get'
 		return GetMethod
 	end 'get'
+
 	if callee.equals(ListLastName) 'last'
 		return ListLastMethod
 	end 'last'
+
 	if callee.equals(ListRemoveFirstName) 'removeFirst'
 		return ListRemoveFirstMethod
 	end 'removeFirst'
+
 	if callee.equals(ListRemoveLastName) 'removeLast'
 		return ListRemoveLastMethod
 	end 'removeLast'
+
 	// `remove` and `insert` are the two whose emitted name is NOT their spelling with a prefix — the entry
 	// says WHERE it acts (`_at`) where the author says WHAT it does — which is exactly the gap this map is for.
 	if callee.equals(ListRemoveAtName) 'remove'
 		return RemoveMethod
 	end 'remove'
+
 	if callee.equals(ListInsertName) 'insert'
 		return InsertMethod
 	end 'insert'
+
 	// The four navigators are the one family whose emitted name is its spelling plus a WORD — `_checked`,
 	// which says what the entry adds to the unchecked cursor primitive beside it and is not something an
 	// author ever types.
 	if callee.equals(ListHeadCheckedName) 'head'
 		return ManagedListHeadMethod
 	end 'head'
+
 	if callee.equals(ListTailCheckedName) 'tail'
 		return ManagedListTailMethod
 	end 'tail'
+
 	if callee.equals(ListNodeNextCheckedName) 'next'
 		return ManagedListNodeNextMethod
 	end 'next'
+
 	if callee.equals(ListNodePrevCheckedName) 'prev'
 		return ManagedListNodePrevMethod
 	end 'prev'
+
 	panic("listAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `List` accessor — this map is asked ONLY behind `isThrowingListRuntimeCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `installListRuntime`'s drift guard asks this for every throwing `__list_` builder it installs, so the second case fails at INSTALL and never in front of a user")
 end 'listAccessorSourceMethodName'
 
@@ -431,6 +442,7 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListFrom(module)
 	buildListClone(module, name: ListCloneName, clonesElements: false)
 	buildListClone(module, name: ListCloneManagedName, clonesElements: true)
+
 	// ⚠ **THE ONE PAIR THIS ALL-OR-NOTHING INSTALL GATES, AND THE GATE IS NOT TIDINESS.** Every other helper
 	// here calls only what this install builds; the soleness walks call `__mm_sole_box`, which
 	// `installMmRuntime` builds under `usesSoleWalk` alone — so installing them unconditionally would leave
@@ -439,6 +451,7 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 		buildListSole(module, name: ListSoleName, walksElements: false)
 		buildListSole(module, name: ListSoleManagedName, walksElements: true)
 	end 'soleWalk'
+
 	buildListDecref(module)
 
 	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installManagedDirectoryRuntime`'s guard, one
@@ -455,11 +468,14 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 		if not isListRuntimeCallee(func.name) 'notOurs'
 			continue
 		end 'notOurs'
+
 		let named = isThrowingListRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+
 		if stamped and not named 'stampedNotNamed'
 			panic("installListRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingListRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
 		end 'stampedNotNamed'
+
 		if named and not stamped 'namedNotStamped'
 			panic("installListRuntime: isThrowingListRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
 		end 'namedNotStamped'
@@ -932,6 +948,7 @@ function buildListInsert(module StdModule)
 	emitStoreField(module, block: interior, record: node, offset: ListNextOffset, value: displaced)
 	emitStoreField(module, block: interior, record: predecessor, offset: ListNextOffset, value: node)
 	emitStoreField(module, block: interior, record: displaced, offset: ListPrevOffset, value: node)
+
 	// Neither end field moved, so this arm owes only the count — which the two end arms got from
 	// `emitListLinkPublished` inside the entry they called. The claim is recorded AFTER the links, which is that
 	// helper's own ordering discipline.
@@ -1483,6 +1500,7 @@ function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset
 	module.setTerminator(emptied, op: StdOp.branch(release.id))
 
 	emitListCountDelta(module, block: release, list: list, opcode: StdBinOpcode.sub, ids: ids)
+
 	// The element moved out to the caller, so the slot is nulled before the chain lets go — `remove_node`'s
 	// rule, for its reason: `__list_node_decref` reads it to decide whether the node still owes a drop, and a
 	// handle minted by an `insertFirst` may well outlive this `removeFirst`.
@@ -1722,11 +1740,13 @@ end 'buildListFrom'
 // guard above checks in both directions.
 function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	var paramTypes = oneI64Param()
+
 	if clonesElements 'perElementCloner'
 		paramTypes.push(StdType.i64)
 	end 'perElementCloner'
 
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+
 	// ⚠ **BOTH ENTRIES RESERVE TWO PARAMETER ID SLOTS**, so `cloneFn` below is either parameter 1 or nothing at
 	// all. `ValueMinter.create(paramTypes.count())` would have made that id the trivial entry's FIRST MINTED
 	// TEMPORARY instead — a name that reads as a parameter and denotes an unrelated value.
@@ -1819,11 +1839,13 @@ end 'emitListClonedElement'
 // takes a reference to one whatever its element is.
 function buildListSole(module StdModule, name ByteArray, walksElements bool)
 	var paramTypes = oneI64Param()
+
 	if walksElements 'perElementWalk'
 		paramTypes.push(StdType.i64)
 	end 'perElementWalk'
 
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+
 	// ⚠ Both entries reserve two parameter id slots — `buildListClone`'s rule, for its reason.
 	var ids = ValueMinter.create(2)
 

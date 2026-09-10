@@ -127,6 +127,7 @@ end 'addRepeatSampling'
 
 function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
 	var items = JsonNodeIdArray.create()
+
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
 
@@ -155,8 +156,10 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		// and in this document together, or in neither.
 		var phases = JsonNodeIdArray.create()
 		var subs = JsonNodeIdArray.create()
+
 		for source in scalePhaseSources() 'eachPhase'
 			let node = metricNode(doc, name: phaseSourceName(source), metric: phaseMetricOf(source, result: result))
+
 			match source 'src'
 				compilePhase then phases.push(node)
 				regAllocPhase then subs.push(node)
@@ -170,6 +173,7 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 
 		items.push(doc.add(JsonNode.objectNode(keys, children: children)))
 	end 'eachRung'
+
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
@@ -186,6 +190,7 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 		// omission is exactly right.
 		return
 	end 'notLogged'
+
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
 	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: ((result.total.allocs - beforeAllocs) as JsonFloat))

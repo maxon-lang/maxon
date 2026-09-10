@@ -58,6 +58,7 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 			integer or
 			float then break 'residue'
 		exitCode then break 'residue'
+
 		// A struct reference is NOT a residue — it is what `resolveNamedType` PRODUCES for a
 		// declared `type`, and it is already concrete. Its width is a machine word, assigned one
 		// line down by the same table every other arm's comes from. (`named` is checked above and
@@ -65,26 +66,32 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// surviving to here means resolution left work undone; a `structRef` means resolution DID
 		// its work.)
 		structRef then break 'residue'
+
 		// A String is NOT a residue — `Parser.parseTypeReference` produces `MaxonType.string` for the
 		// `String` builtin directly (syntactically, like `Self`), so it is already concrete. Its width
 		// is a machine word (a pointer), assigned one line down by the same table every arm's comes from.
 		string then break 'residue'
+
 		// A function value is NOT a residue — `Parser.parseTypeReference`/`emitFunctionRef` produce
 		// `MaxonType.function` directly, so it is already concrete. Its width is a machine word (a `.text`
 		// code pointer), assigned one line down by the same table every arm's comes from.
 		function then break 'residue'
+
 		// A type parameter and a generic instance are NOT residues (P1.6-A) — the parser produces them
 		// directly and `resolveType` leaves them alone (they are already concrete: an opaque i64 and a
 		// struct pointer). Their width is a machine word, assigned one line down by the same table.
 		typeParameter then break 'residue'
 		genericInstance then break 'residue'
+
 		// A Character is concrete — a record pointer — so it is no more a residue than a String is.
 		character then break 'residue'
+
 		// An EXISTENTIAL is concrete: `Parser.parseTypeReference` mints `interfaceRef` directly for a name
 		// the whole-program interface registry knows, and `denotedNamedType` mints one for a swept `named`
 		// that turns out to be an interface. Its width here is the VALUE half's machine word — the witness
 		// half is a SEPARATE value with its own Std type, never a widening of this one.
 		interfaceRef then break 'residue'
+
 		// A `cstring` is concrete: `parseTypeReference` mints it directly for the keyword, and its width is
 		// the machine word every other address gets from the table one line down.
 		cstring then break 'residue'
@@ -123,12 +130,14 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		integer then return StdType.i64
 		float then return StdType.f64
 		named then return StdType.i64
+
 		// `exitCode` is the resolved `ExitCode` builtin alias. Its width is
 		// assigned HERE (unsigned 32-bit) — this is the sole place ExitCode's
 		// width lives, keeping MaxonType itself width-free (see MaxonDialect).
 		exitCode then return StdType.u32
 		unresolved then panic("valueTagToStdType: an `unresolved` tag reached lowering — it is a call to a function no file in the program declares, which SemanticCheck reports as E3004 and which therefore never reaches codegen")
 		void then panic("valueTagToStdType: a `void` tag names no value, so it has no width — a void call's result is a discarded statement result (Parser.parseCall) and can never be an operand")
+
 		// ⭐ A STRUCT IS A POINTER, AND THIS LINE IS THE WHOLE OF THAT DECISION. `type Point` is a
 		// heap-allocated refcounted box (`Parser.emitStructLiteral` → `__mm_alloc`), and a value of
 		// that type is the box's ADDRESS — one machine word, in a GPR, passed and returned like any
@@ -136,29 +145,36 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// is a pointer too. Nothing above this line knows the width, which is the point — MaxonType
 		// stays width-free (see MaxonDialect) and the machine word is named exactly once, here.
 		structRef then return StdType.i64
+
 		// ⭐ A STRING IS A POINTER — to the fused 56-byte rdata record. One machine word, in a GPR,
 		// passed and returned like any other i64. Nothing above this line knows the width, which is the
 		// point: MaxonType stays width-free and the machine word is named exactly once, here.
 		string then return StdType.i64
+
 		// ⭐ A FUNCTION VALUE IS A POINTER — a `.text` code address. One machine word, in a GPR, passed
 		// and returned like any other i64. Nothing above this line knows the width, which is the point:
 		// MaxonType stays width-free and the machine word is named exactly once, here.
 		function then return StdType.i64
+
 		// ⭐ A TYPE PARAMETER IS AN OPAQUE MACHINE WORD (P1.6-A). `T` in `type Box uses T` lowers to an
 		// i64, which is the WHOLE of what makes a generic type's method bodies compile ONCE and be
 		// byte-identical to the equivalent monomorphic struct: a trivial type argument is passed in a
 		// GPR and stored in an 8-byte slot like any other scalar. Nothing above this line knows the
 		// width — MaxonType stays width-free — and the machine word is named exactly once, here.
 		typeParameter then return StdType.i64
+
 		// A GENERIC INSTANCE IS A POINTER to the base struct's box — one machine word, like `structRef`.
 		genericInstance then return StdType.i64
+
 		// A CHARACTER IS A POINTER to the fused byte record — the same machine word a String is.
 		character then return StdType.i64
+
 		// ⭐ **AN EXISTENTIAL'S *VALUE HALF* IS A POINTER** — one machine word, exactly as `structRef` is.
 		// This tag types ONE of the fat pointer's two words and never both: the witness half is a separate
 		// value carrying its own (integer) tag, which is what keeps the collapse a scalar-to-scalar table
 		// rather than something that would have to answer with a width of 16.
 		interfaceRef then return StdType.i64
+
 		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
 		cstring then return StdType.i64
 	end 'collapse'
@@ -243,11 +259,13 @@ function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		shl then return StdBinOpcode.shl
 		shr then return StdBinOpcode.shr
 		shrLogical then return StdBinOpcode.shrLogical
+
 		// The `min`/`max` intrinsics — 1:1 renames like the arithmetic band's. Float-only on both sides
 		// of the boundary, and `appendStdBinOp`'s guard is what makes that unrepresentable rather than
 		// merely unwritten (`stdBinOpcodeIsFloatOnly`).
 		min then return StdBinOpcode.min
 		max then return StdBinOpcode.max
+
 		// The UNSIGNED divisions have no `binOp` opcode for the reason `mod` has none, twice over: they
 		// trap, so they need `StdOp.div`/`mod`'s `isPure: false`, and they are integer-only, so there is
 		// no float `binOp` for them to be. `lowerBinOp` routes both directly.
@@ -265,11 +283,13 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		neg then return StdUnaryOpcode.neg
 		bitNot then return StdUnaryOpcode.bitNot
 		logicalNot then return StdUnaryOpcode.logicalNot
+
 		// The conversion pair — still a 1:1 rename, and still no decision made here: the parser
 		// chose the DIRECTION (it is the tier that knows the operand is a float), and the Std
 		// opcode only renames it. `trunc` is the source builtin; `promoteToFloat` is inserted.
 		trunc then return StdUnaryOpcode.fpToSi
 		promoteToFloat then return StdUnaryOpcode.siToFp
+
 		// The math intrinsics — a 1:1 rename like the rest, and the only reason they are spelled
 		// separately from the conversions above is that they are NOT conversions: they stay inside
 		// the float domain, so `assertConversionCrossesDomain` must not be asked about them.
@@ -279,11 +299,13 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		sqrt then return StdUnaryOpcode.sqrt
 		abs then return StdUnaryOpcode.abs
 		fneg then return StdUnaryOpcode.fneg
+
 		// The reinterpretation — still a 1:1 rename. It is spelled separately from BOTH bands above
 		// for the reason `stdUnaryOperandIsFloat` gives it its own arm: it leaves the float domain
 		// (so it is not an intrinsic) without converting (so it is not a conversion).
 		floatToBits then return StdUnaryOpcode.bitcastF64ToI64
 		bitsToFloat then return StdUnaryOpcode.bitcastI64ToF64
+
 		// ⚠ The SIGN-EXTENSION family is the ONE member with no 1:1 rename — it EXPANDS to a shift pair —
 		// which is why this map is written as statements rather than as a `gives` expression: the honest
 		// answer for that band is a panic, and there is no opcode to hand back. `lowerUnaryOp` routes it to
@@ -357,6 +379,7 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		shl gives MaxonBinOp.shl
 		shr gives MaxonBinOp.shr
 		shrLogical gives MaxonBinOp.shrLogical
+
 		// The three FLOAT-ONLY opcodes (`stdBinOpcodeIsFloatOnly`). They have a `MaxonBinOp` twin and it
 		// is named here, because the round trip below is only a check when every arm answers: an arm that
 		// panicked "float-only" would be this file deciding what a CALLER may fold, which is the caller's
@@ -366,6 +389,7 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		div gives MaxonBinOp.div
 		min gives MaxonBinOp.min
 		max gives MaxonBinOp.max
+
 		// ⭐ EC18's HIGH MULTIPLY HAS NO `MaxonBinOp` TWIN, and that is a property of the LANGUAGE
 		// rather than an omission here: no source operator spells "bits 64..127 of a 128-bit product".
 		// It is minted by `StrengthReduceDivision` at the Std tier and lowered to one instruction, so
@@ -377,6 +401,7 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 	end 'map'
 
 	let roundTrip = maxonBinOpToStdOpcode(op)
+
 	if roundTrip != opcode 'notAnInverse'
 		panic("maxonBinOpOfStdOpcode: `{opcode.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
 	end 'notAnInverse'
@@ -397,6 +422,7 @@ export function maxonCmpOpOfStdPred(pred StdCmpPred) returns MaxonCmpOp
 	end 'map'
 
 	let roundTrip = maxonCmpOpToStdPred(op)
+
 	if roundTrip != pred 'notAnInverse'
 		panic("maxonCmpOpOfStdPred: `{pred.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
 	end 'notAnInverse'
@@ -434,6 +460,7 @@ export function maxonUnaryOpOfStdOpcode(opcode StdUnaryOpcode) returns MaxonUnar
 	end 'map'
 
 	let roundTrip = maxonUnaryOpToStdOpcode(op)
+
 	if roundTrip != opcode 'notAnInverse'
 		panic("maxonUnaryOpOfStdOpcode: `{opcode.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
 	end 'notAnInverse'
@@ -478,12 +505,15 @@ let NoNamedCallee = b""
 
 function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
+
 	for k in 0 upto paramTypes.count() 'eachParam'
 		let paramType = try paramTypes.get(k) otherwise panic("paramFloatMask: paramTypes.get OOB at {k}")
+
 		if stdTypeIsFloat(maxonTypeToStdType(paramType)) 'floatParam'
 			mask = mask or (1 shl k)
 		end 'floatParam'
 	end 'eachParam'
+
 	return mask
 end 'paramFloatMask'
 
@@ -497,6 +527,7 @@ function signatureHasFunctionParam(sig FuncSignature) returns bool
 			return true
 		end 'function'
 	end 'eachParam'
+
 	return false
 end 'signatureHasFunctionParam'
 
@@ -577,6 +608,7 @@ typealias WitnessAdapterNameSet = Set with ByteArray
 union WitnessTableInstance
 	// No instance is in hand — the base-keyed table, and the answer for every non-generic conformer.
 	shared
+
 	// This concrete instance's own table.
 	perInstance(gid GenericInstanceId)
 end 'WitnessTableInstance'
@@ -598,13 +630,17 @@ type WitnessAdapterRequest
 	// `requireWitnessSlotImplIgnoresDictionary` may raise, which has to name the conformance whose shared
 	// table cannot supply a dictionary.
 	export let conformerType as ByteArray
+
 	// The impl the adapter forwards to — `witnessSlotImpl`'s answer, so the adapter calls exactly the member
 	// the conformance accepted.
 	export let implName as ByteArray
+
 	// The adapter's own symbol, already stamped into the slot's relocation by the time this is drained.
 	export let adapterName as ByteArray
+
 	// How many arguments a `witnessCall` through this slot passes — the adapter's whole parameter list.
 	export let slotArity as ParamCount
+
 	// WHICH table stamped this slot, and therefore WHERE the dictionary the adapter passes comes from (G19):
 	// `perInstance` names the instance whose descriptor and witnesses the adapter materializes, `shared` is
 	// the null dictionary `requireWitnessSlotImplIgnoresDictionary` proves nothing reads.
@@ -652,11 +688,14 @@ type NullWitnessArgRequest
 	// The function whose body passes the zero — the position a refusal is blamed at, because it is the call
 	// site the author must change, and the only one of the two names that is always the user's.
 	export let caller as ByteArray
+
 	// The callee whose witness parameter receives it.
 	export let callee as ByteArray
+
 	// WHICH of the callee's witness parameters — its position in `witnessConstraintsOfMethod(callee)`, the
 	// same list `appendWitnessArgs` walks, so the parameter this names is the parameter the zero landed in.
 	export let constraintIndex as WitnessSlotIndex
+
 	// The conformer and interface the missing table would have been keyed by — carried for the diagnostic,
 	// which has to name the conformance whose impls make the instance untabulatable.
 	export let conformerType as ByteArray
@@ -695,8 +734,10 @@ type RangeSiteWalk
 	// The CURRENT function's sites — the objects this walk writes `stdOpPos` onto, which IS the
 	// publishing: `project.rangeChecks` holds the same array, so `InsertRangeChecks` reads what lands here.
 	var sites as RangeCheckSiteArray
+
 	// Site indices grouped by the block that records them, ascending by ordinal within a block.
 	var order as RangeSiteIndexArray
+
 	// Per block id: the next unconsumed entry of that block's run in `order`, and one past its last.
 	var cursor as RangeSiteIndexArray
 	var runEnd as RangeSiteIndexArray
@@ -733,6 +774,7 @@ type RangeSiteWalk
 
 		self.runEnd.clear()
 		self.runEnd.growFilled(blockCount as ElementIndex, value: 0)
+
 		for site in checks.sites 'countPerBlock'
 			let seen = try self.runEnd.get(site.block) otherwise panic("RangeSiteWalk.beginFunction: a site names block id {site.block}, outside the function's id space of {blockCount}")
 			try self.runEnd.set(site.block, value: seen + 1) otherwise panic("RangeSiteWalk.beginFunction: runEnd.set OOB at block {site.block}, which was just read in range")
@@ -741,6 +783,7 @@ type RangeSiteWalk
 		self.cursor.clear()
 		self.cursor.reserve(blockCount as ElementIndex)
 		var total = 0 as RangeSiteIndex
+
 		for id in 0 upto blockCount 'accumulate'
 			total = total + (try self.runEnd.get(id) otherwise panic("RangeSiteWalk.beginFunction: runEnd.get OOB at block {id} despite the upto bound"))
 			try self.runEnd.set(id, value: total) otherwise panic("RangeSiteWalk.beginFunction: runEnd.set OOB at block {id} despite the upto bound")
@@ -749,6 +792,7 @@ type RangeSiteWalk
 
 		self.order.clear()
 		self.order.growFilled(checks.sites.count(), value: 0)
+
 		for step in 0 upto checks.sites.count() 'placeBackwards'
 			let index = checks.sites.count() - 1 - step
 			let site = try checks.sites.get(index) otherwise panic("RangeSiteWalk.beginFunction: sites.get OOB at {index} despite the upto bound")
@@ -774,9 +818,11 @@ type RangeSiteWalk
 
 		var next = try self.cursor.get(blockId) otherwise panic("RangeSiteWalk.recordAt: block id {blockId} is outside the function's block-id space, which `beginFunction` sized the columns to")
 		let stop = try self.runEnd.get(blockId) otherwise panic("RangeSiteWalk.recordAt: runEnd has no entry for block id {blockId}, which cursor just answered for")
+
 		while next < stop 'eachReachedSite'
 			let index = try self.order.get(next) otherwise panic("RangeSiteWalk.recordAt: order.get OOB at {next}, inside block {blockId}'s own run")
 			var site = try self.sites.get(index) otherwise panic("RangeSiteWalk.recordAt: order entry {index} is not a site index")
+
 			if site.maxonOpPos > maxonOpPos 'notReachedYet'
 				break
 			end 'notReachedYet'
@@ -784,6 +830,7 @@ type RangeSiteWalk
 			site.stdOpPos = stdOpPos
 			next = next + 1
 		end 'eachReachedSite'
+
 		try self.cursor.set(blockId, value: next) otherwise panic("RangeSiteWalk.recordAt: cursor.set OOB at block {blockId}, which was just read in range")
 	end 'recordAt'
 end 'RangeSiteWalk'
@@ -797,12 +844,14 @@ end 'RangeSiteWalk'
 // suite still green. The premise is enforced here rather than trusted.
 function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteIndexArray, at RangeSiteIndex, site RangeCheckSite, runEnd RangeSiteIndexArray)
 	let runStop = try runEnd.get(site.block) otherwise panic("requireSiteOrdinalsAscend: runEnd.get OOB at block {site.block}, which the placement pass already read in range")
+
 	if at + 1 >= runStop 'lastOfItsRun'
 		return
 	end 'lastOfItsRun'
 
 	let nextIndex = try order.get(at + 1) otherwise panic("requireSiteOrdinalsAscend: order.get OOB at {at + 1}, inside block {site.block}'s own run")
 	let next = try sites.get(nextIndex) otherwise panic("requireSiteOrdinalsAscend: order entry {nextIndex} is not a site index")
+
 	if next.maxonOpPos < site.maxonOpPos 'outOfOrder'
 		panic("requireSiteOrdinalsAscend: block {site.block} records a range-check site at Maxon op position {site.maxonOpPos} before one at {next.maxonOpPos} — a block's sites must be recorded in source order, because the guard walk consumes each block's run in order and would hand the earlier site the later position")
 	end 'outOfOrder'
@@ -883,6 +932,7 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try maxonModule.blocks.get(blockRef) otherwise panic("registerProgramLiteralBlobs: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try maxonModule.ops.get(opIdx) otherwise panic("registerProgramLiteralBlobs: opIdx {opIdx} not in module.ops")
 				registerIfProgramLiteral(op, globalData: globalData)
@@ -928,20 +978,24 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			witnessDispatch or
 			witnessTryDispatch or
 			panicAbortValue then break 'op'
+
 		// The error-flag encode carries no program LITERAL — the only constant it needs is the bias, which the
 		// lowering mints for itself rather than reading out of the op.
 		errorFlagEncode then break 'op'
+
 		// No service op carries a program literal: a `spawn`'s bytes are a TYPE NAME the lowering turns into
 		// two symbols, and a send's and a reply cell's are callee names no `.rdata` blob holds.
 		serviceSpawn or
 			serviceSend or
 			serviceReplyCell then break 'op'
+
 		// ⚠ An imaged struct record is registered by its own LOWERING and not here, because what it registers is
 		// not a blob: it is the whole payload — the synthetic allocation header and the box — and the LABEL it
 		// mints points inside it. A pre-registration would have to mint the same payload twice or hand this
 		// walk the header geometry, and the dedup that pools two identical records already makes one object of
 		// them whichever pass asks first.
 		immortalStructRecord then break 'op'
+
 		// ⚠ An imaged string table registers its own literals at its LOWERING and not here, for the imaged
 		// struct record's reason: what it registers is not a blob but three interlocking payloads — a String
 		// record per element, the buffer of addresses over them, and the Array record over that — whose labels
@@ -984,9 +1038,11 @@ union DivisionExpansion
 	// `__checked_div`: the divisor's zero test IS the flag (see `emitDivisorZeroFlag`), and the divide runs
 	// on an OR'd divisor so it never sees the zero it reported. Integer or float.
 	checkedQuotient(errorFlag ValueId)
+
 	// `__checked_mod`: the same, plus A1x's overflow guard — a divisor the compiler could not prove
 	// non-zero is one it could not prove is not `-1` either.
 	checkedRemainder(errorFlag ValueId)
+
 	// `__guarded_mod` (A1x): the divisor is PROVEN non-zero, so there is no flag to write and no divisor to
 	// repair — only the overflow guard, which answers `0` and raises nothing.
 	guardedRemainder
@@ -1006,78 +1062,99 @@ end 'divisionExpansionKind'
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
+
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
+
 	// What `declaredFunctionShapeOf` answers "what type was this function VALUE declared with?" from — the
 	// question `indirectCalleeParamTypes` asks per indirect call, and the same one SemanticCheck asked of the
 	// same call before it. Held as the ONE carrier the check holds (`FunctionTypeRegistry`) rather than as
 	// its four halves, so the two sites cannot come to hold different ones. Copied out of `Project` at
 	// `create` like every other registry here, so the lowering still holds no `Project`.
 	var functionTypes as FunctionTypeRegistry
+
 	// The whole-program signature index (`queryProgramSignatures`) — P1.6-B1's source for a generic
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
+
 	// PBR-2: the current function's by-reference parameter mask and parameter count — see `stdTypeOf`. Both
 	// are re-pointed per function beside `valueTags`, and both are 0 for a function with no by-reference
 	// parameter, which is every function in a program that reassigns none.
 	var currentByRefParams as ParamPositionMask
 	var currentParamCount as ParamCount
+
 	// The Maxon module's CHECKED name index (`FunctionNameIndex`, A2l), built once for the whole pipeline
 	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
 	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
 	// hold — the same argument `SemanticCheck`'s throws map and escape summary now stand on.
 	let funcNames as FunctionNameIndex
+
 	// The qualified names of functions that carry a hidden layout-descriptor parameter (P1.6-B1) — built
 	// once by `buildLayoutNeedingFuncs` (a PARAMETER-COUNT scan, never an op-scan: see its header for the
 	// transitive reservations an op-scan would miss), then read at every call site (append the descriptor
 	// argument?) and per callee (bind the descriptor param?).
 	var layoutNeedingFuncs as LayoutNeedingFuncSet
+
 	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob (P1.6-B1). Filled lazily by
 	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
 	// program pays for exactly the descriptors it references.
 	var layoutDescriptors as LayoutDescriptorRegistry
+
 	// The whole-program user interface registry (P1.7a slice 2a), from `project.interfaces` — resolved (with
 	// the synthesized builtins) to read an interface's method LIST when building a witness table blob (one slot
 	// per method, in decl order). Fully merged by lowering time, so a cross-file interface resolves here.
 	var interfaces as IrInterfaceMap
+
 	// Every `implements` clause in the program, from `project.conformances` — fully merged by lowering time,
 	// which is what lets an associated formal resolve to the type its CONFORMERS bind (see `witnessFormalType`).
 	// It is the same store `ConformanceCheck` refuses an ABI disagreement from, so the check and the emission
 	// cannot come to describe one argument differently.
 	var conformances as ConformanceDeclArray
+
 	// The transitive witness-slot list of each interface a dispatch in this module goes through, built on
 	// first use — see `witnessSlotsOf` for why it is memoized rather than re-walked per dispatch op.
 	var witnessSlotMemo as WitnessSlotListMemo
+
 	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
+
 	// The immortal EMPTY-container records already registered — see `ImmortalEmptyArrayLabelSet`.
 	var emittedImmortalEmptyArrays as ImmortalEmptyArrayLabelSet
+
 	// The imaged string-table records already relocated — see `ImmortalStringTableLabelSet`.
 	var emittedImmortalStringTables as ImmortalStringTableLabelSet
+
 	// The imaged struct boxes whose column slots are already relocated — see `ImmortalStructBoxLabelSet`.
 	var emittedImmortalStructBoxes as ImmortalStructBoxLabelSet
+
 	// The witness-slot ABI adapters already requested (WASM3) — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
+
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
 	// function walk, by `installWitnessSlotAdapters`.
 	var pendingWitnessAdapters as WitnessAdapterRequestArray
+
 	// The calls that passed a ZERO for a `where` constraint whose type argument is a PARAMETRIC instance —
 	// see `NullWitnessArgRequest`. Drained ONCE, after the function walk, by `installParametricWitnessChecks`.
 	var pendingNullWitnessArgs as NullWitnessArgRequestArray
+
 	// Which conformances hold a dictionary-carrying impl — see `DictionaryCarryingConformanceMap`.
 	var dictionaryCarryingConformances as DictionaryCarryingConformanceMap
+
 	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
 	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
 	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
 	var witnessSlotImpls as WitnessSlotImplMap
+
 	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 56-byte record and
 	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
 	// Threaded here rather than a field on some later pass because this is the FIRST tier that turns a
 	// source literal into rdata bytes.
 	var globalData as GlobalDataTable
+
 	// ⭐ THE TYPE ORACLE FOR THE FUNCTION CURRENTLY BEING LOWERED — the parser's per-value
 	// `ValueTypeTag` column, published on `IrFunction.valueTags` and re-pointed at each function
 	// by `lower`. It is what fills the Std arith band's `operandType`.
@@ -1092,10 +1169,12 @@ type MaxonToStdLowering
 	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
+
 	// The per-value closure-environment column of the function CURRENTLY being lowered (P1.5-A2b-2) —
 	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
 	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
 	var valueClosureEnv as ValueIdArray
+
 	// The per-value WITNESS-PAIRING column of the function CURRENTLY being lowered
 	// (P1.7a-existentials slice 1) — re-pointed per function like `valueTags`, from the SAME
 	// `IrFunction.valueWitnessIds` the parser published. `witnessForExistentialValue` reads it to FORWARD an
@@ -1103,19 +1182,23 @@ type MaxonToStdLowering
 	// `lowerCall` reads it for the WITNESS an interface-returning call defines (the parser reserved that id;
 	// this tier is where `StdOp.tryCall` finally defines it).
 	var valueWitnessIds as ValueIdArray
+
 	// The per-value NAME column of the function CURRENTLY being lowered — re-pointed per function like
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
 	var valueNameIds as TypeNameIdArray
+
 	// ⭐ Whether this build carries the DebugStream producer (`--debugstream`). Read at exactly ONE seam
 	// here — the `__mm_alloc` arm below, which appends the allocation's TRACE TAG. This is the only tier
 	// that can supply it: the parser writes the call before a type name is interned whole-program, and no
 	// later tier can recover the box's type from a pointer.
 	let debugStream as bool
+
 	// ⭐ The mm-trace tag of each compiler-minted box that is not any declared type's, keyed by the
 	// `__mm_alloc` call's own op index (`project.allocTagSites`). Read by `allocTagIndexOf` and by nothing
 	// else — see `Project.allocTagSites` for why a trace label may not ride in the type slot.
 	let allocTagSites as AllocTagSiteMap
+
 	// ⭐ The compile-time NAME each `__ds_name_id` marker call interns, keyed by that call's own op index
 	// (`project.debugStreamNameSites`). Read by `lowerDebugStreamNameId` and by nothing else. This is the
 	// first tier that can NUMBER them: the interner is whole-program and this walk is the one pass that sees
@@ -1125,6 +1208,7 @@ type MaxonToStdLowering
 	// Which `constArrayLiteral` ops materialize an IMMORTAL `.rdata` record rather than an owned heap one
 	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
 	let immortalConstArraySites as ImmortalConstArraySiteMap
+
 	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE (EC15)** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementStride` and read
@@ -1135,14 +1219,17 @@ type MaxonToStdLowering
 	// the word governs the binding and not the table. The neighbours are read-only because the parser filled
 	// them; this one is filled here.
 	let stdOpElementStrides as StdOpElementStrideMap
+
 	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
 	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
 	// the only thing that knows it.
 	var currentMaxonOpIndex as OpIndex
+
 	// The per-value EXISTENTIAL-INSTANCE column of the function CURRENTLY being lowered — re-pointed per
 	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
 	// RECEIVER's entry to resolve an associated formal at the SITE that declared it (W59).
 	var currentExistentialInstances as ValueExistentialInstanceMap
+
 	// ⭐ The whole-program type-name interner (`project.typeNames`), which `valueNameIds` indexes into and
 	// into which `mergeArtifact` remapped every id on a merged signature or op type — copied out at `create`
 	// like every other registry here, because this pass holds no `Project`. Two questions need it, and this
@@ -1153,43 +1240,54 @@ type MaxonToStdLowering
 	// ⚠ It was DECLARED TWICE, once per question, with the second declaration silently taking the field: one
 	// fact written down twice, in the field list of the pass whose header says not to.
 	var typeNames as TypeNameInterner
+
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
 	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
 	var currentFuncName as ByteArray
+
 	// Where each file's coverage points begin in `Project.covPoints`. EMPTY for every build `--coverage` is
 	// off for, which is what makes the per-function lookup below cost nothing in an ordinary compile.
 	var covPointBases as CovPointBaseMap
+
 	// The base of the CURRENT function's file — added to the FILE-LOCAL id a `MaxonOp.covPoint` carries to
 	// give the whole-program counter slot. Re-stamped per function beside `currentFuncName`.
 	var currentCovPointBase as CovPointId
+
 	// The ValueId of the CURRENT function's hidden layout-descriptor parameter (P1.6-B1), or an unused 0
 	// when it carries none — `hasImplicitLayout` is the authoritative "does it carry one?" bit, because a
 	// zero-user-parameter generic method's descriptor slot is legitimately ValueId 0 (no sentinel).
 	var implicitLayoutValueId as ValueId
+
 	// Does the CURRENT function carry a layout-descriptor parameter? The non-sentinel gate on
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
+
 	// The ValueId of the CURRENT function's hidden fixed-element-count parameter (W190) — the slot between
 	// the layout descriptor and the constraint witnesses. Read only to FORWARD it, by
 	// `emitFixedElementCountOf`: `countof(Self)` itself needs nothing here, because the parser resolved its
 	// own reservation and the expression simply IS this parameter.
 	var implicitCountValueId as ValueId
+
 	// Does the CURRENT function carry that parameter? The non-sentinel gate on the id above — ValueId 0 is a
 	// legitimate slot for a nullary method, exactly as it is for the descriptor.
 	var hasImplicitFixedElementCount as bool
+
 	// The number of hidden WITNESS parameters the CURRENT function carries (P1.7a slice 2a) — one per `where`
 	// constraint of its enclosing type, for an instance method of a constrained generic type (0 otherwise).
 	// The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness slot `i` is
 	// `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint count.
 	var currentWitnessCount as ParamCount
+
 	// The ValueId of the CURRENT function's FIRST witness parameter (P1.7a slice 2a) — `paramCount -
 	// currentWitnessCount`. Read by `lowerWitnessDispatch` to forward the caller's own witness slot to a
 	// dispatch. Meaningless (and unread) when `currentWitnessCount` is 0.
 	var witnessParamBase as ValueId
+
 	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
 	var currentThrows as ThrowsClause
+
 	// The Std RETURN TYPE of the function CURRENTLY being lowered (F3b) — re-pointed per function like
 	// `currentThrows`, from the SAME `IrFunction.returnType` the backend reads. A throwing function's
 	// throw-edge primary value is a family-default the caller ignores, so only its REGISTER FILE matters;
@@ -1197,6 +1295,7 @@ type MaxonToStdLowering
 	// for a float return, else a GPR zero) — the identical field `emitReturnValueMove` keys the return
 	// register off, so the throw-edge default and the return register cannot come to disagree.
 	var currentReturnType as StdReturnType
+
 	// The MAXON return type of the function CURRENTLY being lowered (P1.7a slice 2, the return ABI) —
 	// re-pointed per function like `currentThrows`. It is carried BESIDE the collapsed `currentReturnType`
 	// and not instead of it, because the two answer different questions and only one of them survives the
@@ -1205,20 +1304,24 @@ type MaxonToStdLowering
 	// question its own return type can answer. `emitRetOrErrorReturn` asks it through
 	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
 	var currentMaxonReturnType as MaxonReturnType
+
 	// The stdlib functions no path from `main` reaches (`StdlibFacts.unreachable`) — the ONE fact `lower`
 	// skips a body on, and the SAME derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage`
 	// read. Copied out of `Project` at `create` like every other registry here (this pass holds no
 	// `Project`), and named for the FACT rather than for its use, exactly as `scanRuntimeUsage`'s
 	// `unreachableStdlib` parameter is.
 	var unreachableStdlib as FunctionNameSet
+
 	// The whole-program range-check plan (P1.9), from `project.rangeChecks` — the SAME table
 	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
 	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
 	// See `RangeSiteWalk`.
 	var rangeChecks as RangeCheckPlanMap
+
 	// The site walk of the function CURRENTLY being lowered — re-pointed per function like `valueTags`,
 	// but REFILLED rather than rebuilt — one walk serves the whole lowering (`RangeSiteWalk.create`).
 	var rangeSites as RangeSiteWalk
+
 	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) seeded at
 	// the parser's dense id count, i.e. the next free id. The ops this pass synthesizes (the flag re-encode
 	// of a throw, the zero flag of a normal throwing return) mint
@@ -1335,6 +1438,7 @@ type MaxonToStdLowering
 		// coverage-instrumentation pass (a later-milestone consumer).
 		for i in 0 upto self.maxonModule.blocks.count() 'relocateBlocks'
 			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: maxonModule.blocks.get OOB at {i}")
+
 			// Fresh block: opRefs/terminator are rebuilt by the per-function walk below.
 			// The phi model the parser attached (block-args + the per-edge branchEdges
 			// carrying each phi's incoming values) is SHARED with the Maxon block, not
@@ -1357,6 +1461,7 @@ type MaxonToStdLowering
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = try self.maxonModule.functions.get(i) otherwise panic("lowerMaxonToStd: maxonModule.functions.get OOB at {i}")
 			var stdParams = StdTypeArray.create()
+
 			for k in 0 upto func.maxonParamTypes.count() 'eachParam'
 				// ⭐⭐ **A BY-REFERENCE PARAMETER CARRIES AN ADDRESS, WHATEVER ITS DECLARED TYPE SAYS (PBR-2).**
 				// The declared type is the type of the VALUE the cell holds; the parameter itself is the cell's
@@ -1371,6 +1476,7 @@ type MaxonToStdLowering
 				let paramType = try func.maxonParamTypes.get(k) otherwise panic("lowerMaxonToStd: maxonParamTypes.get OOB at {k} inside its own count()")
 				stdParams.push(StdType.i64 if maskHasParam(func.reassignedParamMask, param: k) else maxonTypeToStdType(paramType))
 			end 'eachParam'
+
 			// The uniform ABI's companion environment parameters (P1.5-A2b-2) sit PAST the user parameters:
 			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
 			// Grow the Std parameter list to `paramCount` so `emitParams` materializes every incoming register and
@@ -1378,6 +1484,7 @@ type MaxonToStdLowering
 			for _ in func.maxonParamTypes.count() upto func.paramCount 'envParam'
 				stdParams.push(StdType.i64)
 			end 'envParam'
+
 			func.returnType = maxonReturnTypeToStdReturnType(func.maxonReturnType)
 			func.paramTypes = stdParams
 			self.stdModule.functions.push(func)
@@ -1391,6 +1498,7 @@ type MaxonToStdLowering
 		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
+
 			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
 			// LOADER'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module to `stdlib/` changes
 			// NOTHING for a program that does not reach it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
@@ -1423,35 +1531,45 @@ type MaxonToStdLowering
 			// Point the type oracle at THIS function before any of its ops are lowered — the
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
+
 			// PBR-2: which of THIS function's parameters are cell ADDRESSES rather than values. It travels with
 			// the type column because it is a correction TO that column — see `stdTypeOf`.
 			self.currentByRefParams = srcFunc.reassignedParamMask
 			self.currentParamCount = srcFunc.paramCount
+
 			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
 			// function-value argument's env from here.
 			self.valueClosureEnv = srcFunc.valueClosureEnv
+
 			// The witness-pairing column travels with it too (P1.7a-existentials slice 1): an existential
 			// argument's witness half is FORWARDED from here rather than re-resolved.
 			self.valueWitnessIds = srcFunc.valueWitnessIds
+
 			// The existential-instance column travels with it as well (W59): a dispatch's associated FORMAL is
 			// resolved from the RECEIVER's own `with` arguments, which live only here.
 			self.currentExistentialInstances = srcFunc.valueExistentialInstances
+
 			// The name column travels with it too (P1.6-B1): `materializeLayoutArg` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFuncName = srcFunc.name
 			self.bindCovPointBase(srcFunc)
+
 			// Bind this function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses).
 			self.bindImplicitParams(srcFunc)
 			self.currentThrows = srcFunc.throwsTypeName
+
 			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
 			self.currentReturnType = srcFunc.returnType
+
 			// The UNCOLLAPSED return type travels with it (P1.7a slice 2): the collapse above erased whether
 			// this function hands back a fat pointer, and `emitRetOrErrorReturn` needs exactly that.
 			self.currentMaxonReturnType = srcFunc.maxonReturnType
+
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
 			self.nextValueId = srcFunc.valueTags.count()
+
 			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
 			// sites the Std position the parser's Maxon ordinal became (P1.9). See `RangeSiteWalk`.
 			self.bindRangeSiteWalk(srcFunc)
@@ -1483,10 +1601,12 @@ type MaxonToStdLowering
 					self.rangeSites.recordAt(srcBlockId, maxonOpPos: maxonOpPos, stdOpPos: dstBlock.opRefs.count())
 					let opIdx = self.maxonBlockOpRefAt(blockRef, pos: maxonOpPos)
 					let hlOp = self.maxonOpAt(opIdx)
+
 					// The op's own index, for the SIDE TABLES keyed by it. Set here rather than threaded through
 					// `lowerOp`'s callees because the depth is arbitrary — the one reader today
 					// (`allocTagIndexOf`) sits four frames down.
 					self.currentMaxonOpIndex = opIdx
+
 					// The debug-span cursor, set beside the op index for the same reason: the Std ops this one
 					// call is about to append are at an arbitrary depth, and a span threaded as an argument is
 					// one every new emitter could forget to pass on.
@@ -1501,6 +1621,7 @@ type MaxonToStdLowering
 				if terminatorNamesAnOp(srcTerminator) 'hasTerm'
 					let termIdx = terminatorOpIndexOf(srcTerminator)
 					let termOp = self.maxonOpAt(termIdx)
+
 					// ⚠ **THE TERMINATOR IS OUTSIDE THE BODY LOOP, SO IT NEEDS ITS OWN CURSOR SET.** Without
 					// this every `ret` would inherit the last body op's line — and a block with no body ops
 					// would inherit some earlier block's.
@@ -1544,6 +1665,7 @@ type MaxonToStdLowering
 		end 'noEntry'
 
 		let checks = try self.rangeChecks.get(func.name) otherwise panic("bindRangeSiteWalk: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
+
 		if checks.sites.isEmpty() 'noSites'
 			self.rangeSites.standDown()
 			return
@@ -1589,6 +1711,7 @@ type MaxonToStdLowering
 			compare(result, lhs, rhs, op, signedness) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, signedness: signedness, dstBlock: dstBlock)
 			condBranch then panic("lowerMaxonToStd: a `condBranch` appeared as a body op (parser bug — a branch is always a block terminator)")
 			branch then panic("lowerMaxonToStd: a `branch` appeared as a body op (parser bug — a branch is always a block terminator)")
+
 			// The varAccess band lowers 1:1 into the Std memory band — the two are the same three ops
 			// at two tiers, and the ONLY thing that happens here is the width collapse the tier
 			// boundary exists for (`maxonTypeToStdType`: `boolean` → `i1`, whose `storageBytes` is the
@@ -1597,57 +1720,73 @@ type MaxonToStdLowering
 			loadIndirect(result, addr, offset, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: addr, offset: offset, valueType: maxonTypeToStdType(valueType)))
 			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
 			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
+
 			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
 			tryCall(result, errorFlag, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 			panicAbort(message) then self.lowerPanicAbort(message, dstBlock: dstBlock)
+
 			// A function VALUE — a `.text` code address (P1.5-A1). Lowers to the Std `funcAddr`, the
 			// `.text` twin of `globalAddr`; a PLAIN function routes through its `__fnref_` env-thunk so the
 			// materialized address has the uniform `(userargs, env) -> R` shape (P1.5-A2b-2).
 			functionRef(result, funcName) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
+
 			// A call THROUGH a function value (P1.5-A1) — lowers to the Std `callIndirect`, the callee value
 			// passing through as the register the call goes through. Positional args, no labels to slot.
 			indirectCall then self.lowerIndirectCall(hlOp, dstBlock: dstBlock)
+
 			// The error terminators are never body ops.
 			throwError or
 				propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
+
 			// P1.5-B1a: `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
 			asyncCall(result, callee, args, argLabels, _, _, argDefaultSlots) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 			await (result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
+
 			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The
 			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
 			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
+
 			// P1.7 slice 2: a `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
 			constArrayLiteral(result, elementSize, elementCount, bytes) then self.lowerConstArrayLiteral(result, elementSize: elementSize, elementCount: elementCount, bytes: bytes, dstBlock: dstBlock)
+
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminator`.
 			switch then panic("lowerMaxonToStd: a `switch` op appeared as a body op (parser bug — the jump table is always a block terminator)")
+
 			// A constrained-type-parameter dispatch (P1.7a slice 2a) — materialize/forward the witness address
 			// and emit the fused `StdOp.witnessCall`. Routed through a helper that RE-MATCHES the op in a SMALL
 			// match rather than binding `args` in this big one — the tail-slot-Array corruption `lowerIndirectCall`
 			// documents.
 			witnessDispatch then self.lowerWitnessDispatch(hlOp, dstBlock: dstBlock)
+
 			// The THROWING twin (P1.7a slice 2b-v) — the same dispatch plus the second `errorFlag` result, so it
 			// goes through its own small re-match for the same tail-slot-`Array` reason.
 			witnessTryDispatch then self.lowerWitnessTryDispatch(hlOp, dstBlock: dstBlock)
+
 			// A panic whose message was ASSEMBLED at run time (A3n) — the pointer passes through verbatim.
 			panicAbortValue(messagePtr) then self.stdModule.appendOp(dstBlock, op: StdOp.osPanicValue(messagePtr))
+
 			// The error flag a routed bare `throw` carries to its block handler — `throwError`'s encode,
 			// as a value rather than as a terminator's side effect.
 			errorFlagEncode(result, errorValue, errorIsBoxed) then self.lowerErrorFlagEncode(result, errValue: errorValue, errIsBoxed: errorIsBoxed, dstBlock: dstBlock)
+
 			// The three service ops (SV1 wave 3, SV2). All go through a SMALL re-match for
 			// `lowerWitnessDispatch`'s reason — an arm here binds nothing, so a field added to any of them
 			// cannot be dropped by this match while another reader keeps it.
 			serviceSpawn then self.lowerServiceSpawn(hlOp, dstBlock: dstBlock)
 			serviceSend then self.lowerServiceSend(hlOp, dstBlock: dstBlock)
 			serviceReplyCell then self.lowerServiceReplyCell(hlOp, dstBlock: dstBlock)
+
 			// W197: a module-level `let` holding a constructed struct of scalars — its box IS the image.
 			immortalStructRecord then self.lowerImmortalStructRecord(hlOp, dstBlock: dstBlock)
+
 			// A module-level `let` holding an array of string literals. Routed through a SMALL re-match so
 			// `texts` is bound in a single-call arm, never in this big one — the tail-slot-`Array` corruption
 			// `lowerIndirectCall` documents.
 			immortalStringTable then self.lowerImmortalStringTable(hlOp, dstBlock: dstBlock)
+
 			// The file-local counter slot becomes the whole-program one HERE, which is the only tier that can do
 			// it: the parse is per-file and memoized, and the count has to be final before the counter image is
 			// laid out, which happens before this pass runs.
@@ -1661,6 +1800,7 @@ type MaxonToStdLowering
 	// break rather than an uninstrumented file.
 	function bindCovPointBase(srcFunc IrFunction)
 		self.currentCovPointBase = 0
+
 		if self.covPointBases.count() == 0 or srcFunc.sourceFilePath.isEmpty() 'noPointsToRebase'
 			return
 		end 'noPointsToRebase'
@@ -1691,9 +1831,11 @@ type MaxonToStdLowering
 	// mention; `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names.
 	function emitImmortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy ByteArray, dstBlock IrBlock)
 		let table = registerImmortalStringTableRecord(self.globalData, texts: texts, elementSize: elementSize, debugStream: self.debugStream)
+
 		if not self.emittedImmortalStringTables.contains(table.recordLabel) 'firstUse'
 			self.emittedImmortalStringTables.insert(table.recordLabel)
 			self.stampOwnershipWord(elementDestroy, label: table.recordLabel, offsetInLabel: ManagedRecordElementDestroyOffset)
+
 			for (iter, elementLabel) in table.elementLabels.withIterator() 'eachSlot'
 				self.globalData.recordRdataAbs64InRdata(elementLabel, rdataLabel: table.bufferLabel, offsetInLabel: (iter.index() as ByteOffset) * (elementSize as ByteOffset))
 			end 'eachSlot'
@@ -1752,16 +1894,19 @@ type MaxonToStdLowering
 
 		let entry = try nodes.get(node as ElementIndex) otherwise panic("ensureImmortalBoxNode: node id {node} is outside a {nodes.count()}-entry arena — the op carries the whole tree its root names")
 		var slotLabels = StringArray.create()
+
 		for column in entry.columns 'eachSlot'
 			slotLabels.push(self.immortalBoxSlotLabel(nodes, below: node, value: column.value))
 		end 'eachSlot'
 
 		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(entry.bytes, columns: entry.columns, slotLabels: slotLabels), kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
+
 		if self.emittedImmortalStructBoxes.contains(label) 'alreadyRelocated'
 			return label
 		end 'alreadyRelocated'
 
 		self.emittedImmortalStructBoxes.insert(label)
+
 		for i in 0 upto entry.columns.count() 'eachSlot'
 			let column = try entry.columns.get(i) otherwise panic("ensureImmortalBoxNode: columns.get OOB at {i} below count {entry.columns.count()}")
 			self.globalData.recordRdataAbs64InRdata(try slotLabels.get(i) otherwise panic("ensureImmortalBoxNode: slotLabels.get OOB at {i} — the loop above pushed one label per slot"), rdataLabel: label, offsetInLabel: column.offset)
@@ -1786,10 +1931,12 @@ type MaxonToStdLowering
 		end 'aBoxOfScalars'
 
 		var record = bytes.clone()
+
 		for i in 0 upto columns.count() 'eachColumn'
 			let column = try columns.get(i) otherwise panic("seededBoxBytes: columns.get OOB at {i} below count {columns.count()}")
 			let seed = scalarImage(self.globalData.rdataOffsetOf(try slotLabels.get(i) otherwise panic("seededBoxBytes: slotLabels.get OOB at {i} — the caller pushed one label per slot")) as ParsedInt, byteCount: MachineWordBytes as BytePos)
 			var at = column.offset
+
 			for b in seed 'eachByte'
 				try record.set(at as ElementIndex, value: b) otherwise panic("seededBoxBytes: a pointer slot at offset {column.offset} runs past a {record.count()}-byte box — the box size and the slot offsets both come from the one `StructLayout`")
 				at = at + 1
@@ -1809,6 +1956,7 @@ type MaxonToStdLowering
 			propagateError(errorFlag) then self.lowerPropagateError(errorFlag, dstBlock: dstBlock)
 			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
+
 			// The dense-match jump table lowers 1:1 to the Std twin. Routed through a helper that RE-MATCHES
 			// the op in a SMALL match rather than binding `denseTargetBlockIds` in this big one — the tail-slot
 			// Array corruption `lowerIndirectCall` documents (the array is the middle slot here, but the helper
@@ -1911,6 +2059,7 @@ type MaxonToStdLowering
 				stringTable panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a STRING TABLE, whose payload is N separate literals this op cannot carry — `Parser.emitImageRecordRead` emits `immortalStringTable` for that shape and files no mark")
 				containerBox panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a CONTAINER BOX, which is a struct box and not a `__ManagedMemory` record — `Parser.emitImageRecordRead` emits `immortalStructRecord` for that shape and files no mark")
 			end 'shape'
+
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
 			return
 		end 'imageData'
@@ -1961,6 +2110,7 @@ type MaxonToStdLowering
 	// one here is what keeps the symbol the writer resolves against in the program at all.
 	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy ByteArray) returns String
 		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy, debugStream: self.debugStream)
+
 		if self.emittedImmortalEmptyArrays.contains(label) 'alreadyStamped'
 			return label
 		end 'alreadyStamped'
@@ -1987,8 +2137,10 @@ type MaxonToStdLowering
 		if func.paramCount == 0 'noParams'
 			return
 		end 'noParams'
+
 		let entryRef = try func.blockRefs.get(0) otherwise panic("emitParams: function '{String.from(func.name)}' has no entry block")
 		var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("emitParams: entry blockRef {entryRef} not in stdModule.blocks")
+
 		for i in 0 upto func.paramCount 'eachParam'
 			let paramType = try func.paramTypes.get(i) otherwise panic("emitParams: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
 			self.stdModule.appendOp(entryBlock, op: StdOp.param(i as ValueId, index: i, paramType: paramType))
@@ -2064,12 +2216,14 @@ type MaxonToStdLowering
 		let countSlots = self.fixedElementCountParamCountFor(func.name)
 		self.hasImplicitFixedElementCount = countSlots != 0
 		self.implicitCountValueId = 0
+
 		if self.hasImplicitFixedElementCount 'countSlot'
 			self.implicitCountValueId = fixedElementCountSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount)
 		end 'countSlot'
 
 		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
 		self.implicitLayoutValueId = 0
+
 		if not self.hasImplicitLayout 'noLayout'
 			return
 		end 'noLayout'
@@ -2096,6 +2250,7 @@ type MaxonToStdLowering
 		if not sig.takesReceiver() and not self.signatures.calleeReturnsItsDeclaringType(callee) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
+
 		return self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints).count()
 	end 'witnessParamCountForCallee'
 
@@ -2109,9 +2264,11 @@ type MaxonToStdLowering
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, callee: callee, dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
+
 		// The SUPPLY side of the reserve/supply pair — the SAME counter `Parser.parseFunction` reserves with.
 		let existentialCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
 		let countSlots = self.fixedElementCountParamCountFor(callee)
+
 		if not needsLayout and witnessCount == 0 and existentialCount == 0 and countSlots == 0 'noImplicits'
 			return baseArgs
 		end 'noImplicits'
@@ -2121,6 +2278,7 @@ type MaxonToStdLowering
 		// dictionary-passing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
+
 		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is
 		// `[user][env][existentialWitness][layout][count][witness]` and this list is built in that order** (the
 		// env companions are already inside `baseArgs`, appended by `finalizeCallArgs`). See
@@ -2128,15 +2286,19 @@ type MaxonToStdLowering
 		if existentialCount > 0 'existentialWitnesses'
 			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, dstBlock: dstBlock)
 		end 'existentialWitnesses'
+
 		if needsLayout 'layout'
 			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
+
 		if countSlots > 0 'fixedElementCount'
 			out.push(self.materializeFixedElementCountArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'fixedElementCount'
+
 		if witnessCount > 0 'witnesses'
 			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
+
 		return out
 	end 'finalizeCallArgsWithLayout'
 
@@ -2158,6 +2320,7 @@ type MaxonToStdLowering
 	function appendExistentialWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock)
 		for i in 0 upto sig.paramTypes.count() 'eachParam'
 			let paramType = try sig.paramTypes.get(i) otherwise panic("appendExistentialWitnessArgs: paramTypes.get OOB at {i} for '{String.from(callee)}'")
+
 			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notExistential'
 				continue
 			end 'notExistential'
@@ -2196,6 +2359,7 @@ type MaxonToStdLowering
 	// cannot share a home and must never disagree.
 	function pairedWitnessOf(value ValueId, site ByteArray) returns ValueId
 		let witness = try self.valueWitnessIds.get(value) otherwise 0 as ValueId
+
 		if witness == 0 'unpaired'
 			panic("pairedWitnessOf: v{value} is typed as an interface at '{String.from(site)}' but carries no witness half — the parser pairs every existential it mints (`Parser.pairInterfaceWitness`)")
 		end 'unpaired'
@@ -2222,6 +2386,7 @@ type MaxonToStdLowering
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
 		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
 		let constraints = self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints)
+
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
 			out.push(self.materializeWitnessArg(source, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
@@ -2237,6 +2402,7 @@ type MaxonToStdLowering
 		if not sig.takesReceiver() 'staticConstructor'
 			return result
 		end 'staticConstructor'
+
 		return try argIds.get(0) otherwise panic("witnessSourceValue: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 	end 'witnessSourceValue'
 
@@ -2247,6 +2413,7 @@ type MaxonToStdLowering
 	// generic→generic call, both of the same type, so the slots align). Mirrors `materializeLayoutArg`.
 	function materializeWitnessArg(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
+
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
 
@@ -2265,6 +2432,7 @@ type MaxonToStdLowering
 			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
 			// slot placed here is the slot the check verified.
 			let typeArg = self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: constraint.typeParamIndex)
+
 			if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
 				return self.forwardOpaqueParamWitness(typeParamIdOf(typeArg), constraint: constraint, callee: callee)
 			end 'opaqueArgument'
@@ -2297,9 +2465,11 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
 			return addrId
 		end 'concrete'
+
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
 			return self.forwardCallerWitness(constraintIndex, callee: callee)
 		end 'forward'
+
 		panic("materializeWitnessArg: call to witness-carrying '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeWitnessArg'
 
@@ -2341,6 +2511,7 @@ type MaxonToStdLowering
 	// always which pair failed to line up.
 	function forwardOpaqueParamWitness(token TypeParamId, constraint WhereConstraint, callee ByteArray) returns ValueId
 		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName)}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
+
 		// The declaring TYPE of the function being lowered — the same `Type.member` split
 		// `witnessConstraintsOfMethod` reads a caller's own constraint list through, so the two agree on what
 		// "this function's type" means by construction.
@@ -2348,6 +2519,7 @@ type MaxonToStdLowering
 			notQualified gives EmptySourceText
 			parts(typeName, _) gives typeName
 		end 'q'
+
 		if not enclosingType.equals(owner.declaringTypeName) 'foreignParameter'
 			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
 		end 'foreignParameter'
@@ -2362,6 +2534,7 @@ type MaxonToStdLowering
 		if constraintIndex as ParamCount >= self.currentWitnessCount 'noSuchSlot'
 			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
 		end 'noSuchSlot'
+
 		return self.witnessParamBase + (constraintIndex as ValueId)
 	end 'forwardCallerWitness'
 
@@ -2379,9 +2552,11 @@ type MaxonToStdLowering
 	function ensureWitnessTable(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns String
 		let table = self.witnessTableInstanceFor(typeName, instance: instance, interfaceName: interfaceName)
 		let label = witnessTableLabel(self.witnessTableLabelComponent(typeName, instance: table), interfaceName: interfaceName)
+
 		if self.emittedWitnessTables.contains(label) 'cached'
 			return label
 		end 'cached'
+
 		self.emittedWitnessTables.insert(label)
 
 		// ⭐ **THE SLOT LIST IS THE INTERFACE'S TRANSITIVE REQUIREMENT SET, not `iface.methods` (R10c)** — the
@@ -2420,6 +2595,7 @@ type MaxonToStdLowering
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
+
 			// The DECLARING interface, never this table's — `ConformanceCheck.recordWitnessSlotImpl` files its
 			// selection under the interface the requirement was declared on, so an inherited slot's key is the
 			// PARENT's. Passing `interfaceName` here would miss every projected slot's selection and panic.
@@ -2502,14 +2678,17 @@ type MaxonToStdLowering
 	// Both go through `witnessSlotImplIsSlotShaped`.
 	function conformanceImplsCarryADictionary(typeName ByteArray, interfaceName ByteArray) returns bool
 		let key = witnessTableLabel(typeName, interfaceName: interfaceName)
+
 		if let memoized = try self.dictionaryCarryingConformances.get(key) 'alreadyAsked'
 			return memoized
 		end 'alreadyAsked'
 
 		let slots = interfaceWitnessSlots(self.interfaces, iface: self.resolveWitnessInterface(interfaceName))
 		var carries = false
+
 		for i in 0 upto slots.count() 'eachSlot'
 			let slot = try slots.get(i) otherwise panic("conformanceImplsCarryADictionary: slots.get OOB at {i} below count {slots.count()}")
+
 			if not self.witnessSlotImplIsSlotShaped(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), method: slot.method) 'thisSlotCarriesOne'
 				carries = true
 				break
@@ -2650,6 +2829,7 @@ type MaxonToStdLowering
 	// — so it is returned unchanged rather than measured against a signature that does not exist.
 	function witnessSlotCallee(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod) returns ByteArray
 		let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method)
+
 		if self.witnessSlotImplIsSlotShaped(implName, method: slot.method) 'theImplNeedsNoAdapter'
 			return implName
 		end 'theImplNeedsNoAdapter'
@@ -2659,6 +2839,7 @@ type MaxonToStdLowering
 		// adapter is exactly where the two dictionaries differ. A shared table's component IS the conformer,
 		// so no existing adapter's symbol moves.
 		let adapterName = witnessSlotAdapterSymbol(self.witnessTableLabelComponent(typeName, instance: instance), interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
+
 		if self.emittedWitnessAdapters.contains(adapterName) 'anotherTableAlreadyRequestedIt'
 			return adapterName
 		end 'anotherTableAlreadyRequestedIt'
@@ -2709,6 +2890,7 @@ type MaxonToStdLowering
 	// request further adapters, so the list is drained by INDEX over a growing array rather than by `for..in`.
 	function installWitnessSlotAdapters(project Project)
 		var next = 0 as ElementIndex
+
 		while next < self.pendingWitnessAdapters.count() 'drain'
 			// ⚠⚠ **THE REQUEST IS COPIED OUT, AND THIS IS THE ONE SITE WHERE THAT IS NOT MERELY THE BORROW
 			// RULE BEING SATISFIED — IT IS THE HAZARD THE RULE EXISTS FOR.** `synthesizeWitnessSlotAdapter`
@@ -2735,6 +2917,7 @@ type MaxonToStdLowering
 		let impl = try self.funcNames.funcNamed(request.implName) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' is in no function of this module — `witnessSlotCallee` resolved it there one phase earlier")
 
 		var paramTypes = StdTypeArray.create()
+
 		for k in 0 upto request.slotArity 'eachSlotParam'
 			paramTypes.push(try impl.paramTypes.get(k) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' declares {impl.paramTypes.count()} Std parameter types but its slot passes {request.slotArity} — a witness slot's arity can only be SHORTER than its impl's"))
 		end 'eachSlotParam'
@@ -2745,14 +2928,17 @@ type MaxonToStdLowering
 		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
 
 		var args = ValueIdArray.create()
+
 		for k in 0 upto request.slotArity 'eachForwardedArg'
 			args.push(k as ValueId)
 		end 'eachForwardedArg'
+
 		self.appendWitnessAdapterDictionary(args, request: request, impl: impl, entry: entry, project: project)
 
 		// Every id below `args.count()` is a parameter or a dictionary address, so the call's own result is
 		// the next one — and the error flag, when the impl produces one, the one after that.
 		let resultId = args.count()
+
 		if functionUsesSecondaryReturnSlot(impl.maxonReturnType, throws: impl.throwsTypeName) 'aSecondReturnWord'
 			let errorFlagId = (resultId + 1) as ValueId
 			self.stdModule.appendOp(entry, op: StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: request.implName, args: args))
@@ -2794,6 +2980,7 @@ type MaxonToStdLowering
 	function appendWitnessAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
 		let sig = try self.funcSignatures.get(request.implName) otherwise panic("appendWitnessAdapterDictionary: '{String.from(request.implName)}' has no signature — `witnessSlotCallee` returned the impl unchanged for exactly that case")
 		let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function) + countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
+
 		if companionCount > 0 'aPerArgumentCompanion'
 			panic("appendWitnessAdapterDictionary: witness slot impl '{String.from(request.implName)}' declares a `function`- or interface-typed parameter, whose hidden companion word is a fact about the ARGUMENT — a witness dispatch passes one word per formal and cannot supply it")
 		end 'aPerArgumentCompanion'
@@ -2854,6 +3041,7 @@ type MaxonToStdLowering
 		end 'aFixedElementCount'
 
 		let constraints = self.signatures.witnessConstraintsOfMethod(request.implName, extensionConstraints: sig.extensionConstraints)
+
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendInstanceAdapterDictionary: whereConstraints.get OOB at {i} for '{String.from(request.implName)}'")
 			let witnessId = args.count()
@@ -2878,6 +3066,7 @@ type MaxonToStdLowering
 	// non-concrete instance in the first place.
 	function instanceConstraintWitnessLabel(gid GenericInstanceId, constraint WhereConstraint, implName ByteArray) returns String
 		let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+
 		if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'stillOpaque'
 			panic("instanceConstraintWitnessLabel: the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' owes '{String.from(implName)}' a witness for `{String.from(constraint.interfaceName)}` at type-parameter position {constraint.typeParamIndex}, and that argument is still opaque — `instanceIsFullyConcrete` gates exactly this")
 		end 'stillOpaque'
@@ -2923,9 +3112,11 @@ type MaxonToStdLowering
 	// op variant is a compile error there rather than a use silently missed at either proof.
 	function loweredValueUses(func IrFunction) returns StdValueUseSet
 		var referenced = StdValueUseSet.create()
+
 		for opIdx in self.stdModule.liveOpIndices(func) 'eachOp'
 			collectStdOpUses(try self.stdModule.ops.get(opIdx) otherwise panic("loweredValueUses: opIdx {opIdx} from liveOpIndices is not in stdModule.ops"), referenced: referenced)
 		end 'eachOp'
+
 		return referenced
 	end 'loweredValueUses'
 
@@ -2974,6 +3165,7 @@ type MaxonToStdLowering
 		let callee = try self.funcNames.funcNamed(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' is in no function of this module — `materializeWitnessArg` recorded a call the lowering had already resolved")
 		let sig = try self.funcSignatures.get(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' has no signature — a witness argument is appended only for a callee whose signature sized the hidden block")
 		let witnessCount = self.witnessParamCountForCallee(request.callee, sig: sig)
+
 		if request.constraintIndex as ParamCount >= witnessCount 'noSuchSlot'
 			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' carries {witnessCount} witness parameter(s) and a call passed one for constraint {request.constraintIndex} — `appendWitnessArgs` walks the very list this count is of")
 		end 'noSuchSlot'
@@ -3099,6 +3291,7 @@ type MaxonToStdLowering
 		end 'chosenByConformance'
 
 		let discovered = self.signatures.discoveredConformerOf(typeName)
+
 		if not isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'noSelection'
 			panic("witnessSlotImpl: no conformance selected a member for slot '{String.from(typeName)}.{String.from(interfaceName)}.{String.from(method.name)}' — `checkConformance` files one per accepted requirement before the pipeline runs, and lowering is only reached once it accepted every one, so this table is being built for a conformance that was never validated")
 		end 'noSelection'
@@ -3140,6 +3333,7 @@ type MaxonToStdLowering
 			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
 		end 'instanceMethod'
+
 		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
 		// FROM THE CALLER (W43b).** Its result is the FIELD's type (`Array with Key`), not the enclosing
 		// instance, so there is nothing to read a descriptor off — but its only call site is a `Self{…}`
@@ -3149,6 +3343,7 @@ type MaxonToStdLowering
 		if isFieldDefaultHelperName(callee) 'fieldDefault'
 			return self.forwardCallerLayout(callee)
 		end 'fieldDefault'
+
 		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
 	end 'materializeLayoutArgFor'
 
@@ -3178,6 +3373,7 @@ type MaxonToStdLowering
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAConcreteInstance'
 			return self.forwardCallerLayout(callee)
 		end 'notAConcreteInstance'
+
 		return self.emitInstanceDescriptorAddr(result, dstBlock: dstBlock)
 	end 'materializeStaticConstructorLayout'
 
@@ -3228,6 +3424,7 @@ type MaxonToStdLowering
 	// nothing — so that chain keeps both of its inert ends.
 	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
 		let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitInstanceDescriptorAddr: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+
 		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid as GenericInstanceId) 'forwardsTheCallersOwnRun'
 			// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
 			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: 0))), dstBlock: dstBlock)
@@ -3246,9 +3443,11 @@ type MaxonToStdLowering
 	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
 	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
+
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.emitInstanceDescriptorAddr(receiver, dstBlock: dstBlock)
 		end 'instance'
+
 		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
 		// descriptor to pass is the caller's own, FORWARDED. A `typeParameter` receiver (a value of the caller's
 		// `T`) forwards for the same reason. Both are the generic-to-generic threading that lets a shared body
@@ -3257,6 +3456,7 @@ type MaxonToStdLowering
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
 			return self.forwardCallerLayout(callee)
 		end 'forward'
+
 		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeLayoutArg'
 
@@ -3279,6 +3479,7 @@ type MaxonToStdLowering
 			// The ORIGINAL receiver, never the widened/env-derived `baseArgs` — `materializeLayoutArgFor`'s rule.
 			return self.emitFixedElementCountOf(try argIds.get(0) otherwise panic("materializeFixedElementCountArgFor: count-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"), callee: callee, dstBlock: dstBlock)
 		end 'instanceMethod'
+
 		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS COUNT-NEEDING CALLEE WHOSE ANSWER COMES FROM THE
 		// CALLER, AND READING ITS RESULT WOULD BE A WRONG NUMBER RATHER THAN A MISSING ONE.** Its result is the
 		// FIELD's type — which for a `var slot as Vector with 4 Element` STATES 4 — while the count it reads
@@ -3288,6 +3489,7 @@ type MaxonToStdLowering
 		if isFieldDefaultHelperName(callee) 'fieldDefault'
 			return self.forwardCallerFixedElementCount(callee)
 		end 'fieldDefault'
+
 		// A receiverless count-needing callee is a constructor whose RESULT is the instance —
 		// `staticLayoutNeedsSelfReturn` refuses every other shape — so the result carries the concrete gid.
 		return self.emitFixedElementCountOf(result, callee: callee, dstBlock: dstBlock)
@@ -3300,6 +3502,7 @@ type MaxonToStdLowering
 		if not self.hasImplicitFixedElementCount 'noSlot'
 			panic("forwardCallerFixedElementCount: caller '{String.from(self.currentFuncName)}' has no fixed-element-count parameter to forward to '{String.from(callee)}' — the fixpoint's transitive reservation should make this unreachable")
 		end 'noSlot'
+
 		return self.implicitCountValueId
 	end 'forwardCallerFixedElementCount'
 
@@ -3312,6 +3515,7 @@ type MaxonToStdLowering
 	// count, and the answer it must pass on is the one its own caller handed it.
 	function emitFixedElementCountOf(instanceValue ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(instanceValue)
+
 		if tag == ValueTypeTag.genericInstance 'anInstance'
 			let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
 
@@ -3337,6 +3541,7 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noSlot'
 			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName)}' has no layout descriptor to forward to '{String.from(callee)}' — the parser's transitive reservation and residual-rejection should make this unreachable")
 		end 'noSlot'
+
 		return self.implicitLayoutValueId
 	end 'forwardCallerLayout'
 
@@ -3383,6 +3588,7 @@ type MaxonToStdLowering
 		// are named in each other's comments.
 		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
 		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid) as MachineWord, alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize as MachineWord)
+
 		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
 		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
 		// byte-identical to what it always emitted.
@@ -3413,15 +3619,18 @@ type MaxonToStdLowering
 		// instantiation), so its 0 slot is never read.
 		for position in 0 upto paramCount 'eachTypeParam'
 			let blockBase = layoutBlockOffsetFor(position)
+
 			// ⭐⭐ **THE `destroyFunc@40` STAMP AND THE `retainFunc@64` STAMP ARE ONE PAIR OF LINES OVER ONE
 			// PREDICATE, AND SPLITTING THEM LEAKED (found at review).** Both are `stampOwnershipWord` over a
 			// per-argument callee that answers EMPTY when the argument owns no record, so the two words are
 			// non-zero together by construction — see `ProgramSignatures.typeParamDropCallee` for the measured
 			// exit-101 the old FIELD-shaped drop gate produced beside this ARGUMENT-shaped retain gate.
 			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
+
 			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
 				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
 			end 'copyableOpaqueElement'
+
 			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
 			// a borrowed opaque `T` (W41-opaque).** Its GATE is the argument's own ownership, which the drop
 			// word above now shares; only `copyFunc@32` between them is a fact about the instance's opaque
@@ -3442,9 +3651,11 @@ type MaxonToStdLowering
 		if maxonTypeTag(targetType) != ValueTypeTag.typeParameter 'notTypeParam'
 			panic("lowerSizeofType: sizeofType carries a {maxonTypeTag(targetType).name} operand — the parser folds every concrete sizeof to a literal, so only the type-parameter case reaches this op")
 		end 'notTypeParam'
+
 		if not self.hasImplicitLayout 'noLayout'
 			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
 		end 'noLayout'
+
 		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
 	end 'lowerSizeofType'
 
@@ -3470,6 +3681,7 @@ type MaxonToStdLowering
 		end 'compilerOwnCall'
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 			ordered(argIds) then self.appendDirectCall(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock), dstBlock: dstBlock)
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -3531,6 +3743,7 @@ type MaxonToStdLowering
 		let recorded = try self.allocTagSites.get(self.currentMaxonOpIndex) otherwise 'noRecordedTag'
 			return self.allocTagFromResultType(result)
 		end 'noRecordedTag'
+
 		return mmTagIndex(recorded)
 	end 'allocTagIndexOf'
 
@@ -3688,6 +3901,7 @@ type MaxonToStdLowering
 	// one place that could still see it.
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
+
 		// ⭐ **A1x's TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
 		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
@@ -3723,6 +3937,7 @@ type MaxonToStdLowering
 			self.appendOpaqueContainerCreate(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'opaqueContainerCreate'
+
 		// A `__drop_type_param` (P1.7 slice 3b-v) arrives with ONE argument (the opaque owned value); its
 		// element destructor is not known statically, so the enclosing instance's layout descriptor is
 		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
@@ -3744,22 +3959,26 @@ type MaxonToStdLowering
 			self.appendMmAllocTag(result, args: args, tag: self.allocTagIndexOf(result), dstBlock: dstBlock)
 			return
 		end 'allocTag'
+
 		// ⭐⭐ **THE ONE RUNTIME CALLEE THAT BECOMES A CONSTANT RATHER THAN A CALL** — the
 		// `__DebugStream.nameId("…")` marker. See `lowerDebugStreamNameId`.
 		if callee.equals(DebugStreamNameIdMarkerName) 'debugStreamNameId'
 			self.lowerDebugStreamNameId(result, dstBlock: dstBlock)
 			return
 		end 'debugStreamNameId'
+
 		// ⭐⭐ **AND THE FIVE RUNTIME CALLEES THAT BECOME NOTHING AT ALL** — the `__DebugStream` log markers.
 		// See `lowerDebugStreamEmit`, which is where the compile-time half of the gating rule is decided.
 		if isDebugStreamLogMarker(callee) 'debugStreamLog'
 			self.lowerDebugStreamEmit(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'debugStreamLog'
+
 		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'typeParamOwnership'
+
 		// ⭐⭐ **A DICTIONARY DESTRUCTOR TAKES THE WHOLE DESCRIPTOR, NOT A BLOCK (BATCH41).** The arm above
 		// hands `__drop_type_param` the block of the ONE parameter its value is typed at; a dictionary
 		// destructor releases several fields standing at several parameters, so it indexes its own blocks —
@@ -3771,6 +3990,7 @@ type MaxonToStdLowering
 			self.appendWholeLayoutDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'dictionaryCascade'
+
 		// ⚠⚠ **A WITNESS-THREADING ARM STOOD HERE AND IS GONE, AND ITS FAMILY COUNT WENT 3 → 1 → 0.** A
 		// compiler-owned runtime call that PROBES a hash table it does not hold got the key's `Hashable`/
 		// `Equatable` witness-table addresses appended as hidden trailing arguments — the dictionary-passing
@@ -3889,9 +4109,11 @@ type MaxonToStdLowering
 		if not isOpaqueElementCopyCallee(callee) 'notOpaqueCopy'
 			return args
 		end 'notOpaqueCopy'
+
 		if not self.hasImplicitLayout 'noLayout'
 			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+
 		// The COPIED array's own type parameter decides the block (W43b) — its `copyFunc@32` is that column's
 		// cloner and no other's, the exact dual of `appendOpaqueContainerCreate`'s destructor read.
 		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
@@ -3913,6 +4135,7 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+
 		// The value's own type parameter decides the block (W43b): both entries read their word off whatever
 		// descriptor they are handed, so a two-parameter generic acting on its SECOND parameter's value must be
 		// handed that parameter's block and not the first's.
@@ -3932,6 +4155,7 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+
 		var fullArgs = ValueIdArray.create()
 		fullArgs.push(self.implicitLayoutValueId)
 		fullArgs.append(args)
@@ -3942,9 +4166,11 @@ type MaxonToStdLowering
 	// value's own `typeParameter` token, the same token the stamp matched positions against.
 	function typeParamValueBlockOffset(value ValueId, callee ByteArray) returns ByteOffset
 		let tag = self.valueTagOf(value)
+
 		if tag != ValueTypeTag.typeParameter 'notATypeParameter'
 			panic("typeParamValueBlockOffset: `{String.from(callee)}` was given a {tag.name} value — only an opaque type-parameter value is owned through the descriptor")
 		end 'notATypeParameter'
+
 		let token = try self.valueNameIds.get(value) otherwise panic("typeParamValueBlockOffset: typeParameter value v{value} has no name-id (its type-parameter token) — the two type columns are dense and in lockstep")
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token as TypeParamId)))
 	end 'typeParamValueBlockOffset'
@@ -3962,9 +4188,11 @@ type MaxonToStdLowering
 		if not callee.equals(ManagedCreateName) and not callee.equals(ListCreateName) 'notCreate'
 			return false
 		end 'notCreate'
+
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
 			return false
 		end 'notInstance'
+
 		return self.signatures.containerElementIsOpaque((try self.valueNameIds.get(result) otherwise panic("isOpaqueContainerCreateCall: genericInstance '{String.from(callee)}' result v{result} has no name-id (its GenericInstanceId)") as GenericInstanceId))
 	end 'isOpaqueContainerCreateCall'
 
@@ -3979,6 +4207,7 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>` since S2u, or a chain since W134; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+
 		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter (W43b).** A
 		// two-parameter generic creates one opaque container per column from ONE shared body, and reading a fixed
 		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
@@ -4196,6 +4425,7 @@ type MaxonToStdLowering
 	// actual does not happen to match.
 	function witnessFormalType(formalName ByteArray, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonType
 		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
+
 		if let position = try namePositionIn(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
 			return self.associatedFormalType(dispatched.name, position: position as ElementIndex, formalName: formalName, receiver: receiver)
 		end 'aConformerBindsIt'
@@ -4263,6 +4493,7 @@ type MaxonToStdLowering
 
 		let token = try self.valueNameIds.get(receiver) otherwise throw MapError.keyNotFound
 		let bindings = constrainedParamAssociatedBindings(self.signatures, token: token as TypeParamId, interfaceName: interfaceName)
+
 		if position >= bindings.count() 'theConstraintBoundNothingHere'
 			throw MapError.keyNotFound
 		end 'theConstraintBoundNothingHere'
@@ -4295,6 +4526,7 @@ type MaxonToStdLowering
 	// and never again.
 	function interfaceAtDeclIndex(interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
 		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+
 		match lookupInterface(self.interfaces, name: name) 'resolve'
 			found(iface) then return iface
 			notFound then panic("interfaceAtDeclIndex: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in the merged registry — a witness dispatch was numbered against a declaration the merge did not carry")
@@ -4307,6 +4539,7 @@ type MaxonToStdLowering
 	// rests on.
 	function requireSlotNumberingAgrees(interfaceDeclIndex InterfaceDeclIndex, mergedSlots CollectedInterfaceMethodArray)
 		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+
 		match lookupInterface(self.signatures.interfaceMap(), name: name) 'asTheParserSawIt'
 			// A synthesized protocol is in NEITHER map — `lookupInterface` builds it fresh from the same
 			// constants on both sides, so there is no second writer to disagree with and nothing to compare.
@@ -4432,6 +4665,7 @@ type MaxonToStdLowering
 	// parameter — so the slotted args pass through as i64 without `finalizeCallArgs`.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 			ordered(argIds) then self.emitAsyncSpawn(result, callee: callee, argIds: argIds, dstBlock: dstBlock)
 			arityMismatch then panic("lowerAsyncCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -4577,11 +4811,13 @@ type MaxonToStdLowering
 
 	function emitServiceReplyCell(result ValueId, messageName ByteArray, dstBlock IrBlock)
 		let releaserPtr = self.mintStdValueId()
+
 		if serviceReplyNeedsReleaser(messageName, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'ownsAResult'
 			self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: serviceReplyReleaserName(messageName)))
 		end 'ownsAResult' else 'nothingToRelease'
 			self.stdModule.appendOp(dstBlock, op: StdOp.const(releaserPtr, value: 0, valueType: StdType.i64))
 		end 'nothingToRelease'
+
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtCellAllocName, args: argsOf(releaserPtr)))
 	end 'emitServiceReplyCell'
 
@@ -4671,12 +4907,15 @@ type MaxonToStdLowering
 		end 'everyArgAlreadyInItsDomain'
 
 		var crossed = ValueIdArray.create()
+
 		for i in 0 upto argIds.count() 'eachArg'
 			let argId = try argIds.get(i) otherwise panic("crossFloatDomainArgs: argIds.get OOB at {i}")
+
 			if i >= paramTypes.count() 'pastDeclaredParams'
 				crossed.push(argId)
 				continue
 			end 'pastDeclaredParams'
+
 			// The scalar gate first, for `Parser.bindParameters`' measured reason: `paramIsByRef` returns a
 			// union, and this loop runs per argument of every call that crosses the float domain.
 			if self.signatures.programTakesAParamByRef() and self.signatures.paramIsByRef(callee, index: i) 'anAddressRatherThanAValue'
@@ -4687,6 +4926,7 @@ type MaxonToStdLowering
 			let paramType = try paramTypes.get(i) otherwise panic("crossFloatDomainArgs: paramTypes.get OOB at {i} — the bound was just tested")
 			crossed.push(self.floatDomainCrossedArg(argId, paramType: paramType, dstBlock: dstBlock))
 		end 'eachArg'
+
 		return crossed
 	end 'crossFloatDomainArgs'
 
@@ -4704,6 +4944,7 @@ type MaxonToStdLowering
 	// simply means the loop below will decline it. Over-answering costs one array build on such a call.
 	function anyArgCrossesTheFloatDomain(argIds ValueIdArray, paramTypes MaxonTypeArray) returns bool
 		let declared = paramTypes.count()
+
 		for i in 0 upto argIds.count() 'eachArg'
 			if i >= declared 'pastDeclaredParams'
 				break
@@ -4711,10 +4952,12 @@ type MaxonToStdLowering
 
 			let argId = try argIds.get(i) otherwise panic("anyArgCrossesTheFloatDomain: argIds.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("anyArgCrossesTheFloatDomain: paramTypes.get OOB at {i} — the bound was just tested")
+
 			if self.argCrossesTheFloatDomain(argId, paramType: paramType) 'crosses'
 				return true
 			end 'crosses'
 		end 'eachArg'
+
 		return false
 	end 'anyArgCrossesTheFloatDomain'
 
@@ -4820,17 +5063,22 @@ type MaxonToStdLowering
 		end 'noFunctionParam'
 
 		var withEnvs = ValueIdArray.create()
+
 		for argId in argIds 'copyUser'
 			withEnvs.push(argId)
 		end 'copyUser'
+
 		for i in 0 upto argIds.count() 'eachParam'
 			let paramType = try sig.paramTypes.get(i) otherwise panic("appendCalleeEnvArgs: sig.paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} ordered args against a {sig.paramCount()}-parameter signature")
+
 			if maxonTypeTag(paramType) != ValueTypeTag.function 'notFunction'
 				continue
 			end 'notFunction'
+
 			let argId = try argIds.get(i) otherwise panic("appendCalleeEnvArgs: argIds.get OOB at {i}")
 			withEnvs.push(self.calleeEnvArg(argId, dstBlock: dstBlock))
 		end 'eachParam'
+
 		return withEnvs
 	end 'appendCalleeEnvArgs'
 
@@ -4840,9 +5088,11 @@ type MaxonToStdLowering
 	// function reference / non-capturing closure argument.
 	function calleeEnvArg(argId ValueId, dstBlock IrBlock) returns ValueId
 		let env = try self.valueClosureEnv.get(argId) otherwise panic("calleeEnvArg: v{argId} has no closure-env slot — the column is dense over every ValueId the parser minted")
+
 		if env != 0 'carriesEnv'
 			return env
 		end 'carriesEnv'
+
 		let nullEnv = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(nullEnv, value: 0, valueType: StdType.i64))
 		return nullEnv
@@ -4872,12 +5122,14 @@ type MaxonToStdLowering
 				shl or
 				shr or
 				shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+
 			// `min`/`max` need no `lowerDivision`-style fork the way `div` does: only ONE of the two
 			// divisions is a pure `binOp`, so `/` has to ask its operand type which op it becomes,
 			// while these are float-only outright (`stdBinOpcodeIsFloatOnly`) and the parser has
 			// already promoted both operands. So they take the plain append, like the arith band.
 			min or
 				max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+
 			// The UNSIGNED pair takes the same two routes their signed twins take, carrying the one thing
 			// that differs. They need no float fork: `divisionOpcodeFor` mints them only from two
 			// non-negative INTEGER ranges (a ranged float alias carries tag `float`, never `named`), so
@@ -5028,6 +5280,7 @@ type MaxonToStdLowering
 			signed gives signedStdTypeOf(lhsType)
 			unsigned gives unsignedStdTypeOf(lhsType)
 		end 'family'
+
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType))
 	end 'lowerCompare'
 
@@ -5094,6 +5347,7 @@ type MaxonToStdLowering
 			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(retVal, errorFlagId: self.secondaryReturnValue(retVal, dstBlock: dstBlock)), asTerminator: asTerminator)
 			return
 		end 'secondaryReturnSlot'
+
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.ret(retVal), asTerminator: asTerminator)
 	end 'emitRetOrErrorReturn'
 
@@ -5122,6 +5376,7 @@ type MaxonToStdLowering
 			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: self.secondaryReturnValue(defaultVal, dstBlock: dstBlock)), asTerminator: asTerminator)
 			return
 		end 'secondaryReturnSlot'
+
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.retVoid, asTerminator: asTerminator)
 	end 'emitRetVoidOrErrorReturn'
 
@@ -5151,6 +5406,7 @@ type MaxonToStdLowering
 			self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(boxedDefault, errorFlagId: errValue))
 			return
 		end 'boxed'
+
 		let flag = self.mintStdValueId()
 		self.encodeScalarErrorFlag(flag, errValue: errValue, dstBlock: dstBlock)
 		let defaultVal = self.emitZeroConstOfReturnType(dstBlock)
@@ -5247,6 +5503,7 @@ type MaxonToStdLowering
 	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
+
 			// ⚠ **A WITNESS-CARRYING `tryCall` ARM STOOD HERE FOR `__map_get`, AND WENT WITH IT (W105).**
 			// `__map_get` was the only compiler-owned callee that both THREADED witness tables and THREW, and
 			// forgetting it cost a measured 0xC0000005 — see `materializeWitnessTableAddr`, which now holds that
@@ -5265,6 +5522,7 @@ type MaxonToStdLowering
 		end 'compilerOwnTryCall'
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("appendThrowingCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("appendThrowingCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -5390,6 +5648,7 @@ type MaxonToStdLowering
 		// mixed pair is a promotion bug; emitting the divide anyway would read an i64 out of a GPR as an f64
 		// (or the reverse), which is the same silent wrong answer `appendStdBinOp`'s own guard refuses.
 		let operandType = self.stdTypeOf(dividend)
+
 		if self.stdTypeOf(divisor) != operandType 'mixedDomains'
 			panic("lowerDivisionExpansion: the dividend and the divisor of an expanded divide are in DIFFERENT domains (one float, one integer) — `emitDivOrMod` must promote both operands before emitting one")
 		end 'mixedDomains'
@@ -5401,6 +5660,7 @@ type MaxonToStdLowering
 		match expansion 'zeroTest'
 			checkedQuotient(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 			checkedRemainder(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
+
 			// A1x's total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
 			// register would be one nobody reads and a compare nobody branches on.
 			guardedRemainder then break 'zeroTest'
@@ -5445,6 +5705,7 @@ type MaxonToStdLowering
 		// divisor is a possibly-`-1` divisor too (`emitDivOrMod`'s proof rules out neither), and the quotient
 		// needs it never.
 		var safeDividend = dividend
+
 		if divisionKindReadsRemainder(kind) 'remainderOverflow'
 			safeDividend = self.emitRemainderOverflowSafeDividend(dividend, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 		end 'remainderOverflow'
@@ -5453,6 +5714,7 @@ type MaxonToStdLowering
 		// divide always runs on a safe operand. A total division's divisor needs no repair: nothing proved it
 		// zero, so nothing has to be OR'd out of it.
 		var safeDivisor = divisor
+
 		match expansion 'divisorGuard'
 			checkedQuotient(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
 			checkedRemainder(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)

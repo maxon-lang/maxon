@@ -51,6 +51,7 @@ end 'testIsSelected'
 export type TestLaunchPlan
 	// The compiled test binary. Spawned many times; compiled once.
 	export let binary as FilePath
+
 	// How long ONE process may run before it is killed. It bounds the process and therefore the whole
 	// SHARD — which by default is a whole file — so it is a budget a file's tests share, and `--isolate`
 	// is what gives every test the full budget to itself.
@@ -118,11 +119,13 @@ end 'TestRunProgress'
 union TestLaunchResult
 	// The process ran to completion, whatever it exited with.
 	ran(exitCode ExitCodeValue, stderr String)
+
 	// The process outlived its deadline and was killed. ⚠ **NO STREAM SURVIVES THIS** — `Subprocess`
 	// reports a deadline by THROWING, so the bytes the child had already written are gone with it,
 	// and there is nothing to attribute from. `executeShard` answers this arm before attribution for
 	// exactly that reason.
 	deadlineExpired
+
 	// Nothing started: the binary is missing, unreadable, or the spawn itself failed.
 	couldNotStart(reason String)
 end 'TestLaunchResult'
@@ -178,10 +181,12 @@ end 'launchFailureOf'
 type AttributableLaunch
 	// The stream to attribute from — EMPTY for a process that never started.
 	export let stderr as String
+
 	// Whether the PROCESS reported the memory-leak signal. A bool and not the raw exit code, because
 	// this is the only question attribution asks of it; a code carried further would invite a second
 	// reader that decided something else from the same number.
 	export let leaked as bool
+
 	// What to say when the LAUNCH itself was the failure — empty for a process that ran.
 	export let launchProblem as String
 
@@ -214,6 +219,7 @@ end 'hitTheDeadline'
 // never mutated afterwards.
 type ObservedTest
 	export let index as TestRunIndex
+
 	// Whether an END marker closed it. FALSE means the process stopped while this test was running.
 	export let ended as bool
 	export let passed as bool
@@ -234,6 +240,7 @@ typealias ObservedTestArray = Array with ObservedTest
 type TestStreamWalk
 	// Every test the stream reported, in the order it reported them.
 	var observed as ObservedTestArray
+
 	// Output and `threw` reports that belonged to NO test. Kept rather than dropped: a discarded
 	// report is the one thing a reader would most want back when trying to explain a run that made no
 	// sense.
@@ -363,8 +370,10 @@ end 'observedAt'
 // What ONE launch settled, and what it left open.
 type ShardStep
 	export let settled as UnitTestResultArray
+
 	// Tests this launch did not answer for. Running THEM is the only honest way to learn what they do.
 	export let unobserved as TestRunIndexArray
+
 	// The stream's non-protocol text that belonged to no test — the fallback report for a test that
 	// died without writing anything of its own.
 	export let stray as String
@@ -378,6 +387,7 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 	let attributable = attributableLaunch(launch)
 
 	var walk = TestStreamWalk.create()
+
 	for event in parseTestEvents(attributable.stderr) 'eachEvent'
 		match event 'shape'
 			began(index) then walk.began(index)
@@ -386,6 +396,7 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 			outputLine(text) then walk.wrote(text)
 		end 'shape'
 	end 'eachEvent'
+
 	let observed = walk.finish()
 
 	// A launch that never started REPLACES the stream's own text rather than adding to it: there is no
@@ -435,6 +446,7 @@ function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, l
 	let onlyCandidate = results.count() == 1
 
 	var updated = UnitTestResultArray.create()
+
 	for result in results 'eachResult'
 		if result.outcome != UnitTestOutcome.passed 'alreadyHasItsOwnVerdict'
 			updated.push(result)
@@ -464,6 +476,7 @@ end 'asLeaked'
 function leakedAlone(plan TestLaunchPlan, index TestRunIndex) returns bool
 	return match launchTests(plan, indices: soleIndex(index)) 'how'
 		ran(exitCode, _) gives exitCode == MemoryLeakExitCode
+
 		// A test that HANGS when run alone did not leak; whatever verdict the shard gave it stands.
 		deadlineExpired gives false
 		couldNotStart gives false
@@ -567,6 +580,7 @@ function unobservedVerdicts(group TestFileGroup, indices TestRunIndexArray, reas
 	let output = reason if not reason.isEmpty() else NothingStartedText
 
 	var verdicts = UnitTestResultArray.create()
+
 	for index in indices 'eachTest'
 		verdicts.push(UnitTestResult.create(index, test: testOf(group, index: index), outcome: UnitTestOutcome.didNotRun, nanos: 0, thrown: ThrownReport.absent, output: output))
 	end 'eachTest'
@@ -618,6 +632,7 @@ export function runFileTests(plan TestLaunchPlan, group TestFileGroup, selected 
 		end 'stopClaimingWork'
 
 		let shardResults = executeShard(plan, group: group, indices: shard)
+
 		for result in shardResults 'eachResult'
 			if result.isFailure() 'notGreen'
 				progress.failures = progress.failures + 1

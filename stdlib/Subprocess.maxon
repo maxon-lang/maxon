@@ -194,6 +194,7 @@ end 'Environment'
 enum EnvSource
 	// `env` points at a caller-built block and IS the child's whole environment.
 	block = 0
+
 	// The child inherits this process's environment; the `env` slot is not read.
 	parent = 1
 end 'EnvSource'
@@ -418,12 +419,14 @@ let defaultCaptureLimit = 16 * 1024 * 1024
 public type Configuration
 	public var executable as Executable
 	public var arguments as StringArray
+
 	/// Empty path means "inherit the parent's working directory".
 	public var workingDirectory as FilePath
 	public var environment as Environment
 	public var standardInput as InputSource
 	public var standardOutput as OutputDestination
 	public var standardError as OutputDestination
+
 	/// 0 means "wait forever". Non-zero is the kill-after deadline.
 	public var timeoutMs as DurationMs
 	public var platformOptions as PlatformOptions
@@ -504,12 +507,14 @@ public type Subprocess
 		let flags = attachedFlagsFor(config.platformOptions)
 
 		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+
 		if handle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
 
 		let pid = __Builtins.subprocessGetPid(handle)
 		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
+
 		if result == -1 'waitFailed'
 			let reason = lastErrorMessage()
 			__Builtins.subprocessReleaseHandle(handle)
@@ -545,6 +550,7 @@ public type Subprocess
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
 		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+
 		if pid == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -605,6 +611,7 @@ end 'resolveExecutablePath'
 function resolveByName(name String) returns String
 	let resolved = __Builtins.subprocessResolveOnPath(name.cstr())
 	let isNull = __Builtins.managedIsNull(resolved)
+
 	if isNull != 0 'missing'
 		// Resolver miss — let the OS spawn primitive try its own lookup.
 		// On Windows CreateProcessW iterates PATH+PATHEXT itself; on POSIX
@@ -612,6 +619,7 @@ function resolveByName(name String) returns String
 		// of the spawn contract as a single token.
 		return name
 	end 'missing'
+
 	return String.init(resolved)
 end 'resolveByName'
 
@@ -624,10 +632,12 @@ function buildArgvBlob(executablePath String, args StringArray) returns String
 	var out = ByteArray.create()
 	appendNulTerminated(out, source: executablePath)
 	let n = args.count()
+
 	for i in 0 upto n 'arg'
 		let arg = try args.get(i) otherwise panic("buildArgvBlob: args.get(i) out of bounds")
 		appendNulTerminated(out, source: arg)
 	end 'arg'
+
 	return String.from(out)
 end 'buildArgvBlob'
 
@@ -692,12 +702,14 @@ function appendInheritedEntries(out ByteArray, overrides EnvMap)
 	// The overrides not yet spent on an inherited entry. A copy, because deciding which ones are left
 	// over is exactly what the walk below does and the caller's map is not ours to empty.
 	var pending = EnvMap.create()
+
 	for (name, value) in overrides 'eachOverride'
 		pending.upsert(name, value: value)
 	end 'eachOverride'
 
 	for entry in Process.currentEnvironmentEntries() 'eachInherited'
 		let name = Process.envEntryName(entry)
+
 		if let replacement = try pending.get(name) 'overridden'
 			// The entry is rebuilt rather than patched, and the REMOVE comes after it: what is left in
 			// `pending` at the end is exactly the overrides that named nothing inherited.
@@ -731,6 +743,7 @@ end 'appendEnvEntry'
 function appendBytesOf(out ByteArray, source String)
 	let bytes = source.toByteArray()
 	let n = bytes.count()
+
 	for i in 0 upto n 'byte'
 		let b = try bytes.get(i) otherwise panic("appendBytesOf: i < n = bytes.count() but get({i}) failed")
 		out.push(b)
@@ -763,6 +776,7 @@ function requireDelayedFeedObservable(stdin InputSource, stdout OutputDestinatio
 			file or
 			hold gives false
 	end 'in'
+
 	if not feedNeedsStdout 'unaffected'
 		return
 	end 'unaffected'
@@ -799,12 +813,15 @@ end 'outputTripleFromDestination'
 /// separately by `runDetachedConfiguration`).
 function attachedFlagsFor(opts PlatformOptions) returns SpawnFlagsValue
 	var flags = 0 as SpawnFlagsValue
+
 	if opts.windowsHideWindow 'hide'
 		flags = flags or SpawnFlag.hideWindow.rawValue
 	end 'hide'
+
 	if opts.windowsCreateNewProcessGroup 'newGroup'
 		flags = flags or SpawnFlag.newProcessGroup.rawValue
 	end 'newGroup'
+
 	return flags
 end 'attachedFlagsFor'
 
@@ -847,6 +864,7 @@ public type StreamingSubprocess
 	// is called; the runtime owns the underlying pipe + process objects keyed
 	// off this integer.
 	public var handle as StreamingHandle
+
 	// Latched once release() runs so subsequent release() calls are no-ops
 	// (matches the "treat like file close" contract documented above).
 	public var released as bool
@@ -877,13 +895,16 @@ public type StreamingSubprocess
 		let argvBlob = buildArgvBlob(exePath, args: arguments)
 		let argc = arguments.count() + 1
 		let spawnEnv = spawnEnvironmentFor(environment)
+
 		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup / detach). Streaming spawns
 		// never detach — the parent has to keep the pipes open — and don't take platform-options today, so
 		// the field is always 0. The environment block and its source flag follow it.
 		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0, spawnEnv.block.addressableBytes(), spawnEnv.source)
+
 		if rawHandle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
+
 		// rawHandle is the wide builtin return; -1 is excluded above, so the
 		// narrow StreamingHandle range is satisfied.
 		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
@@ -895,6 +916,7 @@ public type StreamingSubprocess
 		try requireLive()
 		let withNewline = "{line}\n"
 		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
+
 		if rc != 0 'writeFailed'
 			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")
 		end 'writeFailed'
@@ -975,12 +997,15 @@ public type StreamingSubprocess
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
 		try requireLive()
 		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
+
 		if rc == -2 'timedOut'
 			throw SubprocessError.timeout(timeoutMs)
 		end 'timedOut'
+
 		if rc == -1 'failed'
 			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}")
 		end 'failed'
+
 		return rc as ExitInt
 	end 'waitWithTimeout'
 
@@ -998,6 +1023,7 @@ public type StreamingSubprocess
 		end 'gone'
 
 		let raw = __Builtins.subprocessPollExit(handle)
+
 		if raw < 0 'stillRunning'
 			return ExitPoll.running
 		end 'stillRunning'
@@ -1138,26 +1164,34 @@ end 'streamName'
 /// neither 0x0A nor 0x0D ever appears as a UTF-8 continuation byte.
 function stripTrailingCR(s String) returns String
 	var len = s.byteLength()
+
 	if len == 0 'empty'
 		return s
 	end 'empty'
+
 	// One materialization for the whole scan-and-slice, taken after the empty check so an empty
 	// string never pays for it. See `String.addressableBytes`.
 	let bytes = s.addressableBytes()
 	let last = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+
 	if last == 10 'hasLf'
 		len = len - 1
 	end 'hasLf'
+
 	if len == 0 'allConsumed'
 		return ""
 	end 'allConsumed'
+
 	let beforeLf = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+
 	if beforeLf == 13 'hasCr'
 		len = len - 1
 	end 'hasCr'
+
 	if len == s.byteLength() 'noTrim'
 		return s
 	end 'noTrim'
+
 	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
 	return String.init(trimmed)
 end 'stripTrailingCR'

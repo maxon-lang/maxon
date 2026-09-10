@@ -34,6 +34,7 @@ let CacheFormatVersion = "maxon-run-cache-1"
 	let WindowsTempVariable = "TEMP"
 #else
 	let PosixTempVariable = "TMPDIR"
+
 	// Every POSIX host has one, so there is a last resort needing no variable at all.
 	let PosixLastResortRoot = "/tmp"
 #endif
@@ -163,6 +164,7 @@ function discardSupersededBuilds(slot RunSlot)
 
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
+
 		if name == current or name == currentSidecar 'theBuildJustPublished'
 			continue
 		end 'theBuildJustPublished'
@@ -222,6 +224,7 @@ end 'cacheRootVariables'
 function cacheRoot() returns FilePath throws RunCacheError
 	for name in cacheRootVariables() 'eachVariable'
 		let spelled = try Process.environmentVariable(name) otherwise continue
+
 		if spelled.isEmpty() 'namesNowhere'
 			continue
 		end 'namesNowhere'
@@ -244,6 +247,7 @@ end 'lastResortCacheRoot'
 // sentence naming a variable nothing reads sends its reader to set something that changes nothing.
 function noCacheRootMessage() returns String
 	var named = ""
+
 	for name in cacheRootVariables() 'eachVariable'
 		named = name if named.isEmpty() else "{named}, {name}"
 	end 'eachVariable'
@@ -272,6 +276,7 @@ end 'slotDirectory'
 // contents must be findable by anybody reading the directory.
 function slotStem(program FilePath, isProject bool) returns String throws RunCacheError
 	let name = program.filename() if isProject else program.stem()
+
 	if name.isEmpty() 'unnameable'
 		throw RunCacheError.unavailable("{program.toString()} has no name a cached build could be called after")
 	end 'unnameable'
@@ -302,9 +307,11 @@ end 'freshnessKey'
 function manifestLine(label String, fields ManifestFieldArray) returns String
 	var line = ""
 	line.append(label)
+
 	for field in fields 'eachField'
 		line.append("{ManifestFieldSeparator}{field}")
 	end 'eachField'
+
 	line.append(ManifestLineSeparator)
 
 	return line
@@ -346,6 +353,7 @@ end 'compilerLine'
 // bytes.
 function digestLines(label String, paths MaxonSourcePathArray) returns String throws RunCacheError
 	var lines = ""
+
 	for path in paths 'eachSource'
 		lines.append(try sourceLine(label, path: path))
 	end 'eachSource'
@@ -367,6 +375,7 @@ end 'sourceLine'
 // and this did not is not expressible.
 function programSources(program FilePath, isProject bool) returns MaxonSourcePathArray throws RunCacheError
 	var sources = MaxonSourcePathArray.create()
+
 	if not isProject 'oneNamedFile'
 		sources.push(program)
 		return sources
@@ -387,6 +396,7 @@ function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
 
 	var compiled = MaxonSourcePathArray.create()
+
 	for path in walked 'eachModule'
 		if path.equals(superseded) 'notCompiled'
 			continue
@@ -402,6 +412,7 @@ end 'stdlibSources'
 // filename.
 function hexDigest(digest ByteArray) returns String
 	var rendered = ""
+
 	for one in digest 'eachByte'
 		rendered.append("{one:02x}")
 	end 'eachByte'

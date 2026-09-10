@@ -19,6 +19,7 @@ export type BuildPhase
 		if spawnFailed 'no'
 			return false
 		end 'no'
+
 		return output.succeeded()
 	end 'succeeded'
 
@@ -26,6 +27,7 @@ export type BuildPhase
 		if spawnFailed 'spawnFailed'
 			return -1
 		end 'spawnFailed'
+
 		return output.exitCode()
 	end 'exitCode'
 
@@ -37,6 +39,7 @@ export type BuildPhase
 		if spawnFailed 'spawnFailed'
 			return spawnError
 		end 'spawnFailed'
+
 		return output.stderr
 	end 'stderr'
 end 'BuildPhase'
@@ -55,6 +58,7 @@ export function runBuild(binary FilePath, argv StringArray, workingDirectory Fil
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs) otherwise (err) 'spawn'
 		return BuildPhase.failedToSpawn("build spawn failed: {err.displayReason()}", durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
+
 	return BuildPhase.spawned(result, durationMs: Clock.elapsedMs(timing))
 end 'runBuild'
 
@@ -72,16 +76,21 @@ end 'runBuild'
 export function expectedExePath(mainFile FilePath) returns FilePath
 	let base = stripExtension(mainFile)
 	let direct = withExeSuffix(base)
+
 	if File.exists(direct) 'direct'
 		return direct
 	end 'direct'
+
 	let parent = try parentDirOrThrow(mainFile) otherwise 'noParent'
 		return direct
 	end 'noParent'
+
 	let basename = lastSegment(base)
 	let inMaxonDir = childPath(parent, segment: ".maxon/{basename}{exeSuffix()}")
+
 	if File.exists(inMaxonDir) 'inMaxon'
 		return inMaxonDir
 	end 'inMaxon'
+
 	return direct
 end 'expectedExePath'

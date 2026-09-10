@@ -217,6 +217,7 @@ end 'patchArm64ElfRelocations'
 function patchX64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textVmAddr + (reloc.codeOffset as MachineWord) + X64Disp32Width
+
 		match reloc.kind 'kind'
 			ripRelDisp32 then patchElfSectionRipRel(code, reloc: reloc, sectionVmAddr: rdataVmAddr, ripAtReloc: ripAtReloc)
 			dataSectionRipRelDisp32 then patchElfSectionRipRel(code, reloc: reloc, sectionVmAddr: dataVmAddr, ripAtReloc: ripAtReloc)
@@ -252,6 +253,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	if target.os != Os.linux 'wrongOs'
 		panic("writeElf: the ELF writer emits Linux executables only (got {targetToString(target)})")
 	end 'wrongOs'
+
 	let elfMachine = match target.cpu 'machine'
 		arm64 gives ElfMachineAarch64
 		x64 gives ElfMachineX86_64
@@ -320,11 +322,14 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		x64 then patchX64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr as MachineWord, dataVmAddr: dataVAddr as MachineWord)
 		wasm32 then panic("writeElf: wasm32 reached the ELF relocation patcher — the entry guard rejects it")
 	end 'relocs'
+
 	bakeElfRdataAbsRelocs(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr as MachineWord)
+
 	// Patch each dense-`match` jump table's `.rodata` slots to `targetBlockVA − tableBaseVA`. The reloc
 	// format is target-neutral, so ONE call serves both the x64 and arm64 ELF paths — the ELF is static
 	// (fixed load address), so a VA delta IS the runtime delta.
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textVAddr, rdataAddr: rodataVAddr as MachineWord)
+
 	// Bake every `.rdata` slot holding a `.text` address — a witness-table method slot, or a managed-opaque-`T`
 	// descriptor's `destroyFunc@40`/`copyFunc@32` — with the target's absolute `.text` VA (`textVAddr +
 	// funcOffset`), the ELF twin of PeWriter's fixed-base bake. This ELF is static (`ET_EXEC`, fixed load
@@ -418,18 +423,24 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 
 	let textShndx = 1
 	var sectionCount = 2  // SHT_NULL + .text
+
 	if hasRodata 'countRodata'
 		sectionCount = sectionCount + 1
 	end 'countRodata'
+
 	sectionCount = sectionCount + 1  // .data
+
 	if hasSymdata 'countSymdata'
 		sectionCount = sectionCount + 1
 	end 'countSymdata'
+
 	let symtabShndx = sectionCount
 	let strtabShndx = symtabShndx + 1
+
 	if hasSymbols 'countSymbolTables'
 		sectionCount = sectionCount + 2
 	end 'countSymbolTables'
+
 	// `.comment` needs no index of its own: nothing links to it, so only its POSITION among the headers
 	// matters, and that is fixed by the write order below.
 	sectionCount = sectionCount + 1
@@ -440,6 +451,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	var strtab = ByteArray.create()
 	strtab.push(0)
 	var symbolNameOffsets = ByteOffsetArray.create()
+
 	for sym in codeResult.debugSymbols 'eachSym'
 		symbolNameOffsets.push(appendElfStringTableName(strtab, name: sym.name))
 	end 'eachSym'
@@ -460,6 +472,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// reads. Written before the offsets below are taken, so those describe a cursor that already
 	// accounts for them.
 	let symdataFileOffset = alignUp(elf.count(), alignment: ElfSectionAlign)
+
 	if hasSymdata 'symdataBytes'
 		padTo(elf, size: symdataFileOffset)
 		elf.append(codeResult.symdata)
@@ -472,6 +485,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let symtabSize = (symbolCount + 1) * ElfSymbolSize if hasSymbols else 0  // + the leading STN_UNDEF
 	let strtabFileOffset = symtabFileOffset + symtabSize
 	let strtabSize = strtab.count() if hasSymbols else 0
+
 	// ⭐ **THE PRODUCER STRING, IN THE SECTION EVERY OTHER COMPILER USES FOR IT.** `readelf -p .comment`
 	// is where a reader looks to find out what built a binary, and GCC has written `GCC: (GNU) …` there
 	// for decades. ELF has no version RECORD — this is a convention, not a structure — so the string is
@@ -494,6 +508,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 		padTo(elf, size: symtabFileOffset)
 		writeElfSymbol(elf, nameOffset: 0, info: 0, shndx: 0, value: 0)
 		let functionSymbolInfo = (ElfStbGlobal shl ElfStInfoBindShift) or ElfSttFunc
+
 		for (iter, sym) in codeResult.debugSymbols.withIterator() 'writeSyms'
 			let nameOffset = try symbolNameOffsets.get(iter.index()) otherwise panic("writeElfTrailingSections: symbolNameOffsets[{iter.index()}] OOB ({symbolNameOffsets.count()} entries) — the name pass and the symbol pass fell out of lockstep")
 			writeElfSymbol(elf, nameOffset: nameOffset as MachineWord, info: functionSymbolInfo, shndx: textShndx, value: textVAddr + (sym.codeOffset as MachineWord))
@@ -511,21 +526,26 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 
 	writeElfSectionHeader(elf, nameOffset: 0, sectionType: ElfShtNull, flags: 0, addr: 0, fileOffset: 0, size: 0, link: 0, info: 0, addralign: 0, entsize: 0)
 	writeElfSectionHeader(elf, nameOffset: textNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfExecinstr, addr: textVAddr, fileOffset: textFileOffset, size: codeSize as MachineWord, link: 0, info: 0, addralign: ElfTextAlign, entsize: 0)
+
 	if hasRodata 'rodataShdr'
 		writeElfSectionHeader(elf, nameOffset: rodataNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc, addr: rodataVAddr, fileOffset: rodataFileOffset, size: rdataSize as MachineWord, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)
 	end 'rodataShdr'
+
 	writeElfSectionHeader(elf, nameOffset: dataNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfWrite, addr: dataVAddr, fileOffset: dataFileOffset, size: dataSize as MachineWord, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)
+
 	// `.symdata` carries NO `SHF_ALLOC` and NO address: it is read out of the FILE by `maxon monitor`,
 	// never mapped, so a virtual address would be a claim no program header backs.
 	if hasSymdata 'symdataShdr'
 		writeElfSectionHeader(elf, nameOffset: symdataNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: 0, addr: 0, fileOffset: symdataFileOffset as MachineWord, size: symdataSize as MachineWord, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)
 	end 'symdataShdr'
+
 	// `sh_link` of a SYMTAB names its string table; `sh_info` is the index of the first non-local
 	// symbol (see `ElfSymtabFirstGlobal`).
 	if hasSymbols 'symbolShdrs'
 		writeElfSectionHeader(elf, nameOffset: symtabNameOffset as MachineWord, sectionType: ElfShtSymtab, flags: 0, addr: 0, fileOffset: symtabFileOffset as MachineWord, size: symtabSize, link: strtabShndx, info: ElfSymtabFirstGlobal, addralign: ElfSectionAlign, entsize: ElfSymbolSize)
 		writeElfSectionHeader(elf, nameOffset: strtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: strtabFileOffset as MachineWord, size: strtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 	end 'symbolShdrs'
+
 	writeElfSectionHeader(elf, nameOffset: commentNameOffset as MachineWord, sectionType: ElfShtProgbits, flags: 0, addr: 0, fileOffset: commentFileOffset as MachineWord, size: commentSize as MachineWord, link: 0, info: 0, addralign: 1, entsize: 0)
 	writeElfSectionHeader(elf, nameOffset: shstrtabNameOffset as MachineWord, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: shstrtabFileOffset as MachineWord, size: shstrtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
 

@@ -54,13 +54,16 @@ public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
 	if cp < 65536 'bmp'
 		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp)
 	end 'bmp'
+
 	var lo = 0
 	var hi = UCD_SUPP_COUNT - 1
+
 	while lo <= hi 'bsearch'
 		let mid = (lo + hi) shr 1
 		let entry = __Builtins.ucdI64At("__ucd_supp", index: mid)
 		let rangeStart = entry and 2097151
 		let rangeEnd = (entry shr 21) and 2097151
+
 		if cp < rangeStart 'left'
 			hi = mid - 1
 		end 'left' else 'not_left'
@@ -71,5 +74,6 @@ public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
 			end 'found'
 		end 'not_left'
 	end 'bsearch'
+
 	return 0
 end 'unicodeGeneralCategory'

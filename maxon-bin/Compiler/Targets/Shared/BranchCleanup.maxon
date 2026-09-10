@@ -70,6 +70,7 @@ function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
 	// order), which is what makes "the physically next block" answerable as `local + 1`.
 	let topo = buildFuncTopology(module, func: func)
+
 	if topo.numBlocks == 0 'noBlocks'
 		return
 	end 'noBlocks'
@@ -105,6 +106,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 	// costs nothing today; it is the fact that must not have to be re-derived if that ever changes.)
 	for local in 1 upto blockCount 'eachBlock'
 		let target = emptyJumpTargetOf(module, topo: topo, local: local)
+
 		if target == local 'staysPut'
 			continue
 		end 'staysPut'
@@ -129,6 +131,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 		path.clear()
 		var cur = start
 		var answer = unresolved
+
 		while answer == unresolved 'followChain'
 			// The three facts about `cur`, read up front: a `try` may not sit bare in an `if` condition
 			// (E3124), and reading them together keeps the chain below a plain three-way test.
@@ -175,6 +178,7 @@ end 'resolveJumpChains'
 // one that received none is genuinely empty. See this file's header.
 function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local CfgIndex) returns CfgIndex
 	let block = blockAt(module, topo: topo, local: local)
+
 	if block.opRefs.count() > 0 or block.hasCondBranchOp() 'carriesWork'
 		return local
 	end 'carriesWork'
@@ -211,12 +215,15 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 		for k in 0 upto topo.succ.degree(local) 'eachSucc'
 			let succ = topo.succ.neighbour(local, k: k) as CfgIndex
 			let alreadyListed = try seen.get(succ) otherwise panic("threadResolvedEdges: seen.get OOB at {succ}")
+
 			if alreadyListed 'duplicateEdge'
 				continue
 			end 'duplicateEdge'
+
 			try seen.set(succ, value: true) otherwise panic("threadResolvedEdges: seen.set OOB at {succ}")
 
 			let target = try resolved.get(succ) otherwise panic("threadResolvedEdges: resolved.get OOB at {succ}")
+
 			if target == succ 'edgeUnchanged'
 				continue
 			end 'edgeUnchanged'
@@ -275,18 +282,22 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 	end 'walk'
 
 	var kept = BlockRefArray.create()
+
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let survives = try reachable.get(local) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {local}")
+
 		if survives 'keep'
 			kept.push(try topo.blockRefByLocal.get(local) otherwise panic("dropUnreachableBlocks: blockRefByLocal.get OOB at {local}"))
 		end 'keep'
 	end 'eachBlock'
+
 	func.blockRefs = kept
 end 'dropUnreachableBlocks'
 
 // Mark a block reachable and queue it, once. Both columns are the caller's.
 function markReachable(reachable BoolArray, stack CfgIndexArray, local CfgIndex)
 	let seenBefore = try reachable.get(local) otherwise panic("markReachable: reachable.get OOB at {local}")
+
 	if seenBefore 'alreadySeen'
 		return
 	end 'alreadySeen'
@@ -317,6 +328,7 @@ end 'elideFallthroughBranches'
 // op-less `dead` slot — carries nothing to elide.
 function elideBranchInto(module TargetModule, blockRef BlockRef, nextId BlockId)
 	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
+
 	match unconditionalBranchTargetOf(module, block: block) 'terminator'
 		none then return
 		blockId(elseTarget) then elideAgainstNext(module, blockRef: blockRef, elseTarget: elseTarget, nextId: nextId)
@@ -355,6 +367,7 @@ end 'elideAgainstNext'
 function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns CondBranch
 	let block = try module.blocks.get(blockRef) otherwise panic("invertibleCondBranchIn: blockRef {blockRef} not in module.blocks")
 	let bodyCount = block.opRefs.count()
+
 	if bodyCount == 0 or not block.hasCondBranchOp() 'noConditionalHalf'
 		return CondBranch.none
 	end 'noConditionalHalf'
@@ -379,6 +392,7 @@ end 'invertBranchAndElide'
 function invertCondBranchOntoElse(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId) returns bool
 	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
 	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))
+
 	if thenTarget != nextId 'thenIsNotNext'
 		return false
 	end 'thenIsNotNext'

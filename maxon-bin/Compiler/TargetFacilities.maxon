@@ -51,15 +51,18 @@
 export enum HostFacility
 	// The scheduler's monotonic counter (`osReadClock`) — `__gt_now_ns` and every `Clock.*` above it.
 	monotonicClock
+
 	// The calendar (`osReadWallClock`) — `__clock_now_unix_s`. Split from the monotonic clock because a
 	// reading that steps backwards when NTP corrects a drift is useless to a deadline, which is the same
 	// split `ClockRuntime`'s header makes for the same reason.
 	wallClock
+
 	// This thread's own CPU consumption (`osThreadCpuTicks`) — `__thread_cpu_ticks`. Its own facility
 	// because its UNIT is platform-defined (TSC ticks vs nanoseconds) and its API is unrelated to either
 	// clock above: a target can serve both wall and monotonic time and still have no per-thread cost clock,
 	// which is exactly WASI's position.
 	threadCpuClock
+
 	// How long the MACHINE has been up (`osTickCountMs`) — `__uptime_ms`. Its own facility rather than a
 	// corner of `wallClock`, on this enum's stated rule that a facility is named for what the HOST provides:
 	// a monotonic count since boot and a calendar are different questions with different APIs, and the
@@ -72,31 +75,42 @@ export enum HostFacility
 	// the union of the op's producers, which is the "a `true` promises a lowering" rule this file's header
 	// states.
 	uptimeClock
+
 	// The timed park (`osSleepMs`) — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`.
 	sleep
+
 	// The cooperative reschedule (`__gt_resched`) — `Runtime.yield()`. The scheduler's run-queue handoff
 	// through `__gt_context_switch`, which is a hand-assembled per-CPU chunk rather than a lowering.
 	reschedule
+
 	// The green-thread substrate a `select` drives (`__gt_await_any`), and the whole `async`/`await` floor
 	// under it.
 	greenThreads
+
 	// A child process — spawn, its three pipes, and the wait (`__gt_subp_*`, `__gt_process_run`,
 	// `__gt_io_read`).
 	subprocess
+
 	// The file surface (`__mf_*`) — open, read, write, close, size, delete, rename, stat.
 	managedFile
+
 	// The directory surface (`__md_*`) — exists, create, current path, and the search walk.
 	managedDirectory
+
 	// The socket surface (`__sock_*`).
 	managedSocket
+
 	// The program's own argument vector (`__cl_*`). Its own facility rather than a corner of `processInfo`
 	// because argv has a DIFFERENT SHAPE per platform — one unsplit string on Windows, a pre-split vector
 	// under SysV — so a target serves it as a rung rather than as a lowering.
 	commandLine
+
 	// Standard input (`__con_*`).
 	consoleStdin
+
 	// The process's own IDENTITY: its executable path and its pid (`__proc_exe_path`, `__proc_pid`).
 	processInfo
+
 	// The process's own SCHEDULING PRIORITY (`__proc_bg_priority`). Its own facility rather than a corner of
 	// `processInfo` because the two are a DIFFERENT KIND of question and the platforms split them that way:
 	// reading an identity is one call that cannot fail, while lowering a priority is a WRITE whose SCOPE
@@ -113,8 +127,10 @@ export enum HostFacility
 	// they are separate rows. What the split records now is the DIFFERENCE IN KIND, which no landing changes —
 	// reading an identity cannot fail, lowering a priority is a write whose scope disagrees across POSIX.
 	processPriority
+
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
+
 	// Whether a standard stream is a TERMINAL (`__tty_*`). Its own facility rather than a corner of
 	// `consoleStdin`, on this enum's stated rule that a facility is named for what the HOST provides:
 	// reading standard input and asking the OS what KIND of object a handle is are two different questions
@@ -133,11 +149,13 @@ export enum HostFacility
 	// The compiler UNBUILDABLE for arm64-macOS in a day: `Testing/TestRender` asks the question unconditionally,
 	// `Testing/` is ordinary user code, and this gate is reachability-blind for user code by design.
 	terminalDetection
+
 	// A NAMED SHARED SECTION two processes both map (`__shm_*`). Its own facility rather than a corner of
 	// `managedFile`, on this enum's stated rule that a facility is named for what the HOST provides:
 	// publishing a section under a name and mapping it into another process is a different API from
 	// reading a file, and a lane can serve either without the other.
 	sharedMemory
+
 	// ⭐⭐ **SAMPLING ANOTHER THREAD OF THIS PROCESS — the suspend/context/read/resume loop, the
 	// high-resolution tick that drives it and the module map that names what it finds (`StdOp.osHostSample`).**
 	// Its own facility rather than a corner of `processInfo`, on this enum's stated rule: reading one's own
@@ -517,9 +535,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			monotonicClock gives true
 			wallClock gives true
 			threadCpuClock gives true
+
 			// MAC3. `mrt_host_sleep_ms` is a `nanosleep`; the GREEN-THREAD park above it rides `greenThreads`,
 			// which is why the two stay separate rows even though one lane now provides both.
 			sleep gives true
+
 			// ⭐⭐ **MAC4/5/6/7.** Each of these four rows was `false` with a REASON attached rather than a
 			// deferral, and each reason is now discharged in the file that owned it:
 			//
@@ -538,6 +558,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedDirectory gives true
 			commandLine gives true
 			consoleStdin gives true
+
 			// MAC2. All three `__proc_` entries lower here: `_NSGetExecutablePath` + `realpath` through the
 			// `mrt_host_exe_path` chunk, `getpid`, and `setpriority` + `getpriority`. ⚠ The reason this row
 			// took a rung rather than a lowering is intact and now DISCHARGED rather than deferred — the three
@@ -545,11 +566,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// in `Arm64DarwinRuntime.buildArm64DarwinExePathChunk` instead of being a refusal.
 			processInfo gives true
 			processPriority gives true
+
 			// `sysconf(_SC_NPROCESSORS_ONLN)` — the read the op was SHAPED for. `StdOp.osCpuCount` takes no
 			// buffer precisely because this lane answers a bare scalar, and the `< 1 ⇒ 1` clamp that covers
 			// both `GetActiveProcessorCount`'s 0 and `sysconf`'s -1 is already builder-built Std
 			// (`CpuParallelRuntime.buildCpuCount`), so this lane supplies only the read.
 			cpuCount gives true
+
 			// ⭐⭐ **MAC3 — THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** This row used to read
 			// *"`__gt_context_switch`, `__gt_trampoline` and `__gt_morestack` are hand-assembled x64 chunks with
 			// no AAPCS64 twin, so a `true` here would promise a scheduler that does not exist"*. They have one
@@ -563,6 +586,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// primitive, and the Linux lane is a raw static image that links no libc to provide one.
 			reschedule gives true
 			greenThreads gives true
+
 			// ⭐⭐ **MAC8 — THE LAST FACILITY, AND THE ROW THAT MAKES THIS LANE SELF-COMPILE.** It read *"waits
 			// on the scheduler above: a spawn's three pipes are read through `__gt_io_park`"*, and the
 			// scheduler is the least of what it needed. Four things landed:
@@ -583,6 +607,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `osPipePeek` asks first. A kqueue would lift that and change no answer — see
 			// `StdToArm64Conversion`'s `osReadOverlapped` arm.
 			subprocess gives true
+
 			// ⭐⭐ **THE BSD SOCKET BAND, AND IT IS THE CHEAPEST ROW IN THIS BLOCK — SIX IMPORT SLOTS AND NOT ONE
 			// CHUNK.** Winsock and BSD sockets are the same five verbs; `closesocket` is `close` (a socket is a
 			// descriptor here), `WSAStartup` has no counterpart at all and lowers to its own answer, and
@@ -594,6 +619,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// which carries the measurement and its controls. The Windows spelling is ACCEPTED here by an
 			// `AF_UNSPEC` tolerance rather than by being right.
 			managedSocket gives true
+
 			// ⭐ **ONE CALL RATHER THAN A DESIGN.**
 			// `Arm64DarwinRuntime.buildArm64DarwinHandleFileTypeChunk` is `isatty` on the descriptor
 			// `osStdHandle` already answers, translated into the vocabulary `StdOp.osHandleFileType` speaks
@@ -605,6 +631,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// AAPCS64 passes a variadic argument on the STACK, which a runtime chunk here does not use. A
 			// libc-less lane has no such choice — see the arm64-linux row.
 			terminalDetection gives true
+
 			// ⭐⭐ **THE NAMED SECTION — `shm_open` + `ftruncate` + `mmap(MAP_SHARED)` + `munmap`, four chunks and
 			// three import slots** (`Arm64DarwinRuntime`'s named-shared-section band). It is what carries a
 			// DebugStream ring between `maxon monitor` and the child it traces on this lane.
@@ -613,10 +640,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// this band needed that no other chunk here does — an outgoing-argument region in a runtime chunk's
 			// own frame (`Arm64RuntimeAsm.beginFunction`'s `outgoingArgBytes`).
 			sharedMemory gives true
+
 			// `mrt_host_tick_ms` is now gated on the union of its three producers rather than on the pipe band
 			// alone (`appendArm64DarwinRuntimeChunks`), so a program that reads the uptime and spawns nothing
 			// carries the chunk it branches to.
 			uptimeClock gives true
+
 			// ⛔ **NOT "NOT YET" — THE REGISTER FILE IS THE WRONG SHAPE.** `thread_get_state` would answer an
 			// `arm_thread_state64_t`, not a `CONTEXT`, so this is a port of the whole sample DECODER rather
 			// than a lowering of `osHostSample`. The row stays `false` until that decoder exists; a `true`
@@ -634,6 +663,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// kernel puts argc at `[sp]` and the vector at `sp+8` and leaves x0/x1 unspecified, so the entry
 			// stub's capture is a different four instructions (`Arm64Runtime.emitArm64ArgvFromEntryStack`).
 			commandLine gives true
+
 			// ⭐⭐ **L2 — the filesystem, and the console read that rides it.** Every body behind these three is
 			// a raw `svc #0` against the AArch64 table in `Arm64LinuxRuntime`, hand-assembled there:
 			//
@@ -650,6 +680,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedFile gives true
 			managedDirectory gives true
 			consoleStdin gives true
+
 			// ⭐⭐ **L3 — THE TWO NON-SCHEDULER CLOCKS.** `clock_gettime` is a syscall on Linux (113) rather
 			// than the `clock_gettime_nsec_np` this backend's macOS arm calls, and it answers a `timespec`
 			// rather than a scalar of nanoseconds — so each of these is a frame with two words in it
@@ -666,6 +697,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			wallClock gives true
 			threadCpuClock gives true
 			sleep gives true
+
 			// ⭐⭐⭐ **L4 — THE GREEN-THREAD FLOOR. THE ROW ABOVE IT IN THIS TABLE PREDICTED EXACTLY WHAT IT
 			// WOULD COST, AND WAS RIGHT.** arm64-macOS's `greenThreads` says this row is `true` "for
 			// arm64-macOS ALONE and not for arm64 generally … every one of those host objects is a pthread
@@ -698,6 +730,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// promises the isel lowers every `StdOp` the facility's bodies emit, and it does.
 			reschedule gives true
 			greenThreads gives true
+
 			// ⭐⭐⭐ **L5 — THE LAST FACILITY, AND THE ROW THAT MAKES THIS LANE SELF-COMPILE.** Its old text read
 			// *"waits on the scheduler above, as it does on every lane: a spawn's three pipes are read through
 			// the green-thread park"*, and L4 discharged that half. What was left was the spawn itself, and
@@ -717,11 +750,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// process. Without it the Std tier's `hProcess == 0` — the whole of `SubprocessError.spawnFailed` —
 			// would be unreachable on this lane.
 			subprocess gives true
+
 			// ⭐⭐ **L3 — the process's IDENTITY, and the row whose old text said outright that it was "three
 			// separate ports rather than one".** Two of the three are done: `getpid` is one `svc` and the
 			// executable path is `readlinkat` on `/proc/self/exe` through `mrt_host_exe_path`, because
 			// `_NSGetExecutablePath` has no Linux counterpart at all.
 			processInfo gives true
+
 			// ⭐⭐ **L4 — THE THIRD, AND ITS OBJECTION IS NOW ANSWERED BY INHERITANCE ALONE.** It read:
 			// *"`setpriority` is a WRITE whose scope disagrees: POSIX scopes a nice value to the THREAD on Linux
 			// and to the PROCESS on Darwin, so this lane owes thread-inheritance work at `StdOp.osThreadCreate`
@@ -743,12 +778,14 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// 10 while every other nice value read back wrong (MEASURED on an aarch64 guest — nice 15 answered
 			// 5). See `LinuxRuntime.LinuxGetPriorityBias`.
 			processPriority gives true
+
 			// ⭐ **L3 — `sched_getaffinity` and a popcount, which is what the old text here already named.** It
 			// is preferred to reading `/sys/devices/system/cpu/online` for two reasons: it needs no filesystem
 			// (this lane's file surface is a whole other facility, and a machine query must not depend on one),
 			// and it reports the CPUs THIS PROCESS MAY ACTUALLY USE rather than the CPUs the machine has —
 			// which is what a parallelism hint wants, and what `nproc` itself answers.
 			cpuCount gives true
+
 			// ⭐⭐⭐ **THE SOCKET BAND — FIVE INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
 			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
 			// (AArch64 has no `send`/`recv` syscall at all) and every raw answer is folded from `-errno` to the
@@ -769,6 +806,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `LinuxRuntime.linuxOpensFiles` names the socket bit: a socket program with no `File` call in it still
 			// lays out `mrt_host_file_open`.
 			managedSocket gives true
+
 			// ⭐⭐ **THE TERMINAL TEST IS THE `ioctl` `isatty` IS MADE OF, BECAUSE THIS LANE LINKS NO LIBC TO
 			// ASK.** `ioctl(fd, TCGETS, &termios)` succeeds exactly on a terminal; `ioctl` is syscall **29** on
 			// AArch64 and `TCGETS` is **0x5401** (`LinuxRuntime`), and the kernel writes **36** bytes, so
@@ -781,15 +819,18 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// program need not have a scheduler; gated on `usesGt` alone the first such program relocated
 			// against a word nothing wrote.
 			terminalDetection gives true
+
 			// ⭐⭐ **THE NAMED SHARED SECTION, ON A LANE WITH NO `shm_open` TO CALL.** That is a libc FUNCTION on
 			// Linux rather than a syscall, and all it does is prepend `/dev/shm/` and `open` the result — so
 			// `Arm64LinuxRuntime`'s band builds the path itself and reaches the same `tmpfs` file with
 			// `openat`/`ftruncate`/`unlinkat`, while the mapping is the `mmap` every POSIX lane shares.
 			sharedMemory gives true
+
 			// `mrt_host_tick_ms` is installed on the union of its three producers — a subprocess deadline, a
 			// DebugStream entry's stamp, and `__uptime_ms` itself — so a program that reads the uptime and
 			// spawns nothing carries the chunk it relocates against.
 			uptimeClock gives true
+
 			// ⛔ The arm64-macOS row's reason, plus this lane's own: `ptrace`/`process_vm_readv` are a
 			// different sampling MECHANISM, and the register file they answer is AArch64's rather than the
 			// x64 `CONTEXT` the sample decoder reads.
@@ -806,6 +847,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// argc at `[rsp]` and the vector at `rsp+8`, captured by the frameless entry stub
 			// (`BackendDispatch.appendLinuxArgvCapture`).
 			commandLine gives true
+
 			// ⭐⭐ **THE FILESYSTEM, AND THE CONSOLE READ THAT RIDES IT.** Every body behind these three is a
 			// raw `syscall` against the x86-64 table in `X64LinuxRuntime`, hand-assembled there:
 			//
@@ -825,6 +867,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedFile gives true
 			managedDirectory gives true
 			consoleStdin gives true
+
 			// ⭐⭐ **THE TWO NON-SCHEDULER CLOCKS.** `clock_gettime` is syscall 228 here (113 on the other
 			// Linux lane) and answers a `timespec` rather than a scalar of nanoseconds — so each is a frame
 			// with two words in it (`X64LinuxRuntime.x64LinuxReadClockTimespec`) rather than a re-spelling
@@ -833,15 +876,18 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// readings may be SUBTRACTED.
 			wallClock gives true
 			threadCpuClock gives true
+
 			// ⭐ **THE IDENTITY: `getpid` is one inline `syscall` (39) and the executable path is
 			// `readlinkat` on `/proc/self/exe`**, because `GetModuleFileNameA` has no Linux counterpart and
 			// no call answers the question — the kernel publishes a SYMLINK instead.
 			processInfo gives true
+
 			// ⭐ **`sched_getaffinity` AND A POPCOUNT**, preferred to reading
 			// `/sys/devices/system/cpu/online` for two reasons: it needs no filesystem (a machine query must
 			// not drag in a whole other facility), and it reports the CPUs THIS PROCESS MAY USE rather than
 			// the CPUs the machine has — which is what a parallelism hint wants and what `nproc` answers.
 			cpuCount gives true
+
 			// ⛔⛔ **THESE FIVE ROWS ARE INDIVISIBLE: A LANE PROVIDES ALL OF THEM OR NONE, AND FLIPPING ONE
 			// ALONE MAKES A PROGRAM THAT PANICS IN THE ISEL.** Whoever next touches them is bound by it:
 			//
@@ -865,6 +911,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			reschedule gives true
 			greenThreads gives true
 			subprocess gives true
+
 			// ⭐⭐ **THE arm64-linux ROW'S TWO SYSCALLS WITH THIS LANE'S NUMBERS, AND THE NUMBERS ARE SWAPPED
 			// RATHER THAN MERELY DIFFERENT.** x86-64 has `getpriority` at 140 and `setpriority` at 141;
 			// AArch64 takes `asm-generic/unistd.h`'s order and has them the other way round, so a lane reusing
@@ -882,6 +929,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// (`LinuxRuntime.LinuxGetPriorityBias`), and without the fold `answers-the-posix-nice-value` would
 			// pass by the coincidence that `20 - 10` is 10 while every other value read back wrong.
 			processPriority gives true
+
 			// ⭐⭐ **THE SOCKET BAND — the arm64-linux row's lowerings with this lane's own syscall numbers
 			// (41/42/44/45 against 198/203/206/207) and its own register ABI, and the SAME Std-IR resolver.** That
 			// resolver is why the split between the two Linux lanes here is four numbers rather than a second
@@ -889,6 +937,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// unchanged. Its reach — and what it does not reach — is stated at `ManagedSocketRuntime`'s resolver
 			// header and summarised in the arm64-linux row.
 			managedSocket gives true
+
 			// ⭐⭐ **THE SAME `ioctl(fd, TCGETS, &termios)` AS THE OTHER LINUX LANE, WITH THIS ONE'S OWN NUMBER.**
 			// `ioctl` is **16** on x86-64 where it is 29 on AArch64; `TCGETS` (0x5401) and the **36** bytes the
 			// kernel writes are shared, and live in `LinuxRuntime` for that reason.
@@ -901,13 +950,16 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// lane, the terminal test, the scheduler's `MAXON_MAX_PROCS` read and the named section's attach —
 			// so a new producer is added there once rather than at each lane's chunk list.
 			terminalDetection gives true
+
 			// ⭐⭐ **THE NAMED SHARED SECTION — the arm64-linux row's band with this lane's own syscall
 			// numbers**, `X64LinuxRuntime` building the `/dev/shm` path the libc `shm_open` this image cannot
 			// call would have built. That row states why a Linux lane spells a create rather than calling one.
 			sharedMemory gives true
+
 			// The arm64-linux row's reason: `mrt_host_tick_ms` is installed on the union of the op's three
 			// producers, so a program that reads the uptime and spawns nothing carries the chunk.
 			uptimeClock gives true
+
 			// ⛔ **THE CPU MATCHES AND THE MECHANISM DOES NOT.** This lane's registers really are x64's, so
 			// the sample DECODER would port — but there is no suspend-and-read-context primitive to lower
 			// `osHostSample` onto: Linux's equivalent is `ptrace` with a stop protocol, or

@@ -360,8 +360,10 @@ end 'parseScaleTrend'
 // there precisely so they can.
 function readTable(lines StringArray, marker String, source String) returns LogTable throws ScaleError
 	var markerLine = lines.count()
+
 	for i in 0 upto lines.count() 'findMarker'
 		let line = try lines.get(i) otherwise panic("readTable: i < count but lines.get({i}) failed")
+
 		if line.trim() == marker 'found'
 			markerLine = i
 			break
@@ -375,15 +377,19 @@ function readTable(lines StringArray, marker String, source String) returns LogT
 	// Walk up over the table's rows to its header. The block is header, separator, then zero or more
 	// data rows — so the topmost `|` line is the header and the bottommost is the row we want.
 	var top = markerLine
+
 	while top > 0 'toTop'
 		let line = try lines.get(top - 1) otherwise panic("readTable: top > 0 but lines.get({top - 1}) failed")
+
 		if not line.startsWith("|") 'aboveTheTable'
 			break
 		end 'aboveTheTable'
+
 		top = top - 1
 	end 'toTop'
 
 	let rowCount = markerLine - top
+
 	if rowCount < TableHeaderLines 'noHeader'
 		throw ScaleError.reason("the table above `{marker}` in {source} has no header row and separator — it must be `| {DateColumnHeading} | {MintedAtColumnHeading} | {NoteColumnHeading} | ... |` followed by `| --- | ... |`")
 	end 'noHeader'
@@ -397,6 +403,7 @@ function readTable(lines StringArray, marker String, source String) returns LogT
 	end 'headerOnly'
 
 	let lastCells = splitRow(try lines.get(markerLine - 1) otherwise panic("readTable: the last row is inside the block"))
+
 	if lastCells.count() != header.count() 'ragged'
 		throw ScaleError.reason("the last row of the table above `{marker}` in {source} has {lastCells.count()} cell(s) but its header has {header.count()} — the table is ragged, and a column read out of it would be the wrong column")
 	end 'ragged'
@@ -425,6 +432,7 @@ end 'assertLeadingHeadings'
 
 function assertHeading(header StringArray, index ColumnIndex, expected String, marker String, source String) throws ScaleError
 	let heading = try cellAt(header, index: index, source: source)
+
 	if heading != expected 'wrongColumn'
 		throw ScaleError.reason("column {index} of the table above `{marker}` in {source} is headed '{heading}' and this compiler reads it as `{expected}` — the leading columns are `{DateColumnHeading}`, `{MintedAtColumnHeading}`, `{NoteColumnHeading}`, then one per rung. A row read against the wrong columns would take a note for a minting path and a rung's count for a note.")
 	end 'wrongColumn'
@@ -474,9 +482,11 @@ let AsciiColon = 0x3A
 function splitRow(line String) returns StringArray
 	let raw = line.split("|")
 	var cells = StringArray.create()
+
 	for i in 1 upto raw.count() - 1 'eachCell'
 		cells.push((try raw.get(i) otherwise panic("splitRow: i < count-1 but get({i}) failed")).trim())
 	end 'eachCell'
+
 	return cells
 end 'splitRow'
 
@@ -539,6 +549,7 @@ function memoryRowFrom(allocCells StringArray, bytesTable LogTable, cpuTable Log
 	// will land beneath is numeric and the same width as the other two, which is the whole of what the
 	// writer assumes about it.
 	let cpu = try rungCells(cpuCells, source: source)
+
 	if allocs.count() != bytes.count() or allocs.count() != cpu.count() 'differentLadders'
 		throw ScaleError.reason("the last rows of the three tables have {allocs.count()}, {bytes.count()} and {cpu.count()} rung(s) — they measure one ladder, so one of them has been hand-edited")
 	end 'differentLadders'
@@ -611,6 +622,7 @@ let DifferingCellIndent = "\n    "
 // codepoint in half and print a replacement character where the difference is.
 function firstDivergenceAt(logged String, other String) returns GraphemeIndex
 	var shortest = logged.count()
+
 	if other.count() < shortest 'otherIsShorter'
 		shortest = other.count()
 	end 'otherIsShorter'
@@ -618,6 +630,7 @@ function firstDivergenceAt(logged String, other String) returns GraphemeIndex
 	var loggedIndex = logged.startIndex()
 	var otherIndex = other.startIndex()
 	var at = 0 as GraphemeIndex
+
 	while at < shortest 'walk'
 		if not logged.charAt(loggedIndex).equals(other.charAt(otherIndex)) 'diverged'
 			return at
@@ -635,6 +648,7 @@ end 'firstDivergenceAt'
 // rule `cellDifferenceReport` states.
 function divergenceExcerpt(value String, at GraphemeIndex) returns String
 	let length = value.count()
+
 	if length <= ExcerptWindowChars 'fitsWhole'
 		return value
 	end 'fitsWhole'
@@ -642,6 +656,7 @@ function divergenceExcerpt(value String, at GraphemeIndex) returns String
 	// Centred on the divergence, then slid back inside the cell: a window hanging off either end would
 	// spend its width on nothing, exactly where the interesting text is.
 	var start = 0 as GraphemeIndex
+
 	if at > ExcerptContextChars 'roomBefore'
 		start = at - ExcerptContextChars
 	end 'roomBefore'
@@ -679,6 +694,7 @@ end 'omissionMark'
 function indexAt(value String, at GraphemeIndex) returns StringIndex
 	var index = value.startIndex()
 	var walked = 0 as GraphemeIndex
+
 	while walked < at 'walk'
 		index = try value.indexAfter(index) otherwise panic("indexAt: walked {walked} of {at} characters into a {value.count()}-character cell and indexAfter failed")
 		walked = walked + 1
@@ -694,9 +710,11 @@ typealias ParsedCountArray = Array with ParsedCount
 
 function rungCells(cells StringArray, source String) returns ParsedCountArray throws ScaleError
 	var counts = ParsedCountArray.create()
+
 	for i in LeadingColumns upto cells.count() 'eachRung'
 		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source), source: source, column: i))
 	end 'eachRung'
+
 	return counts
 end 'rungCells'
 
@@ -704,17 +722,21 @@ end 'rungCells'
 // instances and a function cannot be generic over which.
 function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
 	var column = AllocCountArray.create()
+
 	for cell in cells 'eachRung'
 		column.push(cell as AllocCount)
 	end 'eachRung'
+
 	return column
 end 'allocColumnOf'
 
 function byteColumnOf(cells ParsedCountArray) returns ByteCountArray
 	var column = ByteCountArray.create()
+
 	for cell in cells 'eachRung'
 		column.push(cell as HeapByteCount)
 	end 'eachRung'
+
 	return column
 end 'byteColumnOf'
 
@@ -786,6 +808,7 @@ function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, lo
 	// to answer "moved" for a ladder of a different length, which reported a --rungs=3 run against a
 	// six-rung log as a movement in a compiler that had not moved.
 	var compared = results.count()
+
 	if loggedAllocs.count() < compared 'shorterPast'
 		compared = loggedAllocs.count()
 	end 'shorterPast'
@@ -793,11 +816,13 @@ function memoryDiffers(results RungResultArray, loggedAllocs AllocCountArray, lo
 	for i in 0 upto compared 'eachRung'
 		let result = try results.get(i) otherwise panic("memoryDiffers: i < results.count() but results.get({i}) failed")
 		let allocs = try loggedAllocs.get(i) otherwise panic("memoryDiffers: i < loggedAllocs.count() but get({i}) failed")
+
 		if result.total.allocs != allocs 'allocsMoved'
 			return true
 		end 'allocsMoved'
 
 		let logged = try loggedBytes.get(i) otherwise panic("memoryDiffers: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
+
 		if bytesMoved(result.total.bytes as BytePos, logged: logged as BytePos, bytes: bytes) 'bytesMoved'
 			return true
 		end 'bytesMoved'
@@ -836,6 +861,7 @@ export function assertRecordable(trend LoggedMemory, note String, mintedAt Strin
 	// Saying so at the one site that has already established the arm is what keeps the two facts — the
 	// refusal is live, and it is unreachable from here — from having to be re-derived by a reader.
 	let logged = try trend.loggedRungCount() otherwise panic("assertRecordable: the trend is `present`, which is the arm loggedRungCount answers from — the `absent` arm returned four lines above")
+
 	if rungs != logged 'differentLadder'
 		throw ScaleError.reason("the log's tables have {logged} rung column(s) and this run climbed {rungs}. A row of a different width would make the tables RAGGED, and a rung's column — which is the whole point of reading them downwards — would stop meaning one rung. Re-run with --rungs={logged}.")
 	end 'differentLadder'
@@ -913,6 +939,7 @@ end 'recordScaleRun'
 // This one takes the text and gives text back, so the refusal is provable without either.
 export function insertRowBefore(text String, marker String, row String, source String) returns String throws ScaleError
 	let parts = text.split(marker)
+
 	if parts.count() != MarkerSplitParts 'notExactlyOnce'
 		throw ScaleError.reason("`{marker}` appears {parts.count() - 1} time(s) in {source} and must appear exactly once — a row is inserted immediately above it, and `readTable` reads the table immediately above it")
 	end 'notExactlyOnce'
@@ -956,9 +983,11 @@ end 'renderMemoryRow'
 function renderRow(cells StringArray) returns String
 	var row = StringBuilder.create()
 	row.append("|")
+
 	for cell in cells 'each'
 		row.append(" {cell} |")
 	end 'each'
+
 	row.append("\n")
 	return row.build()
 end 'renderRow'
@@ -979,6 +1008,7 @@ export function groupDigits(value Delta) returns String
 
 	var grouped = StringBuilder.create()
 	var index = 0 as GroupIndex
+
 	for digit in digits 'eachDigit'
 		// A separator goes before every digit whose distance from the END is a multiple of three —
 		// except the first, which would otherwise produce a leading comma.
@@ -1045,6 +1075,7 @@ function civilFromDays(days DayCount) returns CivilDate
 
 	var month = marchMonth + 3
 	var calendarYear = year
+
 	if marchMonth >= 10 'januaryOrFebruary'
 		// March-relative months 10 and 11 are January and February — of the NEXT calendar year.
 		month = marchMonth - 9

@@ -59,13 +59,16 @@ typealias LineIndex = int(0 to u64.max)
 enum GroupKeyKind
 	// Nothing has been emitted in this scope yet, so there is nothing to separate from.
 	none
+
 	// A `///` line. `forcedBlanksBefore` returns 0 after it, which FUSES a doc block to the declaration
 	// below it even across a blank line the author left.
 	doc
+
 	// A whole-line `//`. It attaches to the line below the same way, but only when the author left NO
 	// blank between them: Maxon has no `///` convention in practice, so a `//` serves as both a section
 	// heading and an attached doc, and the blank is what tells them apart.
 	comment
+
 	// The four families that PACK where a scope declares things — `let`/`var` lines, `typealias` lines,
 	// `enum`/`union` cases, and an interface's bodyless signatures. Adjacent members of one family keep
 	// whatever blank separation the author gave them instead of being forced apart.
@@ -73,10 +76,12 @@ enum GroupKeyKind
 	alias
 	dataCase
 	signature
+
 	// The two that pack where a scope holds CODE: consecutive statements are prose, and a match's arms
 	// are one table.
 	statement
 	arm
+
 	// A key no other line can share. Every line that opens or closes a block takes one, so whatever sits
 	// beside it is always forced onto its own group.
 	unique
@@ -108,15 +113,20 @@ enum ScopeGrouping
 	// File scope, and a `type` or `extension` body: fields pack, aliases pack, everything else stands
 	// alone.
 	memberList
+
 	// An `enum` or `union` body: cases pack, a nested declaration stands alone.
 	caseList
+
 	// An `interface` body, where a `function` is a bodyless signature and a run of them is one roster.
 	signatureList
+
 	// A function body, and the body of any labeled block: statements pack, a nested block stands alone.
 	statements
+
 	// A `match` body. Every arm is ONE LINE by the grammar, so the arms are a table and pack; a blank
 	// there comes from a comment block or the closing line, never from between two arms.
 	matchArms
+
 	// The interior of a multi-line `[`/`{` literal. NOT grouped: its lines are elements, and forcing
 	// them apart would invent a structure the author did not write. Preserve-with-cap applies instead.
 	literal
@@ -146,8 +156,10 @@ enum FormatBlockKind
 	// reader wants "is this a bare case-name context", where `name(a, b)` is a case carrying associated
 	// values rather than a call, and where a keyword may be a case NAME rather than a declaration.
 	data
+
 	// An `interface` body, where `function f(...)` is a bodyless signature and opens no block.
 	interfaceBody
+
 	// A `match` body, where `caseName(_, _)` is a pattern whose all-discarded bindings are stripped.
 	matchBody
 	other
@@ -206,11 +218,13 @@ type SourceLines
 
 		while i < bytes.count() 'eachByte'
 			let b = try bytes.get(i) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
+
 			if b == Ascii.lf 'endOfLine'
 				starts.push(lineStart)
 				ends.push(i)
 				lineStart = i + 1
 			end 'endOfLine'
+
 			i = i + 1
 		end 'eachByte'
 
@@ -245,12 +259,15 @@ type SourceLines
 	// owns its line.
 	export function blankBetween(index LineIndex, from ByteOffset, to ByteOffset) returns bool
 		var i = from
+
 		while i < to 'eachByte'
 			if not isLayoutByte(self.byteAt(index, offset: i)) 'sawContent'
 				return false
 			end 'sawContent'
+
 			i = i + 1
 		end 'eachByte'
+
 		return true
 	end 'blankBetween'
 
@@ -287,6 +304,7 @@ type CommentScan
 	let lines as SourceLines
 	var comments as SourceCommentMap
 	var nesting as ByteArray
+
 	// The line the scan is on, 0-based, and the offset within it. Both move inside the block-comment
 	// walk, which is why they are fields rather than loop variables.
 	var line as LineIndex
@@ -310,6 +328,7 @@ type CommentScan
 			self.scanLine()
 			self.line = self.line + 1
 		end 'eachLine'
+
 		return self.comments
 	end 'run'
 
@@ -317,6 +336,7 @@ type CommentScan
 		if lines.count() == 0 or lines.length(0) < 2 'tooShort'
 			return false
 		end 'tooShort'
+
 		return lines.byteAt(0, offset: 0) == Ascii.hash and lines.byteAt(0, offset: 1) == Ascii.bang
 	end 'opensWithShebang'
 
@@ -408,6 +428,7 @@ type CommentScan
 	function scanBlockComment()
 		let startLine = self.line
 		let startPrefixBlank = lines.blankBetween(startLine, from: 0, to: self.at)
+
 		// The segment is SLICED out of the source rather than rebuilt byte by byte: `/*` and `*/` are in
 		// the file already, so the span from the opener to the line end IS the text.
 		var segmentStart = self.at
@@ -420,9 +441,11 @@ type CommentScan
 				// so an in-code block comment does not double-indent.
 				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: lines.length(self.line)), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: true)
 				self.line = self.line + 1
+
 				if self.line >= lines.count() 'sourceRanOut'
 					return
 				end 'sourceRanOut'
+
 				self.at = 0
 				segmentStart = 0
 				continue
@@ -454,6 +477,7 @@ type CommentScan
 		if self.at + 1 >= lines.length(self.line) 'noNextByte'
 			return false
 		end 'noNextByte'
+
 		return lines.byteAt(self.line, offset: self.at + 1) == b
 	end 'nextByteIs'
 end 'CommentScan'
@@ -511,12 +535,15 @@ function producesValue(kind TokenKind, operandBefore bool) returns bool
 	if valueTokenKind(kind) 'alwaysAValue'
 		return true
 	end 'alwaysAValue'
+
 	if not isKeywordKind(kind) 'notAKeyword'
 		return false
 	end 'notAKeyword'
+
 	if prefixOperandKeyword(kind) 'ownsWhatFollows'
 		return false
 	end 'ownsWhatFollows'
+
 	return not operandBefore
 end 'producesValue'
 
@@ -576,33 +603,43 @@ function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inData
 	if noSpaceBefore(cur) 'tightBefore'
 		return false
 	end 'tightBefore'
+
 	if noSpaceAfter(prev) 'tightAfter'
 		return false
 	end 'tightAfter'
+
 	if cur == TokenKind.colon 'namedArgument'
 		return false
 	end 'namedArgument'
+
 	if prevWasUnary 'unarySign'
 		return false
 	end 'unarySign'
+
 	if cur == TokenKind.leftParen and prevWasDot 'memberCall'
 		return false
 	end 'memberCall'
+
 	if cur == TokenKind.leftParen and inDataBlock 'caseWithValues'
 		return false
 	end 'caseWithValues'
+
 	if cur == TokenKind.leftParen and modIsCasePattern(prev, prevBeganLine: prevBeganLine) 'modPattern'
 		return false
 	end 'modPattern'
+
 	if cur == TokenKind.leftParen 'parenthesis'
 		return not callableBeforeLeftParen(prev)
 	end 'parenthesis'
+
 	if cur == TokenKind.leftBracket and (prev == TokenKind.identifier or prev == TokenKind.rightParen or prev == TokenKind.rightBracket) 'subscript'
 		return false
 	end 'subscript'
+
 	if cur == TokenKind.leftBrace and not nonWordToken(prev) 'structLiteral'
 		return false
 	end 'structLiteral'
+
 	return true
 end 'needsSpaceBefore'
 
@@ -618,15 +655,18 @@ type FormatState
 	var out as StringBuilder
 	let options as FormatOptions
 	let tokens as TokenArray
+
 	// The source bytes, for the one construct re-emitted from raw source rather than from tokens: an
 	// interpolated string literal. See `interpolatedLiteralOpensAt`.
 	let source as ByteArray
 	let comments as SourceCommentMap
+
 	// How many lines the source has. The comment-only path walks the FILE rather than the map, because
 	// a `Map`'s iteration order is unspecified and that path must emit in LINE order.
 	let lineCount as LineNumber
 	var consumed as ConsumedLineSet
 	var blocks as FormatBlockKindArray
+
 	// ⭐ **PUSHED AND POPPED IN LOCKSTEP WITH `indentLevel`** — one frame per open level, and that
 	// lockstep is what makes "which scope is this line in" a single fact. DISTINCT from `blocks`, which
 	// answers the three LAYOUT questions and is pushed at the opener TOKEN rather than at the line
@@ -636,28 +676,36 @@ type FormatState
 	var atLineStart as bool
 	var newlineRun as NewlineRun
 	var pendingIndentIncrease as bool
+
 	// How the body this line opens groups ITS lines. Set with `pendingIndentIncrease` and never apart
 	// from it, so a body cannot inherit whatever grouping the previous opener left behind — see
 	// `beginBodyAfterThisLine`.
 	var pendingScopeGrouping as ScopeGrouping
+
 	// The token before this one, ignoring newlines — kind and source bytes. The bytes are read by
 	// exactly one rule: `module` is a CONTEXTUAL keyword with no `TokenKind` of its own, so
 	// `module function f()` can only be recognized by the word.
 	var prevKind as TokenKind
 	var prevValue as ByteArray
 	var prevWasDot as bool
+
 	// True when the previous `-` or `+` was UNARY, so nothing goes between it and its operand.
 	var prevWasUnary as bool
 	var prevProducedValue as bool
+
 	// True when the previous token was the FIRST on its line. Read by `modIsCasePattern`.
 	var prevBeganLine as bool
+
 	// Open `(` `[` `{`. A match arm's pattern is never inside one, so this is what keeps a line that
 	// merely CONTINUES a bracketed literal in an arm body from being read as a fresh arm.
 	var groupDepth as BracketDepth
+
 	// Between a match arm's first token and its `then`/`gives`/`panic`/`throws`.
 	var inArmPattern as bool
+
 	// True while emitting a line that CONTINUES a pattern chain broken after a trailing `or`.
 	var armContinuation as bool
+
 	// Whether any real token has been written yet, and the source line the last one came from. A
 	// separate flag rather than a -1 in the line field: `LineNumber` cannot hold -1, and "nothing has
 	// been emitted" is a different fact from "line zero".
@@ -666,12 +714,14 @@ type FormatState
 	var lineStartedWithEnd as bool
 	var lineHasLabeledOpener as bool
 	var lineHasMatch as bool
+
 	// The group keys of the CURRENT scope's last fully-emitted line and of the line being emitted. A
 	// `none` kind is the absence of such a line; entering a body parks the parent's key on its frame.
 	var prevGroupKey as GroupKey
 	var pendingGroupKey as GroupKey
 	var currentLineOpenedBlock as bool
 	var uniqueGroupCounter as GroupKeyOrdinal
+
 	// True from a line terminator until the next real line-start token decides whether a blank goes
 	// before it.
 	var blankDecisionPending as bool
@@ -684,9 +734,11 @@ type FormatState
 	// newline and no trailing layout.
 	export function run() returns String
 		var index = 0 as TokenIndex
+
 		while index < tokens.count() 'eachToken'
 			index = self.emitToken(index)
 		end 'eachToken'
+
 		return "{self.out.build().trimEnd()}\n"
 	end 'run'
 
@@ -715,13 +767,16 @@ type FormatState
 			// A file of nothing but comments. Walked by LINE rather than over the map, so the order is
 			// the file's own.
 			var line = 1 as LineNumber
+
 			while line <= self.lineCount 'eachLine'
 				if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
 					self.out.append(self.commentTextOn(line))
 					self.out.append("\n")
 				end 'ownsItsLine'
+
 				line = line + 1
 			end 'eachLine'
+
 			return
 		end 'nothingEmitted'
 
@@ -805,16 +860,19 @@ type FormatState
 		// a mid-line `end` (`TokenKind.end`) is a value reference, and a bare `end` in an enum body is a
 		// case name.
 		let endLabelFollows = tok.kind == TokenKind.end and self.kindAt(index + 1) == TokenKind.charLiteral
+
 		if endLabelFollows and self.atLineStart 'closesBlock'
 			if self.indentLevel > 0 'dedent'
 				self.indentLevel = self.indentLevel - 1
 				self.popGroupFrame()
 			end 'dedent'
+
 			self.popBlock()
 			lineIsBlockCloser = true
 		end 'closesBlock'
 
 		let wasAtLineStart = self.atLineStart
+
 		if wasAtLineStart 'lineBegins'
 			self.lineStartedWithEnd = endLabelFollows
 			self.lineHasLabeledOpener = false
@@ -873,6 +931,7 @@ type FormatState
 			let last = self.lastInterpolationFragment(index)
 			self.out.append("\"{self.sourceSpanBetween(index, last: last)}\"")
 			self.noteEmittedAt(tok.line)
+
 			// The whole literal is ONE operand. Nothing below this point applies to a string literal, so the
 			// walk resumes past the literal's final fragment.
 			self.notePrevToken(TokenKind.stringLiteral, value: tok.value, wasAtLineStart: wasAtLineStart)
@@ -908,6 +967,7 @@ type FormatState
 		// end — a line starting with `then` would be read as a labelled block opener.
 		if tok.kind == TokenKind.or and self.inArmPattern 'breakChain'
 			self.armContinuation = true
+
 			// Only where the author has not already broken it; doubling the break would put a blank line
 			// inside the chain on every save.
 			if self.kindAt(index + 1) != TokenKind.newline 'noAuthorBreak'
@@ -920,6 +980,7 @@ type FormatState
 		// parenthesized underscores say nothing.
 		if tok.kind == TokenKind.identifier and self.inMatchBlock() and self.kindAt(index + 1) == TokenKind.leftParen 'maybeAllDiscarded'
 			let afterPattern = self.allDiscardedBindingsEndAt(index + 2)
+
 			if afterPattern > index + 2 and self.kindAt(afterPattern) == TokenKind.rightParen 'allDiscarded'
 				// The rewritten pattern is an operand, the same as the `)` it replaced. The rest of the
 				// left context is deliberately untouched: nothing between here and the `)` could have
@@ -949,6 +1010,7 @@ type FormatState
 		// beside the label rather than starting a line of its own.
 		if tok.kind == TokenKind.charLiteral and self.prevKind == TokenKind.end 'maybeChainLabel'
 			let next = self.indexPastNewlinesFrom(index + 1)
+
 			if self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise 'chains'
 				self.prevKind = tok.kind
 				self.prevValue = tok.value
@@ -974,9 +1036,11 @@ type FormatState
 		// so it is matched by its WORD; `Parser.ModuleModifierName` is where that word is written down.
 		let prevWasModuleKeyword = priorKind == TokenKind.identifier and priorValue.equals(ModuleModifierName)
 		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
+
 		if kindOpensADeclarationBlock(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
 			// Inside an interface body a `function` is a bodyless signature and opens nothing.
 			let bodylessSignature = self.inInterfaceBlock() and tok.kind == TokenKind.function
+
 			if not bodylessSignature 'opensABody'
 				self.blocks.push(blockKindOpenedBy(tok.kind))
 				self.beginBodyAfterThisLine(bodyGroupingOpenedBy(tok.kind))
@@ -988,6 +1052,7 @@ type FormatState
 		if tok.kind == TokenKind.charLiteral and not self.lineStartedWithEnd and self.lineHasLabeledOpener 'maybeBlockLabel'
 			let next = self.indexPastNewlinesFrom(index + 1)
 			let chains = self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise
+
 			if not chains 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
 				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
@@ -1004,6 +1069,7 @@ type FormatState
 	function emitHeadComments(firstTokenLine LineNumber)
 		var emittedAny = false
 		var line = 1 as LineNumber
+
 		while line < firstTokenLine 'eachLine'
 			if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
 				self.out.append(self.commentTextOn(line))
@@ -1012,18 +1078,22 @@ type FormatState
 			end 'ownsItsLine' else if emittedAny 'blankBetweenComments'
 				self.out.append("\n")
 			end 'blankBetweenComments'
+
 			line = line + 1
 		end 'eachLine'
 	end 'emitHeadComments'
 
 	function gapHoldsAWholeLineComment(untilLine LineNumber) returns bool
 		var probe = self.lastEmittedSourceLine + 1
+
 		while probe <= untilLine 'eachLine'
 			if self.pendingCommentOn(probe, wholeLine: true) 'found'
 				return true
 			end 'found'
+
 			probe = probe + 1
 		end 'eachLine'
+
 		return false
 	end 'gapHoldsAWholeLineComment'
 
@@ -1049,20 +1119,24 @@ type FormatState
 					// ones after it are part of the same logical comment block and merely preserve the
 					// author's blanks between themselves.
 					let userHadBlank = probe >= self.lastEmittedSourceLine + 2
+
 					if self.blankDecisionPending 'decide'
 						if groups 'scopeGroups'
 							self.appendBlanks(self.forcedBlanksBefore(GroupKey.of(GroupKeyKind.comment), userHadBlank: userHadBlank))
 						end 'scopeGroups' else if userHadBlank 'literalKeepsOne'
 							self.out.append("\n")
 						end 'literalKeepsOne'
+
 						self.blankDecisionPending = false
 					end 'decide'
+
 					sawFirst = true
 				end 'firstInTheGap' else if probe >= lastCommentLine + 2 'blankBetweenComments'
 					self.out.append("\n")
 				end 'blankBetweenComments'
 
 				self.appendIndent()
+
 				// A continuation line of a multi-line block comment keeps its SOURCE indentation in the
 				// captured text. Stripping it here lets the comment line up with the surrounding code
 				// instead of double-indenting.
@@ -1070,6 +1144,7 @@ type FormatState
 				self.out.append("\n")
 				lastCommentLine = probe
 			end 'ownsItsLine'
+
 			probe = probe + 1
 		end 'eachLine'
 
@@ -1080,6 +1155,7 @@ type FormatState
 		self.pendingGroupKey = GroupKey.of(GroupKeyKind.none)
 		self.currentLineOpenedBlock = false
 		self.blankDecisionPending = true
+
 		// The emission ended with the comment line's own terminator, so the run stands at one.
 		self.newlineRun = 1
 		self.atLineStart = true
@@ -1098,16 +1174,19 @@ type FormatState
 			end 'hadOne'
 		end 'literalKeepsOne' else 'scopeGroups'
 			let thisKey = self.deriveGroupKey(index, grouping: grouping, lineIsBlockCloser: lineIsBlockCloser)
+
 			// A continuation line of an `or` pattern chain sits INSIDE the arm it continues, so it is
 			// never a group of its own however the author broke the chain.
 			if self.blankDecisionPending and not lineIsBlockCloser and not self.armContinuation 'decide'
 				self.appendBlanks(self.forcedBlanksBefore(thisKey, userHadBlank: userHadBlankBeforeLine))
 			end 'decide'
+
 			self.pendingGroupKey = thisKey
 		end 'scopeGroups'
 
 		self.blankDecisionPending = false
 		self.appendIndent()
+
 		// An arm BEGINS a pattern region; a continuation line is already inside the one it continues.
 		if not self.armContinuation 'freshLine'
 			self.inArmPattern = self.inMatchBlock() and self.groupDepth == 0
@@ -1125,15 +1204,19 @@ type FormatState
 		if self.prevGroupKey.kind == GroupKeyKind.none 'noPreviousLine'
 			return 0
 		end 'noPreviousLine'
+
 		if self.prevGroupKey.kind == GroupKeyKind.doc 'docAttachesBelow'
 			return 0
 		end 'docAttachesBelow'
+
 		if self.prevGroupKey.kind == GroupKeyKind.comment and not userHadBlank 'commentAttachesBelow'
 			return 0
 		end 'commentAttachesBelow'
+
 		if self.prevGroupKey.equals(thisKey) 'sameGroupPacks'
 			return 1 if userHadBlank else 0
 		end 'sameGroupPacks'
+
 		return 1
 	end 'forcedBlanksBefore'
 
@@ -1161,16 +1244,20 @@ type FormatState
 		if grouping == ScopeGrouping.caseList 'cases'
 			return self.nextUniqueGroupKey() if self.caseListKeywordDeclaresABody(declared, kind: kind) else GroupKey.of(GroupKeyKind.dataCase)
 		end 'cases'
+
 		if grouping == ScopeGrouping.matchArms 'arms'
 			// Every arm is one line by the grammar, so an arm never opens a body and the roster packs.
 			return GroupKey.of(GroupKeyKind.arm)
 		end 'arms'
+
 		if grouping == ScopeGrouping.statements 'code'
 			if kindOpensADeclarationBlock(kind) or lineStartAlwaysOpensABody(kind) 'opensABody'
 				return self.nextUniqueGroupKey()
 			end 'opensABody'
+
 			return GroupKey.of(GroupKeyKind.statement)
 		end 'code'
+
 		if grouping == ScopeGrouping.signatureList and kind == TokenKind.function 'signature'
 			return GroupKey.of(GroupKeyKind.signature)
 		end 'signature'
@@ -1179,9 +1266,11 @@ type FormatState
 		if kind == TokenKind.let or kind == TokenKind.var 'binding'
 			return GroupKey.of(GroupKeyKind.binding)
 		end 'binding'
+
 		if kind == TokenKind.typealias 'alias'
 			return GroupKey.of(GroupKeyKind.alias)
 		end 'alias'
+
 		return self.nextUniqueGroupKey()
 	end 'deriveGroupKey'
 
@@ -1195,6 +1284,7 @@ type FormatState
 		if not (kindOpensADeclarationBlock(kind) or labeledBlockOpener(kind)) 'notAKeywordCase'
 			return false
 		end 'notAKeywordCase'
+
 		return self.kindAt(index + 1) == TokenKind.identifier
 	end 'caseListKeywordDeclaresABody'
 
@@ -1204,13 +1294,16 @@ type FormatState
 	// newline would take the next case's keyword for it.
 	function firstDeclaredIndexOnLine(index TokenIndex) returns TokenIndex
 		var at = index
+
 		while at < tokens.count() 'eachToken'
 			let kind = self.kindAt(at)
+
 			if kind == TokenKind.newline or kind == TokenKind.eof 'endOfLine'
 				return at
 			end 'endOfLine'
 
 			let isModifier = kind == TokenKind.export or kind == TokenKind.public or kind == TokenKind.static
+
 			if not isModifier 'saysWhatItDeclares'
 				// `module` is a contextual keyword lexed as an identifier, so it is matched by its WORD —
 				// and the token is fetched only here, where that word is what decides.
@@ -1219,6 +1312,7 @@ type FormatState
 				end 'notTheModuleWord'
 
 				let tok = self.tokenAt(at)
+
 				if not tok.value.equals(ModuleModifierName) 'anOrdinaryName'
 					return at
 				end 'anOrdinaryName'
@@ -1226,6 +1320,7 @@ type FormatState
 
 			at = at + 1
 		end 'eachToken'
+
 		return at
 	end 'firstDeclaredIndexOnLine'
 
@@ -1235,9 +1330,11 @@ type FormatState
 			if self.currentLineOpenedBlock 'opensABlock'
 				self.pendingGroupKey = self.nextUniqueGroupKey()
 			end 'opensABlock'
+
 			self.prevGroupKey = self.pendingGroupKey
 			self.pendingGroupKey = GroupKey.of(GroupKeyKind.none)
 		end 'hasAKey'
+
 		self.currentLineOpenedBlock = false
 	end 'closeCurrentLine'
 
@@ -1285,6 +1382,7 @@ type FormatState
 		if self.consumed.contains(line) 'alreadyWritten'
 			return false
 		end 'alreadyWritten'
+
 		let found = try self.comments.get(line) otherwise return false
 		return found.wholeLine == wholeLine
 	end 'pendingCommentOn'
@@ -1309,6 +1407,7 @@ type FormatState
 		if self.blocks.count() == 0 'atFileScope'
 			return FormatBlockKind.other
 		end 'atFileScope'
+
 		return try self.blocks.get(self.blocks.count() - 1) otherwise panic("FormatState.innermostBlock: the count is non-zero on the line above")
 	end 'innermostBlock'
 
@@ -1379,26 +1478,32 @@ type FormatState
 	// `end 'x' /// note` followed by `else`. The two questions share a shape and not an answer.
 	function indexPastNewlinesFrom(index TokenIndex) returns TokenIndex
 		var at = index
+
 		while at < tokens.count() and self.kindAt(at) == TokenKind.newline 'skip'
 			at = at + 1
 		end 'skip'
+
 		return at
 	end 'indexPastNewlinesFrom'
 
 	// Where a run of `_` bindings separated by commas stops, starting at `index`.
 	function allDiscardedBindingsEndAt(index TokenIndex) returns TokenIndex
 		var at = index
+
 		while at < tokens.count() 'eachBinding'
 			let tok = try tokens.get(at) otherwise panic("FormatState.allDiscardedBindingsEndAt: index {at} below the {tokens.count()}-token stream")
+
 			if tok.kind != TokenKind.identifier or not tok.value.equals(DiscardBindingName) 'notADiscard'
 				return at
 			end 'notADiscard'
 
 			at = at + 1
+
 			if self.kindAt(at) == TokenKind.comma 'separator'
 				at = at + 1
 			end 'separator'
 		end 'eachBinding'
+
 		return at
 	end 'allDiscardedBindingsEndAt'
 
@@ -1416,13 +1521,16 @@ type FormatState
 		let closing = TokenKind.rightBracket if tok.kind == TokenKind.leftBracket else TokenKind.rightBrace
 		var depth = 1
 		var at = index + 1
+
 		while at < tokens.count() and depth > 0 'scan'
 			let kind = self.kindAt(at)
+
 			if kind == tok.kind 'opens'
 				depth = depth + 1
 			end 'opens' else if kind == closing 'closes'
 				depth = depth - 1
 			end 'closes'
+
 			at = at + 1
 		end 'scan'
 
@@ -1447,21 +1555,26 @@ type FormatState
 	// the inner literal's own markers must not be mistaken for the outer one's.
 	function lastInterpolationFragment(index TokenIndex) returns TokenIndex
 		var last = index
+
 		// The caller has established that `index + 1` opens an interpolation.
 		var at = index + 1
 
 		while at < tokens.count() 'eachSegment'
 			var depth = 0
+
 			while at < tokens.count() 'oneInterpolation'
 				let kind = self.kindAt(at)
+
 				if kind == TokenKind.stringInterpStart 'opens'
 					depth = depth + 1
 				end 'opens' else if kind == TokenKind.stringInterpEnd 'closes'
 					depth = depth - 1
+
 					if depth == 0 'thisOneClosed'
 						break
 					end 'thisOneClosed'
 				end 'closes'
+
 				at = at + 1
 			end 'oneInterpolation'
 
@@ -1469,16 +1582,19 @@ type FormatState
 			// one arrives cannot reach here — the lexer would have thrown and `format` returned the
 			// source — so the walk simply stops.
 			at = at + 1
+
 			if self.kindAt(at) != TokenKind.stringLiteral 'noClosingFragment'
 				break
 			end 'noClosingFragment'
 
 			last = at
+
 			// Only another interpolation continues the literal. Anything else ends it, which is what
 			// keeps two adjacent string literals from being absorbed into one span.
 			if self.kindAt(at + 1) != TokenKind.stringInterpStart 'literalEnds'
 				break
 			end 'literalEnds'
+
 			at = at + 1
 		end 'eachSegment'
 
@@ -1507,6 +1623,7 @@ type FormatState
 		// must see exactly what they would see without the wrap.
 		let target = (self.indentLevel + 1) if self.armContinuation else self.indentLevel
 		var level = 0 as IndentDepth
+
 		while level < target 'eachLevel'
 			self.out.append(self.options.indentUnit)
 			level = level + 1
@@ -1515,6 +1632,7 @@ type FormatState
 
 	function appendBlanks(count BlankLineCount)
 		var written = 0 as BlankLineCount
+
 		while written < count 'eachBlank'
 			self.out.append("\n")
 			written = written + 1
@@ -1538,12 +1656,15 @@ function bodyGroupingOpenedBy(kind TokenKind) returns ScopeGrouping
 	if kind == TokenKind.enum or kind == TokenKind.union 'caseList'
 		return ScopeGrouping.caseList
 	end 'caseList'
+
 	if kind == TokenKind.interface 'signatures'
 		return ScopeGrouping.signatureList
 	end 'signatures'
+
 	if kind == TokenKind.type or kind == TokenKind.extension 'members'
 		return ScopeGrouping.memberList
 	end 'members'
+
 	if kind == TokenKind.function 'code'
 		return ScopeGrouping.statements
 	end 'code'
@@ -1556,9 +1677,11 @@ function blockKindOpenedBy(kind TokenKind) returns FormatBlockKind
 	if kind == TokenKind.enum or kind == TokenKind.union 'caseList'
 		return FormatBlockKind.data
 	end 'caseList'
+
 	if kind == TokenKind.interface 'signatures'
 		return FormatBlockKind.interfaceBody
 	end 'signatures'
+
 	return FormatBlockKind.other
 end 'blockKindOpenedBy'
 
@@ -1646,6 +1769,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
 
 	while index < lines.count() 'eachLine'
 		var at = 0 as ByteOffset
+
 		while at < lines.length(index) and isLayoutByte(lines.byteAt(index, offset: at)) 'skipIndent'
 			at = at + 1
 		end 'skipIndent'
@@ -1703,6 +1827,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 
 		var subdirectories = FilePathArray.create()
 		var here = FilePathArray.create()
+
 		for entry in entries 'eachEntry'
 			if Directory.isDirectory(entry) 'isSubdirectory'
 				if not prunedSubdirectory(entry) 'kept'
@@ -1724,6 +1849,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		for subdirectory in subdirectories 'eachSubdirectory'
 			pending.push(subdirectory)
 		end 'eachSubdirectory'
+
 		for file in here 'eachFile'
 			files.push(file)
 		end 'eachFile'

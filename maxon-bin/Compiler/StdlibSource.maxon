@@ -77,14 +77,17 @@ export function stdlibDirAbove(start FilePath) returns FilePath throws CompileEr
 	var dir = start
 
 	var depth = 0
+
 	while depth < MaxStdlibSearchDepth 'search'
 		// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays
 		// untyped and matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity —
 		// whereas a String VALUE selects `join(String)` cleanly.
 		let candidate = dir.join("{StdlibDirName}")
+
 		if Directory.exists(candidate) 'found'
 			return candidate
 		end 'found'
+
 		// `parent()` throws at the filesystem root — the correct place for the search to give up.
 		dir = try dir.parent() otherwise throw CompileError.stdlibNotFound
 		depth = depth + 1
@@ -142,6 +145,7 @@ export type StdlibFacts
 	// materialized once so the question can be asked of every function of the program without paying a
 	// path comparison each time (see `isStdlibFunction`).
 	export let stdlibFunctions as FunctionNameSet
+
 	// Stdlib functions NOT reachable from `main`. Dead-function elimination drops them before the back
 	// end, so a pass that runs earlier and examines function BODIES to decide something about the PROGRAM
 	// — the runtime floor it carries (`scanRuntimeUsage`), the targets it can be built for
@@ -149,6 +153,7 @@ export type StdlibFacts
 	// User functions are never in it: a diagnostic in unreached USER code is still the user's bug, while
 	// a runtime requirement of unreached STDLIB code is nobody's.
 	export let unreachable as FunctionNameSet
+
 	// The REACHABLE stdlib functions that need the x64-windows substrate, and which runtime entry each
 	// one reaches. Read at a call site that crosses from user code into stdlib, to refuse the program on
 	// a target that cannot lower it — at the user's own span.
@@ -188,11 +193,13 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 	end 'malformedModule'
 
 	let stdlibNames = try stdlibFunctionNames(project)
+
 	if stdlibNames.count() == 0 'noStdlibSource'
 		return StdlibFacts.empty()
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
+
 	for name in stdlibNames 'seed'
 		stdlibSet.insert(name)
 	end 'seed'
@@ -210,9 +217,11 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 	// function referenced by nothing is reachable from nothing.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
 		var allUnreachable = FunctionNameSet.create()
+
 		for name in stdlibNames 'markAll'
 			allUnreachable.insert(name)
 		end 'markAll'
+
 		return StdlibFacts.create(stdlibSet, unreachable: allUnreachable, substrateEntries: StdlibSubstrateEntryMap.create())
 	end 'noneReferenced'
 
@@ -221,6 +230,7 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 	// actually uses stdlib.
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
 	var unreachable = FunctionNameSet.create()
+
 	for name in stdlibNames 'classify'
 		if not reachable.contains(name) 'unreached'
 			unreachable.insert(name)
@@ -253,16 +263,19 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	end 'malformedModule'
 
 	let stdlibNames = try stdlibFunctionNames(project)
+
 	if stdlibNames.count() == 0 'noStdlibSource'
 		return false
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
+
 	for name in stdlibNames 'seed'
 		stdlibSet.insert(name)
 	end 'seed'
 
 	let initCallees = signatures.globalInitCallees()
+
 	// The same short-circuit `deriveStdlibFacts` opens with, and it is the whole saving: nothing this
 	// program reaches — no op in its code, and no root on either list — names a stdlib function, so no
 	// stdlib body can be reached and the walk's O(functions) name->index map is never built.
@@ -279,6 +292,7 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	// cache, every file answered "declares nothing reached" after the drop, every body stayed skipped, and
 	// `lowerStdToX64` panicked on the `retVoid` of a function the program calls.)
 	var grew = false
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -306,6 +320,7 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 	end 'alreadyBuilding'
 
 	let artifact = try queryParseOps(project, path: path)
+
 	for func in artifact.module.functions 'eachFunc'
 		if not reachable.contains(func.name) 'notReached'
 			continue
@@ -321,15 +336,18 @@ end 'demandOneStdlibFileIfReached'
 // dense ORDER for its node space as well as membership.
 function stdlibFunctionNames(project Project) returns ByteArrayArray throws CompileError
 	var names = ByteArrayArray.create()
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.stdlibSourcePaths.count() 'eachFile'
 		let artifact = try queryParseOps(project, path: try project.stdlibSourcePaths.get(fileIndex) otherwise panic("stdlibFunctionNames: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"))
+
 		for func in artifact.module.functions 'eachFunc'
 			names.push(func.name)
 		end 'eachFunc'
 	end 'eachFile'
+
 	return names
 end 'stdlibFunctionNames'
 
@@ -516,8 +534,10 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var witnessInterfaces = InterfaceNameSet.create()
 	var witnessInterfaceOrder = ByteArrayArray.create()
 	var interfacesSeeded = 0 as FieldIndex
+
 	while true 'seedRounds'
 		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder)
+
 		if interfacesSeeded == witnessInterfaceOrder.count() 'noInterfaceLeftToSeed'
 			break
 		end 'noInterfaceLeftToSeed'
@@ -525,6 +545,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
 			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
+
 			for conformerName in seedConformers 'eachSeededConformer'
 				markWitnessImplsOfConformer(conformerName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			end 'eachSeededConformer'
@@ -811,7 +832,6 @@ end 'noteInterfaceName'
 // The `where`-clause half of the collector above, kept whole because its two-branch read of the signature
 // map is `functionDeclaresAWitnessPosition`'s own and its reason is unchanged — see the paragraphs above.
 function witnessConstraintsOfReachedFunction(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns WhereConstraintArray
-
 	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE (ARR3b)**, because the
 	// declaration-sweep map is keyed by the DECLARED name and a D7 overload member does not wear it — see
 	// `FuncSignature.extensionConstraints`. A function with no recorded signature (a synthesized graph, a
@@ -891,6 +911,7 @@ module function markReachable(name ByteArray, project Project, byName FuncIndexB
 	end 'notAnOverloadSet'
 
 	let members = try project.overloadSets.get(name) otherwise panic("markReachable: overloadSets lost the key '{String.from(name)}' between `contains` and `get`")
+
 	for member in members 'eachMember'
 		markOneReachable(member, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachMember'
@@ -909,11 +930,13 @@ end 'markReachable'
 // it stands for itself and there is nothing further to widen.
 function markEveryMembersOwnDefaultHelper(helperName ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let callee = paramDefaultCalleeSpelling(helperName)
+
 	if not project.overloadSets.contains(callee) 'theCalleeIsNotOverloaded'
 		return
 	end 'theCalleeIsNotOverloaded'
 
 	let members = try project.overloadSets.get(callee) otherwise panic("markEveryMembersOwnDefaultHelper: overloadSets lost the key '{String.from(callee)}' between `contains` and `get`")
+
 	for member in members 'eachMember'
 		markOneReachable(paramDefaultHelperNameOnMember(helperName, member: member), byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachMember'
@@ -958,6 +981,7 @@ function nameReachesStdlib(name ByteArray, project Project, stdlib FunctionNameS
 	end 'notAnOverloadSet'
 
 	let members = try project.overloadSets.get(name) otherwise panic("nameReachesStdlib: overloadSets lost the key '{String.from(name)}' between `contains` and `get`")
+
 	for member in members 'eachMember'
 		if stdlib.contains(member) 'found'
 			return true
@@ -976,6 +1000,7 @@ module function markOneReachable(name ByteArray, byName FuncIndexByName, reached
 	end 'notAModuleFunction'
 
 	let already = try reached.get(idx) otherwise panic("reachableMaxonFunctionNames: reached.get OOB at function index {idx}")
+
 	if already 'alreadyReached'
 		return
 	end 'alreadyReached'
@@ -1003,6 +1028,7 @@ end 'markOneReachable'
 function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -1217,6 +1243,7 @@ function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
 				markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -1311,8 +1338,10 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("userCodeReachesStdlib: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("userCodeReachesStdlib: opRef {opIdx} not in module.ops")
+
 				// ⚠ A THIRD term stood here — an op naming a SYNTHESIZED body that in turn calls corpus code —
 				// and it went at W129 with `markCorpusCalleesOfSynthesizedRuntime`, whose roster it shared. The
 				// PAIRING is the invariant, not the term: this short-circuit must answer TRUE for every edge that
@@ -1323,6 +1352,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return false
 end 'userCodeReachesStdlib'
 
@@ -1377,11 +1407,13 @@ end 'userCodeDemandsAWitnessTable'
 // rather than staying right by accident of which two modules happen to be unconditionally listed.
 function corpusDeclaresASeededConformance(project Project, signatures ProgramSignatures) returns bool
 	let index = declaredConformanceIndex(project)
+
 	for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
 		if index.contains(conformerName) 'declaresOne'
 			return true
 		end 'declaresOne'
 	end 'eachSeededConformer'
+
 	return false
 end 'corpusDeclaresASeededConformance'
 
@@ -1471,18 +1503,22 @@ end 'anyCalleeIsIn'
 function stdlibSubstrateEntries(module MaxonModule, stdlibNames ByteArrayArray, unreachable FunctionNameSet) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
 	var nodeOf = StdlibNodeByName.create()
+
 	for i in 0 upto nodeCount 'index'
 		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i)
 	end 'index'
 
 	var state = SubstrateFixpoint.overNodes(nodeCount)
+
 	for func in module.functions 'eachFunc'
 		if unreachable.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
+
 		if let node = try nodeOf.get(func.name) 'stdlibFunction'
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try module.blocks.get(blockRef) otherwise panic("stdlibSubstrateEntries: blockRef from func.blockRefs not in module.blocks")
+
 				for opIdx in block.opRefs 'eachOp'
 					let op = try module.ops.get(opIdx) otherwise panic("stdlibSubstrateEntries: opRef {opIdx} not in module.ops")
 					noteSubstrateEdge(op, callerNode: node, nodeOf: nodeOf, state: state)
@@ -1494,11 +1530,13 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames ByteArrayArray, 
 	state.propagateToCallers()
 
 	var entries = StdlibSubstrateEntryMap.create()
+
 	for i in 0 upto nodeCount 'publish'
 		if state.requiresSubstrate(i) 'needsIt'
 			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: state.entryOf(i))
 		end 'needsIt'
 	end 'publish'
+
 	return entries
 end 'stdlibSubstrateEntries'
 
@@ -1514,13 +1552,17 @@ type SubstrateFixpoint
 	// Per node: does it (transitively) need the Win32 substrate? Also the "already queued" test — a node is
 	// marked exactly when it enters the worklist, so it enters at most once.
 	var marked as BoolArray
+
 	// Per MARKED node: the index into `seedEntries` of the seed it inherits its entry from.
 	var seedOf as CsrColumn
+
 	// The runtime entry each seed names, in the order the seeds were found.
 	var seedEntries as ByteArrayArray
+
 	// Nodes whose callers still have to inherit from them. Drained by index, never popped, so a node's
 	// position is stable while the array grows.
 	var worklist as CsrColumn
+
 	// The intra-stdlib call graph, REVERSED as it is collected (callee -> caller), so the propagation
 	// walks from a function that names an entry to the functions that reach it.
 	var edgeCallee as CsrColumn
@@ -1547,6 +1589,7 @@ type SubstrateFixpoint
 	// re-queued at most once and the fixpoint below stays linear.
 	function seed(node CsrIndex, entry ByteArray)
 		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
+
 		if already and not substrateEntryOutranks(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
 			return
 		end 'keepTheIncumbent'
@@ -1574,12 +1617,15 @@ type SubstrateFixpoint
 	function propagateToCallers()
 		let callersOf = buildCsr(self.edgeCallee, to: self.edgeCaller, nodeCount: self.marked.count())
 		var head = 0 as CsrIndex
+
 		while head < self.worklist.count() 'drain'
 			let node = try self.worklist.get(head) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
 			head = head + 1
 			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
+
 			for k in 0 upto callersOf.degree(node) 'eachCaller'
 				let caller = callersOf.neighbour(node, k: k)
+
 				if self.inheritsFrom(caller, seedIndex: seedIndex) 'newlyRequiredOrOutranked'
 					self.mark(caller, seedIndex: seedIndex)
 				end 'newlyRequiredOrOutranked'
@@ -1613,6 +1659,7 @@ type SubstrateFixpoint
 		if not self.requiresSubstrate(node) 'unmarked'
 			panic("SubstrateFixpoint.entryOf: node {node} needs no substrate")
 		end 'unmarked'
+
 		let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.entryOf: seedOf.get({node}) outside the node space")
 		return try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.entryOf: node {node} names seed {seedIndex}, which does not exist")
 	end 'entryOf'
@@ -1656,15 +1703,20 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 			switch or
 			witnessDispatch or
 			witnessTryDispatch then break 'op'
+
 		// A panic names no callee at all, so it reaches no stdlib substrate.
 		panicAbortValue then break 'op'
+
 		// The error-flag encode names no callee at all, so it reaches no stdlib substrate.
 		errorFlagEncode then break 'op'
+
 		// A `spawn` names a TYPE; the factory it calls is an ordinary `call` op beside it and is noted there.
 		serviceSpawn then break 'op'
+
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
 		serviceSend(_, callee, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
 		serviceReplyCell then break 'op'

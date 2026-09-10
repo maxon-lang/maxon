@@ -23,7 +23,6 @@
 //
 // The gate and every conjunct of its reason are `ProfileModel`'s.
 #if os(Windows) and arch(x64)
-
 	// How this driver names itself and its subcommand in everything it prints. The subcommand word is the
 	// SUBJECT of every refusal (`profile: …`) and the driver name is the one thing the corpus normalizes
 	// away before comparing this tool's transcripts.
@@ -101,6 +100,7 @@
 		export var minPercent as ProfileShare
 		export var timeoutSeconds as ProfileSeconds
 		export var targetArgs as StringArray
+
 		// ⚠ **THE OVERRIDES ARE TWO PARALLEL LISTS AND NOT A MAP**, which is forced rather than chosen:
 		// `Environment.inheritUpdating` takes stdlib's own file-private `EnvMap`, so the only shape this side
 		// can hand it is a map LITERAL, whose type the argument position supplies. A map built here would be a
@@ -129,6 +129,7 @@
 		end 'unknownVerb'
 
 		var request = ProfileRequest.create()
+
 		for position in FirstOptionArgument upto args.paths.count() 'eachArgument'
 			let arg = try args.paths.get(position) otherwise panic("runProfile: index {position} is past args.paths.count() despite the upto bound")
 
@@ -138,23 +139,27 @@
 				request.folded = true
 			end 'foldedFlag' else if arg.startsWith(TargetEnvFlag) 'targetEnvFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
+
 				if not recordProfileTargetEnv(request, raw: raw) 'notAnAssignment'
 					return refuseProfileUsage("'{TargetEnvFlag}<NAME>=<VALUE>' needs a non-empty variable name, got '{raw}'")
 				end 'notAnAssignment'
 			end 'targetEnvFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
+
 				if not recordProfileTimeout(request, raw: raw) 'notADeadline'
 					return refuseProfileUsage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
 				end 'notADeadline'
 			end 'timeoutFlag' else if arg.startsWith(RateFlag) 'rateFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				let problem = recordProfileRate(request, raw: raw)
+
 				if not problem.isEmpty() 'notARate'
 					return refuseProfileUsage(problem)
 				end 'notARate'
 			end 'rateFlag' else if arg.startsWith(MinPercentFlag) 'minPercentFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 				let problem = recordProfileMinPercent(request, raw: raw)
+
 				if not problem.isEmpty() 'notAShare'
 					return refuseProfileUsage(problem)
 				end 'notAShare'
@@ -250,6 +255,7 @@
 	function recordProfileTargetEnv(request ProfileRequest, raw String) returns bool
 		let halves = raw.split(EnvAssignment)
 		let name = try halves.get(0) otherwise ""
+
 		if name.isEmpty() or halves.count() < 2 'noName'
 			return false
 		end 'noName'
@@ -263,6 +269,7 @@
 	// Everything past the FIRST `=` is the value, because a value may contain one of its own.
 	function profileEnvValueOf(halves StringArray) returns String
 		var value = ""
+
 		for (iter, piece) in halves.withIterator() 'eachPiece'
 			if iter.index() == 0 'theName'
 				continue
@@ -310,6 +317,7 @@
 	// a reader can do nothing with, and printing them would make every refusal transcript machine-specific.
 	function profileSubjectWithSidecar(binary FilePath, placement ProfilePlacement) returns ProfileSubject
 		let sidecarPath = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise return ProfileSubject.refused("'{binary.toString()}' has no spellable sidecar path")
+
 		if not File.exists(sidecarPath) 'noSidecar'
 			return ProfileSubject.refused("no debug-info sidecar at {reportPathDisplay(sidecarPath)} — a profile needs it to name the code its samples land in. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag.")
 		end 'noSidecar'
@@ -358,6 +366,7 @@
 		end 'nothingToSet'
 
 		var overrides = [profileEnvNameAt(request, position: 0): profileEnvValueAt(request, position: 0)]
+
 		for position in 1 upto request.targetEnvNames.count() 'eachOverride'
 			overrides.upsert(profileEnvNameAt(request, position: position), value: profileEnvValueAt(request, position: position))
 		end 'eachOverride'
@@ -382,6 +391,7 @@
 		let pid = __Builtins.subprocessGetPid(child.handle) as ProfileWord
 
 		let process = __Builtins.profileOpenTarget(pid)
+
 		if process == 0 'noSuchProcess'
 			return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath)} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
 		end 'noSuchProcess'
@@ -394,6 +404,7 @@
 		// path that releases anything — `release` skips the slots that came back empty. Testing first would
 		// need a second close sequence here, and two of them disagree the moment a fourth resource appears.
 		var session = ProfileSession.create(process, timer: timer, scratch: scratch, window: window)
+
 		if timer == 0 or scratch == 0 or window == 0 'noSampler'
 			session.release()
 			return refuseProfileAfterKilling(child, reason: "the sampler could not take the timer and scratch pages it ticks on, so this run could not be measured at all")
@@ -425,6 +436,7 @@
 		var completed = false
 
 		session.refreshThreads()
+
 		while true 'eachTick'
 			if profileThreadRefreshDue(Clock.elapsedNanos(lastRefresh)) 'timeToLookAgain'
 				session.refreshThreads()
@@ -437,6 +449,7 @@
 			// ⭐ LIVENESS IS CHECKED AFTER THE SAMPLE, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
 			let observed = profileChildExit(child)
+
 			if profileStatusObserved(observed) 'itEnded'
 				status = observed
 				completed = true
@@ -486,11 +499,13 @@
 		for stream in ProfileChildStream.allCases 'eachStream'
 			var taken = 0
 			var buffered = true
+
 			while buffered and taken < MaxDrainedLinesPerTick 'someOfIt'
 				match pollProfileChildLine(child, stream: stream) 'polled'
 					line(text) then printError("{text}\n")
 					none then buffered = false
 				end 'polled'
+
 				taken = taken + 1
 			end 'someOfIt'
 		end 'eachStream'
@@ -502,6 +517,7 @@
 	function drainChildTail(child StreamingSubprocess)
 		for stream in ProfileChildStream.allCases 'eachStream'
 			var buffered = true
+
 			while buffered 'untilNothingIsBuffered'
 				match pollProfileChildLine(child, stream: stream) 'polled'
 					line(text) then printError("{text}\n")
@@ -510,6 +526,7 @@
 			end 'untilNothingIsBuffered'
 
 			let tail = readProfileChildTail(child, stream: stream)
+
 			if not tail.isEmpty() 'thereWasOne'
 				printError("{tail}\n")
 			end 'thereWasOne'
@@ -595,7 +612,6 @@
 		return RefusedProfileExit
 	end 'refuseProfileUsage'
 #else
-
 	/// ⛔ **REFUSED BY NAME RATHER THAN ABSENT**, exactly as `monitor` is. Sampling suspends another process's
 	/// threads and reads its register file as an x64 `CONTEXT`, which is `TargetFacilities.processSampling`'s
 	/// row — and a compiler without that intrinsic cannot serve it at all. The driver still dispatches

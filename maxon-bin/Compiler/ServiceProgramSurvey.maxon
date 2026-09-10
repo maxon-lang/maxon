@@ -49,6 +49,7 @@ module let NoAwaitRow = i64.max as CsrIndex
 module type ServiceAwaitRoster
 	// Row ⇒ the function whose own body holds the `await`.
 	var funcIndices as FuncIndexArray
+
 	// Row ⇒ which service that await blocks on, and where it is written.
 	var sites as ServiceAwaitSiteArray
 
@@ -118,21 +119,27 @@ module type ServiceProgramSurvey
 	// Call edges in the shared `(callee, caller)` shape every summary closes over. E3139 rows them with
 	// `markSeededCallers`, E3143 with `markSeededCallees`; the EDGES are the same relation either way.
 	export var edges as CallGraphEdges
+
 	// funcIndex ⇒ the service this function is a message of, or EMPTY. Asked once per FUNCTION rather than
 	// once per (function, service): `messageOwnerNameOf` already walks every service's every variant.
 	var ownerPerFunc as ByteArrayArray
+
 	// funcIndex ⇒ is it a message? The same fact as `ownerPerFunc`, in the shape `markSeededCallees` takes.
 	export var messageSeeds as BoolArray
+
 	// E3139's column: every (function, awaited service) pair.
 	export var awaits as ServiceAwaitRoster
+
 	// E3143's column: funcIndex ⇒ does its body choose a callee at run time? See `ServiceGlobalAccessCheck`'s
 	// header for why that is the one unknown that rule resolves toward refusing.
 	export var dispatchesBlindly as BoolArray
+
 	// ⭐ E3143's column: the functions whose ADDRESS this program takes — one entry per `functionRef` that
 	// resolves to a declared function. Collected as indices rather than as a marked column because a
 	// `functionRef` may name a function this sweep has not reached yet; the column is built once at the end,
 	// where the function count is known (`possibleIndirectCallTargets`).
 	var addressTaken as CsrColumn
+
 	// E3143's roster, in two parallel columns.
 	var accessFuncs as FuncIndexArray
 	var accessSites as ModuleVarAccessSiteArray
@@ -183,6 +190,7 @@ module type ServiceProgramSurvey
 	// close FORWARD over the named call graph, because a dispatch landing in `f` also runs whatever `f` calls.
 	export function possibleIndirectCallTargets(project Project, funcNames FunctionNameIndex) returns BoolArray
 		var targets = BoolArray.create()
+
 		for _ in 0 upto self.funcCount() 'eachFunc'
 			targets.push(false)
 		end 'eachFunc'
@@ -212,10 +220,13 @@ module type ServiceProgramSurvey
 		self.ownerPerFunc.push(owner)
 
 		var blind = false
+
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ServiceProgramSurvey.noteFunction: blockRef from func.blockRefs not in module.blocks")
+
 			for opIndex in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIndex) otherwise panic("ServiceProgramSurvey.noteFunction: opIndex {opIndex} not in module.ops")
+
 				if opIsACallGraphEdge(op) 'aCall'
 					_ = recordCallGraphEdge(maxonOpCalleeName(op), funcIndexByName: funcIndexByName, callerIndex: funcIndex, edges: self.edges)
 				end 'aCall'
@@ -261,11 +272,13 @@ end 'ServiceProgramSurvey'
 export function checkServiceRules(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
 	let blockingRuleApplies = project.serviceAwaitSites.count() != 0
 	let globalRuleApplies = project.moduleVarAccessSites.count() != 0 and serviceTypeRoster(signatures).count() != 0
+
 	if not blockingRuleApplies and not globalRuleApplies 'neitherRuleHasAnythingToSay'
 		return
 	end 'neitherRuleHasAnythingToSay'
 
 	var survey = ServiceProgramSurvey.create()
+
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkServiceRules: functions.get OOB at {funcIndex}")
 		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex)

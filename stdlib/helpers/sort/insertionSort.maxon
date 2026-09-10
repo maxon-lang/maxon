@@ -30,22 +30,29 @@ public extension Array
 	// with refcounts unchanged, so managed elements survive the relocation.
 	public function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		Log.trace("insertionSort.run")
+
 		if hi <= lo + 1 'trivial'
 			return
 		end 'trivial'
+
 		var i = lo + 1
+
 		while i < hi 'outer'
 			var j = i
+
 			while j > lo 'inner'
 				let prev = try managed.get(j - 1) otherwise panic("internalInsertionSortRange: prev get OOB; invariant j > lo >= 0")
 				let pending = try managed.get(j) otherwise panic("internalInsertionSortRange: pending get OOB; invariant j <= i < hi <= managed.length()")
 				let ord = cmp(prev, pending)
+
 				if ord != Ordering.greaterThan 'placed'
 					break
 				end 'placed'
+
 				self.swap(j - 1, j: j)
 				j = j - 1
 			end 'inner'
+
 			i = i + 1
 		end 'outer'
 	end 'internalInsertionSortRange'

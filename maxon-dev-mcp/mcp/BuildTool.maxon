@@ -40,11 +40,13 @@ let rawTailMaxBytes = 4096
 // all), and folding the two together would answer one with the other's message.
 function seedCompiler(repoRoot FilePath) returns FilePath throws NotFound
 	let slot = compilerBinaryPath(repoRoot)
+
 	if File.exists(slot) 'haveSlot'
 		return slot
 	end 'haveSlot'
 
 	let seed = childPath(repoRoot, segment: ".bootstrap/{bootstrapRelativePath}{exeSuffix()}")
+
 	if File.exists(seed) 'haveSeed'
 		return seed
 	end 'haveSeed'
@@ -56,6 +58,7 @@ end 'seedCompiler'
 /// build IN — resolved and validated by the dispatcher, never by this tool.
 export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let manifest = childPath(repoRoot, segment: "build.maxon")
+
 	if not File.exists(manifest) 'noManifest'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build: `{manifest.path}` does not exist, so this checkout has no build to run.")
 	end 'noManifest'
@@ -63,6 +66,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 	let fromArg = try argsDoc.getString(argsId, key: "from") otherwise ""
 
 	var builtWith = compilerBinaryPath(repoRoot)
+
 	if fromArg.isEmpty() 'seeded'
 		builtWith = try seedCompiler(repoRoot) otherwise 'noCompiler'
 			return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build: no compiler to build with. Maxon is written in Maxon and this repo holds no second implementation — the slot {compilerBinaryPath(repoRoot).path} is empty and there is no .bootstrap/{bootstrapRelativePath}{exeSuffix()}. Install a release and put its `maxon` binary — the BINARY ALONE, not the unpacked archive — at .bootstrap/, or pass `from` naming a compiler you already have.")
@@ -71,6 +75,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 		builtWith = try FilePath.from(fromArg) otherwise 'badPath'
 			return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: `from` is not a usable path: {fromArg}")
 		end 'badPath'
+
 		if not File.exists(builtWith) 'missingFrom'
 			return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: `from` names no file: {builtWith.path}")
 		end 'missingFrom'
@@ -80,6 +85,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 	// directory and runs the build it describes.
 	var argv = StringArray.create()
 	argv.push("build")
+
 	// ⚠ THE TARGET IS NAMED, because the root manifest declares more than one and a bare `build` there
 	// LISTS them rather than picking. This tool builds the compiler.
 	argv.push(CompilerTargetName)
@@ -90,6 +96,7 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 		// envelope to fill.
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "build: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
 	end 'spawn'
+
 	let elapsed = Clock.elapsedMs(timing)
 
 	return buildOutcome(result, durationMs: elapsed, expectedBinary: compilerBinaryPath(repoRoot), builtWith: builtWith.path)
@@ -126,11 +133,13 @@ function buildOutcome(result CollectedOutput, durationMs DurationMs, expectedBin
 	children.push(durationId)
 	keys.push("success")
 	children.push(successId)
+
 	if result.succeeded() 'haveBinary'
 		let binaryId = doc.add(JsonNode.stringNode(expectedBinary.path))
 		keys.push("binaryPath")
 		children.push(binaryId)
 	end 'haveBinary'
+
 	let builtWithId = doc.add(JsonNode.stringNode(builtWith))
 	keys.push("builtWith")
 	children.push(builtWithId)
@@ -165,15 +174,19 @@ function parseBuildErrors(combined String) returns BuildErrorArray
 	var errors = BuildErrorArray.create()
 	let lines = combined.split("\n")
 	let n = lines.count()
+
 	for i in 0 upto n 'each'
 		let line = try lines.get(i) otherwise 'gErr'
 			panic("parseBuildErrors: lines.get OOB — i bounds-checked")
 		end 'gErr'
+
 		if line.isEmpty() 'empty'
 			continue
 		end 'empty'
+
 		extractMaxonError(line, errors: errors)
 	end 'each'
+
 	return errors
 end 'parseBuildErrors'
 
@@ -185,18 +198,23 @@ function extractMaxonError(line String, errors BuildErrorArray)
 	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noMaxon'
 		return
 	end 'noMaxon'
+
 	// Everything after "error E" up to the first colon is the code.
 	let afterMarker = pos + marker.byteLength()
 	var codeEnd = afterMarker
+
 	while codeEnd < total 'scanCode'
 		let b = try bytes.get(codeEnd) otherwise 'gErr'
 			panic("extractMaxonError: bytes.get OOB — codeEnd bounded")
 		end 'gErr'
+
 		if b == 0x3A 'colon'
 			break
 		end 'colon'
+
 		codeEnd = codeEnd + 1
 	end 'scanCode'
+
 	// `pos` points to the leading space. ` error ` is 7 chars, so `pos + 7`
 	// lands on the `E` itself — codeStr already includes the leading `E`.
 	let codeStr = sliceString(line, from: pos + 7, until: codeEnd)
@@ -213,21 +231,26 @@ end 'extractMaxonError'
 function buildErrorsArray(doc JsonDoc, errors BuildErrorArray) returns JsonNodeId
 	var ids = JsonNodeIdArray.create()
 	let n = errors.count()
+
 	for i in 0 upto n 'each'
 		let err = try errors.get(i) otherwise 'gErr'
 			panic("buildErrorsArray: errors.get OOB — i bounds-checked")
 		end 'gErr'
+
 		let messageId = doc.add(JsonNode.stringNode(err.message))
 		var keys = StringArray.create()
 		var children = JsonNodeIdArray.create()
+
 		if not err.code.isEmpty() 'haveCode'
 			let codeId = doc.add(JsonNode.stringNode(err.code))
 			keys.push("code")
 			children.push(codeId)
 		end 'haveCode'
+
 		keys.push("message")
 		children.push(messageId)
 		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
 	end 'each'
+
 	return doc.add(JsonNode.arrayNode(ids))
 end 'buildErrorsArray'

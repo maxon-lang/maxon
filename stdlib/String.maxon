@@ -100,6 +100,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if singleByteGraphemesFlag 'known'
 			return true
 		end 'known'
+
 		return scanIsAscii(managed)
 	end 'isAscii'
 
@@ -159,6 +160,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let ownBytes = try managed.slice(0, byteLength()) otherwise 'toByteArraySliceErr'
 			panic("String.toByteArray: slice 0..byteLength() is in bounds by construction")
 		end 'toByteArraySliceErr'
+
 		return ByteArray.init(ownBytes)
 	end 'toByteArray'
 
@@ -396,9 +398,11 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	public function equals(other String) returns bool
 		let len = byteLength()
+
 		if len != other.byteLength() 'lenMismatch'
 			return false
 		end 'lenMismatch'
+
 		return bytesEqual(self, aOffset: 0, b: other, bOffset: 0, len: len)
 	end 'equals'
 
@@ -430,6 +434,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if idx.bytePos() >= byteLength() 'atEnd'
 			throw StringError.invalidIndex
 		end 'atEnd'
+
 		return StringIndex.create(idx.charIndex() + 1, bytePos: findGraphemeEnd(self, startPos: idx.bytePos()))
 	end 'indexAfter'
 
@@ -441,6 +446,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if idx.bytePos() == 0 'atStart'
 			throw StringError.invalidIndex
 		end 'atStart'
+
 		return StringIndex.create(idx.charIndex() - 1, bytePos: findGraphemeStart(self, beforePos: idx.bytePos()))
 	end 'indexBefore'
 
@@ -455,6 +461,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// golden in `specs/fragments-x64-windows/static-variables/`. A field read costs nothing.
 	public function append(other String)
 		managed.append(other.managed)
+
 		if not other.singleByteGraphemesFlag 'clearFlag'
 			singleByteGraphemesFlag = false
 		end 'clearFlag'
@@ -463,18 +470,22 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Search methods
 	public function startsWith(prefix String) returns bool
 		let prefixLen = prefix.byteLength()
+
 		if prefixLen > byteLength() 'tooLong'
 			return false
 		end 'tooLong'
+
 		return bytesEqual(self, aOffset: 0, b: prefix, bOffset: 0, len: prefixLen)
 	end 'startsWith'
 
 	public function endsWith(suffix String) returns bool
 		let suffixLen = suffix.byteLength()
 		let len = byteLength()
+
 		if suffixLen > len 'tooLong'
 			return false
 		end 'tooLong'
+
 		return bytesEqual(self, aOffset: len - suffixLen, b: suffix, bOffset: 0, len: suffixLen)
 	end 'endsWith'
 
@@ -528,6 +539,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Replace methods
 	public function replace(old String, with String) returns String
 		let oldLen = old.byteLength()
+
 		if oldLen == 0 'empty_old'
 			return clone()
 		end 'empty_old'
@@ -537,6 +549,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// First pass: count matches
 		var matchCount = 0
 		var searchPos = 0
+
 		while searchPos <= selfLen - oldLen 'count_loop'
 			if let idx = try findIn(self, offset: searchPos, len: selfLen - searchPos, needle: old) 'try_count'
 				matchCount = matchCount + 1
@@ -570,15 +583,19 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let selfBytes = addressableBytes()
 
 		var pos = 0
+
 		while pos <= selfLen - oldLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: old) 'try_find'
 				let matchPos = pos + idx
+
 				if matchPos > pos 'has_prefix'
 					let prefixSlice = try selfBytes.slice(pos, matchPos) otherwise 'prefixSliceErr'
 						panic("String.replace: prefix slice — pos and matchPos within bounds from findIn")
 					end 'prefixSliceErr'
+
 					out.appendBytes(prefixSlice, singleByteGraphemes: singleByteGraphemesFlag)
 				end 'has_prefix'
+
 				out.append(with)
 				pos = matchPos + oldLen
 			end 'try_find' else 'no_more'
@@ -591,6 +608,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			let suffixSlice = try selfBytes.slice(pos, selfLen) otherwise 'suffixSliceErr'
 				panic("String.replace: suffix slice — pos < selfLen guaranteed")
 			end 'suffixSliceErr'
+
 			out.appendBytes(suffixSlice, singleByteGraphemes: singleByteGraphemesFlag)
 		end 'has_suffix'
 
@@ -599,6 +617,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	public function replaceFirst(old String, with String) returns String
 		let oldLen = old.byteLength()
+
 		if oldLen == 0 'empty_old'
 			return clone()
 		end 'empty_old'
@@ -623,6 +642,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let head = try selfBytes.slice(0, idx) otherwise 'rfHeadSliceErr'
 			panic("String.replaceFirst: head slice — idx from findIn, always in bounds")
 		end 'rfHeadSliceErr'
+
 		out.appendBytes(head, singleByteGraphemes: singleByteGraphemesFlag)
 
 		out.append(with)
@@ -630,6 +650,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let tail = try selfBytes.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
 			panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
 		end 'rfTailSliceErr'
+
 		out.appendBytes(tail, singleByteGraphemes: singleByteGraphemesFlag)
 
 		return out.build()
@@ -681,6 +702,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// strings are precisely what SSO exists for.
 	function mapAsciiCase(lo Byte, hi Byte) returns String
 		let len = byteLength()
+
 		if len == 0 'empty'
 			return clone()
 		end 'empty'
@@ -689,10 +711,12 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		for i in 0 upto len 'convert'
 			let b = try work.byteAt(i) otherwise panic("String.mapAsciiCase: byteAt OOB — i < len invariant")
+
 			if b >= lo and b <= hi 'inRange'
 				try work.setByte(i, value: b xor AsciiCaseBit) otherwise panic("String.mapAsciiCase: setByte OOB — i < len invariant")
 			end 'inRange'
 		end 'convert'
+
 		return work
 	end 'mapAsciiCase'
 
@@ -718,14 +742,18 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	function scanTrimStart(chars CharacterSet) returns BytePos
 		let len = byteLength()
 		var start = 0
+
 		while start < len 'scan'
 			let endByte = findGraphemeEnd(self, startPos: start)
 			let ch = makeCharFromBytes(start, len: endByte - start)
+
 			if not chars.contains(ch) 'found'
 				break
 			end 'found'
+
 			start = endByte
 		end 'scan'
+
 		return start
 	end 'scanTrimStart'
 
@@ -734,25 +762,31 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// must be grapheme boundaries, which is what the scan itself only ever produces.
 	function scanTrimEnd(chars CharacterSet, from BytePos, downTo BytePos) returns BytePos
 		var endPos = from
+
 		while endPos > downTo 'scan'
 			let graphemeStart = findGraphemeStart(self, beforePos: endPos)
 			let ch = makeCharFromBytes(graphemeStart, len: endPos - graphemeStart)
+
 			if not chars.contains(ch) 'found'
 				break
 			end 'found'
+
 			endPos = graphemeStart
 		end 'scan'
+
 		return endPos
 	end 'scanTrimEnd'
 
 	/// Trim characters in the given set from both ends of the string.
 	public function trim(chars CharacterSet) returns String
 		let len = byteLength()
+
 		if len == 0 'empty'
 			return clone()
 		end 'empty'
 
 		let start = scanTrimStart(chars)
+
 		if start >= len 'allMatch'
 			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
 		end 'allMatch'
@@ -764,11 +798,13 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Trim characters in the given set from the start of the string.
 	public function trimStart(chars CharacterSet) returns String
 		let len = byteLength()
+
 		if len == 0 'empty'
 			return clone()
 		end 'empty'
 
 		let start = scanTrimStart(chars)
+
 		if start >= len 'allMatch'
 			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
 		end 'allMatch'
@@ -779,11 +815,13 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Trim characters in the given set from the end of the string.
 	public function trimEnd(chars CharacterSet) returns String
 		let len = byteLength()
+
 		if len == 0 'empty'
 			return clone()
 		end 'empty'
 
 		let endPos = scanTrimEnd(chars, from: len, downTo: 0)
+
 		if endPos == 0 'allMatch'
 			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
 		end 'allMatch'
@@ -829,6 +867,7 @@ end 'String'
 /// strings and BUILDS few.
 public type StringBuilder
 	var bytes as ByteArray
+
 	// Tracked as the pieces arrive rather than re-scanned at the end: the builder already sees every
 	// byte that goes in. An empty builder trivially has one-byte graphemes, and one piece that does
 	// not settles it — the property is per-byte, so a join of qualifying pieces qualifies.
@@ -932,6 +971,7 @@ public type StringIterator implements Iterator with Character
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
+
 		return Self{s: s, iterPos: 0, graphemeEnd: findGraphemeEnd(s, startPos: 0)}
 	end 'create'
 
@@ -943,6 +983,7 @@ public type StringIterator implements Iterator with Character
 		if graphemeEnd >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
+
 		iterPos = graphemeEnd
 		graphemeEnd = findGraphemeEnd(s, startPos: iterPos)
 	end 'advance'
@@ -973,9 +1014,11 @@ public type StringIndex implements Equatable, Comparable
 		if charIdx < other.charIdx 'less'
 			return Ordering.lessThan
 		end 'less'
+
 		if charIdx > other.charIdx 'greater'
 			return Ordering.greaterThan
 		end 'greater'
+
 		return Ordering.equalTo
 	end 'compare'
 end 'StringIndex'
@@ -994,10 +1037,12 @@ function bytesEqual(a String, aOffset BytePos, b String, bOffset BytePos, len By
 	for i in 0 upto len 'compare_loop'
 		let ab = try a.byteAt(aOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees aOffset + len <= a.byteLength()")
 		let bb = try b.byteAt(bOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees bOffset + len <= b.byteLength()")
+
 		if ab != bb 'byte_check'
 			return false
 		end 'byte_check'
 	end 'compare_loop'
+
 	return true
 end 'bytesEqual'
 
@@ -1022,14 +1067,17 @@ function findIn(haystack String, offset BytePos, len BytePos, needle String) ret
 	end 'too_long'
 
 	let firstNeedleByte = try needle.byteAt(0) otherwise panic("findIn: byteAt(0) OOB — needleLen > 0 checked above")
+
 	for i in 0 to (len - needleLen) 'search_loop'
 		let candidate = try haystack.byteAt(offset + i) otherwise panic("findIn: byteAt OOB — i <= len - needleLen invariant")
+
 		if candidate == firstNeedleByte 'firstByteMatch'
 			if bytesEqual(haystack, aOffset: offset + i, b: needle, bOffset: 0, len: needleLen) 'found_check'
 				return i
 			end 'found_check'
 		end 'firstByteMatch'
 	end 'search_loop'
+
 	throw StringError.notFound
 end 'findIn'
 
@@ -1069,9 +1117,11 @@ function findLastIn(haystack String, needle String) returns BytePos throws Strin
 	// remaining COUNT down to 0 never represents the one-before-the-start position at all, and
 	// `needleLen > len` is refused above, so the subtraction below cannot underflow.
 	var remaining = len - needleLen + 1
+
 	while remaining > 0 'search_loop'
 		let i = remaining - 1
 		let candidate = try haystack.byteAt(i) otherwise panic("findLastIn: byteAt OOB — i <= len - needleLen invariant")
+
 		if candidate == firstNeedleByte 'firstByteMatch'
 			if bytesEqual(haystack, aOffset: i, b: needle, bOffset: 0, len: needleLen) 'found_check'
 				return i
@@ -1080,6 +1130,7 @@ function findLastIn(haystack String, needle String) returns BytePos throws Strin
 
 		remaining = remaining - 1
 	end 'search_loop'
+
 	throw StringError.notFound
 end 'findLastIn'
 
@@ -1099,12 +1150,15 @@ end 'findLastIn'
 /// `for c in s` loop over a 100k-byte string. Construction gets one pass, as it always had.
 function scanSingleByteGraphemes(managed __ManagedMemory) returns bool
 	let len = managed.length()
+
 	for i in 0 upto len 'scan'
 		let b = try managed.byteAt(i) otherwise panic("scanSingleByteGraphemes: byteAt OOB — i < len invariant")
+
 		if b >= AsciiLimit or b == CarriageReturnByte 'notSingleByte'
 			return false
 		end 'notSingleByte'
 	end 'scan'
+
 	return true
 end 'scanSingleByteGraphemes'
 
@@ -1112,11 +1166,14 @@ end 'scanSingleByteGraphemes'
 /// clear flag means either a non-ASCII byte or a CR and only a walk tells those apart.
 function scanIsAscii(managed __ManagedMemory) returns bool
 	let len = managed.length()
+
 	for i in 0 upto len 'scan'
 		let b = try managed.byteAt(i) otherwise panic("scanIsAscii: byteAt OOB — i < len invariant")
+
 		if b >= AsciiLimit 'nonAscii'
 			return false
 		end 'nonAscii'
 	end 'scan'
+
 	return true
 end 'scanIsAscii'

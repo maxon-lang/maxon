@@ -143,24 +143,31 @@ public function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
 	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8ByteLengthAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
+
 	if b0 < 128 'ascii'
 		return 1
 	end 'ascii'
+
 	if b0 < 224 'two'
 		if utf8WidthFits(s, pos: pos, width: 2) 'twoFits'
 			return 2
 		end 'twoFits'
+
 		return 1
 	end 'two'
+
 	if b0 < 240 'three'
 		if utf8WidthFits(s, pos: pos, width: 3) 'threeFits'
 			return 3
 		end 'threeFits'
+
 		return 1
 	end 'three'
+
 	if utf8WidthFits(s, pos: pos, width: 4) 'fourFits'
 		return 4
 	end 'fourFits'
+
 	return 1
 end 'utf8ByteLengthAt'
 
@@ -169,9 +176,11 @@ public function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8DecodeAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
+
 	if b0 < 128 'ascii'
 		return b0
 	end 'ascii'
+
 	// A lead the buffer cannot complete decodes as ITSELF and the scan advances one — see `utf8WidthFits`.
 	// The width test comes BEFORE the read, which is what makes the read unnecessary rather than merely
 	// checked.
@@ -179,34 +188,45 @@ public function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 		if not utf8WidthFits(s, pos: pos, width: 2) 'twoTruncated'
 			return b0
 		end 'twoTruncated'
+
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err'
 			panic("utf8DecodeAt: 2-byte seq continuation out of bounds")
 		end 'b1Err'
+
 		return ((b0 and Utf8TwoByteLeadMask) shl Utf8ContinuationShift) or (b1 and Utf8ContinuationMask)
 	end 'two'
+
 	if b0 < 240 'three'
 		if not utf8WidthFits(s, pos: pos, width: 3) 'threeTruncated'
 			return b0
 		end 'threeTruncated'
+
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err2'
 			panic("utf8DecodeAt: 3-byte seq byte 1 out of bounds")
 		end 'b1Err2'
+
 		let b2 = try s.byteAt(pos + 2) otherwise 'b2Err'
 			panic("utf8DecodeAt: 3-byte seq byte 2 out of bounds")
 		end 'b2Err'
+
 		return ((b0 and Utf8ThreeByteLeadMask) shl (Utf8ContinuationShift * 2)) or ((b1 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b2 and Utf8ContinuationMask)
 	end 'three'
+
 	if not utf8WidthFits(s, pos: pos, width: 4) 'fourTruncated'
 		return b0
 	end 'fourTruncated'
+
 	let b1 = try s.byteAt(pos + 1) otherwise 'b1Err3'
 		panic("utf8DecodeAt: 4-byte seq byte 1 out of bounds")
 	end 'b1Err3'
+
 	let b2 = try s.byteAt(pos + 2) otherwise 'b2Err2'
 		panic("utf8DecodeAt: 4-byte seq byte 2 out of bounds")
 	end 'b2Err2'
+
 	let b3 = try s.byteAt(pos + 3) otherwise 'b3Err'
 		panic("utf8DecodeAt: 4-byte seq byte 3 out of bounds")
 	end 'b3Err'
+
 	return ((b0 and Utf8FourByteLeadMask) shl (Utf8ContinuationShift * 3)) or ((b1 and Utf8ContinuationMask) shl (Utf8ContinuationShift * 2)) or ((b2 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b3 and Utf8ContinuationMask)
 end 'utf8DecodeAt'

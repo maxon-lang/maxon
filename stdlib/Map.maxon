@@ -46,6 +46,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
+
 		while cap < numElements * 2 'calc_cap'
 			cap = cap * 2
 		end 'calc_cap'
@@ -68,9 +69,11 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			let k = try initKeys.get(i) otherwise 'kErr'
 				panic("Map.init: initKeys.get OOB — i < numElements guaranteed")
 			end 'kErr'
+
 			let v = try initValues.get(i) otherwise 'vErr'
 				panic("Map.init: initValues.get OOB — i < numElements guaranteed")
 			end 'vErr'
+
 			result.upsert(k, value: v)
 		end 'insert_loop'
 
@@ -92,6 +95,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'init_empty'
 
 		let loadLimit = trunc((capacity * 3) / 4)
+
 		if count >= loadLimit 'do_grow'
 			grow()
 		end 'do_grow'
@@ -120,6 +124,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		let hash = key.hash()
 		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.insert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
+
 		if slotHoldsKey(slotIndex) 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
@@ -135,6 +140,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		let hash = key.hash()
 		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.upsert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
+
 		if slotHoldsKey(slotIndex) 'found'
 			try values.set(slotIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
 			return
@@ -148,6 +154,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		// findSlot's own `keyNotFound` (the empty table) is exactly this function's answer, so it
 		// propagates rather than being caught and re-thrown.
 		let slotIndex = try findSlot(key, hash: key.hash())
+
 		if slotHoldsKey(slotIndex) 'found'
 			return try values.get(slotIndex) otherwise panic("Map.get: values.get OOB — slot from findSlot is always in-bounds")
 		end 'found'
@@ -165,6 +172,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Remove key from map, returns true if key was present
 	public function remove(key Key) returns bool
 		let slotIndex = try findSlot(key, hash: key.hash()) otherwise return false
+
 		if slotHoldsKey(slotIndex) 'found'
 			// Only the Deleted state marks the slot as removed. The cached hash is
 			// left as-is: the hash-guard only runs inside the Occupied branch of
@@ -234,10 +242,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Occupied gives false
 				Deleted gives false
 			end 'se1'
+
 			if isEmpty 'empty_slot'
 				// Key not found — hand back the vacancy an insert should take: the first tombstone
 				// on the probe path if there was one, else this empty slot.
 				var bestIndex = index
+
 				if firstDeleted >= 0 'use_deleted'
 					bestIndex = firstDeleted
 				end 'use_deleted'
@@ -250,6 +260,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Empty gives false
 				Occupied gives false
 			end 'sd1'
+
 			if isDeleted and firstDeleted < 0 'mark_deleted'
 				firstDeleted = index
 			end 'mark_deleted'
@@ -259,10 +270,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'check_key'
 				// Skip the full key.equals() unless the cached hash matches — this
 				// is the hot-path win for string-keyed maps.
 				let slotHash = try hashes.get(index) otherwise hash
+
 				if slotHash == hash 'hash_match'
 					if let existing = try keys.get(index) 'get_existing'
 						if existing == key 'found'
@@ -306,6 +319,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	function grow()
 		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
+
 		if newCapacity == 0 'handle_zero'
 			newCapacity = 16
 		end 'handle_zero'
@@ -347,13 +361,16 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Empty gives false
 				Deleted gives false
 			end 'so1'
+
 			if isOccupied 'occupied'
 				let key = try oldKeys.get(i) otherwise 'skip_key'
 					continue
 				end 'skip_key'
+
 				let value = try oldValues.get(i) otherwise 'skip_val'
 					continue
 				end 'skip_val'
+
 				let hash = try oldHashes.get(i) otherwise 'skip_hash'
 					continue
 				end 'skip_hash'
@@ -365,6 +382,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 					Occupied gives true
 					Deleted gives true
 				end 'ns1'
+
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
 					currentState = try states.get(index) otherwise SlotState.Empty
@@ -390,6 +408,7 @@ public type MapIterator uses Key, Value implements Iterator with Entry where Key
 	typealias IterKeyArray = Array with Key
 	typealias IterValueArray = Array with Value
 	typealias IterStateArray = Array with SlotState
+
 	var keys as IterKeyArray
 	var values as IterValueArray
 	var states as IterStateArray

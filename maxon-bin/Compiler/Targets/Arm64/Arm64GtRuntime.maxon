@@ -167,11 +167,13 @@ end 'Arm64GtBlockDirection'
 // whatever the seed zeros happen to be.
 function emitArm64GtSavedBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockDirection)
 	let pairs = arm64GtSavedPairs()
+
 	for i in 0 upto pairs.count() 'eachPair'
 		let index = match direction 'order'
 			push gives i
 			pop gives pairs.count() - 1 - i
 		end 'order'
+
 		let pair = try pairs.get(index) otherwise panic("emitArm64GtSavedBlock: index derived from count is in range")
 		emitArm64GtSavedPair(asm, pair: pair, direction: direction)
 	end 'eachPair'
@@ -230,6 +232,7 @@ function arm64GtSavedPairs() returns Arm64GtSavedPairArray
 	var pairs = Arm64GtSavedPairArray.create()
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.gpr, first: Arm64CalleeSavedGprLow, limit: Arm64CalleeSavedGprEnd)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.simd, first: Arm64CalleeSavedFpFirst, limit: Arm64CalleeSavedFpEnd)
+
 	// The x29/x30 frame record, LAST — see `emitArm64GtSavedBlock` for why that position is load-bearing.
 	pairs.push(Arm64GtSavedPair.create(Arm64GtRegisterFile.gpr, first: arm64RuntimeReg(Arm64Register.x29)))
 	return pairs
@@ -237,6 +240,7 @@ end 'arm64GtSavedPairs'
 
 function arm64GtAppendPairs(pairs Arm64GtSavedPairArray, file Arm64GtRegisterFile, first RegNum, limit RegNum)
 	var reg = first
+
 	while reg < limit 'pairs'
 		pairs.push(Arm64GtSavedPair.create(file, first: reg as MachineWord))
 		reg = reg + Arm64GtRegistersPerPair
@@ -280,6 +284,7 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitStoreWord64At(asm, src: Arm64IntReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffResult)
 	arm64EmitStoreWord64At(asm, src: Arm64FlagReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffThrew)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GtTrampFuncPtrReg, value: GtStatusCompleted)
+
 	// ⛔⛔ **`STLR`, NOT `STR` — THIS IS THE PUBLICATION, AND THE TWO STORES ABOVE ARE WHAT IT PUBLISHES
 	// (G3).** An awaiting driver on ANOTHER M spins on `gt.status == completed` and then reads `gt.result` /
 	// `gt.threw`. On this weakly-ordered ISA a plain `str` here lets the flag become visible before the two
@@ -545,6 +550,7 @@ end 'buildArm64GtMorestackChunk'
 function arm64MorestackLiveFpIndex() returns RegCount
 	for k in 0 upto arm64MorestackSavedGprs.count() 'find'
 		let reg = try arm64MorestackSavedGprs.get(k) otherwise panic("arm64MorestackLiveFpIndex: index derived from count is in range")
+
 		if reg == Arm64Register.x29 'found'
 			return k
 		end 'found'
@@ -572,6 +578,7 @@ function emitArm64MorestackRegisterBlock(asm Arm64RuntimeAsm, direction Arm64GtB
 	for k in 0 upto arm64MorestackSavedGprs.count() 'gprs'
 		let reg = try arm64MorestackSavedGprs.get(k) otherwise panic("emitArm64MorestackRegisterBlock: index derived from count is in range")
 		let slot = arm64MorestackFrameSlot(k)
+
 		match direction 'dir'
 			push then arm64GtStoreSp(asm, src: reg, byteOffset: slot)
 			pop then arm64GtLoadSp(asm, dest: reg, byteOffset: slot)
@@ -581,6 +588,7 @@ function emitArm64MorestackRegisterBlock(asm Arm64RuntimeAsm, direction Arm64GtB
 	for k in 0 upto arm64MorestackSavedFps.count() 'fps'
 		let reg = try arm64MorestackSavedFps.get(k) otherwise panic("emitArm64MorestackRegisterBlock: index derived from count is in range")
 		let slot = arm64MorestackFpSlot(k)
+
 		match direction 'dir'
 			push then arm64EmitStoreFpSp(asm.code, src: arm64RuntimeFpReg(reg), byteOffset: slot)
 			pop then arm64EmitLoadFpSp(asm.code, dest: arm64RuntimeFpReg(reg), byteOffset: slot)
@@ -722,6 +730,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	// so the reload below reads the copy, at the SP the grower handed back.
 	arm64EmitStackAlloc(asm.code, amount: Arm64GuardSaveBytes)
 	arm64GtStoreSp(asm, src: Arm64Register.x30, byteOffset: 0)
+
 	// x12 = this M's system-stack top, which IS `__gt_morestack`'s entry contract. The M is re-read rather
 	// than kept from the test above, because that register now holds the current GT — the OTHER half of the
 	// contract — and the hot path must not spend a register to save a load on the cold one.
@@ -796,6 +805,7 @@ export function emitArm64GtGatedImportCall(code ByteArray, rdataRelocs RdataRelo
 	arm64EmitLoadWord64At(asm, dest: Arm64ShimMReg, base: Arm64ShimMReg, byteOffset: MOffSystemStackSP)
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64ShimSpReg))
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64ShimMReg))
+
 	// Park the green thread's SP in the system stack's own top cell — 16 bytes, so SP stays 16-aligned at
 	// the call. It is read back AFTER the call, because no register survives one.
 	arm64EmitStackAlloc(asm.code, amount: Arm64ShimSaveBytes)
@@ -838,6 +848,7 @@ function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFi
 	arm64ResolveBlockBranches(asm.code, blockOffsets: asm.labelOffsets, fixups: asm.branchFixups)
 
 	let base = code.count()
+
 	for emitted in asm.code 'bytes'
 		code.push(emitted)
 	end 'bytes'
@@ -845,13 +856,16 @@ function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFi
 	for fixup in asm.callFixups 'calls'
 		callFixups.push(CallFixup.create(base + fixup.codeOffset, targetName: fixup.targetName))
 	end 'calls'
+
 	for reloc in asm.rdataRelocs 'rdata'
 		var rebased = RdataRelocation.create(base + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)
+
 		// `create` zeroes `rdataOffset` — carried across explicitly rather than left at that default, because
 		// a fragment that ever files a WITHIN-object displacement would otherwise have it silently dropped.
 		rebased.rdataOffset = reloc.rdataOffset
 		rdataRelocs.push(rebased)
 	end 'rdata'
+
 	for reloc in asm.iatRelocs 'imports'
 		iatRelocs.push(Relocation.create(base + reloc.codeOffset, slotIndex: reloc.slotIndex))
 	end 'imports'

@@ -60,6 +60,7 @@ export function runServer()
 
 	while true 'mainLoop'
 		let result = readRpcRequest(stdin)
+
 		match result 'r'
 			request(req) then handleRequest(req, tools: tools)
 			eof then return
@@ -97,6 +98,7 @@ function handleRequest(req RpcRequest, tools ToolSpecArray)
 	if idIsNull 'ignoreNotif'
 		return
 	end 'ignoreNotif'
+
 	writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "method not found: {req.method}", repoRootEcho: "")
 end 'handleRequest'
 
@@ -150,10 +152,12 @@ function buildToolsListResult(tools ToolSpecArray) returns JsonDoc
 	var toolNodes = JsonNodeIdArray.create()
 
 	let n = tools.count()
+
 	for i in 0 upto n 'each'
 		let spec = try tools.get(i) otherwise 'getErr'
 			panic("buildToolsListResult: tools.get OOB — i bounds-checked")
 		end 'getErr'
+
 		toolNodes.push(buildToolDescriptor(doc, name: spec.name, description: spec.description, schemaFields: spec.schemaFields))
 	end 'each'
 
@@ -429,14 +433,17 @@ end 'dispatchFreshToolCall'
 
 function findTool(tools ToolSpecArray, name String) returns ToolSpec throws NotFound
 	let n = tools.count()
+
 	for i in 0 upto n 'scan'
 		let spec = try tools.get(i) otherwise 'gErr'
 			panic("findTool: tools.get OOB — i bounds-checked")
 		end 'gErr'
+
 		if spec.name.equals(name) 'hit'
 			return spec
 		end 'hit'
 	end 'scan'
+
 	throw NotFound.notFound
 end 'findTool'
 
@@ -449,6 +456,7 @@ end 'findTool'
 // eventually ships without saying it.
 function invokeAndEmit(handler ToolHandler, req RpcRequest, argsId JsonNodeId, repoRoot FilePath)
 	let outcome = handler(req.doc, argsId, repoRoot)
+
 	match outcome 'o'
 		success(doc, root) then emitToolSuccess(doc, root: root, req: req, repoRoot: repoRoot)
 		error(code, message) then writeRpcError(req.doc, idNodeId: req.idNodeId, code: code, message: message, repoRootEcho: repoRoot.path)
@@ -472,6 +480,7 @@ end 'invokeAndEmit'
 // the response writer's to edit.
 function withRepoRootEcho(src JsonDoc, root JsonNodeId, dst JsonDoc, repoRoot FilePath) returns JsonNodeId
 	let node = src.get(root)
+
 	if node.kind != JsonKind.jsonObject 'notAnObject'
 		panic("withRepoRootEcho: a tool's result must be a JSON object to carry `{RepoRootArgKey}`, got {node.kind.name}")
 	end 'notAnObject'
@@ -482,6 +491,7 @@ function withRepoRootEcho(src JsonDoc, root JsonNodeId, dst JsonDoc, repoRoot Fi
 	children.push(dst.add(JsonNode.stringNode(repoRoot.path)))
 
 	let n = node.keys.count()
+
 	for i in 0 upto n 'each'
 		let key = try node.keys.get(i) otherwise panic("withRepoRootEcho: keys.get OOB — i bounded by n")
 		let childId = try node.children.get(i) otherwise panic("withRepoRootEcho: children.get OOB — parallel arrays out of sync")

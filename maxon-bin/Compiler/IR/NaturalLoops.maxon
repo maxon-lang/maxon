@@ -31,6 +31,7 @@
 export type LoopBackEdges
 	// The edge's SOURCE — the latch, the block whose branch closes the loop.
 	export var tails as CsrColumn
+
 	// The edge's TARGET — the loop header, which dominates the tail in a reducible CFG.
 	export var heads as CsrColumn
 
@@ -94,6 +95,7 @@ export function findLoopBackEdges(succ CsrGraph, nodeCount CsrIndex, edges LoopB
 
 		let v = succ.neighbour(u, k: k)
 		let c = try colors.get(v) otherwise panic("findLoopBackEdges: colors.get OOB")
+
 		if c == DfsWhite 'unvisited'
 			try colors.set(v, value: DfsGray) otherwise panic("findLoopBackEdges: colors.set gray OOB")
 			stackNode.push(v)
@@ -125,9 +127,11 @@ export function distinctLoopHeaders(edges LoopBackEdges, nodeCount CsrIndex) ret
 	for k in 0 upto edges.heads.count() 'eachBackEdge'
 		let h = try edges.heads.get(k) otherwise panic("distinctLoopHeaders: heads.get OOB")
 		let already = try seen.get(h) otherwise panic("distinctLoopHeaders: seen.get OOB")
+
 		if already 'sameLoop'
 			continue
 		end 'sameLoop'
+
 		try seen.set(h, value: true) otherwise panic("distinctLoopHeaders: seen.set OOB")
 		headers.push(h)
 	end 'eachBackEdge'
@@ -153,6 +157,7 @@ end 'distinctLoopHeaders'
 export type LoopMembership
 	// Dense over the node space, and only ever true for a member of the CURRENT loop.
 	var inLoop as BoolArray
+
 	// The members, in the order the walk below discovers them: the header first, then the latches, then
 	// their predecessors. ⚠ NOT an order any dataflow may rely on — a consumer that needs defs before
 	// uses walks the DOMINATOR TREE (see `LoopInvariantCodeMotion.analyzeLoopBlocks`).
@@ -202,13 +207,16 @@ export function collectNaturalLoop(pred CsrGraph, header CsrIndex, edges LoopBac
 	_ = into.admit(header)
 
 	var worklist = CsrColumn.create()
+
 	for k in 0 upto edges.heads.count() 'seedTails'
 		let h = try edges.heads.get(k) otherwise panic("collectNaturalLoop: heads.get OOB at {k}")
+
 		if h != header 'otherLoop'
 			continue
 		end 'otherLoop'
 
 		let t = try edges.tails.get(k) otherwise panic("collectNaturalLoop: tails.get OOB at {k}")
+
 		if into.admit(t) 'newTail'
 			worklist.push(t)
 		end 'newTail'
@@ -216,8 +224,10 @@ export function collectNaturalLoop(pred CsrGraph, header CsrIndex, edges LoopBac
 
 	while worklist.count() > 0 'bfs'
 		let n = try worklist.pop() otherwise panic("collectNaturalLoop: worklist.pop on non-empty failed")
+
 		for k in 0 upto pred.degree(n) 'eachPred'
 			let p = pred.neighbour(n, k: k)
+
 			if into.admit(p) 'newMember'
 				worklist.push(p)
 			end 'newMember'

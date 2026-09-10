@@ -98,6 +98,7 @@ export type TestFileGroup
 	// The `*.test.maxon` file as the COMPILER recorded it — the user's own path, not the staged copy's. It
 	// is what a report names and what the staging maps FROM, so it is identity.
 	export let file as FilePath
+
 	// The generated runner's own name, as declared inside that file and called from the entry.
 	//
 	// ⚠ **ONE NAME, WHERE THE BOOTSTRAP CARRIES TWO.** Its `TestFileGroup` holds a `RunnerName` and a
@@ -124,11 +125,13 @@ export type StagedTestBuild
 	// `SpecTestRunner.stageSourceFiles` does and for its reason: with one file named, `commonAncestorOf`
 	// would answer that FILE, and every namespace and every `__file__` would be measured from it.
 	export let buildTargets as MaxonSourcePathArray
+
 	// The subset of those this compiler WROTE, each with the reserved names it minted there — handed to
 	// `Compiler.compileToProduct` as `compilerWrittenSources`, which is what lets those names be DECLARED
 	// and lets the generated code CALL `__` names at all. A `*.test.maxon` copy that got no dispatcher is
 	// NOT in here: its bytes are the author's, unchanged.
 	export let compilerWrittenSources as CompilerWrittenSourceArray
+
 	// ⭐⭐ **WHICH OF THOSE ARE COPIES, AND OF WHOSE FILES** — handed to
 	// `Compiler.compileToProduct` as `stagedSourceOrigins`, which is what makes a compile error name the
 	// file the author can open rather than the copy this run is about to delete. EVERY copied source is
@@ -139,8 +142,10 @@ export type StagedTestBuild
 	// author's file to name — a diagnostic there is a bug in what this compiler wrote, and the staged
 	// path is the only spelling that lets a reader open the text that failed.
 	export let stagedSourceOrigins as StagedSourceOriginArray
+
 	// Where the staged tree is rooted — the test build's project root.
 	export let root as FilePath
+
 	// The groups, in discovery order — the run's numbering. A report reads them through
 	// `reportFileOrder` instead, so what a transcript says does not depend on the filesystem.
 	export let groups as TestFileGroupArray
@@ -210,6 +215,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 	end 'moreTestsThanTheRunIsNumberedFor'
 
 	var groups = TestFileGroupArray.create()
+
 	// The group the PREVIOUS test landed in. 0 before there is one, which names no group and so takes the
 	// scan — see `groupHoldsFile`, which answers FALSE for an ordinal nothing occupies.
 	var recent = 0 as TestFileOrdinal
@@ -296,9 +302,11 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 	if not Directory.create(stagingRoot) 'noStagingRoot'
 		throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
 	end 'noStagingRoot'
+
 	purgeFilesIn(stagingRoot)
 
 	var sources = MaxonSourcePathArray.create()
+
 	// ⭐ **`productionAndTests`, WHICH IS THE ONE THING AN ORDINARY BUILD'S WALK ANSWERS DIFFERENTLY.** A
 	// test body calls the very declarations its project makes, so the tests are compiled WITH the project
 	// and not instead of it.
@@ -312,6 +320,7 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 		let staged = try stageOneSource(stagingRoot, projectRoot: projectRoot, source: source, groups: groups)
 		buildTargets.push(staged.path)
 		stagedSourceOrigins.push(staged.origin)
+
 		if not staged.mintedNames.isEmpty() 'generated'
 			compilerWrittenSources.push(CompilerWrittenSource.create(staged.path, mintedNames: staged.mintedNames))
 		end 'generated'
@@ -338,6 +347,7 @@ end 'stageTestBuild'
 type StagedSource
 	export let path as FilePath
 	export let mintedNames as ByteArrayArray
+
 	// What this copy is a copy OF, and how much of it the author wrote. Always present, because
 	// `stageOneSource` only ever produces copies — the one staged file that is nobody's copy is the
 	// generated entry, which this function does not write.
@@ -404,6 +414,7 @@ end 'mintedNamesForEntry'
 // a staging root the process cannot write is an environment problem the caller reports.
 function writeStagedFile(path FilePath, content String) throws TestStagingError
 	let parent = try path.parent() otherwise throw TestStagingError.refused("could not derive a directory for {path.toString()}")
+
 	if not Directory.create(parent) 'noSubdir'
 		throw TestStagingError.refused("could not create the directory {parent.toString()}")
 	end 'noSubdir'
@@ -465,6 +476,7 @@ end 'fileDispatcherSource'
 function entrySource(groups TestFileGroupArray) returns String
 	let beganLine = wrapped("{TestProtocolBeganTag}{TestProtocolSeparatorInMaxonSource}\{index\}")
 	let endedLine = wrapped("{TestProtocolEndedTag}{TestProtocolSeparatorInMaxonSource}\{index\}{TestProtocolSeparatorInMaxonSource}\{outcome\}{TestProtocolSeparatorInMaxonSource}\{nanos\}")
+
 	// The needle is bracketed with the SAME character the runner brackets its output with, taken from the
 	// one constant — a selection that named test 3 and matched 13 would be exactly those two disagreeing.
 	let selectionNeedle = "{TestSelectIndexBracket}\{index\}{TestSelectIndexBracket}"

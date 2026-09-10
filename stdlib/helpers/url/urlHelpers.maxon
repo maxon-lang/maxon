@@ -7,9 +7,11 @@ public function urlIsAlpha(b Byte) returns bool
 	if b >= 65 and b <= 90 'upper'
 		return true
 	end 'upper'
+
 	if b >= 97 and b <= 122 'lower'
 		return true
 	end 'lower'
+
 	return false
 end 'urlIsAlpha'
 
@@ -18,6 +20,7 @@ public function urlIsDigit(b Byte) returns bool
 	if b >= 48 and b <= 57 'digit'
 		return true
 	end 'digit'
+
 	return false
 end 'urlIsDigit'
 
@@ -26,12 +29,15 @@ public function urlIsHexDigit(b Byte) returns bool
 	if b >= 48 and b <= 57 'digit'
 		return true
 	end 'digit'
+
 	if b >= 65 and b <= 70 'upperHex'
 		return true
 	end 'upperHex'
+
 	if b >= 97 and b <= 102 'lowerHex'
 		return true
 	end 'lowerHex'
+
 	return false
 end 'urlIsHexDigit'
 
@@ -40,13 +46,16 @@ public function urlIsSchemeChar(b Byte) returns bool
 	if urlIsAlpha(b) 'alpha'
 		return true
 	end 'alpha'
+
 	if urlIsDigit(b) 'digit'
 		return true
 	end 'digit'
+
 	// +: 43, -: 45, .: 46
 	if b == 43 or b == 45 or b == 46 'special'
 		return true
 	end 'special'
+
 	return false
 end 'urlIsSchemeChar'
 
@@ -54,21 +63,27 @@ end 'urlIsSchemeChar'
 public function urlValidatePercentEncoding(input String) throws URLError
 	let len = input.byteLength()
 	var i = 0
+
 	while i < len 'scan'
 		let b = input.byteAtOrPanic(i)
+
 		if b == 37 'percent'
 			// '%' = 37, need two hex digits after
 			if i + 2 >= len 'truncated'
 				throw URLError.invalidEncoding
 			end 'truncated'
+
 			let h1 = input.byteAtOrPanic(i + 1)
 			let h2 = input.byteAtOrPanic(i + 2)
+
 			if not urlIsHexDigit(h1) 'badH1'
 				throw URLError.invalidEncoding
 			end 'badH1'
+
 			if not urlIsHexDigit(h2) 'badH2'
 				throw URLError.invalidEncoding
 			end 'badH2'
+
 			i = i + 3
 		end 'percent' else 'notPercent'
 			i = i + 1
@@ -79,6 +94,7 @@ end 'urlValidatePercentEncoding'
 /// Remove dot segments from a path per RFC 3986 Section 5.2.4.
 public function urlRemoveDotSegments(path String) returns String
 	let len = path.byteLength()
+
 	if len == 0 'empty'
 		return ""
 	end 'empty'
@@ -174,6 +190,7 @@ public function urlRemoveDotSegments(path String) returns String
 				continue
 			end 'isDot'
 		end 'checkLoneDot'
+
 		if remaining == 2 'checkLoneDotDot'
 			if path.byteAtOrPanic(pos) == 46 'isDot1'
 				if path.byteAtOrPanic(pos + 1) == 46 'isDot2'
@@ -185,19 +202,24 @@ public function urlRemoveDotSegments(path String) returns String
 
 		// E: Move first path segment (including initial "/" if any) to output
 		var segEnd = pos
+
 		if path.byteAtOrPanic(segEnd) == 47 'startsWithSlash'
 			segEnd = segEnd + 1
 		end 'startsWithSlash'
+
 		// Find next "/" or end
 		while segEnd < len 'findSlash'
 			if path.byteAtOrPanic(segEnd) == 47 'foundSlash'
 				break
 			end 'foundSlash'
+
 			segEnd = segEnd + 1
 		end 'findSlash'
+
 		let segManaged = try pathBytes.slice(pos, segEnd) otherwise 'sliceErr'
 			panic("urlRemoveDotSegments: slice OOB — pos and segEnd are within bounds")
 		end 'sliceErr'
+
 		let seg = String.init(segManaged)
 		output = "{output}{seg}"
 		pos = segEnd
@@ -209,24 +231,31 @@ end 'urlRemoveDotSegments'
 /// Remove the last path segment from output (everything after and including the last "/").
 public function urlRemoveLastSegment(output String) returns String
 	let len = output.byteLength()
+
 	if len == 0 'empty'
 		return ""
 	end 'empty'
+
 	// For the SLICE alone; the byte reads below go through `byteAtOrPanic`.
 	let outputBytes = output.addressableBytes()
 	var i = output.byteLength()
+
 	while i > 0 'scan'
 		i = i - 1
+
 		if output.byteAtOrPanic(i) == 47 'foundSlash'
 			if i == 0 'isRoot'
 				return ""
 			end 'isRoot'
+
 			let sliced = try outputBytes.slice(0, i) otherwise 'sliceErr2'
 				panic("urlRemoveLastSegment: slice OOB — i < len guaranteed")
 			end 'sliceErr2'
+
 			return String.init(sliced)
 		end 'foundSlash'
 	end 'scan'
+
 	return ""
 end 'urlRemoveLastSegment'
 
@@ -235,18 +264,23 @@ public function urlMergeBasePath(basePath String, hasAuthority bool, refPath Str
 	if hasAuthority and basePath.isEmpty() 'emptyBase'
 		return "/{refPath}"
 	end 'emptyBase'
+
 	// Find last "/" in basePath. `baseBytes` is for the SLICE alone; the scan uses `byteAtOrPanic`.
 	let baseBytes = basePath.addressableBytes()
 	var i = basePath.byteLength()
+
 	while i > 0 'scan'
 		i = i - 1
+
 		if basePath.byteAtOrPanic(i) == 47 'foundSlash'
 			let prefix = try baseBytes.slice(0, i + 1) otherwise 'sliceErr3'
 				panic("urlMergeBasePath: slice OOB — i < len guaranteed")
 			end 'sliceErr3'
+
 			let prefixStr = String.init(prefix)
 			return "{prefixStr}{refPath}"
 		end 'foundSlash'
 	end 'scan'
+
 	return refPath
 end 'urlMergeBasePath'

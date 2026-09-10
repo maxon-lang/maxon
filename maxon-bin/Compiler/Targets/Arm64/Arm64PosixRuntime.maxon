@@ -67,6 +67,7 @@ export function arm64PosixEmitEnvValueCopy(asm Arm64RuntimeAsm, valueSlot StackS
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: valueSlot)
 	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x2)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: writtenSlot)
+
 	// STRICTLY less than the capacity, because the NUL needs the last byte — the same test
 	// `emitFilledBufferVerdict` calls a fit.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: bufLenSlot)
@@ -464,6 +465,7 @@ export union PosixHostCall
 	// A GOT-indirect libSystem call — the arm64-macOS route, where every primitive in this band is a libc
 	// function.
 	importCall(slot OsImportSlot)
+
 	// A raw `svc #0` — the arm64-Linux route, where a static image links no libc and the AArch64 syscall
 	// table is the only door.
 	syscall(number MachineWord)
@@ -655,6 +657,7 @@ end 'buildArm64PosixPipePeekChunk'
 export union PosixPollCall
 	// `poll(fds, 1, 0)` — libSystem's.
 	pollImport(slot OsImportSlot)
+
 	// `ppoll(fds, 1, &timespec{0,0}, NULL, sigsetBytes)`.
 	ppollSyscall(number MachineWord, sigsetBytes MachineWord)
 end 'PosixPollCall'
@@ -727,6 +730,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatus)
+
 	// `options = blocking ? 0 : WNOHANG`, as a compare and a `cset` — no branch for a two-valued argument.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBlocking)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixReapWithoutBlocking)

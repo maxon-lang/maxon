@@ -110,12 +110,14 @@
 // the only thing that case is measuring, and it does not weaken the refusal beside it.
 function functionsAMessageCanRun(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns BoolArray
 	let named = markSeededCallees(survey.edges, seeds: survey.messageSeeds, nodeCount: survey.funcCount())
+
 	if not aReachedFunctionDispatchesBlindly(survey, reached: named) 'everyTargetIsNamed'
 		return named
 	end 'everyTargetIsNamed'
 
 	var widened = BoolArray.create()
 	let targets = survey.possibleIndirectCallTargets(project, funcNames: funcNames)
+
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		let alreadyNamed = try named.get(funcIndex) otherwise panic("functionsAMessageCanRun: named.get OOB at {funcIndex} below count {named.count()}")
 		let reachableByADispatch = try targets.get(funcIndex) otherwise panic("functionsAMessageCanRun: targets.get OOB at {funcIndex} below count {targets.count()}")
@@ -132,6 +134,7 @@ function aReachedFunctionDispatchesBlindly(survey ServiceProgramSurvey, reached 
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		let messageRunsIt = try reached.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: reached.get OOB at {funcIndex} below count {reached.count()}")
 		let blind = try survey.dispatchesBlindly.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: dispatchesBlindly.get OOB at {funcIndex} below count {survey.funcCount()}")
+
 		if messageRunsIt and blind 'aTargetThisWalkCannotName'
 			return true
 		end 'aTargetThisWalkCannotName'
@@ -156,9 +159,11 @@ end 'callersReaching'
 // second spelling would be free to size it differently — which is the single thing the mark walk panics on.
 function oneHotSeeds(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
 	var seeds = BoolArray.create()
+
 	for candidate in 0 upto survey.funcCount() 'eachFunc'
 		seeds.push(candidate == funcIndex)
 	end 'eachFunc'
+
 	return seeds
 end 'oneHotSeeds'
 
@@ -168,11 +173,13 @@ end 'oneHotSeeds'
 function reportEarliest(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray, wanted ModuleVarAccess) returns bool
 	for row in 0 upto survey.accessRowCount() 'eachAccess'
 		let site = survey.accessSiteAt(row)
+
 		if not sameModuleVarAccess(site.access, other: wanted) 'theOtherDirection'
 			continue
 		end 'theOtherDirection'
 
 		let funcIndex = survey.accessFuncAt(row)
+
 		if not (try reached.get(funcIndex) otherwise panic("reportEarliest: reached.get OOB at {funcIndex} below count {reached.count()}")) 'noMessageRunsIt'
 			continue
 		end 'noMessageRunsIt'
@@ -193,6 +200,7 @@ function sameModuleVarAccess(access ModuleVarAccess, other ModuleVarAccess) retu
 			read gives true
 			write gives false
 		end 'other'
+
 		write gives match other 'other'
 			read gives false
 			write gives true
@@ -268,8 +276,10 @@ end 'SharedGlobalAccessBlame'
 union SharedGlobalAccessRoute
 	// The writer IS the message — the direct shape, and the one an author would have spotted.
 	itself
+
 	// A chain of NAMED calls runs from the message to the writer.
 	throughCalls
+
 	// No named chain does. The message reaches a dispatch whose target is chosen at run time, so this writer
 	// is a function that dispatch could land in — the header's refusing direction, said out loud.
 	throughAnUnnameableDispatch
@@ -287,8 +297,10 @@ function blameForSharedGlobalAccess(survey ServiceProgramSurvey, funcIndex FuncI
 	end 'theWriterIsTheMessage'
 
 	let callers = callersReaching(survey, funcIndex: funcIndex)
+
 	for candidate in 0 upto survey.funcCount() 'eachCaller'
 		let reachesTheWriter = try callers.get(candidate) otherwise panic("blameForSharedGlobalAccess: callers.get OOB at {candidate} below count {callers.count()}")
+
 		if reachesTheWriter and survey.isAMessage(candidate) 'aMessageCallsIt'
 			return SharedGlobalAccessBlame.create(candidate, route: SharedGlobalAccessRoute.throughCalls)
 		end 'aMessageCallsIt'
@@ -394,6 +406,7 @@ module function opChoosesItsTargetAtRunTime(op MaxonOp) returns bool
 		throwError or
 			propagateError or
 			panicAbort gives false
+
 		// Taking a function's ADDRESS runs nothing; the `indirectCall` that eventually runs it is the op below.
 		functionRef gives false
 		indirectCall gives true
@@ -407,6 +420,7 @@ module function opChoosesItsTargetAtRunTime(op MaxonOp) returns bool
 			witnessTryDispatch gives true
 		panicAbortValue gives false
 		errorFlagEncode gives false
+
 		// A `spawn` names a TYPE and a send names a MESSAGE — both are names, and a send's handler is a seed
 		// of this walk in its own right.
 		serviceSpawn or

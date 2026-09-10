@@ -240,20 +240,24 @@ end 'serviceReplyReleasePlanFor'
 export function collectServiceReplyTargets(module MaxonModule) returns ByteArrayArray
 	var seen = AsyncReleaserSet.create()
 	var targets = ByteArrayArray.create()
+
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectServiceReplyTargets: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				noteIfServiceReplyCell(try module.ops.get(opIdx) otherwise panic("collectServiceReplyTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: targets)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return targets
 end 'collectServiceReplyTargets'
 
 function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
 	match op 'op'
 		serviceReplyCell(_, messageName) then noteAsyncCallee(messageName, seen: seen, targets: targets)
+
 		// Every other op mints no reply cell. Two ranges rather than one because `serviceReplyCell` is the
 		// union's LAST variant and the rest of the dialect sits below it.
 		call or
@@ -306,9 +310,11 @@ end 'declareServiceReplyReleaserNeeds'
 export function installServiceReplyReleasers(module StdModule, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for messageName in targets 'eachMessage'
 		let plan = serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+
 		if plan.isInert() 'nothingToRelease'
 			continue
 		end 'nothingToRelease'
+
 		synthesizeReleaser(module, name: serviceReplyReleaserName(messageName), plan: plan)
 	end 'eachMessage'
 end 'installServiceReplyReleasers'
@@ -328,6 +334,7 @@ function asyncReleasePlanFor(callee ByteArray, funcSignatures FuncSignatureMap, 
 	for i in 0 upto sig.paramCount() 'eachParam'
 		let paramType = try sig.paramTypes.get(i) otherwise panic("asyncReleasePlanFor: paramTypes.get OOB at {i}")
 		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
+
 		if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName) 'managedArg'
 			argSlots.push(AsyncManagedSlot.create((GtOffArgInline + i * GtArgSlotBytes) as ByteOffset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
 		end 'managedArg'
@@ -345,6 +352,7 @@ function asyncResultSlotsOf(callee ByteArray, sig FuncSignature, signatures Prog
 		declared(declaredReturn) gives declaredReturn
 		undeclared gives MaxonReturnType.void
 	end 'r'
+
 	return match returnType 'rt'
 		void gives AsyncManagedSlotArray.create()
 		value(inner) gives asyncSlotsAt(GtOffResult as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: inner, aggregateName: sig.returnAggregateName)
@@ -356,9 +364,11 @@ end 'asyncResultSlotsOf'
 // and the three arms differ only in which word they are asking about.
 function asyncSlotsAt(offset ByteOffset, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
 	var slots = AsyncManagedSlotArray.create()
+
 	if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName) 'ownsHeap'
 		slots.push(AsyncManagedSlot.create(offset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName)))
 	end 'ownsHeap'
+
 	return slots
 end 'asyncSlotsAt'
 
@@ -386,9 +396,11 @@ end 'asyncErrorSlotsOf'
 // wild free.
 function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, errorName ByteArray) returns AsyncManagedSlotArray
 	var slots = AsyncManagedSlotArray.create()
+
 	if layout.isBoxed() 'boxedError'
 		slots.push(AsyncManagedSlot.create(GtOffThrew as ByteOffset, dropCallee: signatures.unionBoxDropCallee(errorName)))
 	end 'boxedError'
+
 	return slots
 end 'asyncBoxedErrorSlots'
 
@@ -459,20 +471,24 @@ end 'asyncErasedUnionIsBoxed'
 export function collectAsyncSpawnTargets(module MaxonModule) returns ByteArrayArray
 	var seen = AsyncReleaserSet.create()
 	var targets = ByteArrayArray.create()
+
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectAsyncSpawnTargets: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				noteIfAsyncSpawn(try module.ops.get(opIdx) otherwise panic("collectAsyncSpawnTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: targets)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return targets
 end 'collectAsyncSpawnTargets'
 
 function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
 	match op 'op'
 		asyncCall(_, callee, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
+
 		// Every other op names no SPAWNED callee, `await`/`tryAwait` included: the await side reaches its
 		// releaser through the GT struct at run time, which is the whole point of storing the address there.
 		// Two ranges rather than one because `asyncCall` sits mid-union, between `indirectCall` and `await`.
@@ -504,6 +520,7 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 			witnessTryDispatch or
 			panicAbortValue or
 			errorFlagEncode then break 'op'
+
 		// A SERVICE's green thread owns its state and its request boxes and releases them in its own loop
 		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
 		// implements is the `async` PROMISE's, and a service has no promise.
@@ -563,9 +580,11 @@ end 'declareSlotDropNeeds'
 export function installAsyncReleasers(module StdModule, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for callee in targets 'eachCallee'
 		let plan = asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+
 		if plan.isInert() 'nothingToRelease'
 			continue
 		end 'nothingToRelease'
+
 		synthesizeReleaser(module, name: asyncReleaserName(callee), plan: plan)
 	end 'eachCallee'
 end 'installAsyncReleasers'
@@ -641,6 +660,7 @@ function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMi
 	module.setTerminator(start, op: StdOp.condBranch(noError, thenBlockId: releaseSuccess.id, elseBlockId: releaseError.id))
 
 	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseSuccess, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
+
 	// `errorSlots` is empty for a throwing callee whose error type is a SCALAR clause — there is a `threw`
 	// worth branching on and nothing in it to free — so this arm emits no drop at all and falls straight
 	// through. That is the "callee throws" / "error is managed" split, and it is why they are two facts.
@@ -660,8 +680,10 @@ end 'emitResultOrErrorRelease'
 // on, and it is the reading a memzeroed recycled struct guarantees.
 function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncManagedSlotArray) returns IrBlock
 	var block = cur
+
 	for slot in slots 'eachSlot'
 		block = emitNullGuardedDrop(module, cur: block, box: gt, offset: slot.offset, kind: FieldDropKind.direct(slot.dropCallee), ids: ids, func: func)
 	end 'eachSlot'
+
 	return block
 end 'emitSlotReleases'

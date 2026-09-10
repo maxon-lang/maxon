@@ -41,8 +41,10 @@ public extension Array
 		if hi <= lo + 1 'trivial'
 			return
 		end 'trivial'
+
 		var i = lo
 		var j = hi - 1
+
 		while i < j 'loop'
 			self.swap(i, j: j)
 			i = i + 1
@@ -58,9 +60,11 @@ public extension Array
 		let a = try managed.get(i) otherwise panic("compareAndSwap: get OOB at i; caller must pre-bound i,j")
 		let b = try managed.get(j) otherwise panic("compareAndSwap: get OOB at j; caller must pre-bound i,j")
 		let ord = cmp(a, b)
+
 		if ord != Ordering.greaterThan 'inOrder'
 			return
 		end 'inOrder'
+
 		self.swap(i, j: j)
 	end 'compareAndSwap'
 
@@ -89,20 +93,25 @@ public extension Array
 		self.compareAndSwap(lo + 2, j: lo + 3, cmp: cmp)
 		self.compareAndSwap(lo + 4, j: lo + 5, cmp: cmp)
 		self.compareAndSwap(lo + 6, j: lo + 7, cmp: cmp)
+
 		// Layer 2: even-positioned pairs
 		self.compareAndSwap(lo + 0, j: lo + 2, cmp: cmp)
 		self.compareAndSwap(lo + 1, j: lo + 3, cmp: cmp)
 		self.compareAndSwap(lo + 4, j: lo + 6, cmp: cmp)
 		self.compareAndSwap(lo + 5, j: lo + 7, cmp: cmp)
+
 		// Layer 3: medians within each half
 		self.compareAndSwap(lo + 1, j: lo + 2, cmp: cmp)
 		self.compareAndSwap(lo + 5, j: lo + 6, cmp: cmp)
+
 		// Layer 4: cross-half corners
 		self.compareAndSwap(lo + 0, j: lo + 4, cmp: cmp)
 		self.compareAndSwap(lo + 3, j: lo + 7, cmp: cmp)
+
 		// Layer 5: cross-half inner
 		self.compareAndSwap(lo + 1, j: lo + 5, cmp: cmp)
 		self.compareAndSwap(lo + 2, j: lo + 6, cmp: cmp)
+
 		// Layer 6: final ordering
 		self.compareAndSwap(lo + 1, j: lo + 4, cmp: cmp)
 		self.compareAndSwap(lo + 3, j: lo + 6, cmp: cmp)
@@ -117,21 +126,25 @@ public extension Array
 	// adaptive shifts on already-mostly-sorted input.
 	public function smallSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
+
 		if n == 2 'n2'
 			Log.trace("smallSort.network")
 			self.sortNetwork2(lo, cmp: cmp)
 			return
 		end 'n2'
+
 		if n == 4 'n4'
 			Log.trace("smallSort.network")
 			self.sortNetwork4(lo, cmp: cmp)
 			return
 		end 'n4'
+
 		if n == 8 'n8'
 			Log.trace("smallSort.network")
 			self.sortNetwork8(lo, cmp: cmp)
 			return
 		end 'n8'
+
 		Log.trace("smallSort.insertion")
 		self.internalInsertionSortRange(lo, hi: hi, cmp: cmp)
 	end 'smallSortRange'

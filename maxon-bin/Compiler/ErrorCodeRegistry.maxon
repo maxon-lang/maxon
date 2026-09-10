@@ -10,19 +10,25 @@
 export enum ErrorCode
 	// A string literal reached end-of-line or end-of-file with no closing quote.
 	lexerUnterminatedString = "E1002"
+
 	// A backslash escape in a string or character literal names no known escape.
 	lexerInvalidEscape = "E1004"
+
 	// A literal brace appears unescaped in a string literal. A '{' opens interpolation, so write '\{' to embed a literal brace.
 	lexerUnescapedBrace = "E1006"
+
 	// A block comment reached end-of-file with no closing delimiter.
 	lexerUnterminatedBlockComment = "E1007"
+
 	// The lexer reached end-of-file in the middle of a token.
 	lexerUnexpectedEof = "E1008"
+
 	// A '#' compiler directive names a directive the lexer does not know.
 	lexerUnknownDirective = "E1009"
 
 	// The parser met a token that cannot appear at this point in the grammar.
 	parserUnexpectedToken = "E2001"
+
 	// A type was required here and the token stream had something else.
 	// The compiler emits it for the two shapes where a name IS present but is not a
 	// usable type: a bare sized type as a typealias RHS (`typealias I = i64`),
@@ -39,55 +45,77 @@ export enum ErrorCode
 	// position that offers nothing at all is E2015 instead, which names the one
 	// construct that does infer.
 	parserExpectedType = "E2003"
+
 	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: five distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; and a top-level binding's initializer does not fold to a compile-time constant.
 	parserExpressionError = "E2004"
+
 	// The parser reached end-of-file with a construct still open.
 	parserUnexpectedEof = "E2007"
+
 	// A block's 'end' label does not match the label its header opened.
 	parserMismatchedEndLabel = "E2008"
+
 	// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
 	parserExpectedToken = "E2010"
+
 	// An integer literal does not fit the range of its type.
 	parserLiteralOverflow = "E2011"
+
 	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
 	parserCircularDependency = "E2012"
+
 	// An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
 	assignToImmutable = "E2013"
+
 	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.
 	duplicateParameter = "E2014"
+
 	// The source uses a language construct this compiler does not implement yet.
 	parserUnsupportedFeature = "E2015"
+
 	// A character literal is malformed (empty, or holding more than one character).
 	parserInvalidCharacterLiteral = "E2016"
+
 	// A match arm falls through to the next arm while the enclosing function still owes a return.
 	matchFallthroughWithReturn = "E2025"
+
 	// A match does not cover every case of its scrutinee and has no default arm.
 	matchNotExhaustive = "E2026"
+
 	// Two match arms test the same pattern; the second can never run.
 	matchDuplicatePattern = "E2027"
+
 	// A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
 	// a match arm or postfix-ternary's two arms produce different types,
 	// or a ternary condition is not bool. Thrown at parse time so it wins over the
 	// body-finish unused-variable check (E3012).
 	matchTypeMismatch = "E2028"
+
 	// A match's 'default' arm is not the last arm.
 	matchDefaultNotLast = "E2029"
+
 	// A match arm opens a block but gives it no block label.
 	matchMissingBlockId = "E2042"
+
 	// A match arm's block label does not match the label its arm opened.
 	matchMismatchedBlockId = "E2043"
+
 	// A top-level constant's initializer is not a compile-time constant.
 	parserNonConstantInitializer = "E2045"
+
 	// A match over an enum may only carry a 'default' arm if that arm throws.
 	matchDefaultEnumMustThrow = "E2046"
+
 	// 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
 	controlOutsideLoop = "E2047"
+
 	// 'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant.
 	// `break 'lab'` / `continue 'lab'` where `lab` names the
 	// innermost enclosing loop (with no intervening match for `break`). The
 	// label is redundant -- unlabeled `break`/`continue` already targets
 	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
 	labelTargetsOwnLoop = "E2048"
+
 	// A match arm's body is a block-opening statement. Each arm body must be a single statement.
 	// Phase 9 Stage 0: a match arm body cannot be a block-opening
 	// statement (`if` / `while` / `for` / `match` / block-form `try`).
@@ -95,21 +123,26 @@ export enum ErrorCode
 	// allocate persistent slots that leak on every error path through
 	// the match.
 	matchBlockStatement = "E2049"
+
 	// An 'otherwise' block form declares no error binding.
 	// TWO messages on one code: a block-form
 	// `try 'l' ... end 'l'` with NO `otherwise` handler at all, and one whose
 	// handler declares no `(e)`. The author's mistake is one thing -- an
 	// incomplete handler -- told apart only by how far they got.
 	otherwiseBlockMissingBinding = "E2050"
+
 	// A declaration uses a name reserved by the compiler.
 	reservedIdentifier = "E2051"
+
 	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
 	// a call site labeled its first argument (`f(name: value, ...)`).
 	// The first argument is positional-only; only the second and subsequent
 	// arguments may be labeled.
 	callFirstArgNamed = "E2052"
+
 	// A call leaves a second-or-later argument unlabeled. Every argument after the first must carry its 'name:' label.
 	callArgMissingLabel = "E2053"
+
 	// A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
 	// 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
 	// not a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed
@@ -124,23 +157,28 @@ export enum ErrorCode
 	// FOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a
 	// check that only looked for a bare literal token missed its own motivating example.
 	shiftCountNegative = "E2054"
+
 	// A 'Base with Args' instantiation names a 'Base' that declares no type parameters --
 	// a non-generic type, or a name that is not a generic 'type' at all. Reports as
 	// "Type 'X' has no associated types".
 	genericBaseNotGeneric = "E2055"
+
 	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
 	// where 'type Pair uses A, B' expects two (P1.6-A).
 	genericArityMismatch = "E2056"
+
 	// A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
 	// confined to those files by ONE rule checked in ONE place, so which declarations a build
 	// carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
 	// body for. The message names the fix: rename the file, or move the declaration.
 	parserTestOutsideTestFile = "E2058"
+
 	// A `test` declaration's name is the empty character literal (`test ''`). The name is the
 	// test's whole identity -- it is what the reporter prints and what `end ''` must match -- and
 	// an empty one names nothing. Refused at the declaration rather than at the report, where an
 	// unnamed failure would be the least useful place to discover it.
 	parserTestEmptyName = "E2059"
+
 	// '__line__' or '__file__' appeared somewhere other than a function parameter's default
 	// value -- in an ordinary expression, or as a struct FIELD default, which is a different
 	// thing despite the shared '= <expr>' spelling.
@@ -153,6 +191,7 @@ export enum ErrorCode
 	// CAPTURED. The capture-side check is not merely a better error location -- without it a
 	// field default nobody triggers is never expanded, and the misuse would go undiagnosed.
 	parserCallerLocationOutsideDefault = "E2060"
+
 	// A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',
 	// 'Array with float' -- where the ranged-typealias rule requires a declared domain
 	// ('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule
@@ -166,6 +205,7 @@ export enum ErrorCode
 	// because THIS code's advice ("declare a ranged typealias") is true for 'int' and a trap for
 	// 'float'. So this code only ever names 'int'.
 	genericBarePrimitiveArg = "E2061"
+
 	// A generic type argument resolves to 'float' -- bare ('Box with float') or through a ranged
 	// float typealias ('typealias Real = float(...)' then 'Box with Real'). The compiler DICTIONARY-PASSES
 	// rather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a
@@ -176,6 +216,7 @@ export enum ErrorCode
 	// It is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias
 	// advice, which would direct the reader into the very panic this refusal exists to close.
 	genericFloatTypeArg = "E2062"
+
 	// A '#if' / '#else' / '#endif' region is structurally unbalanced: a '#if' still open at end of
 	// file, or an '#endif' / '#else' with no '#if' to close.
 	// Accepting them is a wrong-answer generator, not a leniency: an unterminated '#if' silently
@@ -183,6 +224,7 @@ export enum ErrorCode
 	// an unrelated 'undefined' further on. The compiler refuses, naming the position of the directive that
 	// has no partner.
 	directiveUnbalanced = "E2063"
+
 	// A '#if' condition names a conditional-compilation predicate that does not exist -- anything
 	// other than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.
 	// Distinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a
@@ -194,6 +236,7 @@ export enum ErrorCode
 	// ')', an operator with no right-hand side, text trailing the condition -- is E2065; it used to
 	// share this code, and 'your predicate name is unknown' is the wrong advice for a missing paren.
 	directiveUnknownPredicate = "E2064"
+
 	// A '#if' condition the directive grammar has no production for. Two shapes reach it: the
 	// condition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare
 	// 'true' where a predicate call belongs, a condition that runs off the end of the file), or the
@@ -207,6 +250,7 @@ export enum ErrorCode
 	// so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
 	// region is dead and the junk is skipped along with it. A condition ends at its own newline.
 	directiveMalformedCondition = "E2065"
+
 	// A conformance's PARENTHESIZED 'with (...)' list binds more arguments than the interface
 	// declares 'uses' names -- 'type Holder implements One with (Integer, Float)' against
 	// 'interface One uses A', which bound A := Integer, silently DROPPED Float and compiled clean
@@ -226,6 +270,7 @@ export enum ErrorCode
 	// It is NOT raised when the interface name resolves to nothing: a name no file declares has no
 	// arity to be surplus of, and the program's real error is E3015 'implements unknown interface'.
 	conformanceWithArgSurplus = "E2066"
+
 	// A call to a bare compiler BUILTIN labels one of its arguments -- 'min(3.0, b: 5.0)'.
 	// A builtin's arguments are ALL POSITIONAL, at every index, because a 'name:' label names a
 	// PARAMETER OF A DECLARATION and a builtin has no declaration to have parameters. Nothing
@@ -264,6 +309,7 @@ export enum ErrorCode
 	// so a '__Builtins.' name this compiler does not implement parses positionally and meets E3004,
 	// rather than a label complaint standing in front of the true diagnostic.
 	builtinArgNamed = "E2067"
+
 	// A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the
 	// number grammar does not admit.
 	// IT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to
@@ -276,6 +322,7 @@ export enum ErrorCode
 	// position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
 	// surface.
 	parserMalformedNumericLiteral = "E2068"
+
 	// A 'Vector with ...' does not state a usable element COUNT before its element type:
 	// 'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a
 	// count too large for the compiler to fold into a buffer allocation.
@@ -287,6 +334,7 @@ export enum ErrorCode
 	// missing its element type IS the E2056 that code names.
 	// It has a code of its own so the one rule has one message wherever the spelling is met.
 	vectorSizeMalformed = "E2069"
+
 	// A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.
 	// Each intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:
 	// 'ucdByteAt' reads '__ucd_bmp', one byte per BMP codepoint, and 'ucdI64At' reads
@@ -302,6 +350,7 @@ export enum ErrorCode
 	// ordinary 'expected a string literal' rule, because that is a shape the parser can state
 	// without knowing which intrinsic it is reading for.
 	ucdTableLabelUnknown = "E2070"
+
 	// A qualified read names a member the type does not declare -- `Config.MIN_SIZE` where
 	// `Config` declares only `MAX_SIZE`. The base is a type the AUTHOR declared, so the type
 	// has a static roster to answer from and the honest sentence is about that roster. Blamed at
@@ -321,12 +370,16 @@ export enum ErrorCode
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
+
 	// 'main' declares a return type other than ExitCode.
 	mainWrongReturnType = "E3002"
+
 	// A call names a function that does not exist -- a typo, or a callee not visible from here.
 	callUnknownFunction = "E3004"
+
 	// A value's type does not match the type required at this position.
 	typeMismatch = "E3005"
+
 	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
 	// a duplicate definition or a local-vs-self-field shadow. Two
 	// shapes share the code: (a) two function definitions with the same
@@ -366,14 +419,17 @@ export enum ErrorCode
 	// not injective. A `typealias` is not a claimant here: it mints no symbol
 	// of its own.
 	duplicateDefinition = "E3006"
+
 	// A call cannot pick a unique overload: two or more candidates match it indistinguishably.
 	// call site cannot pick a unique overload because multiple
 	// variants have indistinguishable signatures at this call. Emitted when
 	// two overloads share the same parameter types and the caller doesn't
 	// disambiguate with named arguments.
 	semanticAmbiguousOverload = "E3007"
+
 	// A symbol is referenced from another file but is not declared 'export'.
 	symbolNotExported = "E3008"
+
 	// A conversion that cannot be proven safe: an explicit cast whose source range does
 	// not fit the destination (`256 as Byte`), an explicit cast that is lossy or
 	// meaningless (`5.0 as int`, `true as int`), or the SAME lossy conversion reached
@@ -384,14 +440,19 @@ export enum ErrorCode
 	// rejected `5.0 as int` while specs/implicit-type-conversion.md silently truncated
 	// the identical conversion at a call argument.
 	semanticUnsafeCast = "E3009"
+
 	// A cast names the value's own typealias, so it converts nothing.
 	semanticUnneededCast = "E3010"
+
 	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
 	unknownType = "E3011"
+
 	// A local binding is declared and never read.
 	semanticUnusedVariable = "E3012"
+
 	// A value-returning function can reach its end without returning, or a 'return' in it carries no value.
 	missingReturn = "E3013"
+
 	// A field not declared 'export' is read or written from outside its own type.
 	// The gate is the TYPE, not the FILE, and it covers WRITES as well as reads:
 	// `type B` touching `type A`'s unexported field is E3014 in the same file, and
@@ -400,28 +461,38 @@ export enum ErrorCode
 	// struct literal, because the type itself determines what fields exist and
 	// visibility only governs access AFTER construction (specs/export-var-fields.md).
 	unexportedFieldAccess = "E3014"
+
 	// An 'implements' clause names an interface that does not exist.
 	semanticUnknownInterface = "E3015"
+
 	// A type claims to implement an interface but does not define all of its members.
 	semanticPartialInterfaceImpl = "E3016"
+
 	// A generic argument violates the 'where' constraint declared on the type parameter.
 	semanticWhereConstraintViolation = "E3017"
+
 	// A field access names a field the type does not have.
 	semanticUnknownField = "E3018"
+
 	// An immutable ('let') binding is passed to a parameter the callee mutates, or a mutating method is called on it.
 	// a mutating method (push/pop/set/append/...) or a parameter-mutating
 	// function is called on an immutable (`let`-bound) receiver/argument. The
 	// receiver's data would be modified through a binding the user declared
 	// immutable. Emitted by the Maxon-tier borrow/mutation check.
 	semanticImmutableRefToMutatingParam = "E3019"
+
 	// An enum declares the same case name twice.
 	enumDuplicateCase = "E3030"
+
 	// Two enum cases declare the same raw value.
 	enumDuplicateRawValue = "E3031"
+
 	// An enum case's raw value has a type other than the enum's declared raw-value type.
 	enumRawValueTypeMismatch = "E3032"
+
 	// A match arm names a case the scrutinee's enum does not have.
 	enumUnknownCase = "E3034"
+
 	// A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
 	// a match-arm payload-binding pattern (`case(x, y)`) supplies
 	// the wrong number of bindings for the case's declared payload. Emitted
@@ -429,20 +500,28 @@ export enum ErrorCode
 	// parse time, or deferred to TypeResolution when the case's owning
 	// union isn't yet known.
 	enumWrongBindingCount = "E3035"
+
 	// A call passes a different number of arguments than the callee declares parameters.
 	callArgCountMismatch = "E3036"
+
 	// A call's 'name:' label names no parameter of the callee.
 	callUnknownArgLabel = "E3037"
+
 	// Two arguments of one call target the same parameter.
 	callDuplicateArg = "E3038"
+
 	// 'main' is declared 'throws'. There is no caller left to handle the error.
 	mainCannotThrow = "E3054"
+
 	// 'try' is applied to a call that cannot throw.
 	tryRequiresThrowingFunction = "E3055"
+
 	// A throwing call is made without 'try'.
 	throwingFunctionRequiresTry = "E3057"
+
 	// 'otherwise' is written without a 'try'.
 	otherwiseRequiresTry = "E3058"
+
 	// An 'otherwise' handler's value has a type other than the 'try' expression's type.
 	// It carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE
 	// POSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the
@@ -450,6 +529,7 @@ export enum ErrorCode
 	// discards a result that does not exist) is refused here as well.
 	// NOT E3124, which is the opposite mismatch -- a value produced and dropped.
 	errorTypeMismatch = "E3059"
+
 	// Two typealiases in scope declare the same name.
 	// Two `typealias` declarations of one name in DIFFERENT files are legal,
 	// whatever their forms: every alias form is scoped, a non-exported one is
@@ -461,16 +541,19 @@ export enum ErrorCode
 	// declarations are typealiases; a colliding pair involving a
 	// `type`/`enum`/`union`/`interface` is E3006 instead.
 	semanticDuplicateTypeAlias = "E3061"
+
 	// A typealias is declared and never used.
 	// "Used" means the NAME appears in a type position in its OWN declaring
 	// file. An exported alias is exempt (one file cannot see another's uses),
 	// and being implicitly inferable from a bare `[...]` literal is not a use.
 	semanticUnusedTypeAlias = "E3062"
+
 	// a bare-name type reference has more than one reachable
 	// typealias definition under directory-as-module rules. The user must
 	// write the directory-qualified form (`dir.Name`) to disambiguate.
 	// Mirrors E3095 (functions) but operates on the typealias registry.
 	semanticAmbiguousTypeAlias = "E3063"
+
 	// a pure-function call's result was discarded. Pure callees must
 	// have their result used -- neither bare `foo()` nor `_ = foo()` is
 	// permitted. Fires from `checkDiscardedResults`, whose other arm is E3065:
@@ -493,6 +576,7 @@ export enum ErrorCode
 	// constrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are
 	// every declared member wearing the requirement's name whose body this program reached.
 	semanticDiscardedPureResult = "E3064"
+
 	// an impure-function call's result was discarded without the
 	// explicit `_ =` opt-in. The impure-call result still has to flow into
 	// either a binding (`let r = foo()`) or an explicit discard
@@ -507,6 +591,7 @@ export enum ErrorCode
 	// but a REFUSAL under E3065 -- so a lowered runtime entry, whose read-only roster is
 	// a whitelist rather than a proof of effect, earns neither.
 	semanticDiscardedImpureResult = "E3065"
+
 	// A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
 	// a `union` value was compared with `==` / `!=`. Unions carry no
 	// synthesized equality -- a new case can't be added without every match site
@@ -514,6 +599,7 @@ export enum ErrorCode
 	// Enums (which auto-implement Equatable) are unaffected. Stdlib source is
 	// exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution.
 	semanticEnumNotComparable = "E3066"
+
 	// a textual self-assignment (`x = x`, `p.x = p.x`) or a
 	// discard-assignment whose RHS isn't a function call (`_ = 42`). The
 	// former has no effect; the latter is the historic shape for opting out
@@ -548,6 +634,7 @@ export enum ErrorCode
 	// and the mutability check, so an immutable or undeclared target reports this
 	// code rather than "cannot assign to immutable variable" or undefined-variable.
 	semanticSelfAssignment = "E3067"
+
 	// The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
 	// the `is` / `is not` reference-identity operator was applied to a
 	// primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
@@ -569,12 +656,14 @@ export enum ErrorCode
 	// reading is a wrong answer rather than a missing one. See
 	// `TypeRules.tagHasReferenceIdentity`.
 	refIdentityOnPrimitive = "E3068"
+
 	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.
 	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
 	// and dangle the outstanding reference. Emitted by the Maxon-tier
 	// `runMaxonBorrowCheck` pass.
 	semanticBorrowConflict = "E3070"
+
 	// a statement appears in the same straight-line block body
 	// immediately after a `return`, `throw`, `panic(...)`, `break` or
 	// `continue`. The trailing statement is unreachable -- control never falls
@@ -590,17 +679,20 @@ export enum ErrorCode
 	// covers `break`/`continue` as well as `return`/`throw`/`panic`,
 	// which `specs/break.md` pins.
 	semanticUnreachableCode = "E3071"
+
 	// a struct-literal names a compiler builtin managed type
 	// (`__ManagedFile`, `__ManagedMemory`, `__ManagedDirectory`, ...). These
 	// carry an opaque runtime handle and must be obtained through their static
 	// factory methods (e.g. `__ManagedFile.openRead`), never built directly.
 	// Emitted by the parser at the struct-literal site.
 	semanticBuiltinTypeConstruction = "E3072"
+
 	// an `async f()` call targets a function that never yields (contains
 	// no await / I/O stub call, transitively). `async` is only for I/O-concurrent
 	// work -- a non-yielding callee would run to completion synchronously on the
 	// spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
 	asyncNonYielding = "E3073"
+
 	// A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively
 	// calling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so
 	// subprocess cannot exist on that target -- rather than silently throwing
@@ -609,9 +701,11 @@ export enum ErrorCode
 	// Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code
 	// into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
 	semanticSubprocessUnsupportedTarget = "E3074"
+
 	// A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
 	// is already known at the arm, so the bare case name suffices.
 	matchQualifiedCaseName = "E3075"
+
 	// a struct literal (`Type{...}`) is written outside the type's own
 	// methods. Construction is restricted to the type's own methods / static
 	// factories so invariants can be enforced at the single construction point;
@@ -620,6 +714,7 @@ export enum ErrorCode
 	// through a typealias visible at the site (inner alias of the current
 	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
 	semanticConstructorRestriction = "E3076"
+
 	// a local declared with `var` is never reassigned, so it should
 	// be a `let`. Detected after type resolution by
 	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
@@ -632,6 +727,7 @@ export enum ErrorCode
 	// this one. A MOVE-OUT counts as a use of mutability: the keyword decides
 	// move-vs-alias, so advising `let` would silently turn a move into an alias.
 	semanticVarShouldBeLet = "E3077"
+
 	// `var b = a` (or `var b = a.field`) where the source `a` is an
 	// immutable (`let`) binding of a reference type (struct / enum /
 	// function). Copying an immutable reference-type binding into a mutable
@@ -641,29 +737,35 @@ export enum ErrorCode
 	// copies and are allowed. Detected after type resolution by
 	// `checkVarFromImmutableForEntry`.
 	semanticVarFromImmutable = "E3078"
+
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
 	semanticMatchDiscardedBindings = "E3081"
+
 	// a labeled control-flow block (`if`/`else`/`while`/`for`) has no
 	// statements between its header and matching `end`. Refused so dead
 	// control-flow can't sneak past a refactor; emitted
 	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
 	// statements were consumed.
 	semanticEmptyBlock = "E3082"
+
 	// a block-form `try 'label' ... end` body contains no throwing
 	// calls (no bare throwing call/methodCall, no routed `throw`). The
 	// construct exists to funnel multiple throwing calls into one handler;
 	// a body that can never fail has no error to route, so the `otherwise`
 	// handler is dead.
 	tryBlockNoThrows = "E3083"
+
 	// the `otherwise (e) 'label' ... end` handler of a block-form
 	// try must contain a `match` on the error binding `e`. Without it, the
 	// synthesized (possibly union) error value is never inspected and the
 	// handler cannot dispatch on which error occurred.
 	tryBlockBindingNotMatched = "E3084"
+
 	// a bare case-name pattern in a match on a synthesized error
 	// union is shared by two or more union members, so it is ambiguous --
 	// the user must qualify it as `EnumName.case`.
 	unionMatchPatternAmbiguous = "E3085"
+
 	// a struct literal omits a field that has no default value, is not a
 	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
 	// in a static factory) was not proven definitely assigned via `self.field =
@@ -671,18 +773,22 @@ export enum ErrorCode
 	// struct-literal field-init checks and the post-body definite-assignment
 	// dataflow pass.
 	semanticFieldNotInitialized = "E3086"
+
 	// an `if x.contains(k)` whose then-block immediately performs
 	// `try x.get(k) otherwise ...` on the same receiver/key pair does the
 	// lookup twice. The compiler asks the user to rewrite as `if let v =
 	// try x.get(k) ... 'lbl'` (or `if var`) so a single lookup serves both
 	// the membership test and the value bind.
 	redundantContainsGet = "E3087"
+
 	// A 'module'-visible symbol is accessed from outside its declaring directory subtree.
 	// Symbol declared with the `module` keyword (visible to the declaring directory
 	// subtree only) but accessed from outside that subtree.
 	symbolNotInModuleScope = "E3088"
+
 	// A typealias chain refers back to itself.
 	semanticTypeResolutionCycle = "E3091"
+
 	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, make it 'module', or say 'public' if it is API surface.
 	// an `export` (global) decl is never referenced from any file
 	// outside its declaring file. The decl could be file-private (drop the
@@ -696,16 +802,19 @@ export enum ErrorCode
 	// That distinction is what makes this diagnostic answerable at all: see
 	// `Visibility` in maxon-bin/Compiler/Project.maxon.
 	semanticUnusedExportedSymbol = "E3092"
+
 	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module', or 'public' if it is API surface.
 	// an `export` (global) decl is referenced only from files inside
 	// its declaring directory subtree. The decl could be downgraded to
 	// `module`-visible. Emitted by `checkUnusedExports`.
 	semanticExportableAsModule = "E3093"
+
 	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
 	// a `module` decl is never referenced from any file other than
 	// the one it was declared in. The decl could be file-private (drop the
 	// `module` modifier). Emitted by `checkUnusedExports`.
 	semanticUnusedModuleSymbol = "E3094"
+
 	// A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
 	// a bare-name function call has more than one reachable
 	// definition under directory-as-module rules. The user must write the
@@ -713,6 +822,7 @@ export enum ErrorCode
 	// the cross-file fallback in `qualifyCalleeForContextWithType` when
 	// `methodNameIndex` returns multiple distinct visible candidates.
 	semanticAmbiguousCrossFileCall = "E3095"
+
 	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
 	// `.rawValue` accessor. Such a comparison is checking which case a value
 	// is, which must be done on the value itself (`value == Type.case` for a
@@ -720,6 +830,7 @@ export enum ErrorCode
 	// case forces every site to handle it instead of silently slipping
 	// through). Comparing the derived string/int accessor bypasses that.
 	semanticEnumAccessorComparison = "E3097"
+
 	// A promise is stored in a Promise type that does not name the error its thunk throws.
 	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
 	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
@@ -736,6 +847,7 @@ export enum ErrorCode
 	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
 	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
 	promiseErrorTypeMismatch = "E3098"
+
 	// A closure that CAPTURES, ESCAPING the frame its captures point into.
 	// THE RULE: a closure that captures may not escape its defining frame.
 	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
@@ -774,6 +886,7 @@ export enum ErrorCode
 	// by-reference capture semantics the closure specs currently pin. The compiler schedules it at
 	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
 	capturingClosureEscapes = "E3099"
+
 	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
 	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
 	// language already has everywhere else. A second await would take a second +1 on a payload the
@@ -784,6 +897,7 @@ export enum ErrorCode
 	// two awaits of the same promise in mutually exclusive branches are each the only await on
 	// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
 	promiseAlreadyAwaited = "E3100"
+
 	// A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot
 	// express `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the
 	// binding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`
@@ -797,6 +911,7 @@ export enum ErrorCode
 	// FEATURE, and would be built for nobody. If a real need appears, that is the shape -- and this
 	// code is what says so.
 	throwingFunctionAsValue = "E3101"
+
 	// A binding is READ after its owned heap value was MOVED OUT of it. Under the compiler's static
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
 	// `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to
@@ -804,12 +919,14 @@ export enum ErrorCode
 	// it would read a value another binding now owns and will drop, and dropping it twice is a
 	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding).
 	useAfterMove = "E3102"
+
 	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
 	// divisor that folded to 0, or the float `a / 0.0` and `a / -0.0` -- both of which give an
 	// infinity). Unlike a possibly-zero divisor -- which is a throwing operation handled with
 	// `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a bug, rejected
 	// at compile time.
 	semanticDivisionByZero = "E3103"
+
 	// A construct is reached by a program compiled for a target whose backend has not lowered the
 	// runtime entry it needs. Which host facility each entry needs and which targets provide it are
 	// the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so
@@ -823,6 +940,7 @@ export enum ErrorCode
 	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	// and no line -- a compiler crash where a diagnostic was owed.
 	targetUnsupportedConstruct = "E3104"
+
 	// Two FILES declare the same ranged typealias name over DIFFERENT underlying primitives -- one
 	// `int`, the other `float`. Two files declaring one name over two RANGES is legal and stays so
 	// (a non-exported typealias is file-local: `specs/duplicate-typealias.md`), because the range is
@@ -837,6 +955,7 @@ export enum ErrorCode
 	// value in a gpr slot, wasm emitted a module its own validator rejected, and a struct field
 	// typed by the alias silently compiled to the wrong width.
 	semanticTypeAliasUnderlyingConflict = "E3105"
+
 	// `Array.resize` is called on an array whose ELEMENT TYPE IS MANAGED -- a struct, a `String`,
 	// a nested container, a boxed union. Such an element lives in the buffer as a refcounted
 	// POINTER, so the zeroed slots `resize` exposes are NULL: an absence, not a value. Maxon has
@@ -858,6 +977,7 @@ export enum ErrorCode
 	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	// and it stays available.
 	semanticArrayResizeManagedElement = "E3106"
+
 	// Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
 	// two names -- the prose one the reporter prints, and the mangled `__test_<sanitized>` one that
 	// reaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to
@@ -868,6 +988,7 @@ export enum ErrorCode
 	// unreportable -- a reader of the report cannot tell which one failed -- so this rejects the
 	// identical-prose case for its own reason, not merely as a symbol-table accident.
 	semanticDuplicateTestName = "E3107"
+
 	// The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose
 	// ELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That
 	// setter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can
@@ -889,6 +1010,7 @@ export enum ErrorCode
 	// generic body at all (a field access through it is refused one step earlier), so every site
 	// this rule can see has a concrete element.
 	semanticBufferSetManagedElement = "E3109"
+
 	// The BUFFER surface's RAW BYTE access -- `arr.managed.setByte(offset, value:)` or
 	// `arr.managed.byteAt(offset)` -- is used on an array whose ELEMENT TYPE IS MANAGED: a struct,
 	// a `String`, a nested container, a boxed union.
@@ -911,6 +1033,7 @@ export enum ErrorCode
 	// staging the buffer surface exists for -- string building, a NUL terminator written at the
 	// length boundary -- is unaffected.
 	semanticBufferByteAccessManagedElement = "E3110"
+
 	// One conforming type reaches ONE interface's requirement by two routes that select DIFFERENT
 	// members for it. A conforming type has exactly one witness table per interface and exactly one
 	// address per method slot, so an interface has to be conformed to exactly ONE way; two routes
@@ -927,6 +1050,7 @@ export enum ErrorCode
 	// The message names both selected members' SIGNATURES rather than their registration names --
 	// `convert#Real` is a key this compiler mints, not something an author wrote.
 	semanticConflictingInterfaceConformance = "E3111"
+
 	// A user program declares a type name that a stdlib module ALSO declares, and that
 	// same spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument
 	// label. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both
@@ -936,6 +1060,7 @@ export enum ErrorCode
 	// sides would disagree about one name and the member would silently stop resolving. Refused
 	// rather than risked; rename the type in the user program.
 	stdlibShadowedNameIsAlsoAMember = "E3112"
+
 	// A function's `throws` clause names something that is not a declared enum or union.
 	// The error-flag ABI carries a caught error as `ordinal + ErrorFlagOrdinalBias` for a payload-free
 	// enum and as a heap BOX POINTER for a payload-carrying union, and which of the two it is comes
@@ -948,6 +1073,7 @@ export enum ErrorCode
 	// whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
 	// through the witness ABI, and is guarded separately by E3016.
 	throwsTypeNotAnErrorEnum = "E3113"
+
 	// A method call on a constrained type parameter names something that MORE THAN ONE of the
 	// requirements its `where` constraints supply could be. An interface and its `extends` parents
 	// may each declare the name, and two constraints on one parameter may each declare it too --
@@ -967,6 +1093,7 @@ export enum ErrorCode
 	// The message names BOTH claimants by their DECLARING interface, since that is the interface the
 	// author has to change; the cure is to rename one requirement or to drop one constraint.
 	semanticAmbiguousWitnessDispatch = "E3114"
+
 	// A method call on a constrained type parameter names a method that the parameter's `where`
 	// constraints supply SEVERAL requirements for, and the call's argument count matches none of
 	// them.
@@ -980,6 +1107,7 @@ export enum ErrorCode
 	// reported by E3036 as it always was, so this code is reached only where a choice genuinely
 	// existed.
 	semanticNoWitnessRequirementForArgCount = "E3115"
+
 	// A method call on a VALUE of a constrained type parameter names a requirement its `where`
 	// constraints declare `static`. A `static` member has no receiver, so there is nothing for the
 	// call to dispatch on; a `static` member is called on a concrete type, which is exactly what a
@@ -998,6 +1126,7 @@ export enum ErrorCode
 	// "is this requirement the `Equatable`/`Comparable` protocol?", a static one is not, and the
 	// author's cure is the sentence E3005 already prints for a throwing or wrong-arity look-alike.
 	semanticStaticRequirementNotDispatchable = "E3116"
+
 	// A construct that fills an `Array with Byte` with RAW BYTES, one byte per ELEMENT, is written in
 	// a file whose `Byte` does not admit every byte value 0 through 255. Two constructs reach it, and
 	// both write bytes that exist only at RUN TIME: the byte view (`String.toByteArray()` /
@@ -1032,6 +1161,7 @@ export enum ErrorCode
 	// least trusts -- a `Byte` whose bounds cannot be read takes the MACHINE WORD
 	// (`rangedAliasStorageBytes`), so the byte view would stop looking byte-packed and slip the rule.
 	rawByteFillNarrowElement = "E3117"
+
 	// The buffer surface's raw-byte writer (`arr.managed.setByte(offset, value)`) is written on an
 	// array whose ELEMENT does not admit every bit pattern of its own storage SLOT.
 	// `setByte` addresses a byte OFFSET, so on a record that strides more than one byte it writes a
@@ -1069,6 +1199,7 @@ export enum ErrorCode
 	// outside of, which is exactly the case E3117 returns on.
 	// `byteAt` is untouched for E3117's reason: it yields a plain unranged `int`, never the element.
 	rawByteWriteSlotDomain = "E3118"
+
 	// Two conformers of one interface bind an associated type to DIFFERENT TYPES, and that associated type is
 	// written as a PARAMETER or RETURN type of a requirement the program actually DISPATCHES.
 	// Under dictionary passing an interface's method bodies are compiled ONCE for every conformer, with no
@@ -1101,6 +1232,7 @@ export enum ErrorCode
 	// Integer }` with two conformers binding `Element` differently and `label()` as the program's only
 	// dispatch was REFUSED, and runs correctly (51) once the gate is the slot.
 	associatedTypeAbiDisagreement = "E3119"
+
 	// An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
 	// conformers bind it to something a witness call cannot carry there. TWO clauses, and they fail in
 	// different POSITIONS:
@@ -1139,6 +1271,7 @@ export enum ErrorCode
 	// today keep compiling. Closing the refusal needs the binding to reach the PARSER, which is a whole-program
 	// conformance sweep in the declaration index (`interfaceDeclSites`' shape, one declaration kind over).
 	associatedTypeReturnNotMachineWord = "E3120"
+
 	// A `float` value is passed where an INTERFACE type is declared, so it would have to be boxed into an
 	// existential's fat pointer.
 	// That pointer's value half is a general-purpose MACHINE WORD -- it is what a dispatch hands the impl as
@@ -1156,6 +1289,7 @@ export enum ErrorCode
 	// value half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a
 	// representation change and not a check.
 	floatWidenedToExistential = "E3121"
+
 	// A function value bound as a container `map`'s transform declares a different number of parameters
 	// than the position calls it with. `map`'s transform is `function(Element) returns Element`
 	// (`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --
@@ -1174,6 +1308,7 @@ export enum ErrorCode
 	// deliberately requires less: the transform's parameter TYPES are not checked here, so "the two function
 	// types must agree" would be false as a statement of what this position demands.
 	transformArityMismatch = "E3122"
+
 	// `if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a
 	// value test -- the then branch runs whenever the call did not throw -- so the result it produces is
 	// silently dropped and the form reads as though it were being tested. `if try json.getBool(node,
@@ -1187,6 +1322,7 @@ export enum ErrorCode
 	// NOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a
 	// different cure, and this one fires only once that question has already been answered.
 	ifTryDiscardsResult = "E3124"
+
 	// A use site wrote `I with <Args>` -- the existential `I`, held with its associated types bound --
 	// and one of those arguments is not what the program's conformers bind that associated type to.
 	// An interface this program DISPATCHES through has exactly ONE binding per associated type, which
@@ -1198,6 +1334,7 @@ export enum ErrorCode
 	// answer, in the conformances, and a copy on the type would be a second), so an unchecked claim
 	// would have no effect at all and would read as though it did.
 	interfaceInstantiationBindingDisagreement = "E3125"
+
 	// A use site wrote `I with <Args>` naming an INTERFACE for one of the associated types, which HOLDS
 	// that position at that interface -- every value of it is a two-word `(value, witness)` widened from
 	// whatever each conformer bound the position to -- and one conformer's binding does not implement it.
@@ -1209,6 +1346,7 @@ export enum ErrorCode
 	// the program means to hold the position at. Both are "this type must implement that interface";
 	// they differ in which party supplies the type, so they are two codes rather than one.
 	heldAssociatedTypeBindingNotConforming = "E3126"
+
 	// A concrete value is WIDENED into a parameterized existential -- `I with <Args>` -- whose argument at
 	// some associated position is not what that value's own conformance binds the position to.
 	// It is E3125's rule moved to the one place it can still be asked once a use site is allowed to CHOOSE.
@@ -1235,6 +1373,7 @@ export enum ErrorCode
 	// the same code refuses and names the position that CAN be resolved -- the same cure E3120 offers for
 	// the same reason one door over.
 	existentialWideningBindingDisagreement = "E3127"
+
 	// A method that satisfies an interface requirement for a GENERIC conforming type reads one of the
 	// hidden dictionary parameters its declaration reserves -- its type parameter's layout descriptor
 	// (`sizeof(T)`, an opaque `Array` build, a borrowed `T` returned or stored), or the witness table of a
@@ -1268,6 +1407,7 @@ export enum ErrorCode
 	// for such an argument and `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with
 	// E3132 where something does.
 	semanticSharedConformanceReadsDictionary = "E3128"
+
 	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
 	// `or`-arm binds a slot some case the arm covers does not hold as that type.
 	// An arm's payload bindings are loaded ONCE, unconditionally, at the head of the arm BODY, and every
@@ -1308,6 +1448,7 @@ export enum ErrorCode
 	// arm body reached from a case that does not hold what its bindings destructure.
 	// The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
 	matchArmPayloadBindingConflict = "E3129"
+
 	// A payload-free `enum` declares a member named after a requirement of a conformance the COMPILER
 	// grants it -- `hash` or `equals` -- with a signature that does not implement that requirement.
 	// An enum without associated values conforms to `Hashable` and `Equatable` by declaration alone
@@ -1325,6 +1466,7 @@ export enum ErrorCode
 	// The cure is to make the member match the requirement it is named after, or to rename it. The
 	// compiler's own implementation is used for every enum that declares neither.
 	semanticGrantedConformanceMemberMismatch = "E3130"
+
 	// An `as` names a GENERIC INSTANCE as its cast target -- `col as RegNumColumn`. Every other cast this
 	// compiler performs is a RETAGGING or a scalar conversion of one value; a container is neither, because
 	// its elements have a storage layout of their own and the two layouts need not agree. `Array with
@@ -1337,6 +1479,7 @@ export enum ErrorCode
 	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
 	// Build the container with the element type you need, or convert it element by element.
 	castTargetIsAContainer = "E3131"
+
 	// A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
 	// at that constraint is a generic instance written over the CALLING body's own type parameters, the
 	// conformance behind it has impls that carry a hidden dictionary -- and the callee READS that witness
@@ -1359,6 +1502,7 @@ export enum ErrorCode
 	// type parameter before the constrained type is built -- or to make the conformance's impls independent
 	// of their type argument so no dictionary is needed at all.
 	semanticParametricConstraintWitnessRead = "E3132"
+
 	// A `where` constraint BINDS the constrained interface's associated types --
 	// `where Source is Iterator with Element` -- and the type argument supplied at an instantiation
 	// conforms to that interface while binding one of those positions to a different type.
@@ -1378,6 +1522,7 @@ export enum ErrorCode
 	// The cure is to bind the constraint to what the conformer declares, or to supply a type argument
 	// whose conformance binds what the constraint states.
 	semanticWhereConstraintBindingDisagreement = "E3133"
+
 	// `spawn` starts a SERVICE, and a service is started from a STATIC FACTORY of a declared type that
 	// returns that type -- `spawn Calc.create()`. There is exactly one form, and this expression is not it.
 	// The cases are: nothing declares the type; the type is declared but nothing declares the member; the
@@ -1389,6 +1534,7 @@ export enum ErrorCode
 	// surface the compiler can check.
 	// The cure is to name a static factory of the type you mean to start.
 	semanticServiceNotASpawnTarget = "E3134"
+
 	// A message of a service declares a parameter whose value cannot cross to another green thread.
 	// A send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps
 	// reference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a
@@ -1404,6 +1550,7 @@ export enum ErrorCode
 	// The cure is to send a `.clone()`, to send the scalar the value is derived from, or to drop the
 	// parameter from the message and reach the value another way.
 	semanticServiceValueNotTransferable = "E3135"
+
 	// A member was called on a service HANDLE that is not one of the service's messages.
 	// A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
 	// synthesized request union each. That is the isolation boundary, and it is also what makes self-send
@@ -1417,6 +1564,7 @@ export enum ErrorCode
 	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
 	// the type, and saying otherwise would read as a typo.
 	semanticServiceNotAMessage = "E3136"
+
 	// An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
 	// would end up holding a second reference to it -- on another green thread.
 	// A service is a green thread with a mailbox, and the language guarantees one green thread per box: that
@@ -1434,6 +1582,7 @@ export enum ErrorCode
 	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
 	// different file from the method the rule fires on.
 	semanticServiceReplyAliasesState = "E3137"
+
 	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
 	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
 	// A send MOVES: the service becomes the argument's one owner, and the sending frame gives up the
@@ -1466,6 +1615,7 @@ export enum ErrorCode
 	// graph reaching a type with no per-type cascade -- an OS handle, or a base-struct-less generic
 	// instance. Containers, records with managed fields and unions with managed payloads all cross.
 	semanticServiceArgumentNotUnique = "E3138"
+
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
 	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
 	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
@@ -1485,6 +1635,7 @@ export enum ErrorCode
 	// clauses, or send it as a statement and do not await it) and have the peer reply with a separate
 	// message, or split the role into two types.
 	semanticServiceCallCycle = "E3139"
+
 	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
 	// cannot carry back to a sender.
 	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO
@@ -1508,6 +1659,7 @@ export enum ErrorCode
 	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
 	// `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
 	semanticServiceReplyNotCarriable = "E3140"
+
 	// A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting
 	// it consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a
 	// promise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when
@@ -1521,6 +1673,7 @@ export enum ErrorCode
 	// It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
 	// promise. It is about there being no way to say which slot stopped owning it.
 	semanticPromiseCannotBeBorrowed = "E3141"
+
 	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has
 	// exactly one owner at every instant, so `await` and `.cancel()` CONSUME it -- the runtime reclaims
 	// the thread's struct there. Any later use of a name that still spells that promise reads a struct
@@ -1533,6 +1686,7 @@ export enum ErrorCode
 	// second consume that this half cannot see -- across a loop back edge, where one lexical `await`
 	// consumes one thread on every iteration.
 	semanticPromiseAlreadyConsumed = "E3142"
+
 	// A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message
 	// reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
 	// thread, and a module `var` is one word every one of them shares.
@@ -1567,6 +1721,7 @@ export enum ErrorCode
 	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
 	// type is a service is a whole-program property whose cause may be in another file.
 	semanticSharedGlobalAccessFromGreenThread = "E3143"
+
 	// A union case's payload argument carries a `name:` label naming no payload of that case --
 	// `TwoParts.values(10, z: 20)` where the case declares `a` and `b`.
 	// NOT E3018, which is about a FIELD: a payload is a positional slot of one case, not a member of
@@ -1574,6 +1729,7 @@ export enum ErrorCode
 	// mistakes also have different cures -- a field typo is fixed against the type, a payload label
 	// against the CASE -- so the diagnostic names the case rather than the union alone.
 	semanticUnknownPayloadName = "E3144"
+
 	// A message whose reply is typed at a GENERIC service's own type parameter is sent through a handle that
 	// no longer says which instantiation it was started at.
 	// A generic service has ONE `<T>.handle` companion, whatever it is instantiated at -- one union and one
@@ -1591,6 +1747,7 @@ export enum ErrorCode
 	// reply's type through a parameter, a struct field or an array element -- or to send the message where the
 	// binding the `spawn` produced is, which carries it already.
 	semanticServiceReplyInstanceUnknown = "E3145"
+
 	// A match arm over an enum, union or error union writes a RANGE of cases -- `add to mul`,
 	// `red upto blue`. An arm names its cases explicitly: an `or`-chain, one case per line.
 	// A range covered the cases whose DECLARATION POSITION fell in its span, so a case appended
@@ -1603,6 +1760,7 @@ export enum ErrorCode
 	// an ordered domain, where a new value between the bounds cannot appear behind the author's
 	// back. So is the ranged type alias `int(0 to 100)`.
 	matchEnumCaseRange = "E3146"
+
 	// A match arm's `or`-chain packs two alternatives onto one line. Every alternative takes its
 	// own line, the chain continuing after a trailing `or`:
 	// call or
@@ -1612,6 +1770,7 @@ export enum ErrorCode
 	// an arm may cover twenty of them -- and it makes adding or removing one a one-line diff.
 	// A single-alternative arm has no chain and is unaffected.
 	matchOrChainNeedsOwnLine = "E3147"
+
 	// `bits(n)` was written with a width the language does not have -- `bits(5)`, `bits(0)`,
 	// `bits(128)`.
 	// The legal widths are 1, 2, 4, 8, 16, 32 and 64, and they are not an arbitrary list: they are
@@ -1639,12 +1798,14 @@ export enum ErrorCode
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
+
 	// a type definition contains a reference cycle -- it transitively
 	// contains itself through struct fields, union associated values, or
 	// container element types. Maxon's ownership model requires acyclic type
 	// graphs for deterministic destruction, so recursive type references are
 	// rejected. Emitted by the type-cycle check after type resolution.
 	irTypeCycle = "E4014"
+
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may
 	// carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
@@ -1664,6 +1825,7 @@ export enum ErrorCode
 	// the rule is about the name and not about which runtime floor a given program
 	// happens to carry.
 	declarationTakesCompilerOwnedName = "E4015"
+
 	// the error enum a builtin runtime family throws is DECLARED in `stdlib/Builtins.maxon`
 	// (`__ManagedMemoryError`, `__ManagedFileError`, `__ManagedDirectoryError`), and this checkout's
 	// declaration disagrees with the ordinals the compiler's runtime transcribes as literals -- either
@@ -1679,6 +1841,7 @@ export enum ErrorCode
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
+
 	// `--coverage` was combined with `--no-debug-info`. The instrumented binary's counters are
 	// anonymous numbers: what each one counts lives in the `.mxdbg` sidecar's coverage-point
 	// table, which `--no-debug-info` suppresses. Emitting them anyway would produce a `.mxcov`
@@ -1699,11 +1862,13 @@ export enum ErrorCode
 	// deadline it quotes is `WedgeWatchdogMs` (maxon-bin/Testing/SpecWorkerPool.maxon), read from
 	// the constant so the message and the watchdog cannot disagree.
 	binaryOutputNotReplaceable = "E6002"
+
 	// The backend reported no failure, yet nothing exists at the output path after the write. The
 	// build removed that path before compiling, so its ABSENCE afterwards means the writer did not
 	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
 	// report success.
 	binaryOutputNotWritten = "E6003"
+
 	// The directory the output goes in does not exist and could not be created. The backend writes the
 	// FILE and does not create the path to it, so without this the build fails at the write and answers
 	// E6003 -- which names the missing OUTPUT and says the write failed, sending the reader to look for

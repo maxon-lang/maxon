@@ -39,8 +39,10 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot 
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("--filter={filter}")
+
 	// See `SpecTestTool`'s arm for why this is a flag rather than a default.
 	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+
 	if network 'haveNetwork'
 		argv.push("--network")
 	end 'haveNetwork'
@@ -48,6 +50,7 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot 
 	// `target` is passed straight through to `--target=<value>`; `wasm32-wasi` runs the
 	// emitted component under the vendored wasmtime.
 	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+
 	if not target.isEmpty() 'haveTarget'
 		argv.push("--target={target}")
 	end 'haveTarget'
@@ -56,6 +59,7 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot 
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: specOutcomeTimeoutMs) otherwise (err) 'spawn'
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec_test_outcome: subprocess: {err.displayReason()}")
 	end 'spawn'
+
 	let elapsed = Clock.elapsedMs(timing)
 
 	let combined = combineStreams(result.stdout, stderr: result.stderr)
@@ -116,6 +120,7 @@ function parseReport(combined String) returns SpecReport
 	let lines = combined.split("\n")
 	let n = lines.count()
 	var i = 0
+
 	while i < n 'eachLine'
 		let line = try lines.get(i) otherwise panic("parseReport: lines.get OOB — i bounded by n")
 		i = i + 1
@@ -124,6 +129,7 @@ function parseReport(combined String) returns SpecReport
 			let label = try parseVerdictLabel(line, prefix: PassPrefix) otherwise 'notALabel'
 				continue
 			end 'notALabel'
+
 			tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: true))
 			continue
 		end 'passed'
@@ -135,6 +141,7 @@ function parseReport(combined String) returns SpecReport
 		let label = try parseVerdictLabel(line, prefix: FailPrefix) otherwise 'notALabel'
 			continue
 		end 'notALabel'
+
 		tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: false))
 
 		var reason = StringArray.create()
@@ -144,6 +151,7 @@ function parseReport(combined String) returns SpecReport
 		// the trailing summary.
 		while i < n 'reasonLines'
 			let next = try lines.get(i) otherwise panic("parseReport: lines.get OOB (reason) — i bounded by n")
+
 			if next.startsWith(PassPrefix) or next.startsWith(FailPrefix) 'nextVerdict'
 				break
 			end 'nextVerdict'
@@ -184,9 +192,11 @@ function parseVerdictLabel(line String, prefix String) returns VerdictLabel thro
 	let bodyBytes = body.toByteArray()
 
 	let slash = firstSlash(body)
+
 	if slash < 0 'noSlash'
 		throw NotFound.notFound
 	end 'noSlash'
+
 	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
 
 	// The test name runs to the `:` that opens a FAIL's reason, or to end-of-line
@@ -194,15 +204,19 @@ function parseVerdictLabel(line String, prefix String) returns VerdictLabel thro
 	let nameStart = (slash + 1) as BytePos
 	let total = bodyBytes.count()
 	var colon = nameStart
+
 	while colon < total 'findColon'
 		let b = try bodyBytes.get(colon) otherwise panic("parseVerdictLabel: get OOB — colon bounded by total")
+
 		if b == 0x3A 'foundColon'
 			break
 		end 'foundColon'
+
 		colon = colon + 1
 	end 'findColon'
 
 	let name = sliceBytes(bodyBytes, from: nameStart, until: colon).trim()
+
 	if name.isEmpty() 'noName'
 		throw NotFound.notFound
 	end 'noName'
@@ -230,11 +244,14 @@ function restAfterLeadingDigits(line String) returns String throws NotFound
 	let bytes = line.toByteArray()
 	let n = bytes.count()
 	var i = 0
+
 	while i < n 'digits'
 		let b = try bytes.get(i) otherwise panic("restAfterLeadingDigits: get OOB — i bounded by n")
+
 		if not isAsciiDigit(b) 'endOfDigits'
 			break
 		end 'endOfDigits'
+
 		i = i + 1
 	end 'digits'
 
@@ -253,13 +270,17 @@ function firstSlash(s String) returns FindResult
 	let bytes = s.toByteArray()
 	let n = bytes.count()
 	var i = 0
+
 	while i < n 'scan'
 		let b = try bytes.get(i) otherwise panic("firstSlash: bytes.get OOB")
+
 		if b == 0x2F or b == 0x5C 'sep'
 			return i as FindResult
 		end 'sep'
+
 		i = i + 1
 	end 'scan'
+
 	return -1
 end 'firstSlash'
 
@@ -286,8 +307,10 @@ function buildOutcome(filter String, exitCode ExitInt, durationMs DurationMs, me
 	var passed = 0
 	var failed = 0
 	let testCount = tests.count()
+
 	for i in 0 upto testCount 'tally'
 		let entry = try tests.get(i) otherwise panic("buildOutcome: tests.get OOB")
+
 		if entry.passed 'p'
 			passed = passed + 1
 		end 'p' else 'f'
@@ -337,6 +360,7 @@ end 'buildOutcome'
 function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
 	var ids = JsonNodeIdArray.create()
 	let n = tests.count()
+
 	for i in 0 upto n 'each'
 		let t = try tests.get(i) otherwise panic("testsArrayJson: tests.get OOB")
 		let specId = doc.add(JsonNode.stringNode(t.spec))
@@ -352,12 +376,14 @@ function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeI
 		children.push(statusId)
 		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
 	end 'each'
+
 	return doc.add(JsonNode.arrayNode(ids))
 end 'testsArrayJson'
 
 function failuresArrayJson(doc JsonDoc, failures SpecFailureSummaryArray) returns JsonNodeId
 	var ids = JsonNodeIdArray.create()
 	let n = failures.count()
+
 	for i in 0 upto n 'each'
 		let f = try failures.get(i) otherwise panic("failuresArrayJson: failures.get OOB")
 		let specId = doc.add(JsonNode.stringNode(f.spec))
@@ -370,5 +396,6 @@ function failuresArrayJson(doc JsonDoc, failures SpecFailureSummaryArray) return
 		children.push(msgId)
 		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
 	end 'each'
+
 	return doc.add(JsonNode.arrayNode(ids))
 end 'failuresArrayJson'

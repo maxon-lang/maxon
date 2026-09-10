@@ -77,11 +77,13 @@ test 'the sidecar names this build, this source and every function the fixture d
 	let noArguments = StringArray.create()
 
 	let build = spawnBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
+
 	if build.exitCode() != 0 'didNotBuild'
 		panic("sidecar-dump.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
 	let executable = builtExecutable(staged)
+
 	if not File.exists(executable) 'wroteNothing'
 		panic("sidecar-dump.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
 	end 'wroteNothing'
@@ -114,8 +116,10 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	var missing = StringArray.create()
 	var degenerate = StringArray.create()
+
 	for name in declared 'eachDeclaredFunction'
 		let row = functionRowNamed(functionRows, name: name)
+
 		if row.isEmpty() 'notListed'
 			missing.push(name)
 			continue
@@ -168,9 +172,11 @@ function hostTargetTriple() returns String
 	#if os(Windows)
 		let osName = "windows"
 	#endif
+
 	#if os(Linux)
 		let osName = "linux"
 	#endif
+
 	#if os(Macos)
 		let osName = "macos"
 	#endif
@@ -187,11 +193,13 @@ end 'hostTargetTriple'
 function keyedDumpValue(dump String, key String) returns String
 	for rawLine in dump.split(LineFeed) 'eachLine'
 		let line = rawLine.trim()
+
 		if not line.startsWith(key) 'notThisLine'
 			continue
 		end 'notThisLine'
 
 		var cursor = line.startIndex()
+
 		for _ in 0 upto key.count() 'eachKeyGrapheme'
 			cursor = try line.indexAfter(cursor) otherwise return ""
 		end 'eachKeyGrapheme'
@@ -210,6 +218,7 @@ function dumpSectionRows(dump String, heading String) returns StringArray
 
 	for rawLine in dump.split(LineFeed) 'eachLine'
 		let line = rawLine.trim()
+
 		if line.startsWith(heading) 'opensThisSection'
 			inSection = true
 			continue
@@ -260,6 +269,7 @@ function functionRowNamed(rows StringArray, name String) returns String
 	for row in rows 'eachRow'
 		let tokens = whitespaceTokens(row)
 		let first = try tokens.get(0) otherwise continue
+
 		if first == name and carriesCodeRange(row) 'theRow'
 			return row
 		end 'theRow'
@@ -302,11 +312,13 @@ function firstLineRowTokenWithin(dump String, atLeast SidecarNumber, below Sidec
 	for row in dumpSectionRows(dump, heading: DumpLineTableHeading) 'eachRow'
 		let tokens = whitespaceTokens(row)
 		let first = try tokens.get(0) otherwise continue
+
 		if not first.startsWith(HexPrefix) 'notAnOffsetRow'
 			continue
 		end 'notAnOffsetRow'
 
 		let offset = hexValue(first)
+
 		if offset >= atLeast and offset < below 'insideTheFunction'
 			return first
 		end 'insideTheFunction'
@@ -319,12 +331,14 @@ end 'firstLineRowTokenWithin'
 // `<path>:12:3` and `<path> line 12` read alike and neither spelling is pinned.
 function lineNumberAfter(text String, marker String) returns FixtureLineNumber
 	var cursor = try text.findFirst(marker) otherwise panic("sidecar-dump.test: lineNumberAfter is reached only past an assertion that '{marker}' is present")
+
 	for _ in 0 upto marker.count() 'eachMarkerGrapheme'
 		cursor = try text.indexAfter(cursor) otherwise return 0
 	end 'eachMarkerGrapheme'
 
 	var value = 0
 	var seenADigit = false
+
 	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
 		if Ascii.isDigit(c) 'aDigit'
 			value = value * DecimalBase + hexDigitValue(c)
@@ -348,8 +362,10 @@ end 'lineNumberAfter'
 // for here was built from a name this process read out of that very file moments ago.
 function sourceLineStartingWith(staged FilePath, prefix String, what String) returns FixtureLineNumber
 	var number = 0
+
 	for line in stagedSourceLines(staged) 'eachLine'
 		number = number + 1
+
 		if line.startsWith(prefix) 'theLine'
 			return number
 		end 'theLine'

@@ -65,9 +65,11 @@ end 'imageRangeFits'
 // skipped — a bug in the reader, not a malformed input.
 export function imageSlice(image ByteArray, start ByteOffset, count BytePos) returns ByteArray
 	var out = ByteArray.create()
+
 	for i in 0 upto count 'each'
 		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked imageRangeFits(start, count) first"))
 	end 'each'
+
 	return out
 end 'imageSlice'
 
@@ -83,12 +85,16 @@ end 'imageSlice'
 // known section name, so "" simply never matches and the walk moves on.
 export function imageNameAt(image ByteArray, at ByteOffset, maxBytes BytePos) returns String
 	var name = ByteArray.create()
+
 	for i in 0 upto maxBytes 'each'
 		let b = try image.get(at + i) otherwise return ""
+
 		if b == 0 'nulTerminator'
 			break
 		end 'nulTerminator'
+
 		name.push(b)
 	end 'each'
+
 	return String.from(name)
 end 'imageNameAt'

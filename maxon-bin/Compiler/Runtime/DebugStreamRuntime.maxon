@@ -424,6 +424,7 @@ export enum MmTag
 	StringRecord
 	ArrayRecord
 	ElementBuffer
+
 	// ⚠ **NO PRODUCER TODAY, AND IT STAYS ANYWAY BECAUSE THIS ROSTER IS APPEND-ONLY.** Its one allocator was
 	// `__mm_to_cstring`'s copy path, which is gone: the conversion now grows the RECEIVER by one byte and
 	// terminates it in place (`StringRuntime.buildMmToCString`), so a `cstring` is never its own box. Deleting
@@ -435,6 +436,7 @@ export enum MmTag
 	CursorRecord
 	FileBox
 	DirectoryBox
+
 	// ⭐ **THE THREE BOXES THE LOWERING CANNOT NAME FROM A TYPE, so the PARSER names them** — through the
 	// `Project.allocTagSites` SIDE TABLE, keyed by the `__mm_alloc` op, never through the value's type (see
 	// that field for what happened when the label rode in the type slot). Each is a compiler-minted heap
@@ -474,6 +476,7 @@ export typealias DebugStreamNameIndexMap = Map with (String, ParsedInt)
 export type DebugStreamNameTable
 	// The wire table: `names[i]` is the name index `i` resolves to. Read by `debugStreamNameBlob`.
 	export var names as StringArray
+
 	// Its inverse, so interning an already-seen name is O(1) rather than a scan of `names`.
 	var byName as DebugStreamNameIndexMap
 
@@ -485,9 +488,11 @@ export type DebugStreamNameTable
 	// `specs/debugstream-name-id.md` pins that answer.
 	export static function create(seed StringArray) returns DebugStreamNameTable
 		var byName = DebugStreamNameIndexMap.create()
+
 		for name in seed 'seedIndex'
 			byName.upsert(name, value: byName.count() as ParsedInt)
 		end 'seedIndex'
+
 		return Self{names: seed, byName: byName}
 	end 'create'
 
@@ -517,9 +522,11 @@ end 'DebugStreamNameTable'
 // here rather than restated as a second convention.
 export function mmTagRosterNames() returns StringArray
 	var names = StringArray.create()
+
 	for tag in MmTag.allCases 'each'
 		names.push("" if tag == MmTag.Untagged else tag.name)
 	end 'each'
+
 	return names
 end 'mmTagRosterNames'
 
@@ -544,11 +551,13 @@ function debugStreamNameBlob(magic ByteArray, names StringArray) returns ByteArr
 	var blob = ByteArray.create()
 	blob.append(magic)
 	appendNameBlobField(blob, value: names.count(), what: "the name count")
+
 	for name in names 'each'
 		let bytes = name.toByteArray()
 		appendNameBlobField(blob, value: bytes.count(), what: "the UTF-8 length of name '{name}'")
 		blob.append(bytes)
 	end 'each'
+
 	return blob
 end 'debugStreamNameBlob'
 
@@ -693,6 +702,7 @@ let DsEnvBufferBytes = 512
 // `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
+
 	// The first five are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and therefore
 	// before any green thread, let alone any worker M. The ring itself is not among them: it lives in shared
 	// MEMORY and is guarded by the CRITICAL_SECTION `__ds_lock` points at.
@@ -738,6 +748,7 @@ end 'buildCarriesDebugStream'
 // See `emitStoreLogIdentity`.
 export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool, rawFree ByteArray)
 	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cStringBytes(DsActivationEnvVar), kind: RdataPayloadKind.envName)
+
 	// ⚠ **BOTH TABLES, END TO END, IN ONE IMAGE.** The monitor scans the section for each magic rather than
 	// indexing to a known offset, so their ORDER carries nothing and neither needs a label of its own. The
 	// interned-name table is written beside the tag table even when the program interned nothing: it is then
@@ -752,6 +763,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	buildDsReserve(module)
 	buildDsCommit(module)
 	buildDsEmitMm(module)
+
 	// ⚠ **THE LOG FAMILY IS BUILT UNCONDITIONALLY WITH THE REST, NOT ONLY WHEN A PROGRAM EMITS ONE.** Its
 	// three entry points are dead code in a traced program that writes no `__DebugStream` member, and
 	// `deadFunctions` is the pass that answers that question — for this family exactly as it does for
@@ -811,6 +823,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	let segmentBytes = emitConst(module, block: entry, value: DsSharedMemoryBytes, ids: ids)
 	let base = ids.mint()
 	module.appendOp(entry, op: StdOp.osMapNamedSegment(base, handleId: handle, sizeId: segmentBytes))
+
 	// The section handle has done its job the moment the view exists; the VIEW keeps the pages alive.
 	// Closing a NULL handle is a harmless FALSE, which is why the failed-open path needs no arm here. The name
 	// buffer is spent for the same reason — the open resolved it — and it is released here rather than on each
@@ -842,6 +855,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	emitStoreGlobalWord(module, block: attach, label: DsStartTsLabel, value: startTs, ids: ids)
 	let alive = emitConst(module, block: attach, value: DsFlagProducerAlive, ids: ids)
 	module.appendOp(attach, op: StdOp.storeIndirect(base, offset: DsOffFlags, valueId: alive, valueType: StdType.i64))
+
 	// ⭐ ARMED LAST. Every store above must be in place before any event site's `__ds_base != 0` test can
 	// succeed, and this is the store that makes it succeed.
 	emitStoreGlobalWord(module, block: attach, label: DsBaseLabel, value: base, ids: ids)
@@ -1105,6 +1119,7 @@ function buildDsEmitMm(module StdModule)
 	let entryBytes = emitConst(module, block: entry, value: DsMmEntryBytes, ids: ids)
 	let entryPtr = ids.mint()
 	module.appendOp(entry, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
+
 	// 0 means the ring was FULL. The entry was never reserved, so there is nothing to commit — this is a
 	// DROPPED event, counted in the segment header, not a deferred one.
 	let noEntry = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1117,6 +1132,7 @@ function buildDsEmitMm(module StdModule)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsMmOffAllocId, valueId: allocId, valueType: StdType.i64))
 
 	let tagIndex = emitMaskedField(module, block: write, value: packedId, mask: DsMmTagIndexMask, ids: ids)
+
 	// `scope_len` (bits 16..31) stays zero: this producer emits no scope names, so the slot has nothing to
 	// carry and the monitor's mm formatter never reads it.
 	let valueField = emitShiftedField(module, block: write, value: value, shift: DsMmValueShift, ids: ids)
@@ -1198,6 +1214,7 @@ function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	var gt = zero
 	var procId = zero
+
 	if usesGt 'scheduled'
 		let liveGt = ids.mint()
 		let liveProcId = ids.mint()
@@ -1207,6 +1224,7 @@ function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, 
 	end 'scheduled'
 
 	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffGt, valueId: gt, valueType: StdType.i64))
+
 	// ⚠ The zeros both fields fall back to are minted in `block`, which dominates `cur` on every arm above,
 	// so the branch the guarded read introduces cannot strand them.
 	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: procId, valueType: StdType.i64))
@@ -1415,6 +1433,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 
 	let textOffset = emitConst(module, block: write, value: DsLogOffText, ids: ids)
 	let textBase = emitBin(module, block: write, a: entryPtr, b: textOffset, opcode: StdBinOpcode.add, ids: ids)
+
 	// ⚠ **AN EMPTY MESSAGE HAS NO TAIL, AND WITHOUT THIS TEST THE PAD STORE WOULD LAND ON THE FIELDS WORD.**
 	// `align8(0)` is 0, so `textBase + tail - 8` is `entryPtr + 24` — the word just written — and a message
 	// of length 0 would erase its own category, level and unit.

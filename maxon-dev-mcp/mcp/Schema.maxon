@@ -23,10 +23,12 @@ function schemaStringEnum(doc JsonDoc, choices StringArray, description String) 
 	let descId = doc.add(JsonNode.stringNode(description))
 	var enumIds = JsonNodeIdArray.create()
 	let n = choices.count()
+
 	for i in 0 upto n 'each'
 		let c = try choices.get(i) otherwise panic("schemaStringEnum: choices.get OOB")
 		enumIds.push(doc.add(JsonNode.stringNode(c)))
 	end 'each'
+
 	let enumArrId = doc.add(JsonNode.arrayNode(enumIds))
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
@@ -111,14 +113,17 @@ export function schemaObject(doc JsonDoc, fields SchemaFieldArray, description S
 	var propChildren = JsonNodeIdArray.create()
 	var requiredIds = JsonNodeIdArray.create()
 	let n = fields.count()
+
 	for i in 0 upto n 'each'
 		let field = try fields.get(i) otherwise panic("schemaObject: fields.get OOB")
 		propKeys.push(field.name)
 		propChildren.push(field.schemaId)
+
 		if field.required 'r'
 			requiredIds.push(doc.add(JsonNode.stringNode(field.name)))
 		end 'r'
 	end 'each'
+
 	let propsId = doc.add(JsonNode.objectNode(propKeys, children: propChildren))
 	let requiredArrId = doc.add(JsonNode.arrayNode(requiredIds))
 

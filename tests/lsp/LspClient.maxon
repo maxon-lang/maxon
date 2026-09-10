@@ -330,8 +330,10 @@ end 'StashedPublish'
 public union LspClientError implements Error
 	// The framed stream broke: it ended mid-message, or a read or write failed.
 	transportFailed(detail String)
+
 	// A reply arrived that is not the shape LSP defines for the request it answers.
 	malformedResponse(detail String)
+
 	// A well-formed JSON-RPC error object. `-32601` is what an unimplemented method answers.
 	serverRefused(code JsonRpcErrorCode, message String)
 end 'LspClientError'
@@ -374,6 +376,7 @@ public type LspClient
 	// missing binary nor a refused spawn is the server answering wrongly.
 	public static function start() returns LspClient
 		let binary = testedServerPath()
+
 		if not File.exists(binary) 'noBinary'
 			panic("LspClient: the test could not run — there is no compiler at {binary.toString()}. Paths here are relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; run it from there, and build `{TestedCompilerStem}` first.")
 		end 'noBinary'
@@ -442,6 +445,7 @@ public type LspClient
 
 	public function shutdown() throws LspClientError
 		var doc = JsonDoc.create()
+
 		// LSP defines `shutdown` as taking no params, and an absent member is not an empty object.
 		var message = beginMessage(doc, method: MethodShutdown)
 		let (_, _) = try self.sendRequest(doc, message: message)
@@ -579,6 +583,7 @@ public type LspClient
 	// `-32601`. This name is reserved for that and is deliberately not an LSP method.
 	public function unservedMethodRefusal(uri String) returns HoverResult throws LspClientError
 		let (doc, result) = try self.positionRequest(MethodNeverServed, uri: uri, line: DocumentStart, character: DocumentStart)
+
 		if isNull(doc, id: result) 'nothingHere'
 			return HoverResult.nothing()
 		end 'nothingHere'
@@ -607,6 +612,7 @@ public type LspClient
 
 	public function hover(uri String, line LspCoordinate, character LspCoordinate) returns HoverResult throws LspClientError
 		let (doc, result) = try self.positionRequest(MethodHover, uri: uri, line: line, character: character)
+
 		if isNull(doc, id: result) 'nothingHere'
 			return HoverResult.nothing()
 		end 'nothingHere'
@@ -685,6 +691,7 @@ public type LspClient
 	public function linkedEditingRange(uri String, line LspCoordinate, character LspCoordinate) returns LinkedEditingRangesResult throws LspClientError
 		let (doc, result) = try self.positionRequest(MethodLinkedEditingRange, uri: uri, line: line, character: character)
 		var ranges = LspRangeArray.create()
+
 		if isNull(doc, id: result) 'nothingHere'
 			return LinkedEditingRangesResult.of(ranges)
 		end 'nothingHere'
@@ -735,6 +742,7 @@ public type LspClient
 	public function semanticTokensFull(uri String) returns SemanticTokensResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodSemanticTokensFull, uri: uri)
 		var data = SemanticTokenValueArray.create()
+
 		if isNull(doc, id: result) 'noTokens'
 			return SemanticTokensResult.of(data)
 		end 'noTokens'
@@ -835,6 +843,7 @@ public type LspClient
 					contentLength = try int.fromString(raw) otherwise 'notACount'
 						throw LspClientError.transportFailed("a Content-Length header is not a byte count: '{raw}'")
 					end 'notACount'
+
 					haveContentLength = true
 				end 'contentLengthField'
 			end 'headerField'
@@ -1092,6 +1101,7 @@ end 'integerMember'
 
 function integerAt(doc JsonDoc, id JsonNodeId) returns SemanticTokenValue throws LspClientError
 	let node = doc.get(id)
+
 	if node.kind != JsonKind.jsonNumber 'notANumber'
 		throw LspClientError.malformedResponse("an array this reply must answer with numbers holds something else")
 	end 'notANumber'
@@ -1103,6 +1113,7 @@ end 'integerAt'
 // defect — reported, rather than turned into a range-check panic by an unchecked cast.
 function coordinateMember(doc JsonDoc, of JsonNodeId, key String) returns LspCoordinate throws LspClientError
 	let value = try integerMember(doc, of: of, key: key)
+
 	if value < 0 'negative'
 		throw LspClientError.malformedResponse("a reply's '{key}' is {value}, and LSP positions are zero-based")
 	end 'negative'
@@ -1156,6 +1167,7 @@ end 'readRange'
 // publish for ANOTHER document is a message this client must keep rather than hand back.
 function publishesFor(doc JsonDoc, uri String) returns bool
 	let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
+
 	if method != MethodPublishDiagnostics 'anotherNotification'
 		return false
 	end 'anotherNotification'
@@ -1225,6 +1237,7 @@ function readDefinition(doc JsonDoc, id JsonNodeId) returns DefinitionResult thr
 
 	if doc.get(id).kind == JsonKind.jsonArray 'aList'
 		let candidates = try elementsOf(doc, id: id)
+
 		if candidates.isEmpty() 'noCandidate'
 			return DefinitionResult.nothing()
 		end 'noCandidate'
@@ -1245,6 +1258,7 @@ end 'readDefinition'
 // A completion answer as either a bare list of items or a `CompletionList` wrapping one.
 function readCompletion(doc JsonDoc, id JsonNodeId) returns CompletionResult throws LspClientError
 	var items = CompletionItemArray.create()
+
 	if isNull(doc, id: id) 'nothingHere'
 		return CompletionResult.of(items)
 	end 'nothingHere'
@@ -1267,6 +1281,7 @@ function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextE
 
 	if hasMember(doc, of: id, key: ChangesKey) 'byUri'
 		let changes = try memberNode(doc, of: id, key: ChangesKey)
+
 		if not hasMember(doc, of: changes, key: uri) 'untouched'
 			return TextEditArray.create()
 		end 'untouched'
@@ -1278,6 +1293,7 @@ function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextE
 
 	for element in try optionalElements(doc, id: try memberNode(doc, of: id, key: DocumentChangesKey)) 'eachDocument'
 		let identifier = try memberNode(doc, of: element, key: TextDocumentKey)
+
 		if (try stringMember(doc, of: identifier, key: UriKey)) != uri 'otherDocument'
 			continue
 		end 'otherDocument'

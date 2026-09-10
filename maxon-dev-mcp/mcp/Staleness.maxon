@@ -38,8 +38,10 @@ let RebuildCommand = "maxon build maxon-dev-mcp/mcp"
 /// Why this binary must not be trusted. `fresh` is the only outcome that lets a tool run.
 export union ServerFreshness
 	fresh
+
 	/// A source file is at least as new as the binary — the binary predates an edit to it.
 	staleSource(newestSource String, binaryPath String)
+
 	/// The binary is running detached from the sources it was built from, so freshness
 	/// cannot be established. Refused rather than assumed: an unverifiable binary is exactly
 	/// the one that was wrong last time.
@@ -110,6 +112,7 @@ function newestSourceUnder(dir FilePath) returns NewestSource throws NotFound
 	var found = false
 
 	let n = entries.count()
+
 	for i in 0 upto n 'each'
 		let entry = try entries.get(i) otherwise 'gErr'
 			panic("newestSourceUnder: entries.get OOB — i bounded by n")
@@ -123,14 +126,17 @@ function newestSourceUnder(dir FilePath) returns NewestSource throws NotFound
 			if lastSegment(entry).equals(BuildOutputDir) 'skipOutput'
 				continue
 			end 'skipOutput'
+
 			let deeper = try newestSourceUnder(entry) otherwise 'empty'
 				continue
 			end 'empty'
+
 			if not found or deeper.modifiedTime > bestTime 'deeperWins'
 				bestPath = deeper.path
 				bestTime = deeper.modifiedTime
 				found = true
 			end 'deeperWins'
+
 			continue
 		end 'descend'
 

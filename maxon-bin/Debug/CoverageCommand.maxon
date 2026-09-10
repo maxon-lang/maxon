@@ -94,6 +94,7 @@ export function runCoverage(args MaxonArgs) returns ExitCode
 	end 'unknownVerb'
 
 	var request = CoverageRequest.create(verb)
+
 	for position in FirstOptionArgument upto args.paths.count() 'eachArgument'
 		let arg = try args.paths.get(position) otherwise panic("runCoverage: index {position} is past args.paths.count() despite the upto bound")
 
@@ -104,6 +105,7 @@ export function runCoverage(args MaxonArgs) returns ExitCode
 			request.dataGiven = true
 		end 'dataFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
 			let raw = try CommandLine.optionValue(arg) otherwise ""
+
 			if not recordDeadline(request, raw: raw) 'notADeadline'
 				return refuseCoverage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
 			end 'notADeadline'
@@ -172,11 +174,13 @@ end 'CoverageLaunch'
 
 function launchTarget(request CoverageRequest, dataPath String) returns CoverageLaunch
 	let target = try FilePath.from(request.exePath) otherwise return CoverageLaunch.refused("'{request.exePath}' is not a spellable path")
+
 	if not File.exists(target) 'noSuchExecutable'
 		return CoverageLaunch.refused("no such executable: {request.exePath}")
 	end 'noSuchExecutable'
 
 	let data = try FilePath.from(dataPath) otherwise return CoverageLaunch.refused("'{dataPath}' is not a spellable path")
+
 	if File.exists(data) 'previousCounters'
 		try File.delete(data) otherwise return CoverageLaunch.refused("cannot remove the previous {dataPath}")
 	end 'previousCounters'

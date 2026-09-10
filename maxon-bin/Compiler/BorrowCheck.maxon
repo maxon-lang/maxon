@@ -146,10 +146,12 @@ export let ReassignMutationDisplay = b"="
 // Activating at the CALL instead would refuse `specs/borrow-checker.md:borrow-not-live-in-otherwise`.
 export type PendingBorrow
 	export let subject as BorrowSubjectId
+
 	// The SSA value the accessor defined. A binding claims this borrow iff the value it binds IS this
 	// one — after `Parser.retargetPendingBorrow` has moved it to the merge phi, which is what a
 	// `try … otherwise <value>` actually binds.
 	export let borrowValue as ValueId
+
 	// The accessor's own line — what the diagnostic reports as `borrowed at line N`.
 	export let borrowLine as LineNumber
 
@@ -169,12 +171,14 @@ export typealias PendingBorrowCount = int(0 to u64.max)
 // until its own last use.
 export type BorrowRecord
 	export let subject as BorrowSubjectId
+
 	// ⭐ **THE BORROWING BINDING, HELD BY REFERENCE** — the same discipline
 	// `Parser.iterationLockedBindings` states, and here for a second reason: the binding's
 	// `lastUseToken` is written by `Parser.requireBindingLive` long AFTER this record is made, so a
 	// name copied out at record time would be a second fact free to disagree with the binding it
 	// describes. `VarInfo` is a heap `type`, so this record observes every later use.
 	export let borrower as VarInfo
+
 	// The token at which the borrowing name came into scope. A write BELOW it — a `try` handler's,
 	// or anything earlier in the body — cannot conflict, because the borrow does not exist there yet.
 	export let activationToken as TokenIndex
@@ -197,21 +201,25 @@ export typealias BorrowRecordArray = Array with BorrowRecord
 // function that borrows nothing, which is almost all of them.
 export type MutationSite
 	export let subject as BorrowSubjectId
+
 	// The name the SOURCE wrote at this write, which is what the diagnostic blames. It may differ
 	// from the spelling the borrow used (`items` vs `self.items`) while naming the one subject.
 	export let subjectName as ByteArray
 	export let token as TokenIndex
 	export let line as LineNumber
 	export let column as ColumnNumber
+
 	// The `via '<x>'` text: the METHOD name for a container write, the trimmed callee for a free
 	// call, `=` for a rebind.
 	export let display as ByteArray
+
 	// ⭐ **NON-EMPTY ⇒ THIS SITE IS ONLY A WRITE IF THE CALLEE SAYS SO.** A container method and a
 	// rebind are decided by the parser, which holds the whole question; `grow(arr)` is not — whether
 	// it writes depends on `grow`'s BODY, possibly in another file. Those sites carry the callee and
 	// the argument's column, and `mutationSiteWrites` settles them against the whole-program
 	// `ParamMutationSummary` — the SAME summary E3019's call-site half reads, never a second one.
 	export let callee as ByteArray
+
 	// The argument's index in the call op's OWN columns (a prepended method receiver included), which
 	// is the index `argSlotPosition` maps to a parameter position. Meaningless when `callee` is empty.
 	export let argColumn as ParamCount
@@ -261,9 +269,11 @@ export typealias MutationSiteArray = Array with MutationSite
 export type StorageReachEdge
 	// The callee this receiver was handed to, as the call op spells it.
 	export let callee as ByteArray
+
 	// The argument column the RECEIVER fills in the call op's own columns — the index `argSlotPosition`
 	// maps to a parameter POSITION of the callee, exactly as `MutationSite.argColumn` is.
 	export let argColumn as ParamCount
+
 	// Which of the CALLER's parameters own the storage that receiver denotes (`Parser.subjectStorageMask`).
 	export let callerParams as ParamPositionMask
 
@@ -291,6 +301,7 @@ export type BorrowFacts
 	export var pending as PendingBorrowArray
 	export var borrows as BorrowRecordArray
 	export var mutations as MutationSiteArray
+
 	// ⚠ **THE ONE COLUMN HERE THAT IS NOT ABOUT THIS BODY'S OWN BORROWS** — see `StorageReachEdge`. It
 	// rides on the same record for the same reason the rest do (the parser holds the only view in which a
 	// binding exists) and, unlike them, it is recorded whether or not this body borrows anything: the
@@ -344,6 +355,7 @@ end 'checkBorrowConflicts'
 
 function checkFunctionBorrowConflicts(project Project, func IrFunction, mutationSummary ParamMutationSummary)
 	let facts = func.borrowFacts
+
 	if facts.borrows.count() == 0 'borrowsNothing'
 		return
 	end 'borrowsNothing'
@@ -358,8 +370,10 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 	var subjectKeys = CsrColumn.create()
 	var borrowRows = CsrColumn.create()
 	var previousActivation = 0
+
 	for i in 0 upto facts.borrows.count() 'eachBorrow'
 		let borrow = borrowAt(facts, index: i)
+
 		// ⚠ **THE ORDER THE WALK BELOW IS AMORTIZED ON, CHECKED WHERE IT IS ESTABLISHED.** See
 		// `reportFirstLiveBorrow`: it stops at the first not-yet-active borrow instead of walking past it,
 		// which is only equivalent because activation is non-decreasing. It is, because every activation is
@@ -370,11 +384,13 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 		if borrow.activationToken < previousActivation 'borrowsOutOfActivationOrder'
 			panic("checkFunctionBorrowConflicts: borrow {i} activates at token {borrow.activationToken}, below its predecessor's {previousActivation} — the parse cursor rewound inside a function body and the live-borrow walk's ordering no longer holds")
 		end 'borrowsOutOfActivationOrder'
+
 		previousActivation = borrow.activationToken
 
 		subjectKeys.push(borrow.subject)
 		borrowRows.push(i)
 	end 'eachBorrow'
+
 	let bySubject = buildCsr(subjectKeys, to: borrowRows, nodeCount: facts.subjects.count())
 
 	// ⭐⭐ **THE PER-SUBJECT WALK CURSOR — what makes this pass LINEAR instead of sites × borrows.** A
@@ -388,8 +404,10 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 	walked.resize(facts.subjects.count())
 
 	var previousSiteToken = 0
+
 	for s in 0 upto facts.mutations.count() 'eachSite'
 		let site = try facts.mutations.get(s) otherwise panic("checkFunctionBorrowConflicts: mutations.get OOB at {s}")
+
 		// The other half of the same invariant, and it carries the same consequence — see the borrow loop.
 		//
 		// ⚠ **BUT NOT THE SAME CAUSE, AND IT STOPPED BEING THE SAME AT W61.** A borrow's activation is the
@@ -403,6 +421,7 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 		if site.token < previousSiteToken 'sitesOutOfTokenOrder'
 			panic("checkFunctionBorrowConflicts: mutation site {s} is at token {site.token}, below its predecessor's {previousSiteToken} — `Parser.pushMutationSiteInTokenOrder` did not keep the sites non-decreasing, and the live-borrow walk's cursor no longer holds")
 		end 'sitesOutOfTokenOrder'
+
 		previousSiteToken = site.token
 
 		if not mutationSiteWrites(project, site: site, mutationSummary: mutationSummary) 'notAWriteAfterAll'
@@ -436,6 +455,7 @@ function mutationSiteWrites(project Project, site MutationSite, mutationSummary 
 	// ARRAY dispatcher records BOTH masks for a parameter receiver, so a plain mutating callee carries its
 	// bit in each. Do not restate this as containment; the `String`/`Set` rows go the other way.
 	let mask = mutationSummary.storageMaskOf(site.callee)
+
 	if mask == NoParamPositions 'writesNoParameter'
 		return false
 	end 'writesNoParameter'
@@ -457,6 +477,7 @@ end 'mutationSiteWrites'
 function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFacts, bySubject CsrGraph, walked CsrColumn, site MutationSite)
 	let degree = bySubject.degree(site.subject as CsrIndex)
 	var k = try walked.get(site.subject) otherwise panic("reportFirstLiveBorrow: walked.get OOB at subject {site.subject}, a key the CSR was built over")
+
 	while k < degree 'eachBorrowOfThisSubject'
 		let borrow = borrowAt(facts, index: bySubject.neighbour(site.subject as CsrIndex, k: k))
 
@@ -528,8 +549,10 @@ end 'pendingAt'
 // precisely when no borrow exists yet).
 export function composePendingBorrowOntoBases(facts BorrowFacts, firstPending PendingBorrowCount, borrowValue ValueId, range SourceRange)
 	var scan = firstPending
+
 	while scan < facts.pending.count() 'eachLinkOfTheChain'
 		let borrowedStorage = try facts.subjects.get(pendingAt(facts, index: scan).subject) otherwise panic("composePendingBorrowOntoBases: subjects.get OOB at the subject of pending {scan} — a subject id is minted by `Parser.borrowSubjectIdOf` against this very column")
+
 		for k in 0 upto facts.borrows.count() 'eachBorrowOfThisBody'
 			let base = borrowAt(facts, index: k)
 
@@ -550,6 +573,7 @@ export function composePendingBorrowOntoBases(facts BorrowFacts, firstPending Pe
 			// and `borrowed at line N` must send them to the line they wrote, never to the base's own mint.
 			facts.pending.push(PendingBorrow.create(base.subject, borrowValue: borrowValue, borrowLine: range.line))
 		end 'eachBorrowOfThisBody'
+
 		scan = scan + 1
 	end 'eachLinkOfTheChain'
 end 'composePendingBorrowOntoBases'
@@ -578,6 +602,7 @@ end 'composePendingBorrowOntoBases'
 // is the same reading every other gate over this list states, and the reason it can sit on the argument path.
 export function pendingBorrowStorageOf(facts BorrowFacts, index PendingBorrowCount, value ValueId) returns ByteArray
 	let pending = pendingAt(facts, index: index)
+
 	if pending.borrowValue != value 'someOtherValue'
 		return EmptySourceText
 	end 'someOtherValue'
@@ -593,5 +618,6 @@ function pendingCarriesSubject(facts BorrowFacts, from PendingBorrowCount, subje
 			return true
 		end 'alreadyNamed'
 	end 'eachLinkSoFar'
+
 	return false
 end 'pendingCarriesSubject'

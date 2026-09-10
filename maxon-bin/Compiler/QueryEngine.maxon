@@ -19,6 +19,7 @@
 // upserted with its fresh hash — no shared revision counter is touched.
 export function fileChanged(project Project, path FilePath, content String)
 	let hash = mixBytes(Hasher.empty(), bytes: content.toByteArray())
+
 	if let existing = try project.db.sourceFiles.get(path) 'exists'
 		if existing.contentHash == hash 'unchanged'
 			return
@@ -28,6 +29,7 @@ export function fileChanged(project Project, path FilePath, content String)
 	end 'newFile'
 
 	project.db.sourceFiles.upsert(path, value: SourceFileEntry.create(content, contentHash: hash))
+
 	// THE ONLY WRITER of the composite-hash memo's dirty flag, because this is the only thing that
 	// can move the composite hash: it is a fold over exactly these entries. The early return above is
 	// on the path where nothing changed, so it must NOT invalidate — an unchanged re-register is a
@@ -265,6 +267,7 @@ end 'shareActiveTokens'
 // walk for it.
 export function sharedProducerMaskOf(project Project, contentHash HashDigest, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
 	let view = try heldViewFor(contentHash, targetKey: targetKey)
+
 	if not view.producerMaskComputed 'notYetDerived'
 		throw SharedMemoMiss.notHeld
 	end 'notYetDerived'
@@ -371,6 +374,7 @@ export function compositeSourceHash(project Project) returns HashDigest
 	end 'memoized'
 
 	var h = Hasher.empty()
+
 	for path in project.db.sourcePaths 'each'
 		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
 		h = Hasher.combined(h, value: entry.contentHash)
@@ -393,6 +397,7 @@ export function signaturesCacheValid(project Project) returns bool
 	if not project.db.signatureCache.computed 'never'
 		return false
 	end 'never'
+
 	return project.db.signatureCache.keyHash == compositeSourceHash(project)
 end 'signaturesCacheValid'
 
@@ -402,6 +407,7 @@ export function allModuleCacheValid(project Project) returns bool
 	if not project.db.allModuleCache.computed 'never'
 		return false
 	end 'never'
+
 	return project.db.allModuleCache.keyHash == compositeSourceHash(project)
 end 'allModuleCacheValid'
 

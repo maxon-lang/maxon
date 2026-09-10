@@ -13,6 +13,7 @@ export function parseRunArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringA
 	let argsArrId = try argsDoc.getChild(argsId, key: "args") otherwise 'noArgs'
 		return out
 	end 'noArgs'
+
 	let arrNode = argsDoc.get(argsArrId)
 	let isArr = match arrNode.kind 'k'
 		jsonArray gives true
@@ -22,6 +23,7 @@ export function parseRunArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringA
 		jsonString gives false
 		jsonObject gives false
 	end 'k'
+
 	if not isArr 'notArr'
 		// `args: null` is tolerated for symmetry with clients that emit
 		// nulls for omitted optionals. Any other wrong-typed value also
@@ -29,10 +31,13 @@ export function parseRunArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringA
 		// reports the run's actual output so the mismatch is observable.
 		return out
 	end 'notArr'
+
 	let n = arrNode.children.count()
+
 	for i in 0 upto n 'each'
 		let childId = try arrNode.children.get(i) otherwise panic("parseRunArgv: children.get OOB — i bounded by n")
 		let child = argsDoc.get(childId)
+
 		match child.kind 'k'
 			jsonString then out.push(child.stringValue)
 			jsonNumber then out.push("{child.numberValue}")
@@ -42,6 +47,7 @@ export function parseRunArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringA
 			jsonObject then panic("parseRunArgv: object entries in `args` are not supported")
 		end 'k'
 	end 'each'
+
 	return out
 end 'parseRunArgv'
 
@@ -51,9 +57,11 @@ export function parseStdin(argsDoc JsonDoc, argsId JsonNodeId) returns InputSour
 	let raw = try argsDoc.getString(argsId, key: "stdin") otherwise 'noStdin'
 		return InputSource.none
 	end 'noStdin'
+
 	if raw.isEmpty() 'empty'
 		return InputSource.none
 	end 'empty'
+
 	return InputSource.bytes(raw)
 end 'parseStdin'
 
@@ -63,8 +71,10 @@ export function parseTimeoutMs(argsDoc JsonDoc, argsId JsonNodeId, defaultMs Dur
 	let raw = try argsDoc.getInt(argsId, key: "timeoutMs") otherwise 'default'
 		return defaultMs
 	end 'default'
+
 	if raw <= 0 'nonPositive'
 		return defaultMs
 	end 'nonPositive'
+
 	return raw as DurationMs
 end 'parseTimeoutMs'

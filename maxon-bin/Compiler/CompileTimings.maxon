@@ -199,12 +199,14 @@ export typealias CpuTicksArray = Array with CpuTicks
 export enum CompilePhase
 	load
 	lex
+
 	// Conditional compilation (`queryActiveTokens`): one pass per file resolving `#if`/`#else`/
 	// `#endif` against the build target. Its OWN phase rather than a slice of `lex`, because `lex`'s
 	// probe deliberately brackets `tokenize` alone (see `queryTokens`) and a phase that absorbed a
 	// neighbour's cost is the defect this file exists to prevent. A file with no directives returns
 	// its token array untouched, so the phase reads as the cost of the PROBE for most of the corpus.
 	directives
+
 	// The whole-program signature index (`queryProgramSignatures`): one token sweep per file, folded
 	// into one table. Its OWN phase, not a slice of `parse`, for the reason this file exists — a cost
 	// billed to a neighbour is a cost nobody can act on, and this one is new, whole-program, and
@@ -214,6 +216,7 @@ export enum CompilePhase
 	merge
 	resolveTypes
 	semanticCheck
+
 	// The cross-file unused-export audit (E3092/E3093/E3094). Its OWN phase, not a slice of
 	// `semanticCheck`, for the reason this file exists: it is a NEW whole-program walk over every
 	// declaration and every op, which is exactly the shape whose cost must be visible to `scale-test`
@@ -224,15 +227,18 @@ export enum CompilePhase
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
 	foldConstOperands
+
 	// The escape analysis + stack promotion (`promoteStackRecords`). Its OWN phase, like every other
 	// Std pass: it is whole-module where its four neighbours are per-function, so a cost billed into one
 	// of them would report a call-graph walk as a per-function one.
 	promoteStackRecords
+
 	// The value-tuple return convention (`applyValueTupleReturn`). Its OWN phase, like every other Std
 	// pass: it is a whole-module call-graph walk, and billed into its per-function neighbours the growth
 	// would be reported as theirs.
 	valueTupleReturn
 	sugarGate
+
 	// The reachability prune (`eliminateDeadFunctions`). Its OWN phase, not a slice of `sugarGate` or
 	// `isel`, because it exists to make the phases after it SMALLER: billed into one of them, the cost
 	// and the saving would net off inside a single number and neither would be readable.
@@ -263,6 +269,7 @@ export enum CompilePhase
 	// while this writes to the OUTPUT — billing a `File.delete` to the source loader is exactly the
 	// neighbour-absorption this file exists to prevent.
 	prepareOutput
+
 	// The whole-program declaration checks that run before the pipeline (`checkValueMergeSignatures`,
 	// `checkConformance`, `checkLiteralInitConformance`, `checkGenericAliasCycles`,
 	// `checkWhereConstraints`, `checkTypeSymbolNamespace`).
@@ -273,17 +280,21 @@ export enum CompilePhase
 	// `queryProgramSignatures` runs between the first check and the other five and owns the
 	// `signatures` phase; `addPhaseCost` accumulates, so two disjoint intervals make one honest row.
 	checkDeclarations
+
 	// The `verify*Ordinals` block — the builtin-error ordinal claims (`Compiler.compileToCodeResult`).
 	verifyOrdinals
+
 	// From `liveGlobalLabels` to `collectFnRefThunkTargets`: which globals the program can still name,
 	// the synthesized `__module_init`, the stdlib reachability facts, and the runtime-usage walk with
 	// its destructor/cloner closures. One phase because every one of them asks the SAME question —
 	// WHAT DOES THIS PROGRAM NEED — and every install below reads the answer.
 	deriveRuntimeNeeds
+
 	// Assembling the `.data` slot list from those answers and laying the section out
 	// (`GlobalDataTable.layOut`). Split from `deriveRuntimeNeeds` although it runs in the same breath,
 	// because it is the only step there whose cost is O(globals) rather than O(module).
 	layOutGlobals
+
 	// `PassPipeline.run`'s ONE shared `FunctionNameIndex`, built before the first pass and read by
 	// two of them.
 	//
@@ -293,16 +304,19 @@ export enum CompilePhase
 	// `deriveStdlibFacts`, so they are billed to `checkDeclarations` and `deriveRuntimeNeeds` — which
 	// is where the cost belongs, since it is those passes' own.
 	pipelineNameIndex
+
 	// The hand-built runtime library installs (`installMmRuntime` … `installBuiltinConformanceRuntime`),
 	// which run after the pipeline and are already-lowered Std. One phase, not eighteen: they are
 	// bits of ONE runtime floor, each gated on its own usage bit, and what a reader wants is what
 	// carrying the runtime costs this program.
 	installRuntime
+
 	// The bodies the compiler SYNTHESIZES for this particular program — the per-union, per-struct and
 	// per-instance destructor cascades, the two cloner cascades, and the `__fnref_` env thunks. Its
 	// own phase beside `installRuntime` because the two scale with different things: the runtime is a
 	// fixed library gated on usage bits, while this grows with the program's TYPES.
 	synthesizeBodies
+
 	// The managed-primitive call-site expansion (`inlineManagedPrimitives`, EC1). APPENDED HERE rather than
 	// beside the four Std passes it runs among, for the reason this enum's header gives — the ordinals are
 	// the wire format every `.metrics.tsv` ever written is indexed by, so a member slotted into the middle
@@ -310,6 +324,7 @@ export enum CompilePhase
 	// Std pass: it walks every block of every function and appends blocks, and a cost billed into a
 	// neighbour is a cost nobody can act on.
 	inlineManagedPrimitives
+
 	// `foldConstOperands` run a SECOND time, over the functions the two brackets above APPENDED (EC3-H).
 	// APPENDED HERE for this enum's own reason — the ordinals are the `.metrics.tsv` wire format.
 	//
@@ -320,6 +335,7 @@ export enum CompilePhase
 	// optimizer would move for two unrelated reasons — the grouping rule the `synthesizeBodies` comment
 	// states, applied one level down.
 	foldEmittedConstOperands
+
 	// The tiny-leaf call-site splice (`inlineLeaves`, EC5). APPENDED HERE rather than beside
 	// `inlineManagedPrimitives`, which since EC17 it runs immediately after, for this enum's own reason —
 	// the ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed by, so a
@@ -333,6 +349,7 @@ export enum CompilePhase
 	// instead of as functions to allocate and emit. Billed into a neighbour, the cost and the saving
 	// would net off inside one number and neither would be readable.
 	inlineLeaves
+
 	// The Target-tier CFG cleanup (`cleanUpBranches`, EC11): jump elision, conditional inversion,
 	// jump threading and unreachable-block elimination on fully register-allocated ops. APPENDED HERE
 	// rather than beside `regalloc`, between which and `prologueEpilogue` it runs, for this enum's own
@@ -345,6 +362,7 @@ export enum CompilePhase
 	// `prologueEpilogue` and `encode` see fewer blocks and fewer ops. Billed into `regalloc`, the cost
 	// and the saving would net off inside one number and neither would be readable.
 	branchCleanup
+
 	// The `const <op> const` evaluation (`foldConstants`, EC12). APPENDED HERE rather than beside the Std
 	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
 	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
@@ -357,6 +375,7 @@ export enum CompilePhase
 	// back by the phases after it — `regalloc`, `isel` and `encode` see fewer ops and a narrower live set
 	// — and billed into a neighbour the cost and the saving would net off inside one number.
 	foldConstants
+
 	// The intra-block common-subexpression elimination (`eliminateCommonSubexpressions`, EC13). APPENDED
 	// HERE rather than beside the Std passes it runs among, for this enum's own reason — the ordinals are
 	// the `.metrics.tsv` wire format every trend row ever written is indexed by, so a member slotted into
@@ -369,6 +388,7 @@ export enum CompilePhase
 	// be paid back by the phases after it — `regalloc` in particular sees a narrower live set — and
 	// billed into a neighbour the cost and the saving would net off inside one number.
 	commonSubexpressionElimination
+
 	// Loop-invariant code motion (`hoistLoopInvariants`, EC14). APPENDED HERE rather than beside the Std
 	// passes it runs among, for this enum's own reason — the ordinals are the `.metrics.tsv` wire format
 	// every trend row ever written is indexed by, so a member slotted into the middle would re-attribute
@@ -381,6 +401,7 @@ export enum CompilePhase
 	// is also one of the passes whose cost is expected to be paid back by the phases after it, and billed
 	// into a neighbour the cost and the saving would net off inside one number.
 	loopInvariantCodeMotion
+
 	// Strength reduction of a division by a constant (`strengthReduceDivision`, EC18). APPENDED HERE
 	// rather than beside the Std passes it runs among, for this enum's own reason — the ordinals are the
 	// `.metrics.tsv` wire format every trend row ever written is indexed by, so a member slotted into the
@@ -393,12 +414,14 @@ export enum CompilePhase
 	// to be paid back later (its sequence is what `commonSubexpressionElimination` then merges), and
 	// billed into a neighbour the cost and the saving would net off inside one number.
 	strengthReduceDivision
+
 	// The SAME pass over the APPENDED RUNTIME BAND (`Compiler.compileToCodeResult`), which no pipeline
 	// pass sees — `foldEmittedConstOperands` is its exact precedent, one row up the same band. Its own
 	// row rather than a widening of `strengthReduceDivision` above, because the two measure different
 	// populations: one is the program's divisions and the other is the runtime's, and a program that
 	// prints one integer pays the second and almost none of the first.
 	strengthReduceEmittedDivision
+
 	// Building and writing the `<output>.mxdbg` debug-info sidecar (`Compiler.compileMeasured`). Its own
 	// row rather than a slice of `writeExe`, because the two are gated by different flags: a build with
 	// `--no-debug-info` pays this nothing at all, and a row that folded it into the executable write
@@ -416,10 +439,12 @@ end 'CompilePhase'
 export type CompileTimings
 	export var phaseNanos as DurationNanosArray
 	export var phaseCpuTicks as CpuTicksArray
+
 	// Cost of the whole compile, stamped once by `compile`. Zero until then: the
 	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
 	// zero total means "not a reported build", not "an instant build".
 	export var total as PhaseCost
+
 	// The register allocator's own sub-phase breakdown. Owned HERE (rather than
 	// created per-run inside `allocateRegisters`) so the report can nest it under the
 	// `regalloc` phase and RECONCILE the two. The sub-phases are a breakdown OF that
@@ -463,9 +488,11 @@ export type CompileTimings
 	// What the instrumentation actually claimed — the sum of every phase.
 	export function attributedCost() returns PhaseCost
 		var sum = PhaseCost.zero()
+
 		for phase in CompilePhase.allCases 'eachPhase'
 			sum = sum.plus(self.costOf(phase))
 		end 'eachPhase'
+
 		return sum
 	end 'attributedCost'
 
@@ -511,6 +538,7 @@ union RegAllocRemainder
 	// The phase's wall minus what its sub-phases claimed: the driver loop's own cost. What a pool of one
 	// leaves, which is every compile at `MAXON_MAX_PROCS=1` and every one a bootstrap-built compiler runs.
 	unattributed(cost PhaseCost)
+
 	// What the sub-phases claimed BEYOND the phase's wall: work the pool did at the same time as other
 	// work. Read as a multiple of the wall it is the allocator's realised parallelism.
 	concurrent(cost PhaseCost)
@@ -520,6 +548,7 @@ function regAllocRemainder(timings CompileTimings) returns RegAllocRemainder
 	let wall = timings.costOf(CompilePhase.regalloc)
 
 	var claimed = PhaseCost.zero()
+
 	for sub in RegAllocPhase.allCases 'eachSub'
 		claimed = claimed.plus(timings.regAlloc.costOf(sub))
 	end 'eachSub'
@@ -563,6 +592,7 @@ export function compileTimingsReport(timings CompileTimings) returns String
 
 	var msg = StringBuilder.create()
 	msg.append("compile timings — total {millisText(total.nanos)} ms wall, {total.cpuTicks} CPU ticks\n")
+
 	// The header's label carries the same indent every row's does, so it pads to the
 	// same column width and the four columns line up.
 	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: TimeWidth)}{padLeft("%", width: PercentWidth)}{padLeft("cpu%", width: PercentWidth)}\n")
@@ -589,9 +619,11 @@ end 'compileTimingsReport'
 // answer is where the compile's time goes, not where the allocator's does.
 function regAllocBreakdown(timings CompileTimings, total PhaseCost) returns String
 	var msg = StringBuilder.create()
+
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(timingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
 	end 'eachSub'
+
 	msg.append(regAllocRemainderRow(timings, total: total))
 	return msg.build()
 end 'regAllocBreakdown'
@@ -663,6 +695,7 @@ end 'padLeft'
 // it (see `padRight`: an overlong label widens its row rather than being truncated).
 function padCount(text String, width ColumnWidth) returns ColumnWidth
 	let len = text.byteLength() as ColumnWidth
+
 	if len >= width 'overflows'
 		return 0
 	end 'overflows'

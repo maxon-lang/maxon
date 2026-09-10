@@ -128,6 +128,7 @@ function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByN
 	for name in project.stdlibFacts.unreachable 'eachSkipped'
 		if let idx = try byName.get(name) 'aModuleFunction'
 			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
+
 			if isLive 'reachedAnyway'
 				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model. Keeping it would emit an EMPTY function the program calls")
 			end 'reachedAnyway'
@@ -242,6 +243,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE IOCP COMPLETION LOOP's TWO CALLEES (SV1).** That loop is a hand-assembled Target-tier chunk, so
 	// no Std caller reaches what it calls and the prune would drop them — leaving a pipe-reading program
 	// calling functions that were never laid out, which is a LINK failure and not a compile error, in exactly
@@ -255,6 +257,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// calls it, so the walk reaches it by an ordinary edge.
 	try markCompilerOwnedRoot(SchedPublishLockedName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE SYSCALL BRACKET AND ITS RETURN ROAD, AND IT IS THE IOCP LOOP'S CASE EXACTLY.** All three are
 	// called only from the TARGET tier — `__sched_enter_syscall` / `__sched_exit_syscall` from the arm64
 	// isel's dispatch door, `__sched_syscall_regain` from `emitGtExitSyscall`'s hand-assembly — so no Std
@@ -277,11 +280,13 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 		try markCompilerOwnedRoot(SchedEnterSyscallName, project: project, index: index, reached: reached, worklist: worklist)
 		try markCompilerOwnedRoot(SchedExitSyscallName, project: project, index: index, reached: reached, worklist: worklist)
 	end 'theBracketIsCalled'
+
 	// ⭐ **THE ENTRY STUB's SCHEDULER TEARDOWN (SV1)** — `__gt_drain_at_exit`, called from `mrt_start` between
 	// the global cleanup and the leak gate and from nowhere else. Exactly `__mm_leak_check`'s position, and
 	// rooted for exactly its reason: the gate emits its call from `RuntimeUsage.usesGt` — where installation
 	// is decided — so a pruned root leaves a call with no callee rather than a program without a drain.
 	try markCompilerOwnedRoot(GtDrainAtExitName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
@@ -289,6 +294,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// module defines none), so an untraced build is unaffected: it installs neither and roots neither.
 	try markCompilerOwnedRoot(DsInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(DsShutdownName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE COVERAGE DUMP**, called from `mrt_start` between the leak gate and the exit primitive and from
 	// nowhere else — exactly `__ds_shutdown`'s position and rooted for its reason. `__cov_write_file` under it
 	// is an ordinary call-graph edge and needs no root of its own; an uninstrumented build installs neither
@@ -348,6 +354,7 @@ function markLiveFunction(name ByteArray, byName FuncIndexByName, reached BoolAr
 	end 'notAModuleFunction'
 
 	let alreadyReached = try reached.get(idx) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {idx}")
+
 	if alreadyReached 'already'
 		return
 	end 'already'
@@ -400,6 +407,7 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			ret or
 			param then break 'op'
 		call(_, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+
 		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
 		// stores, and the two OS primitives that name no Maxon function.
 		retVoid or
@@ -410,10 +418,12 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			osWriteStdout or
 			rdataAddr then break 'op'
 		tryCall(_, _, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+
 		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
 		errorReturn or
 			osExit then break 'op'
 		funcAddr(_, funcName) then markLiveFunction(funcName, byName: byName, reached: reached, worklist: worklist)
+
 		// `callIndirect`/`witnessCall` (see above) plus every appended `os*` primitive and `switch`,
 		// none of which names a Maxon function.
 		callIndirect or
@@ -442,12 +452,15 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile then break 'op'
+
 		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
 		osReadWallClock then break 'op'
+
 		// The THROWING witness call names no Maxon function, exactly as `witnessCall` does not: both read a
 		// code pointer out of a `.rdata` witness table, and the DATA edge that keeps a witness impl live is
 		// counted by the witness-table walk, not here.
 		witnessTryCall then break 'op'
+
 		// Every file op calls a Win32 IMPORT, not a Maxon function, so none keeps anything live here
 		// (R4.1 + R4.2).
 		osFileOpenRead or
@@ -463,23 +476,29 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			osDirCreate or
 			osDirCurrentPath or
 			osFileAttributes then break 'op'
+
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue then break 'op'
 		osCommandLine then break 'op'
+
 		// W5. `GetStdHandle` and `GetModuleFileNameA` are Win32 IMPORTS, so neither keeps a Maxon function
 		// live — the file band's reason, and the reason each is named separately from `osCommandLine`: an
 		// op added later must fail to compile here rather than inherit one of their answers.
 		osStdHandle then break 'op'
 		osExecutablePath then break 'op'
+
 		// W35. The stderr write reaches the OS through an import or a syscall exactly as its stdout twin
 		// does, so it keeps no Maxon function live either.
 		osWriteStderr then break 'op'
+
 		// A promoted record's address names a frame slot, not a function — it keeps nothing live.
 		stackRecordAddr then break 'op'
+
 		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
 		osOpenNamedSegment or
 			osMapNamedSegment or
 			osTickCountMs then break 'op'
+
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too (kernel32 and ws2_32), so none
 		// keeps a Maxon function live either.
@@ -497,16 +516,20 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			osSocketClose or
 			osCpuCount or
 			osThreadCpuTicks then break 'op'
+
 		// F1a: the decommit bottoms out in a Win32 import or a raw syscall — or, on wasm, in nothing at all —
 		// so it keeps no Maxon function live either.
 		osDecommitPages then break 'op'
+
 		// F1b: a fill lowers to INLINE machine code on every target — a store ladder, never a call — so it
 		// keeps no Maxon function live either.
 		memFill then break 'op'
+
 		// F1c: a reserve and a commit bottom out in `VirtualAlloc`, an `mmap` syscall or a `memory.grow` — never
 		// in a Maxon function, so neither keeps one live.
 		osCommitPages or
 			osReservePages then break 'op'
+
 		// F2 + G1: the two atomics and the `gs:` TLS read lower to INLINE machine code, and the thread token,
 		// `TlsAlloc`, `TlsSetValue` and `SetEvent` to a raw syscall or an IMPORT — never to a Maxon function, so
 		// no member of this range keeps one live. (Count the members off the range, not off this sentence: it
@@ -522,16 +545,20 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		osFileOpenWriteExecutable then break 'op'
 		osEnvBlock or
 			osEnvBlockFree then break 'op'
+
 		// G3: an ordered access is inline machine code on every lane, so it names no Maxon callee.
 		loadAcquire or
 			storeRelease then break 'op'
 		osHandleFileType then break 'op'
+
 		// The two named-section calls bottom out in kernel32 imports, never in a Maxon function.
 		osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment then break 'op'
+
 		// A coverage counter names a `.data` slot, not a callee.
 		covPoint then break 'op'
+
 		// Every sampling service bottoms out in an import, never in a Maxon function.
 		osHostSample then break 'op'
 	end 'op'
@@ -546,21 +573,26 @@ end 'markCalleeOf'
 function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
 	let total = module.funcCount()
 	var kept = IrFunctionArray.create()
+
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
 	var newIndexOfOld = FuncIndexArray.create()
+
 	// Did dropping renumber any function that SURVIVES? Only a survivor whose index moved has an origin
 	// row to relocate; a drop with no survivor after it moves nothing (see the trailing-drop skip below).
 	var keptNumberingShifted = false
+
 	for i in 0 upto total 'eachFunc'
 		let func = module.getFunc(i)
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
 		let newIndex = kept.count()
 		newIndexOfOld.push(newIndex)
+
 		if isLive 'live'
 			if newIndex != i 'moved'
 				keptNumberingShifted = true
 			end 'moved'
+
 			kept.push(func)
 		end 'live' else 'dead'
 			// `String.from` runs INSIDE the lazy message, never beside it: this arm is taken once per

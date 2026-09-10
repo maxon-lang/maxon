@@ -96,16 +96,19 @@ export type PhaseMemoryColumns
 	// What the instrumentation actually claimed, summed over every phase.
 	export function totalDelta() returns PhaseDelta
 		var allocSum = 0 as AllocCount
+
 		for value in self.allocs 'eachAlloc'
 			allocSum = allocSum + value
 		end 'eachAlloc'
 
 		var freeSum = 0 as AllocCount
+
 		for value in self.frees 'eachFree'
 			freeSum = freeSum + value
 		end 'eachFree'
 
 		var byteSum = 0 as HeapByteCount
+
 		for value in self.bytes 'eachByte'
 			byteSum = byteSum + value
 		end 'eachByte'
@@ -156,6 +159,7 @@ end 'RegAllocMemory'
 // per-file fan-out driver contending on a global.
 export type CompileMemory
 	export var columns as PhaseMemoryColumns
+
 	// The whole compile's memory, stamped once by `compile` — the denominator every
 	// phase's share is taken against, and the total the phases must reconcile to. Zero
 	// until then: the warm-rebuild gate drives `compileToCodeResult` directly and never
@@ -216,6 +220,7 @@ function regAllocMemoryUnattributed(memory CompileMemory) returns PhaseDelta
 	let wall = memory.deltaOf(CompilePhase.regalloc)
 
 	var claimed = PhaseDelta.zero()
+
 	for sub in RegAllocPhase.allCases 'eachSub'
 		let subDelta = memory.regAlloc.deltaOf(sub)
 		claimed = PhaseDelta.create(0, cpuTicks: 0, allocs: claimed.allocs + subDelta.allocs, frees: claimed.frees + subDelta.frees, bytes: claimed.bytes + subDelta.bytes)
@@ -259,9 +264,11 @@ end 'compileMemoryReport'
 
 function regAllocMemoryBreakdown(memory CompileMemory) returns String
 	var msg = StringBuilder.create()
+
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(memoryRow("{MemSubPhaseIndent}{sub.name}", delta: memory.regAlloc.deltaOf(sub)))
 	end 'eachSub'
+
 	msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: regAllocMemoryUnattributed(memory)))
 	return msg.build()
 end 'regAllocMemoryBreakdown'

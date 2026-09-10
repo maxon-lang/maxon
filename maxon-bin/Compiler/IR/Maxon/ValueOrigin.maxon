@@ -64,58 +64,75 @@ export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 		compare(result, _, _, _, _) gives MaxonOpResult.value(result)
 		condBranch or
 			branch gives MaxonOpResult.none
+
 		// The varAccess band: an address and a load DEFINE a value; a store is a statement and
 		// defines none — the same split `ret`/`retVoid` sit on either side of.
 		globalAddr(result, _) gives MaxonOpResult.value(result)
 		loadIndirect(result, _, _, _) gives MaxonOpResult.value(result)
 		storeIndirect gives MaxonOpResult.none
+
 		// A string literal DEFINES a value — the `.rdata` record's address (P1.2 wave A).
 		stringLiteral(result, _) gives MaxonOpResult.value(result)
+
 		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
 		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none (P1.4b).
 		tryCall(result, _, _, _, _, _, _, _, _) gives MaxonOpResult.value(result)
 		throwError or
 			propagateError or
 			panicAbort gives MaxonOpResult.none
+
 		// P1.5-A1: a `functionRef` DEFINES its result (a code address, like `literal`); an `indirectCall`
 		// DEFINES its result (the call's return value, like `call`).
 		functionRef(result, _) gives MaxonOpResult.value(result)
 		indirectCall(result, _, _) gives MaxonOpResult.value(result)
+
 		// P1.5-B1a: an async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
 		asyncCall(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
 		await (result, _) gives MaxonOpResult.value(result)
+
 		// P1.5-B2b: a throwing await DEFINES its primary result (its error-flag second result is
 		// compiler-synthetic and needs no source origin), exactly as `tryCall` does.
 		tryAwait(result, _, _) gives MaxonOpResult.value(result)
+
 		// P1.6-B1: `sizeof(T)` DEFINES its result (the type's byte size), so it carries a source origin like
 		// any other value-producing op — the register-pressure diagnostic maps its ValueId back through this.
 		sizeofType(result, _) gives MaxonOpResult.value(result)
+
 		// P1.7 slice 2: a `b"…"` byte-string literal DEFINES a value — the owned Array record's pointer.
 		constArrayLiteral(result, _, _, _) gives MaxonOpResult.value(result)
+
 		// The dense-match jump table is a terminator — it branches, defining no value, like `condBranch`/`branch`.
 		switch gives MaxonOpResult.none
+
 		// A witness dispatch DEFINES its result (the dispatched method's return value), so it carries a source
 		// origin like any other value-producing call (P1.7a slice 2a).
 		witnessDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+
 		// A throwing witness dispatch's PRIMARY result is its origin-bearing value, exactly as a `tryCall`'s
 		// is; its error flag is compiler-synthetic and needs no source origin.
 		witnessTryDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+
 		// A rendered panic defines nothing, exactly as `panicAbort` does — it aborts.
 		panicAbortValue gives MaxonOpResult.none
+
 		// The error-flag encode DEFINES the flag a routed bare `throw` hands its block handler — a value
 		// like any other arithmetic result, and the routed edge names it.
 		errorFlagEncode(result, _, _) gives MaxonOpResult.value(result)
+
 		// A `spawn` DEFINES the mailbox pointer the parser stores into the handle box.
 		serviceSpawn(result, _, _) gives MaxonOpResult.value(result)
+
 		// A SEND defines a VOID result — SV1's message is fire-and-forget, so there is no reply for that slot
 		// to carry, and it exists for the reason a void `call`'s does: every op in this dialect that a statement
 		// can be names its result.
 		serviceSend(result, _, _, _) gives MaxonOpResult.value(result)
+
 		// ⭐ A REPLY CELL defines the PROMISE an awaitable send hands back (SV2) — a value the parser binds,
 		// slots into the request box and awaits, so it needs an origin exactly as every other one does.
 		serviceReplyCell(result, _) gives MaxonOpResult.value(result)
 		immortalStructRecord(result, _, _) gives MaxonOpResult.value(result)
 		immortalStringTable(result, _, _, _) gives MaxonOpResult.value(result)
+
 		// A coverage counter is a statement, not an expression — it defines no value, like `storeIndirect`.
 		covPoint gives MaxonOpResult.none
 	end 'result'
@@ -189,10 +206,13 @@ export type ParamOriginTable
 	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
 		for i in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.lookup: funcIndices.get OOB at {i}")
+
 			if f != funcIndex 'otherFunc'
 				continue
 			end 'otherFunc'
+
 			let v = try self.valueIds.get(i) otherwise panic("ParamOriginTable.lookup: valueIds.get OOB at {i}")
+
 			if v == valueId 'match'
 				let startByte = try self.startBytes.get(i) otherwise panic("ParamOriginTable.lookup: startBytes.get OOB at {i}")
 				let endByte = try self.endBytes.get(i) otherwise panic("ParamOriginTable.lookup: endBytes.get OOB at {i}")
@@ -201,6 +221,7 @@ export type ParamOriginTable
 				return ParamOriginLookup.found(SourceRange.create(startByte, endByte: endByte, line: line, column: column))
 			end 'match'
 		end 'each'
+
 		return ParamOriginLookup.none
 	end 'lookup'
 
@@ -227,9 +248,11 @@ export type ParamOriginTable
 	// survivor's key moves to the function's new position.
 	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
 		var write = 0 as OpCount
+
 		for read in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
 			let isLive = try reached.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the parameter-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+
 			if not isLive 'droppedFunc'
 				continue
 			end 'droppedFunc'
@@ -267,6 +290,7 @@ export type ValueOriginTable
 	var funcIndices as FuncIndexArray
 	var valueIds as ValueIdArray
 	var opIndices as OpIndexArray
+
 	// Parameter declaration spans (the values NO op defines) — carried alongside the
 	// op-origin columns so `Project.valueOrigins` answers BOTH "which op defined value v"
 	// and "where was parameter v declared" from one table. See ParamOriginTable.
@@ -314,15 +338,19 @@ export type ValueOriginTable
 	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ValueOriginLookup
 		for i in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.lookup: funcIndices.get OOB at {i}")
+
 			if f != funcIndex 'otherFunc'
 				continue
 			end 'otherFunc'
+
 			let v = try self.valueIds.get(i) otherwise panic("ValueOriginTable.lookup: valueIds.get OOB at {i}")
+
 			if v == valueId 'match'
 				let opIndex = try self.opIndices.get(i) otherwise panic("ValueOriginTable.lookup: opIndices.get OOB at {i}")
 				return ValueOriginLookup.found(opIndex)
 			end 'match'
 		end 'each'
+
 		return ValueOriginLookup.none
 	end 'lookup'
 
@@ -359,9 +387,11 @@ export type ValueOriginTable
 	// can be overwritten.
 	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
 		var write = 0 as OpCount
+
 		for read in 0 upto self.count() 'each'
 			let f = try self.funcIndices.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
 			let isLive = try reached.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the value-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+
 			if not isLive 'droppedFunc'
 				continue
 			end 'droppedFunc'
@@ -397,11 +427,14 @@ export type ValueOriginTable
 	export function indexRowsOfFunctions(selected BoolArray, funcCount FuncIndex) returns ValueOriginRowIndex
 		var rowStarts = OpIndexArray.create()
 		rowStarts.resize(funcCount + 1)
+
 		for i in 0 upto self.count() 'countEach'
 			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+
 			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
 				continue
 			end 'notWanted'
+
 			// Counted into slot `f + 1`, so the prefix sum below turns the counts into starts in place.
 			let at = f + 1
 			let prior = try rowStarts.get(at) otherwise panic("ValueOriginTable.indexRowsOfFunctions: row {i} names function index {f}, which is outside the {funcCount}-function module this index was asked for")
@@ -409,6 +442,7 @@ export type ValueOriginTable
 		end 'countEach'
 
 		var total = 0 as OpIndex
+
 		for f in 0 upto funcCount + 1 'prefixSum'
 			total = total + (try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}"))
 			try rowStarts.set(f, value: total) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.set OOB at {f}")
@@ -416,19 +450,24 @@ export type ValueOriginTable
 
 		var rows = OpIndexArray.create()
 		rows.resize(total)
+
 		// A SEPARATE write cursor per function, so `rowStarts` survives the scatter intact — advancing
 		// `rowStarts` itself would leave every entry naming its function's END and the starts would have
 		// to be read back off the previous slot, which is the off-by-one this whole shape invites.
 		var cursor = OpIndexArray.create()
 		cursor.resize(funcCount)
+
 		for f in 0 upto funcCount 'seedCursor'
 			try cursor.set(f, value: try rowStarts.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rowStarts.get OOB at {f}")) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
 		end 'seedCursor'
+
 		for i in 0 upto self.count() 'scatterEach'
 			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: funcIndices.get OOB at {i}")
+
 			if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
 				continue
 			end 'notWanted'
+
 			let at = try cursor.get(f) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.get OOB at {f}")
 			try rows.set(at, value: i) otherwise panic("ValueOriginTable.indexRowsOfFunctions: rows.set OOB at {at}")
 			try cursor.set(f, value: at + 1) otherwise panic("ValueOriginTable.indexRowsOfFunctions: cursor.set OOB at {f}")
@@ -472,6 +511,7 @@ export type ValueOriginTable
 			let row = index.rowAt(k)
 			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
 			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
+
 			if v < valueIdAtParamPosition(calleeParamCount) 'rowNamesAParameter'
 				continue
 			end 'rowNamesAParameter'
@@ -488,6 +528,7 @@ export type ValueOriginTable
 			let o = try source.opIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: opIndices.get OOB at {i}")
 			self.record(f + funcOffset, valueId: v, opIndex: o + opOffset)
 		end 'each'
+
 		// The parameter sub-table merges with the SAME function offset (its ValueIds and spans
 		// pass through verbatim), in lockstep with the op-origin fold above.
 		self.paramOrigins.appendFrom(source.paramOrigins, funcOffset: funcOffset)

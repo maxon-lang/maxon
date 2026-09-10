@@ -75,6 +75,7 @@ export enum TypeClass
 	noValue
 	structRef
 	text
+
 	// The class of a non-capturing FUNCTION VALUE (P1.5-A1). Like `structRef`/`text`, it converts to
 	// nothing and nothing converts to it — a function value is a code pointer, not a number and not a
 	// bool, so `f + 1`, `return f` from an `ExitCode` function and `if f` are all one error. It AGREES
@@ -83,6 +84,7 @@ export enum TypeClass
 	// function types agreeing at the class level is A1's assignability (tag-level, not structural — the
 	// arity/param-type identity a function-to-function mismatch would need arrives with a later rung).
 	function
+
 	// The class of a TYPE-PARAMETER value (P1.6-A) — `T` inside a generic type. It is OPAQUE: at this
 	// trivial slice `T` is never substituted, so a `T` value may hold ANY concrete type (an int, a
 	// bool, a trivial struct), and a concrete value may meet a `T` place. So it AGREES WITH ANYTHING,
@@ -91,6 +93,7 @@ export enum TypeClass
 	// borrowing `unknown`'s (which carries E3004 semantics). It lets `IntBox.create(42)` pass an int to
 	// a `T` parameter and `b.get() == 42` compare a `T` result as an i64.
 	typeParameter
+
 	// The class of a `Character` — one extended grapheme cluster (P1.8 slice B). Its OWN class, NOT
 	// `text`, even though a Character and a String share a record: a class is what AGREES with what, and
 	// `s == c` must be a type error rather than a byte compare. Like `text` it converts to nothing and
@@ -102,6 +105,7 @@ export enum TypeClass
 	// company at exactly this rule and nowhere else: two Characters `comparableOperands`, two Strings
 	// still do not. `c < d` is the `Character.compare` cascade, NOT a pointer compare.
 	character
+
 	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type (P1.7a-existentials slice 1).**
 	// Its OWN class, and it agrees with NOTHING but another existential — deliberately, including with the
 	// `structRef` of a conforming type. A conformer reaching an interface-typed place is a WIDENING (the
@@ -123,6 +127,7 @@ export enum TypeClass
 	// dispatches by numbering `Base`'s: MEASURED before that arm existed, a program that compiled clean and
 	// returned 2 where the answer is 1.
 	interfaceValue
+
 	// ⭐ **The class of a `cstring` — a NUL-terminated byte POINTER.** Its OWN class, agreeing with nothing
 	// but another `cstring`, which is the rule the tag exists for: a `__Builtins.*` parameter declared
 	// `cstring` must refuse an ordinary int, and an `i64` one must refuse a `cstring`. It converts to
@@ -138,6 +143,7 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		boolean gives TypeClass.boolean
 		integer gives TypeClass.numeric
 		float gives TypeClass.numeric
+
 		// A `named` type is a ranged typealias, and EVERY alias the compiler can declare is NUMERIC. The CLASS is
 		// what this table answers and it is the same for every alias; which alias a value wears is a
 		// separate question, answered by name in `ProgramSignatures.aggregatesConflict`:
@@ -156,27 +162,34 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		exitCode gives TypeClass.numeric
 		unresolved gives TypeClass.unknown
 		void gives TypeClass.noValue
+
 		// A declared struct type. NOT `numeric` — a struct is a POINTER, and the arm above is a
 		// theorem about ALIASES that a struct would have falsified. See TypeClass's `structRef`.
 		structRef gives TypeClass.structRef
+
 		// A String. NOT `numeric` (it is a pointer, not a number) and NOT `structRef` (it is a
 		// builtin, not a declared `type`, and must not be admitted to `p == q`'s reference-equality
 		// rejection or a struct's field lookup). Its own class, agreeing only with itself.
 		string gives TypeClass.text
+
 		// A function value. Its own class — see TypeClass's `function` arm. A function value fits a
 		// function-typed place (both `function`) and nothing else (E3005 everywhere else).
 		function gives TypeClass.function
+
 		// A type parameter is OPAQUE and agrees with anything (P1.6-A) — its own deferral class.
 		typeParameter gives TypeClass.typeParameter
+
 		// A generic INSTANCE is a struct pointer, so it shares the `structRef` class (a reference that
 		// converts to nothing). It reaches here only if a place is declared with a generic-instance
 		// alias — the trivial slice never mints a genericInstance-tagged VALUE (a factory returns
 		// `Self`, i.e. `structRef`), so this is the sound answer for the type, not a hot path.
 		genericInstance gives TypeClass.structRef
+
 		// A Character. NOT `text` — see TypeClass's `character` arm: sharing the String RECORD is a
 		// REPRESENTATION fact, and a class is an AGREEMENT fact. Agreeing with `text` here would make
 		// `s == c` a silent byte compare and `print(c)` legal.
 		character gives TypeClass.character
+
 		// An EXISTENTIAL — a value at its interface type. NOT `structRef`, even though its VALUE half is a
 		// struct pointer: see TypeClass's `interfaceValue` for why a conformer must not simply agree.
 		interfaceRef gives TypeClass.interfaceValue
@@ -198,9 +211,11 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 	if left == TypeClass.noValue or right == TypeClass.noValue 'nonValue'
 		return false
 	end 'nonValue'
+
 	if left == TypeClass.unknown or right == TypeClass.unknown 'deferred'
 		return true
 	end 'deferred'
+
 	// A TYPE PARAMETER agrees with anything (P1.6-A) — the same deferral `unknown` gets, for the
 	// different reason that `T` is a real, opaque type that ANY concrete type may inhabit at this
 	// trivial slice (no substitution). Tested after `noValue` so a `T` never meets a non-value.
@@ -223,6 +238,7 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 	if left == TypeClass.typeParameter or right == TypeClass.typeParameter 'typeParam'
 		return true
 	end 'typeParam'
+
 	return left == right
 end 'typeClassesAgree'
 
@@ -286,6 +302,7 @@ export function castHasNoLegalConversion(source ValueTypeTag, target ValueTypeTa
 	let targetClass = typeClassOf(target)
 	let sourceConcrete = typeClassIsAggregate(sourceClass) or typeClassIsScalar(sourceClass)
 	let targetConcrete = typeClassIsAggregate(targetClass) or typeClassIsScalar(targetClass)
+
 	if not sourceConcrete or not targetConcrete 'opaque'
 		return false
 	end 'opaque'
@@ -305,6 +322,7 @@ function typeClassIsAggregate(c TypeClass) returns bool
 		structRef gives true
 		text gives true
 		function gives true
+
 		// A Character is a POINTER to a byte record, exactly as a String is — so `c as Age` and
 		// `42 as Character` describe no conversion and are E3009, for `text`'s reason.
 		character gives true
@@ -313,10 +331,12 @@ function typeClassIsAggregate(c TypeClass) returns bool
 		unknown gives false
 		noValue gives false
 		typeParameter gives false
+
 		// An EXISTENTIAL is a pointer pair, not a scalar — `structRef`'s answer, so `x as Age` on an
 		// interface-typed value and `42 as Backend` are both E3009 rather than a silent reinterpretation of
 		// the value half.
 		interfaceValue gives true
+
 		// ⭐ **A `cstring` IS AN AGGREGATE HERE, WHICH IS WHAT REFUSES `p as Age` AND `42 as cstring`.** It is a
 		// pointer and not a scalar, so a cast across the boundary describes no conversion — `text`'s answer,
 		// for `text`'s reason. That the two lower to the same machine word is exactly why the rule has to be
@@ -335,13 +355,16 @@ function typeClassIsScalar(c TypeClass) returns bool
 		structRef gives false
 		text gives false
 		function gives false
+
 		// A Character is a record pointer, not a register-sized number — `text`'s answer.
 		character gives false
 		unknown gives false
 		noValue gives false
 		typeParameter gives false
+
 		// An existential is a pointer pair, not a register-sized number — `structRef`'s answer.
 		interfaceValue gives false
+
 		// A `cstring` is an address, not a register-sized NUMBER — `text`'s answer.
 		cstring gives false
 	end 'c'
@@ -370,9 +393,11 @@ end 'typeClassIsScalar'
 // call argument, per return, per assignment.
 export enum DeclaredTypeMatch
 	ok
+
 	// Different classes — a bool where a number is declared, or the reverse. The rule
 	// `typesAgree` already owned.
 	mismatch
+
 	// ⭐ **A FLOAT MEETING A DECLARED INTEGER.** The classes AGREE — both numeric — and the
 	// conversion is still forbidden, which is why no symmetric rule could ever have caught it.
 	//
@@ -388,6 +413,7 @@ export enum DeclaredTypeMatch
 	// `type-casting.md` blesses even the explicit `100 as float`, and `arithResultTag` promotes on
 	// it. Only the lossy direction is a lie.
 	narrowsFloatToInt
+
 	// ⭐ **A FUNCTION VALUE MEETING A DECLARED NON-FUNCTION TYPE** (P1.5-A1) — `loc = dbl`, `slot = dbl`,
 	// `return dbl` from a `returns int` function, a function arg to an int parameter. Its OWN verdict, not
 	// `mismatch`, because the spec's E3005 for it has SPECIFIC advice ("a function value is only usable
@@ -474,6 +500,7 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 	// is a committed program that returns an opaque element as its ranged-int alias.
 	if value == ValueTypeTag.typeParameter 'opaqueValue'
 		let declaredClass = typeClassOf(declared)
+
 		if typeClassIsAggregate(declaredClass) and declaredClass != TypeClass.interfaceValue 'aConcreteRecord'
 			return DeclaredTypeMatch.mismatch
 		end 'aConcreteRecord'
@@ -702,9 +729,11 @@ export function tagAdmitsNoAggregate(tag ValueTypeTag) returns bool
 		typeParameter gives false
 		genericInstance gives false
 		character gives false
+
 		// An existential's VALUE half is an aggregate reference (every conformer the compiler admits is a declared
 		// struct), so this tag admits one — `false`, with `structRef`'s reason.
 		interfaceRef gives false
+
 		// A `cstring` is a raw pointer and no aggregate name is derivable from it, so it is not in the
 		// narrow four this predicate is `true` for — `structRef`'s reason, one pointer kind over.
 		cstring gives false
@@ -725,6 +754,7 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		boolean gives false
 		integer gives true
 		float gives false
+
 		// A `named` type is a ranged alias — as of F1 an `int(low to high)` OR a `float(low to high)`
 		// one (`Parser.readTypeAliasDeclaration`). A float alias is NOT integral, so unlike `typeClassOf`
 		// (where both aliases are numeric) this arm is no longer a theorem. It stays `true` deliberately:
@@ -735,32 +765,40 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// resolved through the alias registry, which is that F2 work.
 		named gives true
 		exitCode gives true
+
 		// NOT integral, and this is the arm the composed spelling gets wrong: `unresolved` agrees
 		// with everything, so it must not be mistaken for a type a float has to convert INTO.
 		unresolved gives false
 		void gives false
+
 		// A struct is a pointer, and a pointer is not a number the language will convert anything
 		// INTO. Nothing narrows to a struct, so this arm is never the target of a coercion — it is
 		// `false` because the statement "a struct is an integer" is false, not because the site is
 		// unreachable.
 		structRef gives false
+
 		// A String is a pointer, not a number the language will convert anything INTO. Nothing narrows
 		// to a String, so `false` here is the statement "a String is not an integer".
 		string gives false
+
 		// A function value is a code pointer, not a number the language will convert anything INTO.
 		// Nothing narrows to a function, so `false` here is the statement "a function is not an integer".
 		function gives false
+
 		// A type parameter is OPAQUE (P1.6-A): nothing narrows INTO a `T`, so `false` keeps a
 		// `float`-into-`T` from reading as a lossy conversion (`checkDeclaredType`). A generic instance
 		// is a struct pointer, not an integer.
 		typeParameter gives false
 		genericInstance gives false
+
 		// A Character is a record pointer, not a magnitude — `string`'s answer, and what makes
 		// `c shl 1` / `c and 3` the same rejection `s shl 1` gets.
 		character gives false
+
 		// An existential is a fat pointer, not a magnitude — `structRef`'s answer, and the statement
 		// "an interface value is not an integer" rather than a claim about reachability.
 		interfaceRef gives false
+
 		// ⭐ **`false`, AND THIS IS THE WHOLE POINT OF THE TAG.** A `cstring` erased to `integer` meant a
 		// `cstring` parameter accepted an ordinary int and an `i64` one accepted a `cstring`.
 		cstring gives false
@@ -776,6 +814,7 @@ export function typeTagName(tag ValueTypeTag) returns String
 		boolean gives "bool"
 		integer gives "int"
 		float gives "float"
+
 		// Both render as `int`: `ExitCode` is an unsigned 32-bit ranged int, and a `named` alias is a
 		// ranged int — or, as of F1, a ranged float, which this arm also prints as `int` (the same int
 		// reading `tagIsIntegral`/`valueTagToStdType` give a `named` value in the param/field cases F1
@@ -783,44 +822,53 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// "declared to return 'int'".
 		named gives "int"
 		exitCode gives "int"
+
 		// A type the parser could not pin — today, only a call to a function no file declares
 		// (see TypeClass). It AGREES with everything, so it is never the side that FAILS a rule —
 		// but it can be the OTHER side of one (`f() + flag`, where the bool is what is wrong), and
 		// that message still has to name it. "unknown" is the honest word: The compiler genuinely does not
 		// know, and the program is being rejected anyway (E3004, at the call site).
 		unresolved gives "unknown"
+
 		// A call to a VOID function, used where a value belongs. `Parser.parseCall` rejects that at
 		// the call site with "Function 'noop' does not return a value".
 		// ⚠ The SECOND route this arm was written against has since appeared, so it is no longer
 		// unreachable: `SemanticCheck.requireOverloadVoidResult` prints it for an overload set whose
 		// members disagree about whether they return a value at all (W49 wave 4).
 		void gives "void"
+
 		// ⚠ It names the KIND, not the type: `return p` from an `ExitCode` function reports "got
 		// 'struct'" rather than "got 'Point'". A tag is a scalar and carries no
 		// name (see this file's header on why every rule is stated over one), so the name is not
 		// here to print. It arrives with the `valueNameIds` publication that `TypeClass.structRef`
 		// already names as its own fix — one change, two things it repairs.
 		structRef gives "struct"
+
 		// The `String` builtin — a String type error names `String` (`E3005: operator '+' is not defined
 		// for type 'String'`).
 		string gives "String"
+
 		// A function value. `function` is what the spec's E3005 messages interpolate as `{got}` — "cannot
 		// assign a value of type 'function' to …". A tag is a scalar and carries no name (see this file's
 		// header), so it names the KIND, not a specific signature — which is all the type rule needs.
 		function gives "function"
+
 		// A type parameter and a generic instance (P1.6-A). A tag carries no name, so these name the
 		// KIND: "type parameter" for an opaque `T`, "struct" for a generic instance (which IS a struct
 		// pointer, matching what a plain `structRef` prints).
 		typeParameter gives "type parameter"
 		genericInstance gives "struct"
+
 		// The `Character` builtin — a Character type error names it (`stdlib/Character.maxon` declares
 		// `type Character`).
 		character gives "Character"
+
 		// ⚠ It names the KIND, not the interface — `structRef`'s limitation, for `structRef`'s reason: a tag
 		// is a scalar and carries no name. The four widening doors do NOT print through here; each names the
 		// interface off the declared type it holds (`Parser.interfaceNameOfType`), because "does not implement
 		// interface 'Runnable'" is the message the corpus pins and it needs the name.
 		interfaceRef gives "interface"
+
 		// The keyword the author wrote, which is also what `stdlib/Builtins.maxon` declares the parameter as.
 		cstring gives "cstring"
 	end 'k'
@@ -876,6 +924,7 @@ export function boolPayload(value bool) returns ParsedInt
 	if value 'true'
 		return BoolTrueValue
 	end 'true'
+
 	return BoolFalseValue
 end 'boolPayload'
 
@@ -1077,25 +1126,30 @@ export function tagRidesAsyncGprChannel(tag ValueTypeTag) returns bool
 		boolean gives true
 		integer gives true
 		float gives false
+
 		// `named` covers a ranged-int alias (a GPR scalar), a declared struct read from a field and a boxed
 		// union — a heap pointer in each of the last two. All three are one GPR word.
 		named gives true
 		exitCode gives true
+
 		// `unresolved` is the placeholder an undeclared callee's return type gets; its doomed program is
 		// rejected by SemanticCheck's E3004 before lowering, so admitting it here defers to the diagnostic
 		// that names the real fault instead of blaming the channel.
 		unresolved gives true
+
 		// `void` is not a value and never reaches an argument slot; the RESULT door tests it separately
 		// (a void async's R8 garbage is discarded by the awaiter) rather than through this predicate.
 		void gives false
 		structRef gives true
 		string gives true
+
 		// A function value is a bare `.text` address — one word, and it owns nothing.
 		function gives true
 		typeParameter gives false
 		genericInstance gives true
 		character gives true
 		interfaceRef gives false
+
 		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
 		cstring gives true
 	end 'k'
@@ -1116,11 +1170,13 @@ function wordOperator(op MaxonBinOp) returns bool
 		shl or
 			shr or
 			shrLogical gives false
+
 		// `min`/`max` are BUILTIN CALLS, not word operators: their meaning does not follow their
 		// operands' type (both are float-only, and both operands are promoted before the op exists), and
 		// neither has a bool reading to be the other half of a duality.
 		min or
 			max gives false
+
 		// The unsigned divisions are divisions: arithmetic, with no bool reading, exactly as `div`/`mod`.
 		divUnsigned or
 			modUnsigned gives false
@@ -1166,10 +1222,12 @@ export function shiftOperator(op MaxonBinOp) returns bool
 		shl or
 			shr or
 			shrLogical gives true
+
 		// `min`/`max` take a second operand that is an ordinary number, not a shift DISTANCE — both
 		// sides are values to compare, and both are promoted to float.
 		min or
 			max gives false
+
 		// A DIVISOR is an ordinary number too, whatever the divide's signedness.
 		divUnsigned or
 			modUnsigned gives false
@@ -1198,11 +1256,13 @@ export function divisionOperator(op MaxonBinOp) returns bool
 			shl or
 			shr or
 			shrLogical gives false
+
 		// `min`/`max` divide nothing, so neither has a legality nor a fallibility question — which is
 		// also what lets `emitBinaryMathIntrinsic` reach the bare emitter past `emitBinOp`'s
 		// division panic.
 		min or
 			max gives false
+
 		// The UNSIGNED pair divides too, and every rule this gate guards is about the DIVISOR, which
 		// signedness does not change: `a / 0` is still E3103 and a possibly-zero divisor still throws.
 		divUnsigned or
@@ -1271,11 +1331,13 @@ export enum IntegerValueDomain
 	// A DECLARED ranged type whose every value is non-negative (`rangeIsUnsigned`) — `int(0 to u64.max)`,
 	// `int(1 to 8)`, `ExitCode`. The only answer that ASKS for an unsigned reading.
 	declaredNonNegative
+
 	// No declared range, but a folded constant that happens to be non-negative. It FITS an unsigned
 	// reading and asks for nothing, which is exactly the distinction that keeps `w / 8` unsigned (`w`
 	// declares it) while `7 / 2` — two constants and no declared type anywhere — stays the signed
 	// divide this compiler already emits, buying no codegen movement for no correctness.
 	provablyNonNegative
+
 	// Everything else, and they are ONE answer because they license the same instruction: a declared
 	// range admitting negatives, a negative constant, and — the case that reads as "no constraint" and
 	// is not — a value with NO range at all, which means THE WHOLE OF i64.
@@ -1742,6 +1804,7 @@ export function floatOrderKey(bits ParsedInt) returns ParsedInt
 	if bits >= 0 'positive'
 		return bits
 	end 'positive'
+
 	return i64.min - bits
 end 'floatOrderKey'
 
@@ -1772,9 +1835,11 @@ function rangeIsFull(low ParsedInt, high ParsedInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low == F64MinBound and high == F64MaxBound
 	end 'float'
+
 	if low == i64.min and high == i64.max 'signedFull'
 		return true
 	end 'signedFull'
+
 	return low == 0 and high == UnsignedFullUpperPattern
 end 'rangeIsFull'
 
@@ -1826,6 +1891,7 @@ export function rangeNeedsLowerCheck(low ParsedInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low != F64MinBound
 	end 'float'
+
 	return low > i64.min
 end 'rangeNeedsLowerCheck'
 
@@ -1911,9 +1977,11 @@ export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, i
 		let key = floatOrderKey(value)
 		return key >= floatOrderKey(low) and key <= floatOrderKey(high)
 	end 'float'
+
 	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpper'
 		return (value < 0 and not writtenNegative) or value >= low
 	end 'unsignedUpper'
+
 	return value >= low and value <= high
 end 'literalInRange'
 
@@ -1951,6 +2019,7 @@ end 'literalInRange'
 // (`rangeIsUnsigned` holds inside the shape), so the lows decide under an ordinary signed compare.
 export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias) returns bool
 	let targetIsFloat = aliasIsFloat(target)
+
 	// ⛔⛔ **THIS ARM USED TO ANSWER `true` FOR EVERY int→float PAIR, WHATEVER THE FLOAT'S RANGE — SO A
 	// GENUINELY NARROWING CONVERSION WAS REPORTED AS AN UNNEEDED ONE.** It rested on *"the declared float
 	// alias is the full `float(f64.min to f64.max)` in every use"* — a statement about the aliases the CORPUS
@@ -2034,6 +2103,7 @@ export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high
 	if targetIsUnsignedMaxUpper and rangeIsWithinSignedNonNegative(low, high: high) 'targetSpansEveryNonNegative'
 		return target.low <= low
 	end 'targetSpansEveryNonNegative'
+
 	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(low, high: high) 'mixedRepresentation'
 		return false
 	end 'mixedRepresentation'
@@ -2364,6 +2434,7 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 		shl or
 			shr or
 			shrLogical gives FoldedInt.notFoldable
+
 		// `min`/`max` are FLOAT-only, so neither has an integer fold to compute — and neither ever
 		// reaches here anyway: `Parser.recordBinOpFold` folds only when `tagIsInteger(resultTag)`, and
 		// their result tag is float by construction. The arity-1 math intrinsics decline in
@@ -2372,6 +2443,7 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 		// fold INTO.
 		min or
 			max gives FoldedInt.notFoldable
+
 		// The unsigned divisions fold through the SAME door as their signed twins, which is what keeps
 		// the folder and the emitter agreeing about one operator: `foldIntDivision` reads the opcode's
 		// own signedness rather than being told it a second time.
@@ -2559,6 +2631,7 @@ export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Fol
 		sqrt gives FoldedInt.folded(__Builtins.floatToBits(sqrt(__Builtins.bitsToFloat(operand))))
 		abs gives FoldedInt.folded(absFloatBits(operand))
 		fneg gives FoldedInt.folded(negatedFloatBits(operand))
+
 		// The two REINTERPRETATIONS compute nothing and their fold would be the identity, which is
 		// exactly why they are not answered here: what changes across one is the DOMAIN of the value,
 		// and a `ParsedInt` column cannot say which of its entries is a pattern (`foldIntUnaryOp`'s
@@ -2635,6 +2708,7 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		neg gives FoldedInt.folded(-operand)
 		bitNot gives FoldedInt.folded(not operand)
 		logicalNot gives FoldedInt.notFoldable
+
 		// The CONVERSIONS never fold, and neither arm is an omission.
 		//
 		// `trunc` cannot ARRIVE here with an integer to fold: `Parser.emitTrunc` answers
@@ -2679,6 +2753,7 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 			fneg or
 			floatToBits or
 			bitsToFloat gives FoldedInt.notFoldable
+
 		// The SIGN-EXTENSION family is unreachable here for a STRUCTURAL reason, and its fold would be a real
 		// answer rather than an ambiguous one: `Parser.emitSignExtendFromSlot` is the only emit site, its
 		// operand is the result of a runtime element-load CALL, and a call result is never a value this
@@ -2721,9 +2796,11 @@ function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTyp
 	if tagIsBool(left) or tagIsBool(right) 'logical'
 		return ValueTypeTag.boolean
 	end 'logical'
+
 	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
 		return ValueTypeTag.unresolved
 	end 'defer'
+
 	return ValueTypeTag.integer
 end 'wordOpResultTag'
 
@@ -3001,10 +3078,12 @@ export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueType
 		shl or
 			shr or
 			shrLogical gives ValueTypeTag.integer
+
 		// The unsigned divisions answer exactly what their signed twins answer: signedness selects an
 		// INSTRUCTION, and `arithResultTag` is about the DOMAIN the pair meets in, which is unmoved.
 		divUnsigned or
 			modUnsigned gives arithResultTag(left, right: right)
+
 		// `min`/`max` PROMOTE exactly as the arithmetic band does, and each reaches this function
 		// having been handed two operands already in the float domain — `Parser.emitBinaryMathIntrinsic`
 		// promotes both before it emits, the way `emitMathIntrinsic` does for the arity-1 intrinsics.
@@ -3027,6 +3106,7 @@ end 'binOpResultTag'
 // costs nothing.
 export enum BinOpOperands
 	ok
+
 	// A WORD operator whose operands land in different classes — one bool, one number. The word
 	// operators are CONTEXT-DEPENDENT, not polymorphic: `bool <op> bool` is the logical reading
 	// and `int <op> int` the bitwise one, but a MIXTURE is neither, and either reading silently
@@ -3035,11 +3115,13 @@ export enum BinOpOperands
 	// `flag`, while `4 and flag` computes `4 & 1` = 0 and is ALWAYS FALSE — same shape, opposite
 	// behaviour, decided by a bit of the constant.
 	mixedWordOperands
+
 	// An ARITHMETIC / DIVISION / SHIFT operator with a non-numeric operand. These are numeric BY
 	// DEFINITION on both sides: there is no reading of `4 + flag` at all. So this fires for a
 	// bool on EITHER side — and for two bools (`true + false`), which merely AGREE with each
 	// other and would sail past a pure agreement rule. Agreement is necessary, not sufficient.
 	nonNumericOperands
+
 	// An INTEGRAL-ONLY operator (`mod`, and the whole bit band) with an operand that has no
 	// integral reading — a FLOAT or a STRUCT REFERENCE. See `operatorIsIntegral` for which
 	// operators those are and why.
@@ -3080,12 +3162,14 @@ function operatorIsIntegral(op MaxonBinOp) returns bool
 			sub or
 			mul or
 			div gives false
+
 		// `mod` does NOT, and it is the one arm that looks like it belongs with its neighbours and
 		// does not. x64 has no `fmod` instruction: an IEEE remainder is a RUNTIME CALL, which is a
 		// stdlib cone this rung does not have — but the reason to
 		// reject it is the LANGUAGE's, not the schedule's, so this arm does not move when the cone
 		// lands.
 		mod gives true
+
 		// The bit band. A double's bits are a sign/exponent/mantissa TRIPLE, not a magnitude, so a
 		// bit operation on them cannot mean what the source said — `3.14 shl 1` is not `6.28`, and
 		// `3.14 and 2.0` is not any number the author had in mind.
@@ -3095,12 +3179,14 @@ function operatorIsIntegral(op MaxonBinOp) returns bool
 			shl or
 			shr or
 			shrLogical gives true
+
 		// `min`/`max` are the OPPOSITE of `mod`: not merely float-ADMITTING but float-ONLY, since
 		// `specs/min.md` and `specs/max.md` type them `(a float, b float) float` and an integer argument
 		// is PROMOTED rather than kept. `false` is therefore the answer that lets a float through, which
 		// is the only kind of operand either ever has.
 		min or
 			max gives false
+
 		// ⭐ BOTH unsigned divisions are integral, where the signed pair splits: `/` admits a float
 		// because `divsd` exists, but an UNSIGNED `/` is minted only from two non-negative INTEGER
 		// ranges — a ranged float alias carries tag `float`, never `named`, so it can never reach
@@ -3123,6 +3209,7 @@ export function checkBinOpOperands(op MaxonBinOp, left ValueTypeTag, right Value
 		if not typesAgree(left, right: right) 'mixed'
 			return BinOpOperands.mixedWordOperands
 		end 'mixed'
+
 		return integralOperandsFor(op, left: left, right: right)
 	end 'word'
 
@@ -3232,8 +3319,10 @@ end 'nonIntegralOperandOf'
 // there is nothing safe to emit, and the program is being rejected anyway.
 export union NotOperator
 	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
+
 	// The operand's type could not be determined, so neither reading can be chosen.
 	unknownOperandType
+
 	// The operand has neither reading — a FLOAT (an IEEE triple is not a magnitude) or a STRUCT
 	// REFERENCE (a pointer is not a magnitude either). One arm, because it is one rejection and
 	// one message: `not` is defined on the bool domain and on the integer domain, and on nothing
@@ -3258,13 +3347,16 @@ end 'NotOperator'
 export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 	return match operand 'k'
 		boolean gives NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
+
 		// Every INTEGER takes the bitwise reading (`not 5` is -6).
 		integer gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+
 		// A FLOAT has NEITHER reading, and this is the arm the range used to swallow. It is not a
 		// missing feature waiting on an instruction: `not` on a double is meaningless in the
 		// source language, exactly as `3.14 and 2.0` is (see `BinOpOperands.nonIntegralOperands`),
 		// and no hardware would help.
 		float gives NotOperator.nonIntegralOperand
+
 		// `named` is a ranged typealias. As of F1 (`Parser.readTypeAliasDeclaration`) it may be a
 		// `float(low to high)` one, for which the bitwise reading is WRONG — a double has no `not`,
 		// exactly as the `float` arm above records — so this is no longer the theorem `typeClassOf`'s
@@ -3275,32 +3367,39 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// needs `named` resolved through the alias registry — that F2 work.
 		named or
 			exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+
 		// `unresolved` — a call to a function no file declares (there is no reading to choose).
 		// `void` — a call to a function that returns nothing; `Parser.parseCall` rejects it at the
 		// call site, so it cannot arrive here, and if a second route to a void value ever appeared
 		// this is still the only truthful answer: there is no operand to complement.
 		unresolved or
 			void gives NotOperator.unknownOperandType
+
 		// A STRUCT REFERENCE — rejected for the FLOAT arm's reason, not the `unresolved` arm's: the
 		// type is perfectly well known, and `not` simply has no reading on it. Complementing a box's
 		// address is not a wrong answer waiting on an instruction, it is not a question. Had a struct
 		// been filed under `named`, the arm two lines up would have complemented it and called the
 		// result an `integer` — which is precisely the bug the `float` arm above records.
 		structRef gives NotOperator.nonIntegralOperand
+
 		// A STRING — rejected for the FLOAT/struct arm's reason: `not` is defined on the bool domain
 		// and the integer domain, and on nothing else. Complementing a byte pointer is not a question.
 		string gives NotOperator.nonIntegralOperand
+
 		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a code
 		// pointer (P1.5-A1). Complementing a `.text` address is not a question.
 		function gives NotOperator.nonIntegralOperand
+
 		// A TYPE PARAMETER / GENERIC INSTANCE (P1.6-A) — `not` has no reading on an opaque `T` or a struct
 		// pointer, rejected for the struct/function arm's reason. A `T` agrees with anything for AGREEMENT,
 		// but agreement is not an operator: `not t` is refused here exactly as `t + 1` is elsewhere.
 		typeParameter gives NotOperator.nonIntegralOperand
 		genericInstance gives NotOperator.nonIntegralOperand
+
 		// `not c` has no reading: a Character is a record pointer, and complementing one produces a
 		// number the source did not mean. `string`'s answer.
 		character gives NotOperator.nonIntegralOperand
+
 		// `not x` has no reading on an existential — the struct/String/function arm's reason, one level of
 		// indirection up: complementing a fat pointer's value half is not a question.
 		interfaceRef gives NotOperator.nonIntegralOperand
@@ -3362,6 +3461,7 @@ function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) ret
 	if declared == ValueTypeTag.character or declared == ValueTypeTag.boolean or declared == ValueTypeTag.function 'agreesOnlyWithItself'
 		return valueTag == declared
 	end 'agreesOnlyWithItself'
+
 	if tagIsText(declared) 'textColumn'
 		return tagIsText(valueTag)
 	end 'textColumn'

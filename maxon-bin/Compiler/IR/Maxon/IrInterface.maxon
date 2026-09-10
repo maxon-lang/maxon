@@ -286,6 +286,7 @@ end 'requireSeparatorFreeLabelComponent'
 enum WitnessLabelComponent
 	// The `<Iface>` of `__witness_<Type>.<Iface>`, asked by `witnessTableLabel`.
 	interfaceName
+
 	// The `<method>` of `__witness_<Type>.<Iface>.<method>`, asked by `witnessSlotImplKey`.
 	methodName
 end 'WitnessLabelComponent'
@@ -460,9 +461,11 @@ export type InterfaceMethodSig
 	export let paramNames as ByteArrayArray
 	export let paramTypeNames as ByteArrayArray
 	export let returnTypeName as ByteArray
+
 	// A `static function` in an interface body carries no receiver, so a conforming type
 	// need not supply it as an instance method — the conformance check SKIPS it.
 	export let isStatic as bool
+
 	// ⭐ **THE METHOD'S DECLARED `throws` (P1.7a slice 2b-v)** — the fact that decides which ABI a
 	// witness dispatch of this method uses. A `throwing` clause makes the dispatch a dual-register
 	// `witnessTryCall` that a `try` must cover (E3057 without one); `none` makes it the single-register
@@ -500,10 +503,12 @@ export type InterfaceMethodSig
 	export static function noBufferParams(count ParamCount) returns BoolArray
 		var out = BoolArray.create()
 		var filled = 0 as ParamCount
+
 		while filled < count 'each'
 			out.push(false)
 			filled = filled + 1
 		end 'each'
+
 		return out
 	end 'noBufferParams'
 
@@ -532,14 +537,17 @@ export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
 // IMPL, which has no `InterfaceMethodSig` to hand it.
 export function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool) returns String
 	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
+
 	for i in 0 upto paramNames.count() 'eachParam'
 		if i > 0 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
+
 		let paramName = try paramNames.get(i) otherwise panic("assembleMethodSignature: paramNames.get OOB at {i}")
 		let paramType = try paramTypes.get(i) otherwise panic("assembleMethodSignature: paramTypes.get OOB at {i}")
 		rendered = "{rendered}{String.from(paramName)} {String.from(paramType)}"
 	end 'eachParam'
+
 	return "{rendered}) returns {String.from(returnType)}"
 end 'assembleMethodSignature'
 
@@ -670,6 +678,7 @@ export function namePositionIn(names ByteArrayArray, name ByteArray) returns Typ
 			return i
 		end 'isThisOne'
 	end 'eachName'
+
 	throw MapError.keyNotFound
 end 'namePositionIn'
 
@@ -694,6 +703,7 @@ export function namesInclude(names ByteArrayArray, name ByteArray) returns bool
 			return true
 		end 'isThisOne'
 	end 'eachName'
+
 	return false
 end 'namesInclude'
 
@@ -729,6 +739,7 @@ end 'namesInclude'
 // register file rather than a range. Same asymmetry, same reason, as `Parser.floatResolvedTagOfName`.
 export function renderedTypeNameAbiType(name ByteArray, signatures ProgramSignatures) returns MaxonType
 	let tag = builtinTypeNameTag(name)
+
 	if tag != ValueTypeTag.named 'aBuiltinSpelling'
 		return maxonTypeOfTag(tag, nameId: UnnamedTypeId)
 	end 'aBuiltinSpelling'
@@ -742,10 +753,12 @@ export union AssociatedAbiBinding
 	// declared parameters go through), and `conformer` the declaration that settled it —
 	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
 	agreed(conformer ConformanceDecl, binding ByteArray, declaredType MaxonType)
+
 	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can
 	// name them and anchor on one; the FIRST is the one that settled the binding in source order, exactly as
 	// `checkTypeSymbolNamespace` reports a contested name.
 	disagreed(first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
+
 	// No type in the program conforms at all, so no dispatch through this requirement can ever be made and
 	// nothing constrains the type. A body that mentions it still has to lower, so the caller supplies the
 	// machine word and says why.
@@ -937,6 +950,7 @@ export typealias ConformanceDeclArray = Array with ConformanceDecl
 // The position is the TYPE NAME token — the `Wrapper` of `let w = Wrapper from "hello"`.
 export type LiteralInitSite
 	export let typeName as ByteArray
+
 	// ⭐ **WHICH CONFORMANCE THIS SITE REQUIRES**, carried rather than assumed: `<Type> from "…"` needs
 	// `InitableFromStringLiteral` and `<Type> from 'A'` needs `InitableFromCharLiteral`, and the check runs
 	// over one array holding both. A checker that named one of them would silently hold every site to it.
@@ -988,6 +1002,7 @@ export type WitnessDispatchTarget
 	// reservation cannot disagree with itself, where the lowering re-deriving the count whole-program could.
 	export let witnessValue as ValueId
 	export let methodIndex as WitnessMethodIndex
+
 	// ⭐ **WHICH INTERFACE'S SLOT LIST `methodIndex` INDEXES** — the declaration-order handle
 	// (`ProgramSignatures.interfaceNamesInDeclOrder`), which is the CONSTRAINT's or the EXISTENTIAL's interface
 	// and NOT `declaringInterfaceName` below. The two differ under `extends`: a dispatch of `Base`'s method
@@ -998,6 +1013,7 @@ export type WitnessDispatchTarget
 	export let interfaceDeclIndex as InterfaceDeclIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
+
 	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH (P1.7a slice 2b-vi)** — parallel to
 	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
 	// INTERFACE's parameter names, never a conformer's, and it has to be: under dictionary-passing the shared
@@ -1005,14 +1021,17 @@ export type WitnessDispatchTarget
 	// only (it reads `paramNames` to format E3016 and never compares it), so several conformers may spell
 	// their parameters differently and only the interface's names are common to all of them.
 	export let paramNames as ByteArrayArray
+
 	// The interface method's declared `throws` (P1.7a slice 2b-v) — carried through the resolution so the
 	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
 	// `(e)` binding it recovers. A witness method is in NO signature registry (there is no callee NAME to
 	// ask `throwsOf` about), so this is the only place the fact reaches the call site.
 	export let throwsClause as ThrowsClause
+
 	// The method NAME, for the E3055/E3057/E3059 diagnostics a witness `try` target reports. A direct call
 	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
 	export let methodName as ByteArray
+
 	// ⭐ **THE INTERFACE THAT DECLARED THE REQUIREMENT, WHICH IS NOT ALWAYS THE CONSTRAINT'S (R10c).** Under
 	// `where T is Derived` with `interface Derived extends Base`, a dispatch of `Base`'s `label()` reads a slot
 	// of `Derived`'s table while the requirement it binds against is `Base`'s. Every message about this
@@ -1020,6 +1039,7 @@ export type WitnessDispatchTarget
 	// an interface that inherits a zero-argument `label()`, and the falsehood is exactly what the missing
 	// projection used to produce.
 	export let declaringInterfaceName as ByteArray
+
 	// The requirement's `static`ness, carried for ONE reason: `assembleMethodSignature` — the one spelling of
 	// a requirement, shared with the conformance diagnostics — prints it, and a target that answered `false`
 	// for every requirement would describe a `static` one as something the interface does not declare. It is
@@ -1057,6 +1077,7 @@ export function pickSoleWitnessCandidate(candidates WitnessDispatchTargetArray) 
 	end 'noneSurvive'
 
 	let first = try candidates.get(0) otherwise panic("pickSoleWitnessCandidate: count is {candidates.count()} but get(0) failed")
+
 	if candidates.count() == 1 'exactlyOne'
 		return WitnessCandidatePick.one(first)
 	end 'exactlyOne'
@@ -1087,6 +1108,7 @@ end 'pickSoleWitnessCandidate'
 export function witnessCandidateAlreadyCollected(candidates WitnessDispatchTargetArray, declaringInterfaceName ByteArray, methodName ByteArray) returns bool
 	for i in 0 upto candidates.count() 'eachCollected'
 		let collected = try candidates.get(i) otherwise panic("witnessCandidateAlreadyCollected: candidates.get OOB at {i} below count {candidates.count()}")
+
 		if collected.declaringInterfaceName.equals(declaringInterfaceName) and collected.methodName.equals(methodName) 'sameRequirement'
 			return true
 		end 'sameRequirement'
@@ -1141,6 +1163,7 @@ function interfaceFormalsMatch(a ByteArrayArray, b ByteArrayArray) returns bool
 	for i in 0 upto a.count() 'eachFormal'
 		let left = try a.get(i) otherwise panic("interfaceFormalsMatch: a.get OOB at {i} below count {a.count()}")
 		let right = try b.get(i) otherwise panic("interfaceFormalsMatch: b.get OOB at {i} below count {b.count()}")
+
 		if not left.equals(right) 'differs'
 			return false
 		end 'differs'
@@ -1222,6 +1245,7 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 	if visited.contains(iface.name) 'alreadySeen'
 		return
 	end 'alreadySeen'
+
 	visited.insert(iface.name)
 
 	for i in 0 upto iface.methods.count() 'eachOwn'
@@ -1230,8 +1254,10 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
 		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("appendInterfaceWitnessSlots: extendsInterfaces.get OOB at {j} below count {iface.extendsInterfaces.count()}")
+
 		match lookupInterface(interfaces, name: parentName) 'parent'
 			found(parentIface) then appendInterfaceWitnessSlots(interfaces, iface: parentIface, slots: slots, visited: visited)
+
 			// A parent named by `extends` that does not resolve is not diagnosed here (no slice reports a bad
 			// `extends` target); its requirements simply cannot be projected, and every reader of this list
 			// then agrees that they are absent — which is the property that matters.
@@ -1258,6 +1284,7 @@ export function requireSameSlotNumbering(interfaceName ByteArray, parserSlots Co
 	for i in 0 upto parserSlots.count() 'eachSlot'
 		let numbered = (try parserSlots.get(i) otherwise panic("requireSameSlotNumbering: parserSlots.get OOB at {i} below its own count")).method.name
 		let resolved = (try mergedSlots.get(i) otherwise panic("requireSameSlotNumbering: mergedSlots.get OOB at {i}, which the count check above excludes")).method.name
+
 		if not numbered.equals(resolved) 'slotsDisagree'
 			panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has '{String.from(numbered)}' at witness slot {i} in the signature index a dispatch was numbered against and '{String.from(resolved)}' in the merged registry it resolves through — `methodIndex` recovers a different requirement and sets the wrong calling convention for the call, on every target and with no diagnostic")
 		end 'slotsDisagree'
@@ -1345,6 +1372,7 @@ function collectInterfaceAndItsParents(interfaces IrInterfaceMap, name ByteArray
 	if into.contains(name) 'alreadyWalked'
 		return
 	end 'alreadyWalked'
+
 	into.insert(name)
 
 	// The parent walk runs INSIDE the `found` arm rather than after it: bound and discarded, the declaration
@@ -1352,6 +1380,7 @@ function collectInterfaceAndItsParents(interfaces IrInterfaceMap, name ByteArray
 	// each of which may synthesize a protocol interface, for one question.
 	match lookupInterface(interfaces, name: name) 'decl'
 		found(iface) then collectParentInterfaces(interfaces, iface: iface, into: into)
+
 		// A conformance naming an interface no file declares reaches nothing further; E3015 reports it.
 		notFound then return
 	end 'decl'
@@ -1526,24 +1555,31 @@ function builtinInterfaceKind(name ByteArray) returns BuiltinInterfaceKind
 	if name.equals(StringableInterfaceName) 'stringable'
 		return BuiltinInterfaceKind.stringable
 	end 'stringable'
+
 	if name.equals(FormattedStringableInterfaceName) 'formatted'
 		return BuiltinInterfaceKind.formattedStringable
 	end 'formatted'
+
 	if name.equals(HashableInterfaceName) 'hashable'
 		return BuiltinInterfaceKind.hashable
 	end 'hashable'
+
 	if name.equals(EquatableInterfaceName) 'equatable'
 		return BuiltinInterfaceKind.equatable
 	end 'equatable'
+
 	if name.equals(ComparableInterfaceName) 'comparable'
 		return BuiltinInterfaceKind.comparable
 	end 'comparable'
+
 	if name.equals(CloneableInterfaceName) 'cloneable'
 		return BuiltinInterfaceKind.cloneable
 	end 'cloneable'
+
 	if name.equals(ErrorInterfaceName) 'error'
 		return BuiltinInterfaceKind.error
 	end 'error'
+
 	return BuiltinInterfaceKind.notABuiltin
 end 'builtinInterfaceKind'
 
@@ -1787,9 +1823,11 @@ export function byteRecordTagOfTypeName(name ByteArray) returns ValueTypeTag
 	if name.equals(StringConformerName) 'theString'
 		return ValueTypeTag.string
 	end 'theString'
+
 	if name.equals(CharacterConformerName) 'theCharacter'
 		return ValueTypeTag.character
 	end 'theCharacter'
+
 	return ValueTypeTag.unresolved
 end 'byteRecordTagOfTypeName'
 
@@ -1836,12 +1874,15 @@ export function primitiveTagOfTypeName(name ByteArray) returns ValueTypeTag
 	if name.equals(IntConformerName) 'theInt'
 		return ValueTypeTag.integer
 	end 'theInt'
+
 	if name.equals(FloatConformerName) 'theFloat'
 		return ValueTypeTag.float
 	end 'theFloat'
+
 	if name.equals(BoolConformerName) 'theBool'
 		return ValueTypeTag.boolean
 	end 'theBool'
+
 	return ValueTypeTag.unresolved
 end 'primitiveTagOfTypeName'
 
@@ -1919,9 +1960,11 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'int'
+
 	if typeName.equals(StringConformerName) 'string'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'string'
+
 	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record — and it is
 	// ALSO `Comparable`, which is the one place the two byte records part company (A5m-c).
 	//
@@ -1934,12 +1977,15 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(CharacterConformerName) 'character'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'character'
+
 	if typeName.equals(FloatConformerName) 'float'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'float'
+
 	if typeName.equals(BoolConformerName) 'bool'
 		return interfaceName.equals(ComparableInterfaceName)
 	end 'bool'
+
 	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER AND THE FIRST *CONDITIONAL* ONE (array-hashable).**
 	// `stdlib/Array.maxon:630` declares it as `extension Array implements Hashable, Equatable where
 	// Element is Hashable and Equatable`, and the two halves of that declaration name the
@@ -2056,15 +2102,19 @@ export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	if tag == ValueTypeTag.integer 'int'
 		return BuiltinConformer.intConformer
 	end 'int'
+
 	if tag == ValueTypeTag.float 'float'
 		return BuiltinConformer.floatConformer
 	end 'float'
+
 	if tag == ValueTypeTag.boolean 'bool'
 		return BuiltinConformer.boolConformer
 	end 'bool'
+
 	if tag == ValueTypeTag.string 'string'
 		return BuiltinConformer.stringConformer
 	end 'string'
+
 	return BuiltinConformer.notAConformer
 end 'builtinConformerOfTag'
 
@@ -2113,6 +2163,7 @@ export union DirectConformanceTarget
 	// formal takes any value of the same conformer (`Parser.valueIsConformer`, which collapses `Byte` to
 	// `int`).
 	builtinValue(conformer BuiltinConformer)
+
 	// A payload-free `enum`, whose granted `Hashable`/`Equatable` is served by the impls of its i64 TAG
 	// (`ProgramSignatures.enumConformanceImplName`). A `Self` formal takes a value of THAT enum and nothing
 	// else — an `int` actual would compare a tag against an unrelated number, and another enum's would
@@ -2284,11 +2335,13 @@ end 'builtinConformableProtocolNames'
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
 export function intrinsicConformanceProtocolNames(typeName ByteArray, discovered DiscoveredConformer) returns ByteArrayArray
 	var names = ByteArrayArray.create()
+
 	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
 		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, discovered: discovered) 'conforms'
 			names.push(protocolName)
 		end 'conforms'
 	end 'eachProtocol'
+
 	return names
 end 'intrinsicConformanceProtocolNames'
 
@@ -2328,8 +2381,10 @@ export function builtinConformerMethod(typeName ByteArray, methodName ByteArray,
 		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
 		// table slot, so it has nothing to keep in step with a witness table's numbering.
 		let iface = requireBuiltinInterface(protocolName)
+
 		for i in 0 upto iface.methods.count() 'eachMethod'
 			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'")
+
 			if method.name.equals(methodName) 'declaresMethod'
 				return BuiltinConformerMethodLookup.supplied(method)
 			end 'declaresMethod'
@@ -2359,12 +2414,15 @@ end 'builtinConformerMethod'
 // from serves the four reserved direct-dispatch conformers and nothing else.
 export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
 	var names = ByteArrayArray.create()
+
 	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
 		let iface = requireBuiltinInterface(protocolName)
+
 		for method in iface.methods 'eachMethod'
 			names.push(method.name)
 		end 'eachMethod'
 	end 'eachProtocol'
+
 	return names
 end 'builtinConformerMethodNameList'
 
@@ -2402,14 +2460,17 @@ end 'builtinConformerLoweredMethodNames'
 // structurally cannot carry.
 export function builtinConformerDispatchMethodNames(typeName ByteArray) returns String
 	var names = builtinConformerMethodNameList(typeName)
+
 	for loweredName in builtinConformerLoweredMethodNames() 'eachLowered'
 		names.push(loweredName)
 	end 'eachLowered'
 
 	var phrases = StringArray.create()
+
 	for methodName in names 'eachMethod'
 		phrases.push("`{String.from(methodName)}`")
 	end 'eachMethod'
+
 	return renderPhraseList(phrases)
 end 'builtinConformerDispatchMethodNames'
 
@@ -2420,11 +2481,14 @@ end 'builtinConformerDispatchMethodNames'
 // type nobody declared.
 function renderPhraseList(phrases StringArray) returns String
 	var rendered = ""
+
 	for phrase in phrases 'eachPhrase'
 		if not rendered.isEmpty() 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
+
 		rendered = "{rendered}{phrase}"
 	end 'eachPhrase'
+
 	return rendered
 end 'renderPhraseList'

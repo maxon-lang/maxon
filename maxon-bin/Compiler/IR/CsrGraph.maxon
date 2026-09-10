@@ -75,6 +75,7 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 		let cur = try start.get(f + 1) otherwise panic("buildCsr: key {f} is outside the {nodeCount}-key space")
 		try start.set(f + 1, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
 	end 'countDeg'
+
 	for n in 0 upto nodeCount 'prefix'
 		let a = try start.get(n) otherwise panic("buildCsr: prefix start.get(n) OOB")
 		let b = try start.get(n + 1) otherwise panic("buildCsr: prefix start.get(n+1) OOB")
@@ -83,13 +84,16 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 
 	var list = CsrColumn.create()
 	list.resize(edgeCount)
+
 	// Running fill cursor per key, seeded from `start[key]`.
 	var fill = CsrColumn.create()
 	fill.resize(nodeCount)
+
 	for n in 0 upto nodeCount 'seedFill'
 		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
 		try fill.set(n, value: s) otherwise panic("buildCsr: seedFill set OOB")
 	end 'seedFill'
+
 	for k in 0 upto edgeCount 'place'
 		let f = try from.get(k) otherwise panic("buildCsr: place from.get OOB")
 		let t = try to.get(k) otherwise panic("buildCsr: place to.get OOB")
@@ -122,26 +126,32 @@ end 'buildCsr'
 export function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
 	var marked = BoolArray.create()
 	var worklist = CsrColumn.create()
+
 	for i in 0 upto seeds.count() 'seed'
 		let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
 		marked.push(isSeed)
+
 		if isSeed 'root'
 			worklist.push(i)
 		end 'root'
 	end 'seed'
 
 	var head = 0 as CsrIndex
+
 	while head < worklist.count() 'drain'
 		let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
 		head = head + 1
+
 		for k in 0 upto graph.degree(node) 'neighbour'
 			let nbr = graph.neighbour(node, k: k)
+
 			if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
 				try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
 				worklist.push(nbr)
 			end 'newlyMarked'
 		end 'neighbour'
 	end 'drain'
+
 	return marked
 end 'reverseReachabilityMark'
 
@@ -160,6 +170,7 @@ end 'reverseReachabilityMark'
 // chain of N generic aliases would be N native frames.
 export function nodesOnACycle(graph CsrGraph) returns BoolArray
 	var walk = SccWalk.overNodes(graph.nodeCount())
+
 	// The DFS stack, as parallel columns: the node, and how many of its neighbours it has walked.
 	var frameNode = CsrColumn.create()
 	var frameEdge = CsrColumn.create()
@@ -195,6 +206,7 @@ export function nodesOnACycle(graph CsrGraph) returns BoolArray
 				if walk.isOpenComponent(next) 'backIntoThisWalk'
 					walk.lowerTo(node, bound: walk.discoveryOf(next))
 				end 'backIntoThisWalk'
+
 				continue
 			end 'moreNeighbours'
 
@@ -241,18 +253,21 @@ export function shortestCycleThrough(graph CsrGraph, start CsrIndex) returns Csr
 	try reached.set(start, value: true) otherwise panic("shortestCycleThrough: start node {start} is outside the graph's own {graph.nodeCount()} nodes")
 
 	var head = 0 as CsrIndex
+
 	while head < frontier.count() 'eachFrontierNode'
 		let node = try frontier.get(head) otherwise panic("shortestCycleThrough: frontier.get({head}) below its own count()")
 		head = head + 1
 
 		for k in 0 upto graph.degree(node) 'eachNeighbour'
 			let next = graph.neighbour(node, k: k)
+
 			// An edge back to `start` CLOSES the loop, and the BFS tree already holds the way there.
 			if next == start 'closesTheCycle'
 				return cycleThrough(cameFrom, closedBy: node, start: start)
 			end 'closesTheCycle'
 
 			let alreadyReached = try reached.get(next) otherwise panic("shortestCycleThrough: neighbour {next} of node {node} is outside the graph's own {graph.nodeCount()} nodes")
+
 			if alreadyReached 'alreadyOnTheFrontier'
 				continue
 			end 'alreadyOnTheFrontier'
@@ -272,13 +287,16 @@ end 'shortestCycleThrough'
 function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) returns CsrColumn
 	var backwards = CsrColumn.create()
 	var at = closedBy
+
 	while at != start 'walkBackUpTheTree'
 		backwards.push(at)
 		at = try cameFrom.get(at) otherwise panic("cycleThrough: node {at} is on the BFS tree but has no recorded parent")
 	end 'walkBackUpTheTree'
+
 	backwards.push(start)
 
 	var path = CsrColumn.create()
+
 	for i in 0 upto backwards.count() 'eachNode'
 		let fromTheEnd = backwards.count() - 1 - i
 		path.push(try backwards.get(fromTheEnd) otherwise panic("cycleThrough: backwards.get({fromTheEnd}) below its own count()"))
@@ -307,14 +325,19 @@ end 'nodeNamesItself'
 type SccWalk
 	// 1-based discovery order, so 0 reads as "not visited yet" and no second column has to say so.
 	var discovered as CsrColumn
+
 	// The lowest discovery index reachable from the node's subtree — Tarjan's lowlink.
 	var lowlink as CsrColumn
+
 	// Where the node sits on `componentStack`, which turns a component's SIZE into a subtraction.
 	var openAt as CsrColumn
+
 	// Is the node still on `componentStack` — is its component still being built?
 	var isOpen as BoolArray
+
 	// The answer: does the node lie on a cycle?
 	export var onCycle as BoolArray
+
 	// The nodes of every component still open, in discovery order.
 	var componentStack as CsrColumn
 	var nextDiscovery as CsrIndex
@@ -383,6 +406,7 @@ type SccWalk
 		while self.componentStack.count() > base 'popMember'
 			let member = try self.componentStack.pop() otherwise panic("SccWalk.closeComponent: pop from a componentStack already at its base")
 			try self.isOpen.set(member, value: false) otherwise panic("SccWalk.closeComponent: node {member} outside the walk's node space")
+
 			if cyclic 'onACycle'
 				try self.onCycle.set(member, value: true) otherwise panic("SccWalk.closeComponent: node {member} outside the walk's node space")
 			end 'onACycle'

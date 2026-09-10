@@ -1916,6 +1916,7 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	asm.placeLabel(testSignal)
 	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x3, label: takeSignal)
+
 	// A ZERO timeout is a POLL: the caller wants the state, not a wait. Answer the seeded `WAIT_TIMEOUT`
 	// without entering the kernel at all.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
@@ -1923,6 +1924,7 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: WaitInfinite)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: waitTimed)
+
 	// Unbounded: sleep while the word is still unsignalled, then re-test. That IS the `while (!signalled)`
 	// loop the primitive requires — a futex return is advisory (`EAGAIN`, `EINTR`), and re-testing is the
 	// only sound response to one.
@@ -2792,6 +2794,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxThreadCreateChunk(globalData))
 		chunks.push(buildArm64LinuxTlsAllocChunk(globalData))
 		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
+
 		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
 		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs

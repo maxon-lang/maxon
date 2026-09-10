@@ -72,6 +72,7 @@ function writeAscii(buf ByteArray, text String)
 		let b = try ch.asciiValue() otherwise panic("writeAscii: non-ASCII character in an ASCII-only context")
 		buf.push(b)
 	end 'chars'
+
 	buf.push(0)
 end 'writeAscii'
 
@@ -99,6 +100,7 @@ export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord 
 	if offset + 4 > buf.count() 'oob'
 		throw ByteReadError.outOfRange(offset, width: 4, available: buf.count())
 	end 'oob'
+
 	var result = 0
 	try 'readBytes'
 		let b0 = buf.get(offset)
@@ -114,6 +116,7 @@ export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord 
 			emptySlot then panic("readDword: byte slot empty (push-init invariant)")
 		end 'kind'
 	end 'badRead'
+
 	return result
 end 'readDword'
 
@@ -188,13 +191,16 @@ export enum PatchSite
 	x64CallRel32
 	x64IatDisp32
 	x64RdataDisp32
+
 	// A hand-assembled runtime function's `lea r64, [rip + <chunk-local label>]` — how it
 	// takes the address of a string it laid down at the end of its own chunk.
 	x64RuntimeLabelDisp32
+
 	// The `ja` closing the prologue's guard-page walk (`encodeStackProbe`). Its target is a byte
 	// offset in the same buffer rather than a block, so it is patched the instant it is emitted —
 	// it is here because the ±2 GiB guard names the site it fired on.
 	x64StackProbeRel32
+
 	// A branch INSIDE the byte-fill size ladder (`encodeX64MemFill`) — the same shape as the stack
 	// probe's, and here for the same reason: its target is a byte offset in this buffer rather than a
 	// block, so it is patched the instant the arm it selects has been laid down, and the ±2 GiB guard
@@ -208,6 +214,7 @@ end 'PatchSite'
 function assertSignedReach(byteOff MachineWord, bits MachineWord, what PatchSite, codeOffset CodeOffset, targetAddr MachineWord)
 	let posMax = (1 shl (bits - 1)) - 1  // largest positive displacement
 	let negMin = u64.max - (1 shl (bits - 1)) + 1  // smallest (most negative) two's-complement value, unsigned-wrapped
+
 	if byteOff > posMax and byteOff < negMin 'overflow'
 		panic("{what.name}: displacement out of ±{1 shl (bits - 1)} byte range (codeOffset={codeOffset}, target={targetAddr}, disp={byteOff}) — relocation overflow")
 	end 'overflow'
@@ -265,6 +272,7 @@ export function patchArm64Adrp(code ByteArray, codeOffset CodeOffset, instrAddr 
 	let instrPage = instrAddr and not 0xFFF
 	let targetPage = targetAddr and not 0xFFF
 	let pageOff = targetPage - instrPage
+
 	// ADRP's imm21 is scaled by the 4 KiB page, so its byte reach is 21+12 = 33 bits.
 	assertSignedReach(pageOff, bits: 33, what: PatchSite.arm64Adrp, codeOffset: codeOffset, targetAddr: targetAddr)
 	let pageOffShifted = pageOff shr 12
@@ -287,9 +295,11 @@ export function patchArm64PageOff(code ByteArray, codeOffset CodeOffset, targetA
 	let origInsn = try readDword(code, offset: codeOffset as ByteOffset) otherwise panic("patchArm64PageOff: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let topByte = (origInsn shr 24) and 0xFF
 	let scale = 8 if topByte == 0xF9 else 1  // 0xF9 = LDR/STR Xn (scaled by 8); 0x91 = ADD imm (unscaled)
+
 	if topByte != 0xF9 and topByte != 0x91 'badOpcode'
 		panic("patchArm64PageOff: instruction at codeOffset {codeOffset} is neither ADD-imm (0x91) nor LDR/STR Xn (0xF9) — opcode top byte 0x{topByte} — emitter/reloc mismatch")
 	end 'badOpcode'
+
 	// `scale` is 1 or 8, never zero; `otherwise panic` is the project's form for a `try` that must not fail.
 	let imm12 = (try (pageOffset / scale) otherwise panic("patchArm64PageOff: scale was 0 past its own two-valued choice")) and 0xFFF
 	let patched = (origInsn and 0xFFC003FF) or (imm12 shl 10)

@@ -31,6 +31,7 @@ let VendorSearchDepth = 10
 // not-found sentinel callers check with `.isEmpty()`).
 export function findFileUpward(candidateSegments StringArrayArray) returns FilePath
 	var dir = Directory.currentPath()
+
 	for _ in 0 upto VendorSearchDepth 'search'
 		for segments in candidateSegments 'eachCandidate'
 			// ⚠ `var candidate = dir` MOVES the search loop's directory out of it — a bare-local read is a
@@ -39,18 +40,22 @@ export function findFileUpward(candidateSegments StringArrayArray) returns FileP
 			// owned path that join mints is what the rest of the segments extend.
 			let firstSegment = try segments.get(0) otherwise panic("findFileUpward: a candidate names no path segments — every candidate is at least one segment below the level's directory, and an empty one would test the directory itself")
 			var candidate = dir.join(firstSegment)
+
 			for i in 1 upto segments.count() 'join'
 				let segment = try segments.get(i) otherwise panic("findFileUpward: segments.get OOB at {i} inside its own count()")
 				candidate = candidate.join(segment)
 			end 'join'
+
 			if File.exists(candidate) 'found'
 				return candidate
 			end 'found'
 		end 'eachCandidate'
+
 		// dir.parent() returns no value at the filesystem root; bail out empty.
 		let parentDir = try dir.parent() otherwise return FilePath from ""
 		dir = parentDir
 	end 'search'
+
 	return FilePath from ""
 end 'findFileUpward'
 
@@ -68,14 +73,17 @@ let VendorDirSegment = "vendor"
 function hostBinaryCandidates(dirSegments StringArray, stem String) returns StringArrayArray
 	var exe = StringArray.create()
 	var noExt = StringArray.create()
+
 	for segment in dirSegments 'eachSegment'
 		exe.push(segment)
 		noExt.push(segment)
 	end 'eachSegment'
+
 	exe.push("{stem}.exe")
 	noExt.push(stem)
 
 	var candidates = StringArrayArray.create()
+
 	if detectHostTarget().os == Os.windows 'winHost'
 		candidates.push(exe)
 		candidates.push(noExt)
@@ -116,9 +124,11 @@ function findWasmWitDir() returns FilePath
 	candidates.push(full)
 
 	let witFile = findFileUpward(candidates)
+
 	if witFile.isEmpty() 'missing'
 		return FilePath from ""
 	end 'missing'
+
 	return try witFile.parent() otherwise return FilePath from ""
 end 'findWasmWitDir'
 
@@ -150,11 +160,13 @@ let WasmComponentExtension = ".component.wasm"
 // build on this target exactly as it does on the other three.
 export function writeWasm(outputPath FilePath, coreModule ByteArray)
 	let wasmToolsExe = findWasmToolsPath()
+
 	if wasmToolsExe.isEmpty() 'missingTool'
 		panic("writeWasm: wasm-tools not found in vendor/wasm-tools/ — required to wrap the wasm core module into a Preview2 component")
 	end 'missingTool'
 
 	let witDir = findWasmWitDir()
+
 	if witDir.isEmpty() 'missingWit'
 		panic("writeWasm: WASI WIT package not found at vendor/wasi-wit/ — required to wrap the wasm core module into a Preview2 component")
 	end 'missingWit'
@@ -186,6 +198,7 @@ export function writeWasm(outputPath FilePath, coreModule ByteArray)
 	let embedResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: embedArgs, workingDirectory: cwd) otherwise (err) 'embedRunFail'
 		panic("writeWasm: failed to run wasm-tools component embed: {err.displayReason()}")
 	end 'embedRunFail'
+
 	if not embedResult.succeeded() 'embedFailed'
 		panic("writeWasm: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
 	end 'embedFailed'
@@ -199,6 +212,7 @@ export function writeWasm(outputPath FilePath, coreModule ByteArray)
 	let newResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: newArgs, workingDirectory: cwd) otherwise (err) 'newRunFail'
 		panic("writeWasm: failed to run wasm-tools component new: {err.displayReason()}")
 	end 'newRunFail'
+
 	if not newResult.succeeded() 'newFailed'
 		panic("writeWasm: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
 	end 'newFailed'

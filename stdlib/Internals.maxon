@@ -147,6 +147,7 @@ function __mm_incref(ptr MachineWord)
 	#if rcSanitize(true)
 		__rc_check_freed_touch(ptr, kind: RC_TOUCH_INCREF)
 	#endif
+
 	__Internals.atomicInc(ptr - 8)
 end '__mm_incref'
 
@@ -188,10 +189,13 @@ function __mm_decref(ptr MachineWord)
 	#if rcSanitize(true)
 		__rc_check_freed_touch(ptr, kind: RC_TOUCH_DECREF)
 	#endif
+
 	let prior = __Internals.atomicXadd(ptr - 8, value: -1)
+
 	if prior == 1 'lastRef'
 		__mm_free(ptr)
 	end 'lastRef'
+
 	// STRICT over-release trap: prior == 0 means this decref releases a
 	// reference that was never taken (the sole-owner rc=0 reference belongs to
 	// `__mm_drop`, never to decref); prior < 0 means the header is already
@@ -221,18 +225,21 @@ function __mm_drop(ptr MachineWord)
 	if ptr == 0 'null'
 		return
 	end 'null'
+
 	let rc = __Internals.loadIndirect(ptr - 8)
 	#if rcSanitize(true)
 		if rc == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DROP)
 		end 'freedTouch'
 	#endif
+
 	if rc == 0 'soleOwner'
 		// Scope-exit drop of the sole owner (rc==0): this is the sole reference,
 		// so free the block directly.
 		__mm_free(ptr)
 		return
 	end 'soleOwner'
+
 	// rc>0: the value escaped (an extra owner exists). Decref this owner's ref; the
 	// last owner frees. (No mm_drop marker — a plain decref like any shared value.)
 	__mm_decref(ptr)
@@ -340,6 +347,7 @@ function __slab_assert_os_alloc(ptr MachineWord) returns MachineWord
 		// 137 = osAllocPages returned NULL (out of memory / commit limit).
 		__Internals.osExit(137)
 	end 'oom'
+
 	return ptr
 end '__slab_assert_os_alloc'
 
@@ -353,18 +361,23 @@ end '__slab_assert_os_alloc'
 // does not treat them as heap-owned and emit a stray sys.free at function exit.
 function __slab_arena_init()
 	let arenaBase = __slab_assert_os_alloc(__Internals.osAllocPages(0x4000000))
+
 	// metadata: next = NULL (offset 0)
 	__Internals.storeIndirect(arenaBase, value: 0)
+
 	// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE (chunk 0 used, rest free)
 	__Internals.storeIndirect(arenaBase + 0x10, value: -2)
+
 	// qwords 1..127 = -1 (all free)
 	for i in 1 upto 128 'fill'
 		__Internals.storeIndirect(arenaBase + 0x10 + (i shl 3), value: -1)
 	end 'fill'
+
 	// Prepend to the arena list head: new->next = old_head; head = new.
 	let oldHead = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
 	__Internals.storeIndirect(arenaBase, value: oldHead)
 	__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: arenaBase)
+
 	// __slab_init_done = 1
 	__Internals.storeIndirect(__Internals.slabInitDoneAddr(), value: 1)
 end '__slab_arena_init'
@@ -376,20 +389,26 @@ end '__slab_arena_init'
 // allocates a fresh 64 MiB arena via the OS, links it in, and retries.
 function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 	var arenaPtr = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
+
 	while true 'arenaLoop'
 		if arenaPtr == 0 'grow'
 			// No arena had room — alloc a fresh 64 MiB arena and link in.
 			let newArena = __slab_assert_os_alloc(__Internals.osAllocPages(0x4000000))
+
 			// metadata: next = old_head
 			__Internals.storeIndirect(newArena, value: __Internals.loadIndirect(__Internals.slabArenaListHeadAddr()))
+
 			// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE
 			__Internals.storeIndirect(newArena + 0x10, value: -2)
+
 			// qwords 1..127 = -1 (all free)
 			for j in 1 upto 128 'growFill'
 				__Internals.storeIndirect(newArena + 0x10 + (j shl 3), value: -1)
 			end 'growFill'
+
 			// head = new_arena
 			__Internals.storeIndirect(__Internals.slabArenaListHeadAddr(), value: newArena)
+
 			// Restart the scan against the fresh arena.
 			arenaPtr = newArena
 			continue
@@ -400,24 +419,30 @@ function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 		var runLen = 0
 		var runStart = 0
 		var found = false
+
 		while i < 0x2000 'bitLoop'
 			let qwordIdx = i shr 6
 			let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
 			let qword = __Internals.loadIndirect(qwordAddr)
 			let bit = (qword shr (i and 63)) and 1
+
 			if bit == 0 'used'
 				runLen = 0
 			end 'used'
+
 			if bit != 0 'free'
 				if runLen == 0 'startRun'
 					runStart = i
 				end 'startRun'
+
 				runLen = runLen + 1
+
 				if runLen >= numChunks 'gotRun'
 					found = true
 					break
 				end 'gotRun'
 			end 'free'
+
 			i = i + 1
 		end 'bitLoop'
 
@@ -426,6 +451,7 @@ function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 			for j in runStart upto runStart + numChunks 'clear'
 				let qwordIdx = j shr 6
 				let qwordAddr = arenaPtr + 0x10 + (qwordIdx shl 3)
+
 				// mask = ~(1 << (j & 63)). Maxon has no unary bitNot; xor with -1
 				// (all-ones two's complement) is the same.
 				let bit = 1 shl (j and 63)
@@ -433,8 +459,10 @@ function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 				let prior = __Internals.loadIndirect(qwordAddr)
 				__Internals.storeIndirect(qwordAddr, value: prior and mask)
 			end 'clear'
+
 			// __slab_arena_last_base = arena_ptr
 			__Internals.storeIndirect(__Internals.slabArenaLastBaseAddr(), value: arenaPtr)
+
 			// result = arena + runStart * CHUNK_SIZE
 			return arenaPtr + (runStart shl 13)
 		end 'haveRun'
@@ -442,6 +470,7 @@ function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 		// No run found in this arena; advance to next (offset 0 = next pointer).
 		arenaPtr = __Internals.loadIndirect(arenaPtr)
 	end 'arenaLoop'
+
 	// Unreachable — the while-true above either returns or grows then retries.
 	return 0
 end '__slab_arena_alloc_chunks'
@@ -465,6 +494,7 @@ end '__slab_arena_free_chunks'
 // multiple OS threads.
 function __slab_init()
 	let done = __Internals.loadIndirect(__Internals.slabInitDoneAddr())
+
 	if done == 0 'doInit'
 		__slab_arena_init()
 		__Internals.osLockInit(__Internals.slabLockAddr())
@@ -476,54 +506,71 @@ function __slab_class_size(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 8
 	end 'c'
+
 	if idx == 1 'c'
 		return 16
 	end 'c'
+
 	if idx == 2 'c'
 		return 24
 	end 'c'
+
 	if idx == 3 'c'
 		return 32
 	end 'c'
+
 	if idx == 4 'c'
 		return 48
 	end 'c'
+
 	if idx == 5 'c'
 		return 64
 	end 'c'
+
 	if idx == 6 'c'
 		return 96
 	end 'c'
+
 	if idx == 7 'c'
 		return 128
 	end 'c'
+
 	if idx == 8 'c'
 		return 192
 	end 'c'
+
 	if idx == 9 'c'
 		return 256
 	end 'c'
+
 	if idx == 10 'c'
 		return 384
 	end 'c'
+
 	if idx == 11 'c'
 		return 512
 	end 'c'
+
 	if idx == 12 'c'
 		return 1024
 	end 'c'
+
 	if idx == 13 'c'
 		return 2048
 	end 'c'
+
 	if idx == 14 'c'
 		return 4096
 	end 'c'
+
 	if idx == 15 'c'
 		return 8192
 	end 'c'
+
 	if idx == 16 'c'
 		return 16384
 	end 'c'
+
 	return 32768
 end '__slab_class_size'
 
@@ -532,54 +579,71 @@ function __slab_objs_per_span(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 1024
 	end 'c'
+
 	if idx == 1 'c'
 		return 512
 	end 'c'
+
 	if idx == 2 'c'
 		return 341
 	end 'c'
+
 	if idx == 3 'c'
 		return 256
 	end 'c'
+
 	if idx == 4 'c'
 		return 170
 	end 'c'
+
 	if idx == 5 'c'
 		return 128
 	end 'c'
+
 	if idx == 6 'c'
 		return 85
 	end 'c'
+
 	if idx == 7 'c'
 		return 64
 	end 'c'
+
 	if idx == 8 'c'
 		return 42
 	end 'c'
+
 	if idx == 9 'c'
 		return 32
 	end 'c'
+
 	if idx == 10 'c'
 		return 21
 	end 'c'
+
 	if idx == 11 'c'
 		return 16
 	end 'c'
+
 	if idx == 12 'c'
 		return 8
 	end 'c'
+
 	if idx == 13 'c'
 		return 4
 	end 'c'
+
 	if idx == 14 'c'
 		return 2
 	end 'c'
+
 	if idx == 15 'c'
 		return 4
 	end 'c'
+
 	if idx == 16 'c'
 		return 2
 	end 'c'
+
 	return 1
 end '__slab_objs_per_span'
 
@@ -593,6 +657,7 @@ end '__slab_objs_per_span'
 // caller must initialise every mspan field it relies on. See __slab_refill_mcache.
 function __slab_meta_alloc() returns MachineWord
 	let head = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
+
 	if head != 0 'popFree'
 		// result = head; head = [head]
 		let next = __Internals.loadIndirect(head)
@@ -606,6 +671,7 @@ function __slab_meta_alloc() returns MachineWord
 	let bumpPtr = __Internals.loadIndirect(__Internals.slabMetaBumpPtrAddr())
 	let advanced = bumpPtr + MSPAN_META_SLOT_SIZE
 	let bumpEnd = __Internals.loadIndirect(__Internals.slabMetaBumpEndAddr())
+
 	if bumpEnd >= advanced 'doBump'
 		__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: advanced)
 		return bumpPtr
@@ -712,9 +778,11 @@ let SLAB_RAW_SHARD = SLAB_MAX_SHARDS - 1
 // One read, one value, and every consumer below is pure arithmetic on it.
 function __slab_owning_p_tag() returns MachineWord
 	let rawId = __slab_current_p_id()
+
 	if rawId < 0 'noAdoptedP'
 		return MSPAN_OWNING_P_RAW
 	end 'noAdoptedP'
+
 	return rawId
 end '__slab_owning_p_tag'
 
@@ -737,9 +805,11 @@ function __slab_shard_for_tag(tag MachineWord) returns McacheShard
 	if not __slab_tag_is_real_p(tag) 'noP'
 		return SLAB_RAW_SHARD
 	end 'noP'
+
 	if tag >= SLAB_MAX_SHARDS 'cap'
 		return SLAB_MAX_SHARDS - 1
 	end 'cap'
+
 	return tag
 end '__slab_shard_for_tag'
 
@@ -759,10 +829,13 @@ function __slab_proc_at(tag MachineWord) returns MachineWord
 	if not __slab_tag_is_real_p(tag) 'none'
 		return 0
 	end 'none'
+
 	let procs = __Internals.loadIndirect(__Internals.schedProcsAddr())
+
 	if procs == 0 'noProcs'
 		return 0
 	end 'noProcs'
+
 	return __Internals.loadIndirect(procs + (tag shl 3))
 end '__slab_proc_at'
 
@@ -779,10 +852,12 @@ end '__slab_scheduler_is_running'
 // multiple producers. On single-threaded targets the CAS never contends.
 function __slab_remote_free_push(pPtr MachineWord, slot MachineWord)
 	let headAddr = pPtr + 0x78
+
 	while true 'retry'
 		// old = [headAddr]; [slot] = old (link new node to the current head)
 		let old = __Internals.loadIndirect(headAddr)
 		__Internals.storeIndirect(slot, value: old)
+
 		// success = CAS(headAddr, old, slot) — returns 1 on success / 0 on fail.
 		if __Internals.atomicCas(headAddr, old: old, new: slot) != 0 'done'
 			return
@@ -801,13 +876,17 @@ function __slab_drain_remote_frees(pPtr MachineWord)
 	end 'none'
 
 	let headAddr = pPtr + 0x78
+
 	// Detach the chain: CAS([p+0x78], old, NULL) until we win or it's empty.
 	var chainHead = 0
+
 	while true 'detachRetry'
 		let old = __Internals.loadIndirect(headAddr)
+
 		if old == 0 'empty'
 			return
 		end 'empty'
+
 		// success = CAS(headAddr, old, 0) — 1 on success / 0 on fail.
 		if __Internals.atomicCas(headAddr, old: old, new: 0) != 0 'detached'
 			chainHead = old
@@ -817,12 +896,15 @@ function __slab_drain_remote_frees(pPtr MachineWord)
 
 	// Walk the detached chain, replaying each node onto its span's free list.
 	var current = chainHead
+
 	while current != 0 'walk'
 		// Park `next` before the span lookup / free-list push clobbers [current].
 		let next = __Internals.loadIndirect(current)
+
 		// span = arena_map_get(current). Per the cross-P invariant this always
 		// succeeds (the span is registered at creation and never unregistered).
 		let span = __slab_arena_map_get(current)
+
 		// Single-writer push onto span.free_list (same helper the local free
 		// path uses; fully empties → returns span to mcentral).
 		__slab_free_class_with_mspan(current, mspan: span)
@@ -885,9 +967,11 @@ function __slab_reback_span(span MachineWord)
 		let base = __Internals.loadIndirect(span)
 		__Internals.osRecommitPages(base, size: footprint)
 		__slab_memzero(base, size: footprint)
+
 		// Pages are zero again, so the whole span is virgin once more.
 		__slab_reset_span_to_virgin(span, base: base, totalSlots: totalSlots)
 	end 'wasDecommitted'
+
 	__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_ACTIVE)
 end '__slab_reback_span'
 
@@ -916,15 +1000,18 @@ function __slab_refill_mcache(classIdx MachineWord, rowShard McacheShard, owning
 
 	let partial = __Internals.loadIndirect(mcentralEntry)
 	var span = 0
+
 	if partial != 0 'takePartial'
 		// span = partial; partial_head = span.next_span; span.next_span = 0
 		span = partial
 		let nextSpan = __Internals.loadIndirect(partial + 0x20)
 		__Internals.storeIndirect(mcentralEntry, value: nextSpan)
 		__Internals.storeIndirect(partial + 0x20, value: 0)
+
 		// Re-stamp owning_p = owningTag — this thread now exclusively owns the span (it
 		// carried MSPAN_OWNING_P_PARKED while parked in mcentral).
 		__Internals.storeIndirect(partial + 0x40, value: owningTag)
+
 		// Reset the scavenge grace state and re-back the pages if the scavenger handed
 		// them to the OS. Factored into __slab_reback_span so refill's hot body stays
 		// free of the syscall / rebuild calls.
@@ -935,6 +1022,7 @@ function __slab_refill_mcache(classIdx MachineWord, rowShard McacheShard, owning
 		let slotSize = __slab_class_size(classIdx)
 		let totalSlots = __slab_objs_per_span(classIdx)
 		let dataSize = slotSize * totalSlots
+
 		// numChunks = ceil(dataSize / 8192)
 		let numChunks = (dataSize + 8191) shr 13
 
@@ -952,10 +1040,12 @@ function __slab_refill_mcache(classIdx MachineWord, rowShard McacheShard, owning
 		__Internals.storeIndirect(span + 0x28, value: classIdx)
 		__Internals.storeIndirect(span + 0x30, value: totalSlots)
 		__Internals.storeIndirect(span + 0x38, value: arenaBase)
+
 		// owning_p = owningTag (set once, here, under the lock). Storing the TAG (not the
 		// capped row index) lets __slab_free compare it exactly against a freeing thread's
 		// own tag, so a raw OS thread matches only a raw-owned span and never a real P's.
 		__Internals.storeIndirect(span + 0x40, value: owningTag)
+
 		// scavenge state (+0x48) = ACTIVE: a fresh span's pages are committed. The
 		// scavenger advances it to SEEN_FREE then DECOMMITTED across two idle passes;
 		// __slab_reback_span resets it to ACTIVE (re-backing the pages) on reuse.
@@ -996,13 +1086,16 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 
 	// Determine whether the cached span is a miss (empty slot, or free_count==0).
 	var miss = false
+
 	if cachedSpan == 0 'noSpan'
 		miss = true
 	end 'noSpan'
+
 	if cachedSpan != 0 'haveSpan'
 		if __Internals.loadIndirect(cachedSpan + 0x18) == 0 'depleted'
 			miss = true
 		end 'depleted'
+
 		// Ownership gate. A span returned to mcentral (owning_p = MSPAN_OWNING_P_PARKED) or
 		// handed to another P keeps free_count != 0, so the depletion check above
 		// cannot detect a RECYCLED span; popping it would corrupt a span another P
@@ -1024,13 +1117,16 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 		// Re-probe the cached span after draining.
 		let probedSpan = __Internals.loadIndirect(mcacheSlot)
 		var stillMiss = false
+
 		if probedSpan == 0 'noSpan2'
 			stillMiss = true
 		end 'noSpan2'
+
 		if probedSpan != 0 'haveSpan2'
 			if __Internals.loadIndirect(probedSpan + 0x18) == 0 'depleted2'
 				stillMiss = true
 			end 'depleted2'
+
 			// Same ownership gate as the initial check: refill via mcentral for a
 			// non-owned cached span rather than popping it (prevents the analogous
 			// fast-reject -> drain -> re-probe loop and the recycle corruption).
@@ -1052,12 +1148,14 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 	let freeList = __Internals.loadIndirect(span + 0x10)
 
 	var result = 0
+
 	if freeList != 0 'recycled'
 		// A RECYCLED slot: it holds the previous occupant's bytes plus the free-list
 		// link we wrote into slot[0] when it was freed. Pop it, then zero it — the
 		// memzero subsumes the link, so there is no separate slot[0] clear.
 		result = freeList
 		__Internals.storeIndirect(span + 0x10, value: __Internals.loadIndirect(freeList))
+
 		if needzero != 0 'zeroIt'
 			__slab_memzero(result, size: slotSize)
 		end 'zeroIt'
@@ -1066,13 +1164,16 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 		// holds the zeroes the OS gave us — no memzero, at any size class. This is
 		// the common case while a span fills for the first time.
 		let bumpNext = __Internals.loadIndirect(span + 0x50)
+
 		// INV-1 says free_count > 0 and an empty free list imply bump_next < bump_end.
 		// If that ever fails we would hand out a slot past the end of the span, so
 		// trap loudly instead of silently corrupting the next span's memory.
 		let bumpEnd = __Internals.loadIndirect(span) + slotSize * __Internals.loadIndirect(span + 0x30)
+
 		if bumpNext >= bumpEnd 'invariantViolated'
 			panic("__slab_alloc_class: free_count > 0 but no free-list entry and bump region exhausted (INV-1 violated)")
 		end 'invariantViolated'
+
 		result = bumpNext
 		__Internals.storeIndirect(span + 0x50, value: bumpNext + slotSize)
 	end 'virgin'
@@ -1080,10 +1181,12 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 	// span.free_count -= 1 (both arms consumed exactly one slot)
 	let newFreeCount = __Internals.loadIndirect(span + 0x18) - 1
 	__Internals.storeIndirect(span + 0x18, value: newFreeCount)
+
 	// Drop drained spans from the mcache so the next call hits the refill path.
 	if newFreeCount == 0 'evict'
 		__Internals.storeIndirect(mcacheSlot, value: 0)
 	end 'evict'
+
 	return result
 end '__slab_alloc_class'
 
@@ -1112,6 +1215,7 @@ function __slab_mcentral_return_span(span MachineWord)
 	// Cross-P mcache eviction: NULL any row still caching this span.
 	for i in 0 upto SLAB_MAX_SHARDS 'evictLoop'
 		let mcacheSlot = __Internals.slabMcacheBaseAddr() + (i * SLAB_MCACHE_ROW_STRIDE) + classOffset
+
 		if __Internals.loadIndirect(mcacheSlot) == span 'hit'
 			__Internals.storeIndirect(mcacheSlot, value: 0)
 		end 'hit'
@@ -1145,17 +1249,20 @@ function __slab_scavenge()
 		// mcentral entry = base + classIdx * 16; partial_head is at offset 0.
 		let mcentralEntry = __Internals.slabMcentralArrayAddr() + (classIdx shl 4)
 		var span = __Internals.loadIndirect(mcentralEntry)
+
 		while span != 0 'walk'
 			// Read the entry-state once; the two branches below act on it as a
 			// two-epoch grace guard (ACTIVE -> SEEN_FREE this pass, SEEN_FREE ->
 			// DECOMMITTED the next). They are mutually exclusive on the entry state.
 			let state = __Internals.loadIndirect(span + 0x48)
+
 			if state == SPAN_SCAV_ACTIVE 'firstSeen'
 				// First pass to find this span fully free: open its grace period but do
 				// not decommit. A span about to be reused resets to ACTIVE on reuse, so
 				// the active working set never reaches the decommit branch.
 				__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_SEEN_FREE)
 			end 'firstSeen'
+
 			if state == SPAN_SCAV_SEEN_FREE 'stillFree'
 				// Free across two consecutive passes → genuinely idle. Hand its pages
 				// back to the OS and mark it decommitted until a reuse re-backs it.
@@ -1166,6 +1273,7 @@ function __slab_scavenge()
 				__Internals.osDecommitPages(base, size: footprint)
 				__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_DECOMMITTED)
 			end 'stillFree'
+
 			// SPAN_SCAV_DECOMMITTED: already handed back — nothing to do this pass.
 			// Advance via next_span (+0x20).
 			span = __Internals.loadIndirect(span + 0x20)
@@ -1265,18 +1373,21 @@ end '__slab_arena_map_set'
 // none. Three-level lookup with no locks (reads of the immutable map).
 function __slab_arena_map_get(ptr MachineWord) returns MachineWord
 	let l1Base = __Internals.loadIndirect(__Internals.slabArenaMapL1Addr())
+
 	if l1Base == 0 'noL1'
 		return 0
 	end 'noL1'
 
 	let l1Idx = ptr shr 39
 	let l2Ptr = __Internals.loadIndirect(l1Base + (l1Idx shl 3))
+
 	if l2Ptr == 0 'noL2'
 		return 0
 	end 'noL2'
 
 	let l2Idx = (ptr shr 26) and 8191
 	let spansPtr = __Internals.loadIndirect(l2Ptr + (l2Idx shl 3))
+
 	if spansPtr == 0 'noSpans'
 		return 0
 	end 'noSpans'
@@ -1295,13 +1406,16 @@ function __slab_os_direct_free(ptr MachineWord)
 	var i = 0
 	var found = false
 	var entryAddr = 0
+
 	while i < count 'scan'
 		let candidate = arrayBase + (i shl 4)
+
 		if __Internals.loadIndirect(candidate) == ptr 'hit'
 			entryAddr = candidate
 			found = true
 			break
 		end 'hit'
+
 		i = i + 1
 	end 'scan'
 
@@ -1312,12 +1426,14 @@ function __slab_os_direct_free(ptr MachineWord)
 
 	let size = __Internals.loadIndirect(entryAddr + 8)
 	let newCount = count - 1
+
 	if i != newCount 'swap'
 		// Move the trailing entry into the slot we're vacating.
 		let tailAddr = arrayBase + (newCount shl 4)
 		__Internals.storeIndirect(entryAddr, value: __Internals.loadIndirect(tailAddr))
 		__Internals.storeIndirect(entryAddr + 8, value: __Internals.loadIndirect(tailAddr + 8))
 	end 'swap'
+
 	__Internals.storeIndirect(__Internals.slabOsDirectCountAddr(), value: newCount)
 	__Internals.osFreePages(ptr, size: size)
 end '__slab_os_direct_free'
@@ -1337,12 +1453,14 @@ function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 		let arr = __slab_arena_alloc_chunks(1)
 		__slab_memzero(arr, size: 8192)
 		__Internals.storeIndirect(__Internals.slabOsDirectArrayAddr(), value: arr)
+
 		// 8192 / 16 = 512 entries per chunk.
 		__Internals.storeIndirect(__Internals.slabOsDirectCapacityAddr(), value: 512)
 	end 'allocArr'
 
 	let count = __Internals.loadIndirect(__Internals.slabOsDirectCountAddr())
 	let capacity = __Internals.loadIndirect(__Internals.slabOsDirectCapacityAddr())
+
 	if count >= capacity 'full'
 		// 134 = OS-direct capacity exceeded.
 		__Internals.osExit(134)
@@ -1363,12 +1481,15 @@ end '__slab_os_direct_alloc'
 // reaches here fits the last class, so a fall-through is an invariant violation.
 function __slab_class_index_for(size MachineWord) returns MachineWord
 	var classIdx = 0
+
 	for _ in 0 upto SLAB_NUM_SIZE_CLASSES 'classLoop'
 		if __slab_class_size(classIdx) >= size 'fits'
 			return classIdx
 		end 'fits'
+
 		classIdx = classIdx + 1
 	end 'classLoop'
+
 	// Unreachable (size <= SLAB_MAX_SMALL_ALLOC fits in the last class).
 	__Internals.osExit(136)
 	return 0
@@ -1418,7 +1539,9 @@ function __slab_alloc_needzero(size MachineWord, needzero MachineWord) returns M
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 		return osPtr
 	end 'osPath'
+
 	let classIdx = __slab_class_index_for(size)
+
 	// A raw OS thread (one carrying MSPAN_OWNING_P_RAW) reaches the shared raw mcache
 	// shard. Two cases:
 	//   (a) PRE-SCHEDULER main (no `async` yet → no scheduler running): the
@@ -1442,6 +1565,7 @@ function __slab_alloc_needzero(size MachineWord, needzero MachineWord) returns M
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 		return rawSlot
 	end 'rawThreadLocked'
+
 	return __slab_alloc_class(classIdx, needzero: needzero)
 end '__slab_alloc_needzero'
 
@@ -1456,6 +1580,7 @@ function __slab_rounded_size(size MachineWord) returns MachineWord
 	if size > SLAB_MAX_SMALL_ALLOC 'osPath'
 		return (size + (SLAB_PAGE_SIZE - 1)) and -SLAB_PAGE_SIZE
 	end 'osPath'
+
 	return __slab_class_size(__slab_class_index_for(size))
 end '__slab_rounded_size'
 
@@ -1485,6 +1610,7 @@ function __slab_free(ptr MachineWord)
 	// ledger block (a corrupt-ledger / nil-deref crash). `__rc_quarantine_release`'s
 	// own final free also routes here and must NOT re-quarantine.
 	let span = __slab_arena_map_get(ptr)
+
 	if span == 0 'osDirect'
 		// OS-direct free mutates the shared OS-direct array — serialize it.
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
@@ -1538,6 +1664,7 @@ function __slab_free(ptr MachineWord)
 	// answers 0 for a tag that names no P, so a raw-owned or parked span lands on the
 	// fallback-local push below rather than indexing the P array with a tag.
 	let targetP = __slab_proc_at(owningP)
+
 	if targetP == 0 'fallbackLocal'
 		// Defensive: a NULL target (no live P for owning_p) would drop the free.
 		// Fall back to the local push so the slot is never lost; with no live
@@ -1545,6 +1672,7 @@ function __slab_free(ptr MachineWord)
 		__slab_free_class_with_mspan(ptr, mspan: span)
 		return
 	end 'fallbackLocal'
+
 	__slab_remote_free_push(targetP, slot: ptr)
 end '__slab_free'
 
@@ -1571,7 +1699,6 @@ end '__slab_free'
 // ids, which perturbed emitted bytes.)
 // =============================================================================
 #if rcSanitize(true)
-
 	// Poison words written into a quarantined slot's mm-header field positions.
 	// Impossible as real header values: a refcount is a small non-negative integer
 	// (the decref underflow trap keeps it from ever going negative), a destructor
@@ -1681,9 +1808,11 @@ end '__slab_free'
 	let RC_LEDGER_OFF_HEAD = 8
 	let RC_LEDGER_OFF_COUNT = 16
 	let RC_LEDGER_OFF_ENTRIES = 24
+
 	// 24 header bytes + 12 entries * 24 bytes = 312. Kept a literal (top-level
 	// `let` takes only a literal); update alongside the three sizes above.
 	let RC_LEDGER_BLOCK_SIZE = 312
+
 	// 2 GiB bump arena for ring blocks (~6.9M blocks — a full self-compile keeps
 	// millions of objects in flight). Blocks are recycled onto the freelist at
 	// slot age-out, so live usage tracks peak-in-flight objects, not total
@@ -1747,16 +1876,19 @@ end '__slab_free'
 	// release path's bypass re-entry).
 	function __rc_quarantine_intercept(slotBase MachineWord) returns bool
 		let span = __slab_arena_map_get(slotBase)
+
 		if span == 0 'osDirect'
 			return false
 		end 'osDirect'
 
 		let slotSize = __Internals.loadIndirect(span + 0x08)
+
 		if slotSize < RC_QUARANTINE_MIN_SLOT_SIZE 'tooSmall'
 			return false
 		end 'tooSmall'
 
 		let rcWord = __Internals.loadIndirect(slotBase + 24)
+
 		if rcWord == RC_SANITIZE_BYPASS 'agedOut'
 			// `__rc_quarantine_release` re-entering after age-out: clear the
 			// sentinel (the reserved-word / clean-header contract) and let the
@@ -1808,9 +1940,11 @@ end '__slab_free'
 			let evictSize = __Internals.loadIndirect(entry + RC_QENTRY_SLOT_SIZE)
 
 			var nextHead = head + 1
+
 			if nextHead == capacity 'wrapHead'
 				nextHead = 0
 			end 'wrapHead'
+
 			__Internals.storeIndirect(ctl + RC_QCTL_HEAD, value: nextHead)
 			__Internals.storeIndirect(ctl + RC_QCTL_COUNT, value: __Internals.loadIndirect(ctl + RC_QCTL_COUNT) - 1)
 			__Internals.storeIndirect(ctl + RC_QCTL_BYTE_TOTAL, value: __Internals.loadIndirect(ctl + RC_QCTL_BYTE_TOTAL) - evictSize)
@@ -1871,9 +2005,11 @@ end '__slab_free'
 		end 'captureChain'
 
 		var nextTail = tail + 1
+
 		if nextTail == capacity 'wrapTail'
 			nextTail = 0
 		end 'wrapTail'
+
 		__Internals.storeIndirect(ctl + RC_QCTL_TAIL, value: nextTail)
 		__Internals.storeIndirect(ctl + RC_QCTL_COUNT, value: __Internals.loadIndirect(ctl + RC_QCTL_COUNT) + 1)
 		__Internals.storeIndirect(ctl + RC_QCTL_BYTE_TOTAL, value: __Internals.loadIndirect(ctl + RC_QCTL_BYTE_TOTAL) + slotSize)
@@ -1888,6 +2024,7 @@ end '__slab_free'
 	// impossible) terminate instead of evicting forever. Caller holds __slab_lock.
 	function __rc_quarantine_needs_evict(ctl MachineWord, incomingBytes MachineWord) returns bool
 		let count = __Internals.loadIndirect(ctl + RC_QCTL_COUNT)
+
 		if count == 0 'empty'
 			return false
 		end 'empty'
@@ -1931,6 +2068,7 @@ end '__slab_free'
 		// the reserved word) onto the freelist before the slab reclaims the slot.
 		// The reserved word is never poisoned, so it still holds the block here.
 		let ledgerBlock = __Internals.loadIndirect(slotBase + 0)
+
 		if ledgerBlock != 0 'recycleLedger'
 			__rc_ledger_free_block(ledgerBlock)
 			__Internals.storeIndirect(slotBase + 0, value: 0)
@@ -2001,6 +2139,7 @@ end '__slab_free'
 		let slotBase = userPtr - 32
 
 		var what = ""
+
 		if kind == RC_TOUCH_INCREF 'increfKind'
 			what = "INCREF of freed object"
 		end 'increfKind' else if kind == RC_TOUCH_DECREF 'decrefKind'
@@ -2016,6 +2155,7 @@ end '__slab_free'
 		end 'unknownKind'
 
 		printError("rc-sanitize: {what} 0x{userPtr:016x}\n")
+
 		if rcOpKind != RC_KIND_UNSPECIFIED 'namedKind'
 			printError("  imbalanced op KIND: {__rc_kind_name(rcOpKind)}\n")
 		end 'namedKind'
@@ -2050,9 +2190,11 @@ end '__slab_free'
 			end 'hit'
 
 			idx = idx + 1
+
 			if idx == capacity 'wrap'
 				idx = 0
 			end 'wrap'
+
 			remaining = remaining - 1
 		end 'scan'
 
@@ -2075,11 +2217,13 @@ end '__slab_free'
 	// (`arena_next == 0`) stays correct for a racing allocator.
 	function __rc_ledger_arena_init(ctl MachineWord)
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
+
 		if __Internals.loadIndirect(ctl + RC_LCTL_ARENA_NEXT) == 0 'stillUnset'
 			let arena = __slab_assert_os_alloc(__Internals.osAllocPages(RC_LEDGER_ARENA_BYTES))
 			__Internals.storeIndirect(ctl + RC_LCTL_ARENA_END, value: arena + RC_LEDGER_ARENA_BYTES)
 			__Internals.storeIndirect(ctl + RC_LCTL_ARENA_NEXT, value: arena)
 		end 'stillUnset'
+
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 	end '__rc_ledger_arena_init'
 
@@ -2091,10 +2235,13 @@ end '__slab_free'
 
 		while true 'pop'
 			let head = __Internals.loadIndirect(ctl + RC_LCTL_FREELIST)
+
 			if head == 0 'freelistEmpty'
 				break
 			end 'freelistEmpty'
+
 			let next = __Internals.loadIndirect(head + RC_LEDGER_OFF_NEXT)
+
 			if __Internals.atomicCas(ctl + RC_LCTL_FREELIST, old: head, new: next) != 0 'popped'
 				return head
 			end 'popped'
@@ -2105,9 +2252,11 @@ end '__slab_free'
 		end 'needInit'
 
 		let block = __Internals.atomicXadd(ctl + RC_LCTL_ARENA_NEXT, value: RC_LEDGER_BLOCK_SIZE)
+
 		if block + RC_LEDGER_BLOCK_SIZE > __Internals.loadIndirect(ctl + RC_LCTL_ARENA_END) 'exhausted'
 			return 0
 		end 'exhausted'
+
 		return block
 	end '__rc_ledger_alloc_block'
 
@@ -2115,9 +2264,11 @@ end '__slab_free'
 	// truly frees at quarantine age-out). Treiber-stack push.
 	function __rc_ledger_free_block(block MachineWord)
 		let ctl = __Internals.rcLedgerCtlAddr()
+
 		while true 'push'
 			let head = __Internals.loadIndirect(ctl + RC_LCTL_FREELIST)
 			__Internals.storeIndirect(block + RC_LEDGER_OFF_NEXT, value: head)
+
 			if __Internals.atomicCas(ctl + RC_LCTL_FREELIST, old: head, new: block) != 0 'pushed'
 				return
 			end 'pushed'
@@ -2130,9 +2281,11 @@ end '__slab_free'
 	// Called by `__mm_alloc` under `#if rcSanitize(true)`.
 	function __rc_ledger_attach() returns MachineWord
 		let block = __rc_ledger_alloc_block()
+
 		if block == 0 'exhausted'
 			return 0
 		end 'exhausted'
+
 		let entry = block + RC_LEDGER_OFF_ENTRIES
 		__Internals.storeIndirect(entry + 0, value: RC_KIND_CREATED)
 		__Internals.storeIndirect(entry + 8, value: 0)
@@ -2148,18 +2301,22 @@ end '__slab_free'
 	// acceptable diagnostic imprecision, never a correctness hazard.
 	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter RefCountDelta, ra MachineWord)
 		let block = __Internals.loadIndirect(userPtr - 32)
+
 		if block == 0 'noRing'
 			return
 		end 'noRing'
+
 		let head = __Internals.loadIndirect(block + RC_LEDGER_OFF_HEAD)
 		let entry = block + RC_LEDGER_OFF_ENTRIES + head * RC_LEDGER_ENTRY_SIZE
 		__Internals.storeIndirect(entry + 0, value: kind)
 		__Internals.storeIndirect(entry + 8, value: rcAfter)
 		__Internals.storeIndirect(entry + 16, value: ra)
 		var nextHead = head + 1
+
 		if nextHead == RC_LEDGER_RING_ENTRIES 'wrap'
 			nextHead = 0
 		end 'wrap'
+
 		__Internals.storeIndirect(block + RC_LEDGER_OFF_HEAD, value: nextHead)
 		__Internals.storeIndirect(block + RC_LEDGER_OFF_COUNT, value: __Internals.loadIndirect(block + RC_LEDGER_OFF_COUNT) + 1)
 	end '__rc_ledger_record'
@@ -2169,72 +2326,95 @@ end '__slab_free'
 		if kind == RC_KIND_CREATED 'k'
 			return "created"
 		end 'k'
+
 		if kind == RC_KIND_STORE_INCREF_NEW 'k'
 			return "storeIncrefNew"
 		end 'k'
+
 		if kind == RC_KIND_FIELD_TRANSFER_INCREF 'k'
 			return "fieldTransferIncref"
 		end 'k'
+
 		if kind == RC_KIND_MODULE_GLOBAL_INCREF 'k'
 			return "moduleGlobalIncref"
 		end 'k'
+
 		if kind == RC_KIND_ACQUIRE_AT_DEF 'k'
 			return "acquireAtDef"
 		end 'k'
+
 		if kind == RC_KIND_RETAIN_FOR_RETURN 'k'
 			return "retainForReturn"
 		end 'k'
+
 		if kind == RC_KIND_BORROWED_ELEMENT_RETAIN 'k'
 			return "borrowedElementRetain"
 		end 'k'
+
 		if kind == RC_KIND_CONSUMED_ARG_COPY_RETAIN 'k'
 			return "consumedArgCopyRetain"
 		end 'k'
+
 		if kind == RC_KIND_TRANSPARENT_WRAP_RETAIN 'k'
 			return "transparentWrapRetain"
 		end 'k'
+
 		if kind == RC_KIND_RETURNED_BORROW_RETAIN 'k'
 			return "returnedBorrowRetain"
 		end 'k'
+
 		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_RETAIN 'k'
 			return "addressTakenSlotRetain"
 		end 'k'
+
 		if kind == RC_KIND_PHI_EDGE_INCREF 'k'
 			return "phiEdgeIncref"
 		end 'k'
+
 		if kind == RC_KIND_FIELD_OVERWRITE_DECREF_OLD 'k'
 			return "fieldOverwriteDecrefOld"
 		end 'k'
+
 		if kind == RC_KIND_BY_REF_PARAM_DECREF_OLD 'k'
 			return "byRefParamDecrefOld"
 		end 'k'
+
 		if kind == RC_KIND_LAST_USE_DECREF 'k'
 			return "lastUseDecref"
 		end 'k'
+
 		if kind == RC_KIND_LAST_USE_EDGE_DECREF 'k'
 			return "lastUseEdgeDecref"
 		end 'k'
+
 		if kind == RC_KIND_TERMINATOR_DECREF 'k'
 			return "terminatorDecref"
 		end 'k'
+
 		if kind == RC_KIND_DEAD_DEF_DROP 'k'
 			return "deadDefDrop"
 		end 'k'
+
 		if kind == RC_KIND_DEAD_BLOCK_PARAM_DROP 'k'
 			return "deadBlockParamDrop"
 		end 'k'
+
 		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_DROP 'k'
 			return "addressTakenSlotDrop"
 		end 'k'
+
 		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_OVERWRITE_DROP 'k'
 			return "addressTakenSlotOverwriteDrop"
 		end 'k'
+
 		if kind == RC_KIND_BORROW_ROOT_EDGE_DROP 'k'
 			return "borrowRootEdgeDrop"
 		end 'k'
+
 		if kind == RC_KIND_DESTRUCTOR_FIELD_DROP 'k'
 			return "destructorFieldDrop"
 		end 'k'
+
 		return "unspecified"
 	end '__rc_kind_name'
 
@@ -2242,6 +2422,7 @@ end '__slab_free'
 	// ring depth. Reads only the ring block (never the possibly-freed object).
 	function __rc_ledger_dump(userPtr MachineWord)
 		let block = __Internals.loadIndirect(userPtr - 32)
+
 		if block == 0 'noRing'
 			printError("  refcount-op history: (none — ledger arena exhausted at this object's allocation)\n")
 			return
@@ -2249,19 +2430,23 @@ end '__slab_free'
 
 		let count = __Internals.loadIndirect(block + RC_LEDGER_OFF_COUNT)
 		var shown = count
+
 		if shown > RC_LEDGER_RING_ENTRIES 'cap'
 			shown = RC_LEDGER_RING_ENTRIES
 		end 'cap'
+
 		printError("  refcount-op history (oldest first; last {shown} of {count} ops):\n")
 
 		// When the ring wrapped, the oldest retained entry sits at `head` (the
 		// next slot to be overwritten); otherwise entries fill [0, count).
 		var idx = 0
+
 		if count > RC_LEDGER_RING_ENTRIES 'wrapped'
 			idx = __Internals.loadIndirect(block + RC_LEDGER_OFF_HEAD)
 		end 'wrapped'
 
 		var shownCount = 0
+
 		while shownCount < shown 'each'
 			let entry = block + RC_LEDGER_OFF_ENTRIES + idx * RC_LEDGER_ENTRY_SIZE
 			let entKind = __Internals.loadIndirect(entry + 0)
@@ -2270,9 +2455,11 @@ end '__slab_free'
 			printError("    {__rc_kind_name(entKind)} -> rc {entRc}   @\n")
 			__rc_print_free_frame(entRa)
 			idx = idx + 1
+
 			if idx == RC_LEDGER_RING_ENTRIES 'ringWrap'
 				idx = 0
 			end 'ringWrap'
+
 			shownCount = shownCount + 1
 		end 'each'
 	end '__rc_ledger_dump'
@@ -2286,12 +2473,14 @@ end '__slab_free'
 	function __rc_print_backtrace_skipping(skipFrames MachineWord, maxFrames MachineWord)
 		var fp = __Internals.loadFramePtr()
 		var dropped = 0
+
 		while dropped < skipFrames and fp != 0 'skip'
 			fp = __Internals.loadIndirect(fp)
 			dropped = dropped + 1
 		end 'skip'
 
 		var printed = 0
+
 		while printed < maxFrames and fp != 0 'walk'
 			__rc_print_free_frame(__Internals.loadIndirect(fp + 8))
 			fp = __Internals.loadIndirect(fp)
@@ -2350,9 +2539,11 @@ end '__slab_free'
 	function __mm_incref_tagged(ptr MachineWord, kind MachineWord)
 		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
 		__rc_check_invalid_ptr(ptr, kind: kind)
+
 		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_INCREF, rcOpKind: kind)
 		end 'freedTouch'
+
 		let prior = __Internals.atomicXadd(ptr - 8, value: 1)
 		__rc_ledger_record(ptr, kind: kind, rcAfter: prior + 1, ra: ra)
 	end '__mm_incref_tagged'
@@ -2362,14 +2553,18 @@ end '__slab_free'
 	// rather than to the wrapper.
 	function __mm_decref_tagged_ra(ptr MachineWord, kind MachineWord, ra MachineWord)
 		__rc_check_invalid_ptr(ptr, kind: kind)
+
 		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DECREF, rcOpKind: kind)
 		end 'freedTouch'
+
 		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1, ra: ra)
+
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
+
 		if __mm_is_over_release(prior) 'overRelease'
 			__rc_report_over_release(ptr, kind: kind)
 		end 'overRelease'
@@ -2387,9 +2582,11 @@ end '__slab_free'
 	// tolerates exactly null, otherwise the strict tagged body.
 	function __mm_decref_maybenull_tagged(ptr MachineWord, kind MachineWord)
 		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
+
 		if ptr == 0 'null'
 			return
 		end 'null'
+
 		__mm_decref_tagged_ra(ptr, kind: kind, ra: ra)
 	end '__mm_decref_maybenull_tagged'
 
@@ -2401,24 +2598,31 @@ end '__slab_free'
 	// either way.
 	function __mm_drop_tagged(ptr MachineWord, kind MachineWord)
 		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
+
 		if ptr == 0 'null'
 			return
 		end 'null'
+
 		__rc_check_invalid_ptr(ptr, kind: kind)
 		let rc = __Internals.loadIndirect(ptr - 8)
+
 		if rc == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DROP, rcOpKind: kind)
 		end 'freedTouch'
+
 		if rc == 0 'soleOwner'
 			__rc_ledger_record(ptr, kind: kind, rcAfter: 0, ra: ra)
 			__mm_free(ptr)
 			return
 		end 'soleOwner'
+
 		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1, ra: ra)
+
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
+
 		if __mm_is_over_release(prior) 'overRelease'
 			__rc_report_over_release(ptr, kind: kind)
 		end 'overRelease'
@@ -2426,7 +2630,6 @@ end '__slab_free'
 #endif
 
 #if leakReport(true)
-
 	// =========================================================================
 	// Per-destructor LEAK CENSUS (`--leak-report`).
 	//
@@ -2514,15 +2717,19 @@ end '__slab_free'
 	// count:0} and key==0 correctly reads as an empty slot.
 	function __leak_ctl_ensure()
 		let ctl = __Internals.leakCtlAddr()
+
 		if __Internals.loadIndirect(ctl + LEAK_CTL_TABLE) != 0 'ready'
 			return
 		end 'ready'
+
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
+
 		if __Internals.loadIndirect(ctl + LEAK_CTL_TABLE) == 0 'stillUnset'
 			let table = __slab_assert_os_alloc(__Internals.osAllocPages(LEAK_TABLE_BYTES))
 			__Internals.storeIndirect(ctl + LEAK_CTL_CAPACITY, value: LEAK_TABLE_BUCKETS)
 			__Internals.storeIndirect(ctl + LEAK_CTL_TABLE, value: table)
 		end 'stillUnset'
+
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 	end '__leak_ctl_ensure'
 
@@ -2541,37 +2748,48 @@ end '__slab_free'
 	// destructors) would silently under-report, so it exits loudly instead.
 	function __leak_probe(dtor MachineWord, claim bool) returns MachineWord
 		let table = __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_TABLE)
+
 		if table == 0 'noTable'
 			return 0
 		end 'noTable'
+
 		var idx = __leak_hash(dtor)
 		var probes = 0
+
 		while probes < LEAK_TABLE_BUCKETS 'probe'
 			let bucket = table + idx * LEAK_BUCKET_SIZE
 			let key = __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY)
+
 			if key == dtor 'hit'
 				return bucket
 			end 'hit'
+
 			if key == 0 'empty'
 				if not claim 'noClaim'
 					return 0
 				end 'noClaim'
+
 				// Race-safe claim: CAS 0 -> dtor. On success we own the bucket; on
 				// failure another recorder claimed it — if it is now OUR dtor, use
 				// it, otherwise keep probing.
 				if __Internals.atomicCas(bucket + LEAK_BUCKET_KEY, old: 0, new: dtor) != 0 'claimed'
 					return bucket
 				end 'claimed'
+
 				if __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY) == dtor 'wonByOther'
 					return bucket
 				end 'wonByOther'
 			end 'empty'
+
 			idx = idx + 1
+
 			if idx == LEAK_TABLE_BUCKETS 'wrap'
 				idx = 0
 			end 'wrap'
+
 			probes = probes + 1
 		end 'probe'
+
 		// 138 = leak-census table full (raise LEAK_TABLE_BUCKETS).
 		__Internals.osExit(138)
 		return 0
@@ -2603,12 +2821,15 @@ end '__slab_free'
 		// callerFp = the direct caller's saved frame pointer, read from __mm_alloc's
 		// own saved-rbp slot (reliably stored by __mm_alloc's prologue).
 		let callerFp = __Internals.loadIndirect(allocFramePtr)
+
 		if callerFp <= allocFramePtr 'notAscending'
 			return 0
 		end 'notAscending'
+
 		if (callerFp and 7) != 0 'misaligned'
 			return 0
 		end 'misaligned'
+
 		if callerFp - allocFramePtr > LEAK_STACK_WALK_WINDOW 'tooFar'
 			return 0
 		end 'tooFar'
@@ -2618,6 +2839,7 @@ end '__slab_free'
 		// symbol table is emitted immediately after the code region, so it is .text's exclusive
 		// upper bound.
 		let ra2 = __Internals.loadIndirect(callerFp + 8)
+
 		if ra2 >= __Internals.mrtStartAddr() and ra2 < __Internals.symtableAddr() 'inText'
 			return ra2
 		end 'inText'
@@ -2648,17 +2870,21 @@ end '__slab_free'
 		if __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_DUMPING) != 0 'dumping'
 			return
 		end 'dumping'
+
 		if dtor == 0 'raw'
 			__Internals.atomicInc(__Internals.leakCtlAddr() + LEAK_CTL_RAW_LIVE)
 			return
 		end 'raw'
+
 		__leak_ctl_ensure()
 		let bucket = __leak_probe(dtor, claim: true)
+
 		if bucket != 0 'have'
 			// atomicXadd returns the PRIOR count, so newCount is this allocation's
 			// 1-based position in the bucket.
 			let prior = __Internals.atomicXadd(bucket + LEAK_BUCKET_COUNT, value: 1)
 			let newCount = prior + 1
+
 			if (newCount and (newCount - 1)) == 0 'milestone'
 				// Store the two-deep partner FIRST, then the one-deep sample: the
 				// one-deep word is the gate the reader checks, so publishing it last
@@ -2714,11 +2940,14 @@ end '__slab_free'
 
 		// Compact every bucket with a non-zero live count to the front of the array.
 		var live = 0
+
 		if table != 0 'haveTable'
 			var read = 0
+
 			while read < capacity 'compact'
 				let src = table + read * LEAK_BUCKET_SIZE
 				let count = __Internals.loadIndirect(src + LEAK_BUCKET_COUNT)
+
 				if count != 0 'nonEmpty'
 					let dst = table + live * LEAK_BUCKET_SIZE
 					__Internals.storeIndirect(dst + LEAK_BUCKET_KEY, value: __Internals.loadIndirect(src + LEAK_BUCKET_KEY))
@@ -2727,31 +2956,39 @@ end '__slab_free'
 					__Internals.storeIndirect(dst + LEAK_BUCKET_SAMPLE_RA2, value: __Internals.loadIndirect(src + LEAK_BUCKET_SAMPLE_RA2))
 					live = live + 1
 				end 'nonEmpty'
+
 				read = read + 1
 			end 'compact'
 
 			// Selection sort the [0, live) prefix by count descending.
 			var i = 0
+
 			while i < live 'selOuter'
 				var best = i
 				var j = i + 1
+
 				while j < live 'selInner'
 					let cj = __Internals.loadIndirect(table + j * LEAK_BUCKET_SIZE + LEAK_BUCKET_COUNT)
 					let cbest = __Internals.loadIndirect(table + best * LEAK_BUCKET_SIZE + LEAK_BUCKET_COUNT)
+
 					if cj > cbest 'newBest'
 						best = j
 					end 'newBest'
+
 					j = j + 1
 				end 'selInner'
+
 				if best != i 'swap'
 					__leak_swap_buckets(table + i * LEAK_BUCKET_SIZE, b: table + best * LEAK_BUCKET_SIZE)
 				end 'swap'
+
 				i = i + 1
 			end 'selOuter'
 		end 'haveTable'
 
 		printError("LEAK-REPORT-BEGIN total={total} distinct={live} raw={rawLive}\n")
 		var k = 0
+
 		while k < live 'emit'
 			let bucket = table + k * LEAK_BUCKET_SIZE
 			let dtor = __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY)
@@ -2764,6 +3001,7 @@ end '__slab_free'
 			// Two-deep sample is 0 when the walk was unwalkable — emit alloc2=0x0
 			// rather than a wrapped `0 - mrtStart` so the reader sees "no frame".
 			var alloc2Off = 0
+
 			if sampleRA2 != 0 'have2'
 				alloc2Off = sampleRA2 - mrtStart
 			end 'have2'
@@ -2771,9 +3009,11 @@ end '__slab_free'
 			printError("LEAK-DTOR count={count} off=0x{off:x} alloc=0x{allocOff:x} alloc2=0x{alloc2Off:x}\n")
 			k = k + 1
 		end 'emit'
+
 		if rawLive != 0 'hasRaw'
 			printError("LEAK-RAW count={rawLive}\n")
 		end 'hasRaw'
+
 		printError("LEAK-REPORT-END\n")
 
 		__Internals.storeIndirect(ctl + LEAK_CTL_DUMPING, value: 0)
@@ -2795,11 +3035,14 @@ function __leak_count_dec(destructor MachineWord)
 		if __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_DUMPING) != 0 'dumping'
 			return
 		end 'dumping'
+
 		if destructor == 0 'raw'
 			__Internals.atomicDec(__Internals.leakCtlAddr() + LEAK_CTL_RAW_LIVE)
 			return
 		end 'raw'
+
 		let bucket = __leak_probe(destructor, claim: false)
+
 		if bucket != 0 'have'
 			__Internals.atomicDec(bucket + LEAK_BUCKET_COUNT)
 		end 'have'
@@ -2845,10 +3088,13 @@ function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero 
 	// `== 0` rather than `< 1`: `size` is an unsigned `MachineWord`, under which the two are the
 	// same test, and the equality says which one is meant without depending on the reading.
 	var clampedSize = size
+
 	if size == 0 'clamp'
 		clampedSize = 1
 	end 'clamp'
+
 	__Internals.atomicInc(__Internals.mmAllocCountAddr())
+
 	// `--leak-report`: tally this allocation under its destructor in the
 	// per-destructor census (raw dtor==0 buffers go to the ctl's raw_live word).
 	// Kept adjacent to the __mm_alloc_count bump so the two stay in lockstep. Two
@@ -2866,14 +3112,17 @@ function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero 
 	#if leakReport(true)
 		__leak_count_inc(destructor, allocRA: __Internals.loadIndirect(__Internals.loadFramePtr() + 8), allocRA2: __leak_walk_2deep(__Internals.loadFramePtr()))
 	#endif
+
 	// The 32-byte header is fully written below on BOTH paths, so only the user
 	// region's zeroing is in question — which is exactly what `needzero` selects.
 	var slotBase = 0
+
 	if needzero != 0 'zeroed'
 		slotBase = __slab_alloc(clampedSize + 32)
 	end 'zeroed' else 'raw'
 		slotBase = __slab_alloc_raw(clampedSize + 32)
 	end 'raw'
+
 	// The first header word is reserved (always 0). It is kept so the
 	// destructor / size / refcount offsets stay at their historical
 	// `user_ptr - 24 / -16 / -8`. Under `--rc-sanitize` it instead carries this
@@ -2885,8 +3134,10 @@ function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero 
 	#else
 		__Internals.storeIndirect(slotBase, value: 0)
 	#endif
+
 	__Internals.storeIndirect(slotBase + 8, value: destructor)
 	__Internals.storeIndirect(slotBase + 16, value: clampedSize)
+
 	// Refcount-insertion (Step 2): a fresh allocation owns NO reference — the
 	// refcount header starts at 0 (alloc-at-0). With lowering no longer emitting
 	// any incref, the binding/field store that takes ownership is the first +1,
@@ -2913,11 +3164,15 @@ function __mm_free(ptr MachineWord)
 	#if rcSanitize(true)
 		__rc_check_freed_touch(ptr, kind: RC_TOUCH_MM_FREE)
 	#endif
+
 	let destructor = __Internals.loadIndirect(ptr - 24)
+
 	if destructor != 0 'hasDtor'
 		__Internals.indirectCall1(destructor, arg: ptr)
 	end 'hasDtor'
+
 	__Internals.atomicDec(__Internals.mmAllocCountAddr())
+
 	// `--leak-report`: untrack this allocation from the per-destructor census.
 	// `destructor` here is the value already read from the mm header of the (still
 	// live) object — we never re-read a freed header. Kept adjacent to the
@@ -2926,6 +3181,7 @@ function __mm_free(ptr MachineWord)
 	#if leakReport(true)
 		__leak_count_dec(destructor)
 	#endif
+
 	// slot_base = ptr - 32 (the reserved word is the first header word).
 	// rc-sanitize: quarantine the mm slot here (NOT in `__slab_free`) so only slots
 	// carrying the mm header + ledger word are poisoned/held; raw `__slab_alloc`
@@ -2936,6 +3192,7 @@ function __mm_free(ptr MachineWord)
 			return
 		end 'quarantined'
 	#endif
+
 	__slab_free(ptr - 32)
 end '__mm_free'
 
@@ -3039,6 +3296,7 @@ let LAYOUT_FLAG_BIT_PACKED = 2
 function __managed_mem_alloc_buffer(byteLen MachineWord) returns MachineWord
 	let buf = __mm_alloc(byteLen, destructor: 0)
 	__mm_incref(buf)
+
 	// The buffer arrives ZEROED — `__mm_alloc` guarantees it, so this function no
 	// longer zeroes it itself (it used to, with a byte-at-a-time loop, on every
 	// Array/Map/Set buffer).
@@ -3069,6 +3327,7 @@ end '__managed_mem_alloc_buffer'
 // returned 0 is silently discarded.
 function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 	let parent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+
 	if parent == MM_PARENT_ROOT or parent == MM_PARENT_INLINE 'ownedWalk'
 		// Container element-walk teardown. element_destroy@40 holds the
 		// per-element teardown function pointer (or 0 for raw/unmanaged-element
@@ -3082,23 +3341,29 @@ function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 		// The element_destroy==0 gate keeps raw/byte/primitive buffers from being
 		// walked (decref-ing a raw int would fault).
 		__managed_mem_walk_elements(self)
+
 		if parent == MM_PARENT_ROOT 'extBuf'
 			// ONLY external ROOT buffers are a separate allocation to decref. An
 			// INLINE record's buffer lives inside this record's own slab slot and is
 			// reclaimed when `__mm_free` frees that slot — there is nothing to decref.
 			let buffer = __Internals.loadIndirect(self)
+
 			if buffer != 0 'hasBuf'
 				__mm_decref(buffer)
 			end 'hasBuf'
 		end 'extBuf'
+
 		return 0
 	end 'ownedWalk'
+
 	if parent == MM_PARENT_RDATA 'rdata'
 		return 0
 	end 'rdata'
+
 	if parent == MM_PARENT_UNINIT 'uninit'
 		return 0
 	end 'uninit'
+
 	// Slice view: drop one ref on the parent __ManagedMemory.
 	__mm_decref(parent)
 	return 0
@@ -3118,17 +3383,23 @@ end '__destruct___ManagedMemory'
 // Caller guarantees 0 <= start <= end <= length.
 function __managed_mem_walk_elements_range(self MachineWord, start BufferCoordinate, end BufferCoordinate)
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+
 	if elementDestroy == 0 'rawElems'
 		return
 	end 'rawElems'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let walkBuf = __Internals.loadIndirect(self)
+
 	if walkBuf == 0 'noBuf'
 		return
 	end 'noBuf'
+
 	var i = start
+
 	while i < end 'eachElem'
 		let slot = __Internals.loadIndirect(walkBuf + i * elemSize)
+
 		if slot != 0 'live'
 			// `element_destroy` is `&__mm_decref` (void), so use the void-shaped
 			// indirect call — wasm's `call_indirect` type-checks the site against the
@@ -3136,6 +3407,7 @@ function __managed_mem_walk_elements_range(self MachineWord, start BufferCoordin
 			// mismatch). See `lowerInternalsIndirectCall1`.
 			__Internals.indirectCallVoid1(elementDestroy, arg: slot)
 		end 'live'
+
 		i = i + 1
 	end 'eachElem'
 end '__managed_mem_walk_elements_range'
@@ -3192,26 +3464,34 @@ end '__managed_mem_walk_elements'
 // construction. Caller guarantees 0 <= start <= end <= capacity.
 function __managed_mem_zero_elements_range(self MachineWord, start BufferCoordinate, end BufferCoordinate)
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'notOwned'
 		return
 	end 'notOwned'
+
 	let buffer = __Internals.loadIndirect(self)
+
 	if buffer == 0 'noBuf'
 		return
 	end 'noBuf'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+
 	// element_size < 0 is the sub-byte-packed sentinel: `start`/`end` are FIELD
 	// indices, and a field is not generally byte-aligned, so a byte-range memzero
 	// would flatten the live neighbours sharing the boundary bytes. Clear the
 	// fields one at a time through the shared packed writer instead.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		var i = start
+
 		while i < end 'clearFields'
 			__managed_mem_write_packed(buffer, idx: i, elemSize: elemSize, value: 0)
 			i = i + 1
 		end 'clearFields'
+
 		return
 	end 'packed'
+
 	// Byte-level and type-agnostic — exactly why it is correct for a scalar
 	// element and a managed pointer alike.
 	__Internals.memzero(buffer + start * elemSize, size: (end - start) * elemSize)
@@ -3255,9 +3535,11 @@ end '__managed_mem_clear'
 // hits 0. Returns i64 (0) to match the indirect-call destructor ABI.
 function __destruct___ManagedMemoryCursor(self MachineWord) returns MachineWord
 	let sourcePtr = __Internals.loadIndirect(self + 32)
+
 	if sourcePtr != 0 'hasSource'
 		__mm_decref(sourcePtr)
 	end 'hasSource'
+
 	return 0
 end '__destruct___ManagedMemoryCursor'
 
@@ -3280,13 +3562,17 @@ end '__destruct___ManagedMemoryCursor'
 // reads [n, oldLength) off the OLD live range.
 function __managed_mem_set_length(self MachineWord, n BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if n > capacity 'tooLong'
 		throw __ManagedMemoryError.invalidLength
 	end 'tooLong'
+
 	let oldLength = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if n < oldLength 'shrink'
 		__managed_mem_vacate_range(self, start: n, end: oldLength)
 	end 'shrink'
+
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: n)
 	return 0
 end '__managed_mem_set_length'
@@ -3349,6 +3635,7 @@ function __managed_mem_buffer_byte_len(count BufferCoordinate, elemSize ElementS
 	if __managed_mem_is_packed(elemSize) 'packed'
 		return __managed_mem_packed_byte_len(count, elemSize: elemSize)
 	end 'packed'
+
 	return count * elemSize
 end '__managed_mem_buffer_byte_len'
 
@@ -3368,6 +3655,7 @@ function __managed_mem_capacity_for_bytes(bytes MachineWord, elemSize ElementStr
 		let bitWidth = __managed_mem_packed_bit_width(elemSize) as NonZeroWord
 		return (bytes shl 3) / bitWidth
 	end 'packed'
+
 	let stride = elemSize as NonZeroWord
 	return bytes / stride
 end '__managed_mem_capacity_for_bytes'
@@ -3381,12 +3669,15 @@ function __managed_mem_load_sized(addr MachineWord, elemSize ElementStride) retu
 	if elemSize == 1 'b'
 		return __Internals.loadByte(addr, offset: 0)
 	end 'b'
+
 	if elemSize == 2 'h'
 		return __Internals.loadHalfword(addr)
 	end 'h'
+
 	if elemSize == 4 'w'
 		return __Internals.loadWord(addr)
 	end 'w'
+
 	return __Internals.loadIndirect(addr)
 end '__managed_mem_load_sized'
 
@@ -3395,14 +3686,17 @@ function __managed_mem_store_sized(addr MachineWord, elemSize ElementStride, val
 		__Internals.storeByte(addr, offset: 0, value: value)
 		return
 	end 'b'
+
 	if elemSize == 2 'h'
 		__Internals.storeHalfword(addr, value: value)
 		return
 	end 'h'
+
 	if elemSize == 4 'w'
 		__Internals.storeWord(addr, value: value)
 		return
 	end 'w'
+
 	__Internals.storeIndirect(addr, value: value)
 end '__managed_mem_store_sized'
 
@@ -3419,11 +3713,13 @@ function __managed_mem_cursor_current(cursor MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(cursor)
 	let position = __Internals.loadIndirect(cursor + 8)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
+
 	// element_size < 0 is the sub-byte-packed sentinel: read the (-element_size)-bit
 	// field at `position` — same layout as __managed_mem_get.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		return __managed_mem_read_packed(buffer, idx: position, elemSize: elemSize)
 	end 'packed'
+
 	return __managed_mem_load_sized(buffer + position * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_current'
 
@@ -3442,19 +3738,24 @@ function __managed_mem_cursor_peek(cursor MachineWord, ahead BufferCoordinate) r
 	let position = __Internals.loadIndirect(cursor + 8)
 	let length = __Internals.loadIndirect(cursor + 16)
 	let target = position + ahead
+
 	if target < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
+
 	if target >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+
 	let buffer = __Internals.loadIndirect(cursor)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
+
 	// element_size < 0 is the sub-byte-packed sentinel — same layout as
 	// __managed_mem_get / cursor_current.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		return __managed_mem_read_packed(buffer, idx: target, elemSize: elemSize)
 	end 'packed'
+
 	return __managed_mem_load_sized(buffer + target * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_peek'
 
@@ -3467,18 +3768,24 @@ function __managed_mem_get(self MachineWord, idx BufferCoordinate) returns Machi
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
+
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if idx >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: read the (-element_size)-bit
 	// field at `idx` (bool = 1 bit) and return it zero-extended.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		return __managed_mem_read_packed(buffer, idx: idx, elemSize: elemSize)
 	end 'packed'
+
 	let loaded = __managed_mem_load_sized(buffer + idx * elemSize, elemSize: elemSize)
+
 	// Empty-slot detection for managed-pointer (struct/string/union/array)
 	// elements only: `element_destroy != 0` marks a slot that holds a refcounted
 	// heap pointer. resize()/remove() zero such slots; reading one back as a live
@@ -3487,9 +3794,11 @@ function __managed_mem_get(self MachineWord, idx BufferCoordinate) returns Machi
 	// Primitive slots (element_destroy == 0) store values inline — a 0 there is a
 	// valid element, never an empty slot.
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+
 	if elementDestroy != 0 and loaded == 0 'emptyManagedSlot'
 		throw __ManagedMemoryError.emptySlot
 	end 'emptyManagedSlot'
+
 	return loaded
 end '__managed_mem_get'
 
@@ -3502,16 +3811,21 @@ function __managed_mem_set(self MachineWord, idx BufferCoordinate, value Machine
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
+
 	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
 		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	end 'cow'
+
 	if idx >= capacity 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// In-place overwrite of a LIVE managed element must release the displaced
 	// occupant, or its +1 leaks (the teardown walk only decrefs whatever the slot
 	// holds at teardown — the new value, not the one we overwrite here). Gate on
@@ -3522,10 +3836,13 @@ function __managed_mem_set(self MachineWord, idx BufferCoordinate, value Machine
 	// value's +1 likewise moves in here (the caller's last-use decref is suppressed
 	// by `opMovesValueIntoContainer`), so net per element stays 0.
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
+
 	if elementDestroy != 0 'maybeReleaseOld'
 		let curLength = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 		if idx < curLength 'liveSlot'
 			let oldVal = __Internals.loadIndirect(buffer + idx * elemSize)
+
 			if oldVal != 0 'haveOld'
 				// `element_destroy` is `&__mm_decref` (void) — void-shaped indirect call
 				// so wasm's typed `call_indirect` matches the target (mirrors the
@@ -3534,12 +3851,14 @@ function __managed_mem_set(self MachineWord, idx BufferCoordinate, value Machine
 			end 'haveOld'
 		end 'liveSlot'
 	end 'maybeReleaseOld'
+
 	// element_size < 0 is the sub-byte-packed sentinel: read-modify-write the
 	// (-element_size)-bit field at `idx` in place.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: value)
 		return 0
 	end 'packed'
+
 	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
 	return 0
 end '__managed_mem_set'
@@ -3556,27 +3875,36 @@ end '__managed_mem_set'
 // Throws indexOutOfBounds (wire 1) on OOB.
 function __managed_mem_swap(self MachineWord, i BufferCoordinate, j BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if i < 0 'iLo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'iLo'
+
 	if i >= length 'iHi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'iHi'
+
 	if j < 0 'jLo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'jLo'
+
 	if j >= length 'jHi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'jHi'
+
 	if i == j 'noOp'
 		return 0
 	end 'noOp'
+
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
 	end 'cow'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: read both packed fields, then
 	// write each into the other's slot. Both reads happen before either write, and
 	// `write_packed` re-loads its byte each call, so this stays correct even when i
@@ -3588,11 +3916,14 @@ function __managed_mem_swap(self MachineWord, i BufferCoordinate, j BufferCoordi
 		__managed_mem_write_packed(buffer, idx: j, elemSize: elemSize, value: iVal)
 		return 0
 	end 'packed'
+
 	let iAddr = buffer + i * elemSize
 	let jAddr = buffer + j * elemSize
+
 	// Byte-wise exchange of the two element_size-byte slots. The slots are
 	// distinct (i != j), so no overlap — a forward byte loop is safe.
 	var b = 0
+
 	while b < elemSize 'swapBytes'
 		let ib = __Internals.loadByte(iAddr, offset: b)
 		let jb = __Internals.loadByte(jAddr, offset: b)
@@ -3600,6 +3931,7 @@ function __managed_mem_swap(self MachineWord, i BufferCoordinate, j BufferCoordi
 		__Internals.storeByte(jAddr, offset: b, value: ib)
 		b = b + 1
 	end 'swapBytes'
+
 	return 0
 end '__managed_mem_swap'
 
@@ -3617,21 +3949,27 @@ function __managed_mem_raw_set(self MachineWord, idx BufferCoordinate, value Mac
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
+
 	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
 		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	end 'cow'
+
 	if idx >= capacity 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: read-modify-write the field.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: value)
 		return 0
 	end 'packed'
+
 	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
 	return 0
 end '__managed_mem_raw_set'
@@ -3649,6 +3987,7 @@ end '__managed_mem_raw_set'
 function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	let parent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+
 	// INLINE records have capacity >= 0 (real spare-slot count) but must still
 	// detach here: their buffer points into the record's own allocation, so
 	// `mmRealloc` (which grow calls right after cow_check) would be reallocating a
@@ -3657,17 +3996,21 @@ function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	if capacity >= 0 and parent != MM_PARENT_INLINE 'noCopy'
 		return 0
 	end 'noCopy'
+
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let byteLen = __managed_mem_buffer_byte_len(length, elemSize: elemSize)
+
 	// Owned (rc=1) raw byte buffer — see __managed_mem_alloc_buffer. mm_alloc
 	// clamps zero-sized requests to 1.
 	let newBuf = __managed_mem_alloc_buffer(byteLen)
 	let oldBuf = __Internals.loadIndirect(self)
+
 	// memcpy handles byteLen == 0 as a no-op per ABI.
 	__Internals.memcpy(newBuf, src: oldBuf, size: byteLen)
 	__Internals.storeIndirect(self, value: newBuf)
 	__Internals.storeIndirect(self + MM_OFFSET_CAPACITY, value: length)
+
 	// Promote the record to ROOT now that it owns a private heap buffer.
 	// `__destruct___ManagedMemory` keys teardown on parent_ptr (NOT capacity), so
 	// without this the record kept its pre-COW parent — RDATA (-2: "nothing to
@@ -3677,9 +4020,11 @@ function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	// ROOT, then release ONLY a real slice parent (a heap pointer, i.e. not one of
 	// the ROOT/INLINE/RDATA/UNINIT sentinels). `parent` was read at entry.
 	__Internals.storeIndirect(self + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
+
 	if parent != MM_PARENT_ROOT and parent != MM_PARENT_INLINE and parent != MM_PARENT_RDATA and parent != MM_PARENT_UNINIT 'wasSlice'
 		__mm_decref(parent)
 	end 'wasSlice'
+
 	return 0
 end '__managed_mem_cow_check'
 
@@ -3690,10 +4035,13 @@ end '__managed_mem_cow_check'
 function __managed_mem_grow(self MachineWord, newCap BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	_ = __managed_mem_cow_check(self)
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if newCap < capacity 'tooSmall'
 		throw __ManagedMemoryError.invalidCapacity
 	end 'tooSmall'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+
 	// Buffer bytes for the new capacity — packed-aware via the shared helper. A
 	// sub-byte-packed element_size (< 0) would otherwise size `newCap * (negative)`
 	// wrong and every later packed write past byte 0 would corrupt the heap; this
@@ -3713,12 +4061,15 @@ function __managed_mem_byte_at(self MachineWord, i BufferCoordinate) returns Mac
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
+
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let limit = length * elemSize
+
 	if i >= limit 'hi'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'hi'
+
 	let buffer = __Internals.loadIndirect(self)
 	return __Internals.loadByte(buffer, offset: i)
 end '__managed_mem_byte_at'
@@ -3730,6 +4081,7 @@ function __managed_mem_set_byte(self MachineWord, i BufferCoordinate, value Mach
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
+
 	// Byte writes are bounded by CAPACITY (the allocated region), NOT length —
 	// mirroring `__managed_mem_set` (the element setter, which gates on capacity).
 	// `create` leaves the record at length 0 / capacity = count, and the
@@ -3740,15 +4092,19 @@ function __managed_mem_set_byte(self MachineWord, i BufferCoordinate, value Mach
 	// too. A capacity < 0 buffer (rdata/slice) is detached to a
 	// writable ROOT copy first, exactly as `__managed_mem_set` does.
 	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
 		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	end 'cow'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let limit = capacity * elemSize
+
 	if i >= limit 'hi'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'hi'
+
 	let buffer = __Internals.loadIndirect(self)
 	__Internals.storeByte(buffer, offset: i, value: value)
 	return 0
@@ -3772,10 +4128,13 @@ function __managed_mem_remove(self MachineWord, idx BufferCoordinate) returns Ma
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
+
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if idx >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+
 	// A constant array LITERAL is rdata-backed (capacity -2, read-only) and a
 	// zero-copy view is a slice (capacity -1, shared with its parent): the in-place
 	// tail-shift below would fault on rdata or corrupt the parent on a slice.
@@ -3783,11 +4142,14 @@ function __managed_mem_remove(self MachineWord, idx BufferCoordinate) returns Ma
 	// (same `capacity < 0` gate). An owned ROOT/INLINE buffer
 	// (capacity >= 0) is already writable, so cow_check is skipped.
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < 0 'cow'
 		_ = __managed_mem_cow_check(self)
 	end 'cow'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: the byte-scaled tail-shift
 	// below does not apply (its `* elemSize` would go negative). Read the removed
 	// field, then slide fields (idx+1 .. length-1) DOWN one position with the shared
@@ -3796,20 +4158,24 @@ function __managed_mem_remove(self MachineWord, idx BufferCoordinate) returns Ma
 	if __managed_mem_is_packed(elemSize) 'packed'
 		let removed = __managed_mem_read_packed(buffer, idx: idx, elemSize: elemSize)
 		var j = idx + 1
+
 		while j < length 'shiftBits'
 			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
 			__managed_mem_write_packed(buffer, idx: j - 1, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'shiftBits'
+
 		__managed_mem_zero_elements_range(self, start: length - 1, end: length)
 		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 		return removed
 	end 'packed'
 
 	let elemAddr = buffer + idx * elemSize
+
 	// Element-width dispatch mirrors __managed_mem_get. After the load we
 	// shift the tail via the byte-loop below regardless of element width.
 	var result = 0
+
 	if elemSize == 1 'b'
 		result = __Internals.loadByte(elemAddr, offset: 0)
 	end 'b' else 'notByte'
@@ -3823,15 +4189,18 @@ function __managed_mem_remove(self MachineWord, idx BufferCoordinate) returns Ma
 			end 'qword'
 		end 'notHalf'
 	end 'notByte'
+
 	// Byte-loop shift: src byte = (idx + 1) * elemSize; dst = src - elemSize.
 	let srcStart = (idx + 1) * elemSize
 	let endByte = length * elemSize
 	var i = srcStart
+
 	while i < endByte 'shiftLoop'
 		let byte = __Internals.loadByte(buffer, offset: i)
 		__Internals.storeByte(buffer, offset: i - elemSize, value: byte)
 		i = i + 1
 	end 'shiftLoop'
+
 	__managed_mem_zero_elements_range(self, start: length - 1, end: length)
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 	return result
@@ -3845,15 +4214,20 @@ function __managed_mem_shift_right(self MachineWord, idx BufferCoordinate, count
 	if idx < 0 'idxNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxNeg'
+
 	if count < 0 'countNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'countNeg'
+
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if idx + count > capacity 'oob'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'oob'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: shift the `count` fields at
 	// [idx, idx+count) UP one position with a DESCENDING loop (read_packed(j) ->
 	// write_packed(j+1)) so overlapping copies never clobber, then clear the vacated
@@ -3861,11 +4235,13 @@ function __managed_mem_shift_right(self MachineWord, idx BufferCoordinate, count
 	// the caller's following set(idx, value) overwrites the cleared field.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		var j = idx + count - 1
+
 		while j >= idx 'shiftBits'
 			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
 			__managed_mem_write_packed(buffer, idx: j + 1, elemSize: elemSize, value: bit)
 			j = j - 1
 		end 'shiftBits'
+
 		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: 0)
 		return 0
 	end 'packed'
@@ -3874,21 +4250,25 @@ function __managed_mem_shift_right(self MachineWord, idx BufferCoordinate, count
 	// startByte = idx * elemSize.
 	let startByte = idx * elemSize
 	var i = (idx + count) * elemSize - 1
+
 	while i >= startByte 'loop'
 		let byte = __Internals.loadByte(buffer, offset: i)
 		__Internals.storeByte(buffer, offset: i + elemSize, value: byte)
 		i = i - 1
 	end 'loop'
+
 	// Zero the vacated source slot at buffer[idx] so the caller's following
 	// `set(idx, value)` does not decref the STALE DUPLICATE pointer the shift left
 	// there (the original occupant was copied to buffer[idx+1]). Without this, the
 	// `set` decref-old frees the element we just relocated → dangling slot at idx+1.
 	var z = startByte
 	let holeEnd = startByte + elemSize
+
 	while z < holeEnd 'clearHole'
 		__Internals.storeByte(buffer, offset: z, value: 0)
 		z = z + 1
 	end 'clearHole'
+
 	return 0
 end '__managed_mem_shift_right'
 
@@ -3900,36 +4280,45 @@ function __managed_mem_shift_left(self MachineWord, idx BufferCoordinate, count 
 	if idx < 1 'idxLow'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxLow'
+
 	if count < 0 'countNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'countNeg'
+
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if idx + count > capacity 'oob'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'oob'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+
 	// element_size < 0 is the sub-byte-packed sentinel: shift the `count` fields at
 	// [idx, idx+count) DOWN one position with an ASCENDING loop (read_packed(j) ->
 	// write_packed(j-1)) — overlap-safe because each destination field was already read.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		let endBit = idx + count
 		var j = idx
+
 		while j < endBit 'shiftBits'
 			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
 			__managed_mem_write_packed(buffer, idx: j - 1, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'shiftBits'
+
 		return 0
 	end 'packed'
 
 	let endByte = (idx + count) * elemSize
 	var i = idx * elemSize
+
 	while i < endByte 'loop'
 		let byte = __Internals.loadByte(buffer, offset: i)
 		__Internals.storeByte(buffer, offset: i - elemSize, value: byte)
 		i = i + 1
 	end 'loop'
+
 	return 0
 end '__managed_mem_shift_left'
 
@@ -3943,6 +4332,7 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 	let otherLen = __Internals.loadIndirect(other + MM_OFFSET_LENGTH)
 	let newLength = selfLen + otherLen
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < newLength 'doGrow'
 		// Geometric growth: request max(newLength, capacity*2) so a series
 		// of `append` calls runs in amortized O(1) per element. Without
@@ -3952,20 +4342,25 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 		// few-element accumulation doesn't bounce-grow.
 		var requested = newLength
 		let doubled = capacity * 2
+
 		if doubled > requested 'preferDoubled'
 			requested = doubled
 		end 'preferDoubled'
+
 		if requested < 8 'atLeast8'
 			requested = 8
 		end 'atLeast8'
+
 		// grow throws invalidCapacity, but requested > capacity here so the
 		// throw path is unreachable. We discard the tuple result; the error
 		// wire is also discarded because no try/otherwise surrounds the call.
 		_ = try __managed_mem_grow(self, newCap: requested) otherwise 0
 	end 'doGrow'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let selfBuf = __Internals.loadIndirect(self)
 	let otherBuf = __Internals.loadIndirect(other)
+
 	// element_size < 0 is the sub-byte-packed sentinel: the byte-scaled memcpy below
 	// does not apply, so copy `other`'s otherLen fields onto self's end one field at a
 	// time (self field selfLen+j <- other field j). The grow above (packed-aware)
@@ -3974,11 +4369,13 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 	// does not apply.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		var j = 0
+
 		while j < otherLen 'copyBits'
 			let bit = __managed_mem_read_packed(otherBuf, idx: j, elemSize: elemSize)
 			__managed_mem_write_packed(selfBuf, idx: selfLen + j, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'copyBits'
+
 		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
 		return 0
 	end 'packed'
@@ -3997,10 +4394,12 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 	let selfDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	let otherDestroy = __Internals.loadIndirect(other + MM_OFFSET_ELEMENT_DESTROY)
 	var elementDestroy = selfDestroy
+
 	if elementDestroy == 0 'inheritStamp'
 		elementDestroy = otherDestroy
 		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
 	end 'inheritStamp'
+
 	if elementDestroy != 0 'managedElems'
 		__managed_mem_retain_range(dst, count: otherLen, elemSize: elemSize)
 	end 'managedElems'
@@ -4018,20 +4417,26 @@ function __managed_mem_slice(self MachineWord, start BufferCoordinate, endIdx Bu
 	if start < 0 'startNeg'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'startNeg'
+
 	if endIdx < start 'endLow'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'endLow'
+
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if endIdx > length 'endHi'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'endHi'
+
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let sliceLen = endIdx - start
+
 	// Buffer bytes for the slice — packed-aware via the shared helper (bit-measured
 	// when element_size < 0, else sliceLen * element_size).
 	let byteLen = __managed_mem_buffer_byte_len(sliceLen, elemSize: elemSize)
 	let destructor = __Internals.destructManagedMemoryAddr()
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
+
 	// alloc-at-0 → restore the rc=1 contract callers assume. `Array.slice` binds this
 	// record into a NEW Array via `Self{managed: newManaged}`; that owning field holds
 	// the lone reference, dropped exactly once by the Array's destructor. The call
@@ -4039,6 +4444,7 @@ function __managed_mem_slice(self MachineWord, start BufferCoordinate, endIdx Bu
 	// record stays rc=0 and the owner's single decref goes 0->-1 and never frees → the
 	// sliced record + its copied buffer leak.
 	__mm_incref(newStruct)
+
 	// Managed-element slices SHARE their elements with the source: the memcpy
 	// below copies raw slot POINTERS, so the new record must take its own +1 on
 	// each live slot and inherit the source's element_destroy stamp — its
@@ -4048,15 +4454,18 @@ function __managed_mem_slice(self MachineWord, start BufferCoordinate, endIdx Bu
 	// data via slab-slot reuse) and the slice's own copies leaked.
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	var newBuf = 0
+
 	if sliceLen != 0 'hasContent'
 		newBuf = __managed_mem_alloc_buffer(byteLen)
 		let srcBuf = __Internals.loadIndirect(self)
+
 		// element_size < 0 (sub-byte-packed): source field `start` is not generally
 		// byte-aligned, so a raw memcpy would misalign every field. Copy field-by-field
 		// into the fresh (zero-filled) buffer starting at index 0; unwritten trailing
 		// bits stay false. Sub-byte-packed elements are primitives, so no managed retain.
 		if __managed_mem_is_packed(elemSize) 'packed'
 			var j = 0
+
 			while j < sliceLen 'copyBits'
 				let bit = __managed_mem_read_packed(srcBuf, idx: start + j, elemSize: elemSize)
 				__managed_mem_write_packed(newBuf, idx: j, elemSize: elemSize, value: bit)
@@ -4065,11 +4474,13 @@ function __managed_mem_slice(self MachineWord, start BufferCoordinate, endIdx Bu
 		end 'packed' else 'byteWise'
 			let srcAddr = srcBuf + start * elemSize
 			__Internals.memcpy(newBuf, src: srcAddr, size: byteLen)
+
 			if elementDestroy != 0 'managedElems'
 				__managed_mem_retain_range(newBuf, count: sliceLen, elemSize: elemSize)
 			end 'managedElems'
 		end 'byteWise'
 	end 'hasContent'
+
 	__Internals.storeIndirect(newStruct, value: newBuf)
 	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: sliceLen)
 	__Internals.storeIndirect(newStruct + MM_OFFSET_CAPACITY, value: sliceLen)
@@ -4088,11 +4499,14 @@ end '__managed_mem_slice'
 // never walked (increfing a raw int would fault).
 function __managed_mem_retain_range(buffer MachineWord, count BufferCoordinate, elemSize ElementStride)
 	var i = 0
+
 	while i < count 'eachElem'
 		let slot = __Internals.loadIndirect(buffer + i * elemSize)
+
 		if slot != 0 'live'
 			__mm_incref(slot)
 		end 'live'
+
 		i = i + 1
 	end 'eachElem'
 end '__managed_mem_retain_range'
@@ -4128,15 +4542,18 @@ function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementSt
 	// element_size == 0 (unset / singleton element-layout) is never inlined.
 	if elemSize != 0 and count > 0 and __managed_mem_buffer_byte_len(count, elemSize: elemSize) <= MM_INLINE_CAP_BYTES 'inline'
 		let wantBytes = MANAGED_MEM_RECORD_SIZE + __managed_mem_buffer_byte_len(count, elemSize: elemSize)
+
 		// Bytes __mm_alloc(wantBytes) actually hands back after slab class rounding
 		// (it calls __slab_alloc(wantBytes + MM_ALLOC_HEADER_SIZE) internally).
 		let slotUser = __slab_rounded_size(wantBytes + MM_ALLOC_HEADER_SIZE) - MM_ALLOC_HEADER_SIZE
 		let inlineBytes = slotUser - MANAGED_MEM_RECORD_SIZE
 		let cap = __managed_mem_capacity_for_bytes(inlineBytes, elemSize: elemSize)
 		let rec = __mm_alloc(MANAGED_MEM_RECORD_SIZE + inlineBytes, destructor: destructor)
+
 		// alloc-at-0 → restore the rc=1 contract (identical to the external path below).
 		__mm_incref(rec)
 		let inlineBuf = rec + MANAGED_MEM_RECORD_SIZE
+
 		// The inline element region lives INSIDE this record's own slab slot, which
 		// `__mm_alloc` already handed back zeroed — so there is no zero loop here any
 		// more (there used to be, byte-at-a-time, on every small array).
@@ -4156,6 +4573,7 @@ function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementSt
 	end 'inline'
 
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
+
 	// alloc-at-0 → restore the rc=1 contract callers assume. The new record is bound
 	// into an OWNING container (an array literal's `Array.init(record)` transparent
 	// wrap, a String, `mrt_read_stdin_managed`, …) whose field holds the lone reference
@@ -4166,6 +4584,7 @@ function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementSt
 	// lowering's `synthesizeManagedFieldInits` (both rc=1).
 	__mm_incref(newStruct)
 	var newBuf = 0
+
 	if count > 0 'hasContent'
 		// Bit-packed records (element_size < 0, e.g. bool = -1) measure capacity in
 		// BITS; the general helper handles that and every byte-strided element size.
@@ -4174,6 +4593,7 @@ function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementSt
 		let size = __managed_mem_buffer_byte_len(count, elemSize: elemSize)
 		newBuf = __managed_mem_alloc_buffer(size)
 	end 'hasContent'
+
 	__Internals.storeIndirect(newStruct, value: newBuf)
 	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: 0)
 	__Internals.storeIndirect(newStruct + MM_OFFSET_CAPACITY, value: count)
@@ -4201,10 +4621,13 @@ function __managed_mem_set_element_destroy_from_layout(self MachineWord, layoutD
 	if layoutDesc == 0 'noDesc'
 		return 0
 	end 'noDesc'
+
 	let flags = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_FLAGS)
+
 	if (flags and LAYOUT_FLAG_HAS_HEAP_REFS) != 0 'managed'
 		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
 	end 'managed'
+
 	return 0
 end '__managed_mem_set_element_destroy_from_layout'
 
@@ -4230,30 +4653,37 @@ function __managed_mem_set_element_size_from_layout(self MachineWord, layoutDesc
 	if layoutDesc == 0 'noDesc'
 		return 0
 	end 'noDesc'
+
 	// Preserve a deliberately sub-byte-packed record: `element_size < 0` is the
 	// negative-bit-width sentinel (bool = -1) the packed path sets so `grow`
 	// measures the buffer in BITS and the accessors bit-address it. Re-stamping is at
 	// best a no-op (the layout re-derives the same width) and must never clobber it
 	// back to a positive byte stride.
 	let current = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+
 	if __managed_mem_is_packed(current) 'alreadyPacked'
 		return 0
 	end 'alreadyPacked'
+
 	// `elementSize@16` is the element's byte stride (1 Byte, 8 pointer/managed), or —
 	// when the layout's BIT_PACKED flag is set — its BIT width (1 for bool). `0` marks
 	// a forwarded singleton element-layout (a Map's keys/values field-array); leave the
 	// provisional pointer-width default there.
 	let elemSize = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_ELEMENT_SIZE)
+
 	if elemSize == 0 'singletonSkip'
 		return 0
 	end 'singletonSkip'
+
 	let flags = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_FLAGS)
+
 	if (flags and LAYOUT_FLAG_BIT_PACKED) != 0 'packed'
 		// Sub-byte-packed: `elementSize@16` is the bit width; store its negation so the
 		// record carries the negative-bit-width encoding the accessors dispatch on.
 		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: -elemSize)
 		return 0
 	end 'packed'
+
 	__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
 	return 0
 end '__managed_mem_set_element_size_from_layout'
@@ -4288,17 +4718,21 @@ end '__managed_mem_set_element_size_from_layout'
 function __managed_mem_to_cstring(self MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(self)
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+
 	if __Internals.loadByte(buffer, offset: length) == 0 'alreadyTerminated'
 		return buffer
 	end 'alreadyTerminated'
+
 	// A capacity that already fits `length + 1` is always a positive (owned)
 	// value — the rdata/shared sentinels are negative and so are < length + 1,
 	// routing through `grow`, which COWs then reallocs. So reaching the
 	// terminator write below always means we own the buffer.
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+
 	if capacity < length + 1 'needRoom'
 		_ = try __managed_mem_grow(self, newCap: length + 1) otherwise panic("__managed_mem_to_cstring: grow to length+1 cannot shrink")
 	end 'needRoom'
+
 	let ownedBuf = __Internals.loadIndirect(self)
 	__Internals.storeByte(ownedBuf, offset: length, value: 0)
 	return ownedBuf
@@ -4313,9 +4747,11 @@ end '__managed_mem_to_cstring'
 // capacity=len+1, element_size=1, parent_ptr=-1 (root). Non-throwing.
 function __managed_mem_from_cstring(cstr MachineWord) returns MachineWord
 	var len = 0
+
 	while __Internals.loadByte(cstr, offset: len) != 0 'scan'
 		len = len + 1
 	end 'scan'
+
 	let bufSize = len + 1
 	let destructor = __Internals.destructManagedMemoryAddr()
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)

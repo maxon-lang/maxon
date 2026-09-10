@@ -193,6 +193,7 @@ function assertGtFrameConsistent(target Target)
 	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
 
 	let declared = gtInitialFrameBytes(target) as StackSize
+
 	if framedBytes != declared 'drift'
 		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but `gtInitialFrameBytes` (the frame __gt_spawn lays for this target) is {declared} — a mismatch is a wild ret on the first switch-in")
 	end 'drift'
@@ -224,6 +225,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// One slot per callee-saved XMM — bounded by that list, two orders of magnitude below the guard
 	// page, so this reservation never walks and needs no scratch (see `encodePrologue`).
 	encodePrologue(code, stackSize: gtXmmSaveAreaBytes(), probeScratchIsFree: false)
+
 	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
 		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32, srcReg: reg)
@@ -232,6 +234,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// from->sp = rsp ; from->fp = rbp.
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp)
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp)
+
 	// ⭐ SAVE the CURRENT NT_TIB stack bounds into `from`, so the TIB always describes the stack that is actually
 	// executing. Without this, the syscall shim's after-call restore (which sets the TIB to `currentGt`'s bounds)
 	// would leave the TIB describing the OUTGOING GT's stack after a switch, and the RESUMED GT's next kernel call
@@ -245,6 +248,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// rsp = to->sp ; rbp = to->fp — now on the destination stack.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: GtSwitchToReg, disp: GtOffSp as Imm32, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rbp, base: GtSwitchToReg, disp: GtOffFp as Imm32, wide: true)
+
 	// LOAD the resumed GT's saved TIB bounds into the NT_TIB, matching the stack we just switched to (`__gt_spawn`
 	// seeds a fresh GT's bounds; the save above keeps every GT's fresh). The pair keeps `gs:[0x08]`/`gs:[0x10]`
 	// consistent with RSP across every switch.
@@ -259,6 +263,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: restore index derived from count is in range")
 		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32)
 	end 'restoreXmm'
+
 	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
 
 	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
@@ -266,6 +271,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 		let reg = try calleeSavedOrder.get(calleeSavedOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
 		encodePopReg(code, reg: reg)
 	end 'pop'
+
 	code.push(OpcodeRet)
 
 	return FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
@@ -312,6 +318,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8)
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
+
 	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE (G3).** An awaiting
 	// driver on another M spins on `gt.status == completed` and then reads the two words stored just above,
 	// so the flag must not become visible before them. x86-64 is TOTAL STORE ORDER — stores are never
@@ -540,11 +547,13 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		WriteFile gives WriteFileStackArgWords
 		CreateNamedPipeW gives CreateNamedPipeStackArgWords
 		CreateFileW gives CreateFileStackArgWords
+
 		// The `A` variant takes the SAME seven arguments as its `W` sibling, so it derives from the same
 		// constant. This is the entry R4.1 omitted and R4.2 restored — the defect this rung makes unrepeatable.
 		CreateFileA gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
+
 		// O3. FIVE arguments, so one word on the stack — derived from the same constant
 		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
 		MapViewOfFile gives MapViewOfFileStackArgWords
@@ -593,14 +602,17 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		GetCommandLineA gives 0  // 0
 		GetModuleFileNameA gives 0  // 3: hModule, lpFilename, nSize
 		SetConsoleOutputCP gives 0  // 1: wCodePageID
+
 		// O3. Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
 		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
 		OpenFileMappingA gives 0  // 3: dwDesiredAccess, bInheritHandle, lpName
 		GetTickCount64 gives 0  // 0
+
 		// The two attached-subprocess imports. `PeekNamedPipe` takes SIX arguments — four in registers and
 		// two on the stack — so it is the only one of this pair with a non-zero count.
 		PeekNamedPipe gives PeekPipeStackArgWords  // 6: hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage
 		TerminateProcess gives 0  // 2: hProcess, uExitCode
+
 		// ⭐ **THE EIGHT `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
 		// passes entirely in registers and needs no stack words. That is not a coincidence worth relying on
 		// silently: `getaddrinfo`, `send` and `recv` sit exactly AT the four-register limit, so a future
@@ -615,11 +627,13 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		recv gives 0  // 4: s, buf, len, flags
 		closesocket gives 0  // 1: s
 		GetActiveProcessorCount gives 0  // 1: GroupNumber
+
 		// ⚠ **THE SHIM SWITCHES STACKS, NOT THREADS**, which is the one thing that could have made this
 		// import wrong here: `QueryThreadCycleTime` reports the CALLING THREAD's CPU time, and a green thread
 		// runs on the same M whichever stack its frame sits on. Its out-param is a `.data` word rather than a
 		// stack slot besides, so the switch cannot move the buffer under it either.
 		QueryThreadCycleTime gives 0  // 2: ThreadHandle, CycleTime
+
 		// G1: both TLS imports are register-only. ⚠ **NEITHER IS EVER SHIMMED IN PRACTICE** — `TlsAlloc` runs
 		// once in `__gt_init` and `TlsSetValue` at each M's adoption, and every one of those sites executes on
 		// an OS thread whose current GT has `stackBase == 0`, which is exactly the shim's direct-call guard. The
@@ -627,23 +641,28 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// what keeps a later >4-argument import from being handed a frame too small.
 		TlsAlloc gives 0  // 0
 		TlsSetValue gives 0  // 2: dwTlsIndex, lpTlsValue
+
 		// The priority pair. Both are register-only, and unlike the TLS pair these CAN be shimmed in practice:
 		// a harness may ask to be de-prioritised from inside a green thread, whose stack is the small one.
 		SetPriorityClass gives 0  // 2: hProcess, dwPriorityClass
 		GetPriorityClass gives 0  // 1: hProcess
+
 		// The whole-environment pair, both register-only. A spawn that names an override reaches them from
 		// inside a green thread — the harness's own run step is one — so, like the priority pair, they really
 		// are shimmed onto the system stack in practice.
 		GetEnvironmentStringsA gives 0  // 0
 		FreeEnvironmentStringsA gives 0  // 1: lpszEnvironmentBlock
+
 		// The terminal question, register-only. A harness asks it from its own main green thread before it
 		// prints anything, so it really is shimmed onto the system stack in practice.
 		GetFileType gives 0  // 1: hFile
+
 		// The named-section pair. `CreateFileMappingA` takes SIX arguments — four in registers and two on the
 		// stack — so it is the only one of this pair with a non-zero count, derived from the same constant
 		// `stdOpOutgoingArgBytes` reserves the frame with.
 		CreateFileMappingA gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
 		UnmapViewOfFile gives 0  // 1: lpBaseAddress
+
 		// The process-sampling band. THREE of the thirteen overflow the four argument registers: the two
 		// six-argument services answer the same constant `stdOpOutgoingArgBytes` reserves the frame with —
 		// `osHostSample` is ONE op whose reservation must hold its WIDEST member — and the five-argument one
@@ -708,11 +727,13 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// and not with the bounded family because a write to a pipe whose reader has stopped reading blocks
 		// exactly as long as the reader takes, which is a property of the far end and not of this process.
 		WriteFile gives SyscallClass.blocking
+
 		// ⭐⭐ **`ReadFile` IS THIS RUNG'S SUBJECT.** `__con_read_stdin` is a plain synchronous read of standard
 		// input with no overlapped IO and no park (`ConsoleRuntime`), so a green thread inside it holds its OS
 		// thread in the kernel until the user presses return — which is what
 		// `specs/sched-syscall-handoff.md`'s ordering case measures.
 		ReadFile gives SyscallClass.blocking
+
 		// The file-system family. Every one of them can reach a cold disk, a network share or a stalled device.
 		CreateFileA gives SyscallClass.blocking
 		CreateFileW gives SyscallClass.blocking
@@ -725,12 +746,15 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		CreateDirectoryA gives SyscallClass.blocking
 		GetCurrentDirectoryA gives SyscallClass.blocking
 		GetFileAttributesA gives SyscallClass.blocking
+
 		// The file-MAPPING pair, which fault pages in from the same devices.
 		OpenFileMappingA gives SyscallClass.blocking
 		MapViewOfFile gives SyscallClass.blocking
+
 		// Spawning a child image and peeking a child's pipe both wait on another process.
 		CreateProcessA gives SyscallClass.blocking
 		PeekNamedPipe gives SyscallClass.blocking
+
 		// The socket family. `getaddrinfo` waits on DNS, `connect`/`send`/`recv` on a peer, `closesocket` on
 		// whatever `SO_LINGER` was set to, and `WSAStartup` loads and initialises the provider stack.
 		WSAStartup gives SyscallClass.blocking
@@ -747,6 +771,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		EnterCriticalSection gives SyscallClass.schedulerBound
 		LeaveCriticalSection gives SyscallClass.schedulerBound
 		InitializeCriticalSection gives SyscallClass.schedulerBound
+
 		// ⛔⛔ **THE THREE WAITS ARE THE SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
 		// shimmed ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
 		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
@@ -765,15 +790,18 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		WaitForSingleObject gives SyscallClass.schedulerBound
 		WaitForMultipleObjects gives SyscallClass.schedulerBound
 		Sleep gives SyscallClass.schedulerBound
+
 		// ⚠ **THIS ARM IS INERT AND SAYS SO RATHER THAN BEING LEFT TO LOOK LIVE**, exactly as the same slot's
 		// stack-arg arm does one function up: the completion loop is hand-assembled and calls
 		// `GetQueuedCompletionStatus` DIRECTLY (`StdToX64Conversion`), so it never reaches this shim. It is
 		// classified anyway because this `match` is TOTAL — and `schedulerBound` is the right answer if it ever
 		// did, since that loop is the scheduler waiting on its own completions.
 		GetQueuedCompletionStatus gives SyscallClass.schedulerBound
+
 		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
 		ExitProcess gives SyscallClass.schedulerBound
 		GetStdHandle gives SyscallClass.schedulerBound
+
 		// ⚠ A "file" call that is NOT in the blocking family above, and the distinction is the ARGUMENT: the
 		// path-taking `GetFileAttributesA` can reach a cold disk, while this one answers the type of an
 		// ALREADY-OPEN handle out of the file object the kernel is holding — bounded and short, like the
@@ -797,6 +825,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		FindClose gives SyscallClass.schedulerBound
 		CreateEventA gives SyscallClass.schedulerBound
 		SetEvent gives SyscallClass.schedulerBound
+
 		// ⚠ **`CreateThread` IS THE ONE THAT LOOKS LIKE IT BELONGS ABOVE AND DOES NOT.** Its only caller is
 		// `__sched_startm`'s spawn arm, which runs INSIDE `__sched_lock` — so bracketing it would be the
 		// header's five-step deadlock reached by a second road. It is bounded in any case: creating a thread
@@ -806,6 +835,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		GetCurrentProcessId gives SyscallClass.schedulerBound
 		GetCommandLineA gives SyscallClass.schedulerBound
 		GetModuleFileNameA gives SyscallClass.schedulerBound
+
 		// ⚠ Reached ONCE, from the entry stub, before any green thread exists — so its class is a formality
 		// rather than a reading. Bounded in any case: it sets a word on the console object and returns.
 		SetConsoleOutputCP gives SyscallClass.schedulerBound
@@ -818,10 +848,12 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		TlsAlloc gives SyscallClass.schedulerBound
 		TlsSetValue gives SyscallClass.schedulerBound
 		freeaddrinfo gives SyscallClass.schedulerBound
+
 		// The named-section pair. Creating a section reaches the memory manager and can touch the page file,
 		// exactly as `OpenFileMappingA`/`MapViewOfFile` above; tearing a view down waits on nothing.
 		CreateFileMappingA gives SyscallClass.blocking
 		UnmapViewOfFile gives SyscallClass.schedulerBound
+
 		// The process-sampling band splits on ONE question: does the call reach memory the kernel may have
 		// to fault in, or another process's loader data? A stack window copied out of a suspended thread can
 		// touch a paged-out page, and a module walk reads the target's loader list under its own lock — both
@@ -830,6 +862,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		CreateToolhelp32Snapshot gives SyscallClass.blocking
 		Module32FirstW gives SyscallClass.blocking
 		Module32NextW gives SyscallClass.blocking
+
 		// The remainder is bounded kernel bookkeeping over handles this process already holds: a handle
 		// open, the suspend/resume pair and the context read, the thread walk, the VAD query and the timer
 		// pair. None of them waits on another party — the sampler's WAIT is `osWaitHandle`'s
@@ -906,10 +939,12 @@ end 'emitGtEnterSyscall'
 // the `sub` here must not break.
 function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, fixups ChunkRel32FixupArray)
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, os: Os.windows)
+
 	// `mov reg, imm64` and not the 32-bit form: `-MSyscallInCall` is NEGATIVE, and `mov ecx, imm32`
 	// ZERO-extends — it would add 0x00000000FFFFFFFF to the word rather than subtracting one from it.
 	encodeMovRegImm64(code, dest: ShimTibScratchReg, value: (0 - MSyscallInCall) as MachineWord)
 	encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: ShimGtReg, disp: MOffSyscallState as Imm32, reg: ShimTibScratchReg)
+
 	// rcx now holds the PRIOR word. Its stolen bit is the verdict; everything above it is the generation and
 	// is none of this side's business, which is what the mask is for.
 	encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: ShimTibScratchReg, imm: MSyscallStolen as Imm32)
@@ -967,6 +1002,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	let slot = iatSlotOfIndex(slotIndex)
 	let stackArgWords = gtShimStackArgWordsOf(slot)
 	let bracketed = gtShimSyscallClassOf(slot) == SyscallClass.blocking
+
 	// reserve = (16-aligned shadow + stack args) + one pushed word — lands RSP 16-aligned at the `call` after
 	// the two pushes.
 	// ⚠ THE STRIDE IS `SpillSlotBytes` — the SAME constant `win64OutgoingArgDisp` places the ISEL's arg stores
@@ -1009,6 +1045,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: MOffSystemStackSP as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
 	encodePushReg(code, reg: ShimGtRspReg)
+
 	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
 	// stack-argument words (`gtShimStackArgWordsOf`, SIX at the widest — `CreateProcessStackArgWords`;
 	// the "seven" this line used to say is `CreateFileA`/`W`'s ARGUMENT count, of which three land on
@@ -1216,6 +1253,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// residue — so a check over the half that did not change would have read as protection while covering
 	// nothing (the lesson `assertGtFrameConsistent` above records).
 	let stackedWordBytes = (1 + savedGprCount) * StackWordBytes
+
 	if (stackedWordBytes + frameBytes) mod StackFrameAlignment != 0 'alignment'
 		panic("__gt_morestack misaligned: 1 ferried word + {savedGprCount} saved GPRs = {stackedWordBytes} bytes, plus a {frameBytes}-byte frame ({ShadowSpaceBytes} shadow + {argFpRegisters.count()} FP argument slots) = {stackedWordBytes + frameBytes}, which is not a multiple of {StackFrameAlignment} — rsp must be 16-aligned at the VirtualAlloc/VirtualFree calls. Restore the parity when changing morestackSavedGprOrder or the FP save area.")
 	end 'alignment'
@@ -1237,9 +1275,11 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	for reg in morestackSavedGprOrder 'push'
 		encodePushReg(code, reg: reg)
 	end 'push'
+
 	// Shadow space + one slot per FP argument register — asserted 16-aligned above and far inside a
 	// page. r11 still carries `gt` here (moved to rbx on the next line), so no certificate.
 	encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
+
 	for k in 0 upto argFpRegisters.count() 'saveXmm'
 		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: save index derived from count is in range")
 		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: gtMorestackXmmSlotDisp(k as RegCount), srcReg: reg)
@@ -1316,6 +1356,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: gtStackGuardMargin(target) as Imm32)  // rcx = new_base + margin
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackGuard as Imm32, srcReg: X64Register.rcx)
+
 	if x64OsProbesStackBounds(target.os) 'republishTheBounds'
 		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
 		encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreNewSizeReg, wide: true)  // rcx = new_top
@@ -1345,13 +1386,16 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: restore index derived from count is in range")
 		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: gtMorestackXmmSlotDisp(k as RegCount))
 	end 'restoreXmm'
+
 	encodeEpilogue(code, stackSize: frameBytes)  // add rsp, shadow + FP save area
 	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: X64Register.rsp, disp: entryRspDisp, wide: true)  // r10 = entryRsp
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: ShimGtRspReg, src: GtMoreOffsetReg, wide: true)  // r10 += offset
+
 	for i in 0 upto morestackSavedGprOrder.count() 'pop'
 		let reg = try morestackSavedGprOrder.get(morestackSavedGprOrder.count() - 1 - i) otherwise panic("buildGtMorestackChunk: pop index derived from count is in range")
 		encodePopReg(code, reg: reg)
 	end 'pop'
+
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: MorestackFerrySkipBytes)  // add rsp, 8 (skip ferried slot)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)  // rsp = relocated GT rsp
 	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
@@ -1519,17 +1563,20 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// loop_top:
 	loopLabels.place(IoLoopTopLabel, value: code.count())
+
 	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64) and the wake-debt
 	// slot (only the publish path below writes it, and the GT0 arm reaches `signal` without going through it).
 	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, srcReg: X64Register.rax)
+
 	// GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped, INFINITE).
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoIocpLabel)
 	encodeLeaRegRegImm32(code, dest: X64Register.rdx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp)
 	encodeLeaRegRegImm32(code, dest: X64Register.r8, base: X64Register.rbp, disp: IoLoopKeyLocalDisp)
 	encodeLeaRegRegImm32(code, dest: X64Register.r9, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: IoLoopInfiniteTimeout)
+
 	// `GetQueuedCompletionStatus`'s 5th argument (dwMilliseconds) goes in outgoing stack SLOT 0 of this loop's
 	// own frame, so the displacement is `win64OutgoingArgDisp(0)` — the SAME rule the ISEL and the GT shim place
 	// their stack arguments by — and not the bare `0x20` it used to be. Asked HERE rather than bound to a global
@@ -1552,11 +1599,13 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.notEqual, targetBlockId: IoLoopDequeuedLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetLastError))
+
 	// Widened through a 32-bit register move because the Win64 ABI leaves RAX's high half undefined for a DWORD
 	// return, and the 64-bit compare below reads the whole register.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: false)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: ErrorBrokenPipe as Imm32)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopCleanEofLabel)
+
 	// `or reg, imm` rather than a `mov`: this immediate is SIGN-EXTENDED from the signed `Imm32` domain the
 	// constant lives in, where `encodeMovRegImm64` takes an unsigned `MachineWord` and could not carry it.
 	encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: X64Register.rax, imm: SubpReadFailedCount as Imm32)
@@ -1571,13 +1620,16 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// dequeued: the bytes slot holds the count, 0 for a clean end of stream, or the failure marker.
 	loopLabels.place(IoLoopDequeuedLabel, value: code.count())
+
 	// overlapped == NULL → shutdown sentinel → exit (defensive; the slice never posts one).
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopExitLabel)
+
 	// gt = overlapped - GtOffOverlapped ; spill to the frame.
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
+
 	// ⭐ LOCK __sched_lock, held across the WHOLE decision below — so the completion thread's abandoned-vs-normal
 	// branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are SERIALIZED, guaranteeing
 	// exactly one side frees the GT and neither dereferences it after free. `bytes` is still in [rbp-bytes]; gt in
@@ -1602,15 +1654,18 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	loopLabels.place(IoLoopSpunLabel, value: code.count())
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
+
 	// NORMAL: gt.io_result = the classified count ; gt.status = ready.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffStatus as Imm32, srcReg: X64Register.rcx)
+
 	// A GT0 self-driver (stackBase == 0) is NOT enqueued — its drive loop notices `status` — but IS signalled.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
+
 	// Publish the re-readied thread on whichever queue its KIND belongs to, under the outer __sched_lock —
 	// which is exactly the lock `__sched_publish_locked` requires of its caller.
 	//
@@ -1642,6 +1697,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
+
 	// ⭐⭐ **PAY THE WAKE DEBT, AFTER THE UNLOCK — AND THAT ORDER IS THE DEKKER ORDERING RATHER THAN LOCK
 	// HYGIENE (SV1).** `LeaveCriticalSection` is a full barrier, so the queue publish above cannot be
 	// reordered past `__sched_wake_or_spawn`'s reads of every P's `idleFlag`; called inside the critical

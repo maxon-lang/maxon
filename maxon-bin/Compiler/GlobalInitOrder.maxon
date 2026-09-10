@@ -139,6 +139,7 @@ end 'anyInitializerCalls'
 // means resolving overloads, which happens after this point in the pipeline.
 function buildEffectiveDeps(globals ManagedGlobalArray, named GlobalInitDependencies, possible GlobalInitDependencies, project Project) returns GlobalInitDependencies throws CompileError
 	var effective = GlobalInitDependencies.create()
+
 	for _ in 0 upto globals.count() 'eachGlobal'
 		effective.push(GlobalInitIndexArray.create())
 	end 'eachGlobal'
@@ -168,6 +169,7 @@ function addDependencyEdge(effective GlobalInitDependencies, from GlobalInitInde
 
 	if reachesBack(effective, from: from, to: to) 'mightCloseACycle'
 		let arc = pathBetween(effective, from: to, to: from)
+
 		if arc.count() > 0 'closesACycle'
 			match edges 'edges'
 				named then try refuseInitializationCycle(arc, globals: globals, project: project)
@@ -198,6 +200,7 @@ function pathBetween(deps GlobalInitDependencies, from GlobalInitIndex, to Globa
 	var seen = BoolArray.create()
 	seen.resize(deps.count())
 	var parent = GlobalInitIndexArray.create()
+
 	for _ in 0 upto deps.count() 'eachGlobal'
 		parent.push(0)
 	end 'eachGlobal'
@@ -208,12 +211,14 @@ function pathBetween(deps GlobalInitDependencies, from GlobalInitIndex, to Globa
 
 	while stack.count() > 0 'walk'
 		let node = try stack.pop() otherwise panic("pathBetween: pop from a non-empty stack")
+
 		if node == to 'arrived'
 			return pathBackFrom(node, from: from, parent: parent)
 		end 'arrived'
 
 		for next in rowOf(deps, index: node) 'eachEdge'
 			let queued = try seen.get(next) otherwise panic("pathBetween: seen.get OOB at {next}, outside the graph its own rows describe")
+
 			if queued 'alreadyQueued'
 				continue
 			end 'alreadyQueued'
@@ -233,12 +238,14 @@ function pathBackFrom(node GlobalInitIndex, from GlobalInitIndex, parent GlobalI
 	var reversed = GlobalInitIndexArray.create()
 	var walker = node
 	reversed.push(walker)
+
 	while walker != from 'climb'
 		walker = try parent.get(walker) otherwise panic("pathBackFrom: parent.get OOB at {walker}, outside the column the search filled")
 		reversed.push(walker)
 	end 'climb'
 
 	var path = GlobalInitIndexArray.create()
+
 	for i in 0 upto reversed.count() 'eachStep'
 		path.push(try reversed.get(reversed.count() - 1 - i) otherwise panic("pathBackFrom: reversed.get OOB inside a loop bounded by its own count"))
 	end 'eachStep'
@@ -268,6 +275,7 @@ end 'rowContains'
 // independent, but the array is a function of the module and not of the root.
 function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, globals ManagedGlobalArray, edges EdgeConfidence) returns GlobalInitDependencies
 	var slotOf = GlobalInitIndexByLabel.create()
+
 	for i in 0 upto globals.count() 'eachGlobal'
 		slotOf.upsert(globalAt(globals, index: i).label, value: i)
 	end 'eachGlobal'
@@ -277,8 +285,10 @@ function initDependencies(module MaxonModule, project Project, signatures Progra
 	var names = FunctionNameSet.create()
 
 	var deps = GlobalInitDependencies.create()
+
 	for j in 0 upto globals.count() 'eachRoot'
 		let global = globalAt(globals, index: j)
+
 		if global.initCallees.count() == 0 'dependsOnNothing'
 			deps.push(GlobalInitIndexArray.create())
 			continue
@@ -318,6 +328,7 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 		// `module.ops` is not the same walk.
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("slotsReadFrom: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("slotsReadFrom: opRef {opIdx} not in module.ops")
 				markOpCallee(op, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
@@ -410,6 +421,7 @@ end 'noteSlotNamed'
 // with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
 function orderedByDependency(globals ManagedGlobalArray, deps GlobalInitDependencies) returns ManagedGlobalArray
 	var state = GlobalInitVisitArray.create()
+
 	for _ in 0 upto globals.count() 'eachGlobal'
 		state.push(GlobalInitVisit.unvisited)
 	end 'eachGlobal'
@@ -434,11 +446,13 @@ function orderedByDependency(globals ManagedGlobalArray, deps GlobalInitDependen
 			if cursor < row.count() 'moreDependencies'
 				try cursors.set(depth, value: cursor + 1) otherwise panic("orderedByDependency: cursors.set OOB at depth {depth}, inside the frame this line just read")
 				let dependency = try row.get(cursor) otherwise panic("orderedByDependency: row.get OOB at {cursor}, below the count this branch tested")
+
 				match visitOf(state, index: dependency) 'dependency'
 					settled then break 'dependency'
 					onTheStack then panic("orderedByDependency: global {dependency} closes a cycle — `buildEffectiveDeps` adds no edge that does, so the graph handed here is acyclic by construction")
 					unvisited then descendTo(dependency, state: state, frames: frames, cursors: cursors)
 				end 'dependency'
+
 				continue
 			end 'moreDependencies'
 
@@ -490,13 +504,16 @@ end 'cursorAt'
 function refuseInitializationCycle(arc GlobalInitIndexArray, globals ManagedGlobalArray, project Project) throws CompileError
 	var names = ""
 	var owner = try arc.get(0) otherwise panic("refuseInitializationCycle: the arc is empty — its caller adds the closing edge only after proving the path non-empty")
+
 	for i in 0 upto arc.count() 'eachMember'
 		let member = try arc.get(i) otherwise panic("refuseInitializationCycle: arc.get OOB at {i}, inside a loop bounded by its own count")
+
 		if i > 0 'separator'
 			names = "{names}, "
 		end 'separator'
 
 		names = "{names}{String.from(globalAt(globals, index: member).declName)}"
+
 		if member > owner 'laterDeclaration'
 			owner = member
 		end 'laterDeclaration'

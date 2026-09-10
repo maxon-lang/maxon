@@ -55,14 +55,17 @@ end 'compile'
 // no caller re-derives one from outside.
 export type CompileProduct
 	export let outputPath as FilePath
+
 	// The rendered Target IR, or EMPTY when this build did not ask for one. Empty is not a sentinel
 	// standing in for a value that could not be produced: `emitIr` is the CALLER's own argument, so
 	// "no IR" is a thing the caller asked for and already knows. A union arm would cost a heap box on
 	// every compile to tell it something it decided one line earlier.
 	export let irText as String
+
 	// What `--metrics` reports as this build's emitted code size, and what the `Wrote N bytes` line
 	// names — read off the same `CodeResult`, so a caller cannot get a second answer.
 	export let codeBytes as CodeByteCount
+
 	// The whole compile's two costs, exactly as `CompileTimings` carries them. They are the
 	// denominator every phase's share divides by (see `compileToProduct`), so a caller reporting a
 	// per-compile cost reads the number the timing table read rather than clocking the call itself —
@@ -202,6 +205,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		stampCoverageImage(project, codeResult: codeResult)
 		writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion)
 	end 'stampTheCounterImage'
+
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
 	try requireOutputWritten(project, outputPath: outputPath)
 
@@ -235,6 +239,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// assembled bytes instead, and this is the only place holding both the module and the chunks it was
 	// encoded into. See `printTargetModule`.
 	var irText = ""
+
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
 		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, stdlibFunctions: project.stdlibFacts.stdlibFunctions)
@@ -305,6 +310,7 @@ end 'compileMeasured'
 // `maxon.exe` -> `maxon.previous.exe`; `maxon` -> `maxon.previous`. See `vacateRunningImage`.
 function previousImageName(outputPath FilePath) returns String
 	let ext = outputPath.fileExtension()
+
 	if ext.isEmpty() 'noExtension'
 		return "{outputPath.toString()}{PreviousImageSuffix}"
 	end 'noExtension'
@@ -331,6 +337,7 @@ function vacateRunningImage(outputPath FilePath)
 	end 'noIntrospection'
 
 	let here = Directory.currentPath()
+
 	if not outputPath.resolve(here).normalize().equals(running.normalize()) 'notOurOwnImage'
 		return
 	end 'notOurOwnImage'
@@ -403,10 +410,12 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 	// throw carries no information here. The existence re-check below is the only test that can tell
 	// "it was not there" from "it would not go", which is the distinction that matters.
 	try File.delete(outputPath.changeExtension(IrFileExtension)) otherwise ignore
+
 	// UNCONDITIONALLY, for the `.ir` sidecar's reason exactly: ADDING `--no-debug-info` must not leave the
 	// previous build's debug info beside a fresh executable. The build-id would refuse that stale pair — but
 	// only at the moment somebody tried to debug it, which is the worst moment to find out.
 	discardDebugInfoSidecar(outputPath)
+
 	// And the counter file, for the sidecar's reason and under the same rule — see `discardCoverageData`.
 	discardCoverageData(outputPath)
 	try File.delete(outputPath) otherwise ignore
@@ -537,17 +546,20 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
 	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try stdlibDirFor(stdlibDirOverride))
+
 	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
 	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
 	// load would classify every synthesized file as ordinary user source — the silent half of the reserved-
 	// name door, which fails by REFUSING a generated call rather than by admitting a written one.
 	project.entryFunctionName = entryFunction
 	project.compilerWrittenSources = compilerWrittenSources
+
 	// Set WITH them and before the load, for their reason: a diagnostic can be raised while a file is
 	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
 	// most of them — go on naming the staged copy.
 	project.stagedSourceOrigins = stagedSourceOrigins
 	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
+
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
 	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
 	// above rather than compiling only stdlib.
@@ -746,6 +758,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		verifyManagedSocketOrdinals(project)
 		verifyManagedMemoryRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
+
 		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
 		// ANY MORE (W49 wave 3).** A check here holds a runtime's LITERAL error flag against the enum's case
 		// ORDER; `StringIndexRuntime` spelled `notFound` as 0 and `invalidIndex` as 1 to build the failure
@@ -763,6 +776,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
 		// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
 		verifyEnumLookupErrorOrdinals(project)
+
 		// ⛔ **`CharacterError` WAS THE ONE FAMILY THIS ROSTER'S OWN CRITERION SELECTS AND THIS ROSTER DID NOT
 		// LIST (W135 review).** The two paragraphs above retire `StringError` and `MapError` on a stated test —
 		// a family belongs here exactly while a throwing runtime graph transcribes its ordinals, and leaves when
@@ -875,6 +889,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise 'duplicateFunctionName'
 		try refuseCompile(project)
 	end 'duplicateFunctionName'
+
 	try pipeline.run(buildMaxonTierPasses()) otherwise 'maxonTierFailed'
 		try refuseCompile(project)
 	end 'maxonTierFailed'
@@ -902,6 +917,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// fields carry what a disagreement produces.
 	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
 	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
 	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
@@ -916,6 +932,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		usage.usesIntToString = true
 		usage.usesHeap = true
 	end 'traceRuntimeNeeds'
+
 	// ⭐ **AND A TRACED build THAT WRITES A `__DebugStream` LOG EVENT CARRIES THE PRODUCER'S OWN FLOOR** —
 	// the arm above's shape, one instrument over, and its two bits are equally invisible to the scan:
 	//   • the HEAP — `__ds_init` `__slab_alloc`s the ring lock and the env-name buffer, so a program that
@@ -938,7 +955,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'debugStreamLogRuntimeNeeds'
+
 	usage.usesManagedGlobals = usesManagedGlobals
+
 	// ⭐ **THE HEAP NOW CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
 	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
 	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk above structurally cannot see, which
@@ -946,6 +965,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// sits here rather than inside `scanRuntimeUsage` because the two arms above can still turn `usesHeap`
 	// ON after the walk has finished, and a closure that ran before them would miss exactly those programs.
 	closeSlabNeeds(usage)
+
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
@@ -958,31 +978,37 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
 	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
 	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+
 	// ⭐ **SV2: a REPLY CELL's releaser is the same obligation over a different plan** — it frees the managed
 	// result of a reply nobody took, so the drop callee its body will name has to be rooted here for the same
 	// reason and at the same moment. `serviceReplyReleasePlanFor` states what the two plans differ in.
 	let serviceReplyTargets = collectServiceReplyTargets(module)
 	declareServiceReplyReleaserNeeds(usage, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+
 	// ⚠ **`declareCharacterSetRuntimeNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME (W129).** It rooted the
 	// `__destruct_Set_Character` cascade `__cs_decref`'s body would name, which is the obligation any FUTURE
 	// synthesized body owning a declared generic's instance still carries — see `declareAsyncReleaserNeeds`
 	// above, which states it for the one family that still has one.
 	noteDestructorUsage(usage, project: project, signatures: signatures)
+
 	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
 	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
 	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesManagedMemory`/`usesHeap` needs
 	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
 	// `noteDestructorUsage` does for the drop cascades.
 	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
+
 	// The SOLENESS walks are the third cascade over that same node space and close in the same window
 	// for the same reason: a `__sole_<T>` calls `__managed_sole`/`__list_sole`/nested `__sole_<T>` inside a
 	// synthesized body, and `installMmRuntime` reads `usesSoleWalk` for the refcount leaf they all reach.
 	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
+
 	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
 	// the record it returns — all inside a body synthesized after the pipeline, which the scan above cannot
 	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
 	// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
 	noteEnumLookupUsage(usage, project: project)
+
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
 	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
@@ -994,6 +1020,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
 	// because it is the only step in this run whose cost is O(globals) rather than O(module).
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
+
 	// ⛔ **THE TRACE BIT IS RECORDED BEFORE THE FIRST `.data` PRODUCER RUNS, NOT BESIDE THE ONE THAT IS
 	// OBVIOUSLY ITS OWN.** A backend sees only this record, and the producer's synthesized body reaches the
 	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families are owed
@@ -1002,6 +1029,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// is absent and the backend panics at the relocation rather than diagnosing anything. `usesHeap` is
 	// final by here, which is what makes this the earliest honest place to ask.
 	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+
 	// ⭐ **AND THE COVERAGE BITS, IN THE SAME WINDOW AND FOR THE SAME REASON.** Nothing in a Maxon module
 	// names `__cov_dump`, so both are DECLARED here rather than discovered — and the file bit is what lays
 	// out the errno word and the host chunks every non-Windows lane's write goes through
@@ -1011,12 +1039,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		usage.usesCoverage = true
 		usage.usesManagedFile = true
 	end 'coverageWritesItsCounters'
+
 	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
+
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals(usage) 'each'
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'heapGlobals'
+
 	// The green-thread scheduler's `.data` slots (current GT, run-queue head/tail, init guard) — same
 	// pre-lowering timing and same reason as the heap slots: a `globalAddr` the backend resolves needs them
 	// laid out first. `usesGt` already implies `usesHeap` (spawn `__slab_alloc`s the GT struct), but the GT
@@ -1026,6 +1057,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'gtGlobals'
+
 	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has THREE
 	// gates and asks them itself: the P machinery rides `usesGt`, the two worker counters also serve
 	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread, and the system
@@ -1035,6 +1067,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in schedRuntimeGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// argv's two captured words plus the empty-argument word (MAC7). ⚠ **NO OUTER BIT TEST**, for
 	// `schedRuntimeGlobals`'s reason: the answer depends on the TARGET as well as on the bit — a Windows
 	// program fetches its command line by a call and lays out nothing — and that pair of conditions is asked
@@ -1042,6 +1075,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in commandLineRuntimeGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The arm64-Linux host surface's one `.data` word — the errno a raw `svc` reports and nothing stores
 	// (`Arm64LinuxRuntime.LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for `commandLineRuntimeGlobals`'
 	// reason: the answer depends on the TARGET as well as on the bits, and that pair of conditions is asked
@@ -1049,18 +1083,21 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in arm64LinuxRuntimeGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The environment vector the Linux entry stub captured — BOTH Linux lanes, because a libc-less image has
 	// no other route to `NO_COLOR`, `TERM` or `MAXON_MAX_PROCS`. ⚠ **NO OUTER BIT TEST**, for its neighbours'
 	// reason: the answer depends on the TARGET as well as on the bits.
 	for entry in linuxEnvpGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The GREEN-THREAD floor's per-OS-thread slot counter, on BOTH Linux lanes. Its own producer beside the
 	// one above for the reason that one is separate from the scheduler's: the two ride different bits, and
 	// asking both conditions here would copy them.
 	for entry in linuxGreenThreadGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The x64-Linux host surface's one `.data` word — the errno a raw `syscall` reports and nothing stores
 	// (`X64LinuxRuntime.X64LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for its arm64 twin's reason: the
 	// answer depends on the TARGET as well as on the bits, and that pair of conditions is asked where it is
@@ -1068,6 +1105,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in x64LinuxRuntimeGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
 	// `.data` layout is unchanged — only a pipe-reading program lays them out.
 	if usage.usesIocp 'ioGlobals'
@@ -1075,6 +1113,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'ioGlobals'
+
 	// The streaming subprocess handle-table pointer (P1.5 slice 1b) rides its OWN bit, so a non-streaming IOCP
 	// program's `.data` layout is unchanged — only a streaming program lays out `__subp_table`.
 	if usage.usesStreaming 'subpGlobals'
@@ -1082,6 +1121,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'subpGlobals'
+
 	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host reads take FRAME scratch, which is what a
 	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here; the two `usage` bits gate
 	// only the two BODIES `installClockRuntime` builds.
@@ -1092,9 +1132,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in slabArenaRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	for entry in slabRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+
 	// The DebugStream producer's own six `.data` slots, on the bit recorded at the top of this block —
 	// nothing in a program can ask for a trace, so `--debugstream` is the only thing that can set it.
 	if usage.usesDebugStream 'debugStreamGlobals'
@@ -1102,6 +1144,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'debugStreamGlobals'
+
 	// ⭐⭐ **THE `--coverage` COUNTER IMAGE — ONE CONTIGUOUS RESERVED `.data` RUN, RESERVED HERE BECAUSE THIS
 	// IS THE LAST MOMENT IT CAN BE.** `layOut` below is the single writer of every `.data` offset and refuses
 	// a run registered after it, and the point COUNT is final only now: the parse mints points and
@@ -1163,6 +1206,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// module claiming one it does not have is what would put a `globalAddr __ds_base` into a build whose
 	// `.data` never laid that slot out.
 	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
+
 	// ⭐ **AND THE SUBPROCESS BIT, AT THE SAME SEAM AND FOR THE SAME REASON.** The PE writer needs it for the
 	// optional trailing import band (`PeWriter.isOptionalTrailingImport`) — `PeekNamedPipe` and
 	// `TerminateProcess` are referenced by the attached-collect runtime and by nothing else, so a program
@@ -1176,31 +1220,37 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// exactly this reason and its header says so; the second flag needed the same seam, not the same
 	// paragraph one screen earlier.
 	pipeline.stdModule.usesSubprocess = usage.usesStreaming
+
 	// ⭐ **AND THE ws2_32 IMPORT DIRECTORY, ON THE SAME SEAM AND FOR THE SAME MEASURED REASON.** It gates a
 	// WHOLE DLL rather than a trailing band (see `IrModule.usesSockets`), and it must be written AFTER
 	// `pipeline.run()` for the paragraph above's reason: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a
 	// flag set any earlier lands on a module that is thrown away — and the symptom is not a missing import but
 	// `iatCall`s at slot indices past the end of the table that was actually emitted.
 	pipeline.stdModule.usesSockets = usage.usesManagedSocket
+
 	// ⭐ **AND THE THIRD PRODUCER OF THE OPTIONAL TRAILING IMPORT BAND**, on the same seam and for the same
 	// measured reason as its two neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag set
 	// any earlier lands on a module that is thrown away, and the symptom is `iatCall`s at slot indices past
 	// the end of the table that was actually emitted. `__cpu_count` needs `GetActiveProcessorCount`, which
 	// lives at the end of kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesCpuCount = usage.usesCpuCount
+
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours: set any earlier and the flag lands on the `stdModule` `lowerMaxonToStd` threw away, and the
 	// symptom is `iatCall`s past the end of the table actually emitted. `__proc_bg_priority` needs
 	// `SetPriorityClass` and `GetPriorityClass`, both at the end of kernel32's run.
 	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
+
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
 	// the band — both at the end of kernel32's run.
 	pipeline.stdModule.usesTerminalDetection = usage.usesTerminalDetection
+
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__shm_create` needs `CreateFileMappingA` and `__shm_close` `UnmapViewOfFile`, both at the
 	// end of kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesSharedMemory = usage.usesSharedMemory
+
 	// ⭐⭐ **AND THE ONLY PRODUCER OF `ntdll.dll` IN THE LANGUAGE**, on the same seam and for the same measured
 	// reason as its neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
 	// lands on a module that is thrown away — and the symptom is not a missing import but `iatCall`s at slot
@@ -1208,20 +1258,24 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// optional kernel32 band AND `NtGetNextThread`, which no other bit can turn on
 	// (`PeWriter.ImportGates.threadWalk`).
 	pipeline.stdModule.usesProcessSampling = usage.usesProcessSampling
+
 	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
 	// kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__uptime_ms` needs `GetTickCount64`, which lives at the end of kernel32's run (see
 	// `isOptionalTrailingImport`) — and a monitor reaches it carrying no trace PRODUCER, so `debugStream`
 	// does not already answer for it.
 	pipeline.stdModule.usesUptimeClock = usage.usesUptimeClock
+
 	// ⭐ **AND THE FIFTH PRODUCER OF THAT BAND (G1)**, on the same seam and for the same measured reason as
 	// its four neighbours. The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and
 	// the machine's processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at
 	// the end of kernel32's run too — three separate reasons a green-thread image needs the whole band.
 	pipeline.stdModule.usesGt = usage.usesGt
+
 	// ⭐⭐ **AND WHETHER A RESERVATION IS FREE ON THIS TARGET**, which is what picks the slab arena's
 	// geometry (see `IrModule.hasPageReservation`). It sits on the same seam as its four neighbours for the
 	// same measured reason — `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
@@ -1287,6 +1341,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `globalData` because it REGISTERS as well as emits: its three `.rdata` tables must be in the table
 	// before the backend lays that section out, exactly as `installUnicodeCategoryRuntime`'s two are.
 	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
+
 	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
 	// installed the same way — already-lowered Std, appended after the pipeline (see this block's header for
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
@@ -1294,6 +1349,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	if usage.usesGt 'installGt'
 		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target, streamState: subprocessStreamStateEnum)
 	end 'installGt'
+
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
 	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a
@@ -1376,6 +1432,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// stated there.
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
 	installProcessRuntime(pipeline.stdModule, usage: usage)
+
 	// The terminal question (`__tty_stdout_wants_color`), on its own bit beside them. It is the one install
 	// in this block that needs `globalData`: its two environment names are `.rdata` constants, registered
 	// the way `installDebugStreamRuntime` registers its own. It also takes the TARGET, as
@@ -1487,50 +1544,60 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `noteDestructorUsage` closed the set over — are built (`usage.neededDestructors`).
 	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
 	installStructDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+
 	// The per-instance destructor cascade (P1.6-B2) — the same already-lowered append as the struct/union
 	// ones. A managed generic instance OWNS its type arguments, so its `__destruct_<mangled>` drops each
 	// substituted managed field; only the REFERENCED instances (directly, or through a nested cascade
 	// `noteDestructorUsage` closed the set over) are built. It reads the instance registry, which lives on
 	// `signatures`, so it needs no `project`.
 	installGenericInstanceDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
+
 	// The DICTIONARY destructor cascade (BATCH41) — the same append, for the instance a SHARED generic body
 	// holds rather than the one a concrete call site names. A declaration view's slot standing at a bare
 	// parameter has no callee to drop through, so its cascade takes the enclosing instantiation's layout
 	// descriptor as a second parameter and releases that slot through `__drop_type_param`. Only the REFERENCED
 	// ones are built, exactly as above.
 	installGenericInstanceDictionaryDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
+
 	// Its DECLARED-RECORD twin (W183) — the same cascade for a record that is a `structRef` rather than an
 	// instance, which is what a TUPLE of the enclosing generic's own parameters is (`stdlib/Map.maxon`'s
 	// `Entry`, a `typealias Pair = (K, V)`). Only the REFERENCED ones are built, exactly as above.
 	installStructDictionaryDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+
 	// The per-struct and per-union DEEP-CLONER cascades (P1.7 slice 3b-vi-b) — the clone twins of the destructor
 	// installers, appended already-lowered after the pipeline for the same reason. Only the cloners the module
 	// references (directly through a `funcAddr(__clone_<T>)` element-cloner stamp, or through a nested cascade
 	// `noteCascadeUsage` closed the set over) are built (`usage.neededCloners`).
 	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
 	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+
 	// The per-instance DEEP-CLONER cascade (W162) — the clone twin of `installGenericInstanceDestructors` above,
 	// installed beside the struct/union cloners for the same reason they sit beside their own destructors. It
 	// takes `project` (which the destructor twin does not) for one fact the instance registry cannot answer: the
 	// MM tag index a fresh box is allocated under lives in `project.globalData`.
 	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners as CascadeSymbolSet, action: CascadeAction.clone)
+
 	// The per-type SOLENESS WALKS — the third twin of the two families above, over the same node space
 	// and installed in the same band. Only the walks the module references (a transfer door's emitted call, or
 	// a nested cascade `noteCascadeUsage` closed the set over) are built (`usage.neededSoleWalks`).
 	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
 	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
 	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
+
 	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
 	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+
 	// The `__gt_release_<callee>` helpers that give back the reference an `async` spawn took to each managed
 	// argument, and release the result-or-error of a promise nobody awaited (A2). Collected before the
 	// pipeline (see `asyncSpawnTargets`), installed here already-lowered like the cascades above; a callee
 	// with nothing managed to release gets none, which is why a scalar async program is unchanged.
 	installAsyncReleasers(pipeline.stdModule, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+
 	// The `__gt_reply_release_<message>` twins, for the managed RESULT of a reply cell nobody awaited (SV2).
 	installServiceReplyReleasers(pipeline.stdModule, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+
 	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
 	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
 	// surface is a function while its four siblings expand in the parser.
@@ -1583,6 +1650,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
+
 	// ⭐ **THE DECLARATION-HYGIENE DRAIN (E3012 unused, E3077 var-should-be-let) — AFTER THE BACKEND, which
 	// is the first point at which nothing else has anything to say about a body.** See
 	// `reportBindingHygieneDiagnostics`.
@@ -1735,12 +1803,15 @@ export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath th
 	// "stopped being absolute" below mean "walked off the top" rather than "was never rooted".
 	var resolvedRoot = first.resolve(cwd)
 	var narrowed = false
+
 	for path in paths 'each'
 		let resolved = path.resolve(cwd)
+
 		while not resolved.isInside(resolvedRoot) 'narrow'
 			// Monotone, so the paths already checked stay inside: `resolvedRoot` only ever becomes an
 			// ancestor of what it was, and each of them was inside it.
 			let candidate = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
+
 			if not candidate.isAbsolute() 'walkedOffTheTop'
 				throw CompileError.noCommonRoot(first, other: path)
 			end 'walkedOffTheTop'
@@ -1853,6 +1924,7 @@ function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray, selec
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
+
 			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
 				into.push(entry)
 			end 'isSource'
@@ -1981,6 +2053,7 @@ export enum SourceSelection
 	// call site and the reason the exclusion exists at all — a test file joins a build only when something
 	// asks for it by name or asks for it here.
 	productionOnly
+
 	// A `maxon test` build: the test files ARE the program, alongside everything an ordinary build compiles.
 	// The tests still have to be compiled WITH their project, because a `test` body calls the very
 	// declarations that project makes.
@@ -2069,6 +2142,7 @@ export type CompilerWrittenSource
 	// loader registers this very spelling and the lookup is a `FilePath.equals` rather than a second
 	// derivation of one path.
 	export let path as FilePath
+
 	// The reserved names this compile declared in that file. NEVER EMPTY: a generated fragment always
 	// declares at least the symbol its caller reaches it by, and `stageTestBuild` refuses to stage one
 	// that does not — which is what lets emptiness mean "the author wrote every byte of this file"
@@ -2111,6 +2185,7 @@ export type StagedSourceOrigin
 	// second derivation of one path. `CompilerWrittenSource.path` is the same spelling for the same
 	// reason.
 	export let stagedPath as FilePath
+
 	// The author's own file, as the project walk produced it. NOT display-formatted: The compiler renders every
 	// diagnostic path with the HOST's separators (a Windows `build temp/x.maxon` says
 	// `temp\x.maxon:3:9`), and a path spelled otherwise here would make `maxon test`'s diagnostics the
@@ -2162,6 +2237,7 @@ function resolveOutputPath(project Project, outputOverride String) returns FileP
 
 	if not outputOverride.isEmpty() 'hasOverride'
 		var outputPath = "{outputOverride}{ext}"
+
 		if outputOverride.endsWith(ext) 'overrideCarriesExt'
 			outputPath = outputOverride
 		end 'overrideCarriesExt'

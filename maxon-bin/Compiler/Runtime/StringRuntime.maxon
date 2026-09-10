@@ -540,6 +540,7 @@ export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 			return false
 		end 'notSingleByte'
 	end 'each'
+
 	return true
 end 'bytesAreSingleByteGraphemes'
 
@@ -579,6 +580,7 @@ function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singl
 	if record.count() != StringRecordBytes 'sizeDrift'
 		panic("buildStringRecordBytes: assembled {record.count()} bytes, not {StringRecordBytes} — a field's width does not match its offset spacing")
 	end 'sizeDrift'
+
 	return record
 end 'buildStringRecordBytes'
 
@@ -586,6 +588,7 @@ function singleByteGraphemesFlagValue(singleByteGraphemes bool) returns ParsedIn
 	if singleByteGraphemes 'oneByteEach'
 		return SingleByteGraphemesTrue
 	end 'oneByteEach'
+
 	return SingleByteGraphemesFalse
 end 'singleByteGraphemesFlagValue'
 
@@ -640,12 +643,15 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesWriteStdout 'writestdout'
 		buildStreamWrite(module, name: StreamWriteStdoutName, stream: OsOutputStream.standardOutput)
 	end 'writestdout'
+
 	if usage.usesWriteStderr 'writestderr'
 		buildStreamWrite(module, name: StreamWriteStderrName, stream: OsOutputStream.standardError)
 	end 'writestderr'
+
 	if usage.usesStrEq 'streq'
 		buildStrEq(module, name: StrEqName)
 	end 'streq'
+
 	// ⚠ **THE BUILDER IS `MmRuntime`'s NOW AND THE INSTALL ARM DELIBERATELY IS NOT (W49 wave 9).** A byte
 	// blit is a Std-tier operation, so the graph moved; the ARM stays here because moving it into
 	// `installMmRuntime` would change two things at once. That installer is gated on `usesHeap`, and this
@@ -655,36 +661,47 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrCopy 'strcopy'
 		buildStrCopy(module)
 	end 'strcopy'
+
 	if usage.usesIntToString 'inttostr'
 		buildIntegerToString(module, signedness: IntegerSignedness.signed)
 	end 'inttostr'
+
 	if usage.usesUIntToString 'uinttostr'
 		buildIntegerToString(module, signedness: IntegerSignedness.unsigned)
 	end 'uinttostr'
+
 	if usage.usesBoolToString 'booltostr'
 		buildBoolToString(module)
 	end 'booltostr'
+
 	if usage.usesStrDecref 'strdecref'
 		buildStrDecref(module)
 	end 'strdecref'
+
 	if usage.usesStrClone 'strclone'
 		buildStrClone(module)
 	end 'strclone'
+
 	if usage.usesStrRetain 'strretain'
 		buildStrRetain(module)
 	end 'strretain'
+
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
+
 	if usage.usesStrOfBuffer 'strofbuffer'
 		buildStrOfBuffer(module)
 	end 'strofbuffer'
+
 	if usage.usesMmToCString 'mmtocstring'
 		buildMmToCString(module)
 	end 'mmtocstring'
+
 	if usage.usesMmFromCString 'mmfromcstring'
 		buildMmFromCString(module)
 	end 'mmfromcstring'
+
 	if usage.usesStrBytesView 'strbytesview'
 		buildStrBytesView(module)
 	end 'strbytesview'
@@ -724,6 +741,7 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: record, offset: StringLengthOffset, valueType: StdType.i64))
 
 	let written = ids.mint()
+
 	match stream 's'
 		standardOutput then module.appendOp(entry, op: StdOp.osWriteStdout(written, bufId: buffer, lenId: length))
 		standardError then module.appendOp(entry, op: StdOp.osWriteStderr(written, bufId: buffer, lenId: length))
@@ -879,6 +897,7 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	var setup = module.addBlock(func, label: b"setup")
 	var countLoop = module.addBlock(func, label: b"countLoop")
 	var writeSetup = module.addBlock(func, label: b"writeSetup")
+
 	// The write loop is HEADER-GUARDED (test at the top), following `buildStrEq`/`buildStrCopy`'s shape so
 	// the three string builders read the same way. It is a STYLE choice, not a correctness one. A fused
 	// loop-test `cmp` whose boolean is a function's highest-numbered value once tripped the value-class
@@ -925,6 +944,7 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	let radixCount = ids.mint()
 	module.appendOp(countLoop, op: StdOp.const(radixCount, value: DecimalRadix, valueType: StdType.i64))
 	let vNext = ids.mint()
+
 	// ⭐ **IT TAKES THE READING THE SIGN HANDLING ABOVE TOOK** (X10 made every `StdOp.div` state its reading
 	// rather than inherit one; X11 made the reading a parameter). For the SIGNED rendering the sign is
 	// handled by `neg`/`sign` and each digit step is multiplied back, so the walk is signed by
@@ -1207,6 +1227,7 @@ export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids 
 	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
 	let overhead = emitConst(module, block: block, value: StringInterpOverheadBytes, ids: ids)
 	let allocSize = emitBin(module, block: block, a: byteLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
+
 	// A fused String record owns nothing beyond the one allocation it IS, so nothing cascades — the same
 	// `TrivialDestructor` the parser passes at `emitBoxAlloc`, read from its one declaration rather than
 	// spelled as a bare 0 (`__strix_make` is the third reader of it).

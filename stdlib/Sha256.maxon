@@ -106,6 +106,7 @@ function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
 	w.reserve(64)
 
 	var wi = 0
+
 	while wi < 16 'readWords'
 		w.push(sha256ReadBE32(padded, off: blockOff + wi * 4))
 		wi = wi + 1
@@ -128,6 +129,7 @@ function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
 	// walks ONE array with `for … in`. That is what keeps random, bounds-checked indexing out of the
 	// compression loop, which is where it would be paid 64 times per block.
 	var r = 0
+
 	for kv in sha256KTable 'foldRoundConstants'
 		let raw = try w.get(r) otherwise panic("sha256: schedule index unreachable")
 		try w.set(r, value: (raw + kv) and 0xFFFFFFFF) otherwise panic("sha256: schedule index unreachable")
@@ -218,6 +220,7 @@ public function sha256(data ByteArray) returns ByteArray
 	padded.push(bitLen and 0xFF)
 
 	var blockOff = 0
+
 	while blockOff < padded.count() 'processBlocks'
 		sha256Compress(h, padded: padded, blockOff: blockOff)
 		blockOff = blockOff + 64

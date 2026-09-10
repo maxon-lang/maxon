@@ -63,23 +63,28 @@ public type SharedSegment
 	// down — see `close`.
 	var handle as SegmentHandle
 	var base as SegmentAddress
+
 	// How large the mapping is. Kept because the teardown needs it on a lane whose unmap takes a length,
 	// and the OS offers no way to read a view's extent back off its base.
 	let bytes as SegmentByteCount
+
 	// The name the section is published under, kept so `segmentName()` can answer it: the OS offers no way
 	// to read a section's name back off its handle, and the name is what a second process needs.
 	var name as String
+
 	// Latched by `close()` so a second call is a no-op, the contract `StreamingSubprocess.release` states.
 	var closed as bool
 
 	/// Create a NEW section of exactly `bytes` bytes, published under `name`, and map it into this process.
 	public static function create(name String, bytes SegmentByteCount) returns SharedSegment throws SharedMemoryError
 		let rawHandle = __Builtins.sharedMemoryCreate(name.cstr(), bytes)
+
 		if rawHandle == NoSection 'createFailed'
 			throw SharedMemoryError.createFailed
 		end 'createFailed'
 
 		let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
+
 		if rawBase == NoSection 'mapFailed'
 			// The section exists and nothing is mapped, so the teardown is the handle alone — which is
 			// exactly what `close` does with a zero base, since an unmap of one is a no-op on every lane.

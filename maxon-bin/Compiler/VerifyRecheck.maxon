@@ -75,6 +75,7 @@ end 'compileCompleted'
 // output does, rather than through a second opinion about how a diagnostic looks.
 function printStandingDiagnostics(project Project, heading String)
 	printError("{heading}\n")
+
 	for diagnostic in project.diagnostics 'each'
 		printError("    {diagnostic.render()}\n")
 	end 'each'
@@ -88,6 +89,7 @@ export function verifyRecheck(inputPath FilePath, target Target) returns bool th
 	let isolationOk = try verifyProjectIsolation(inputPath, target: target)
 
 	let allOk = stabilityOk and clearingOk and isolationOk
+
 	if allOk 'passed'
 		print("verify-recheck: PASS (stability + clearing + isolation)\n")
 		return true
@@ -241,6 +243,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target) returns bool 
 	// THE MEASUREMENT. A was not edited, so it must answer exactly what it answered alone — while a
 	// second project, holding diagnostics of its own, is live in the same process.
 	let firstBeside = checkOnce(first)
+
 	if firstBeside != firstAlone 'contaminated'
 		printError("FAIL isolation: project A reported {firstAlone} diagnostic(s) alone and {firstBeside} while a second, BROKEN project was live. B's state is reaching A — the module-level latches (the Diagnostics capture, PhaseProbe.openPhaseSpans, QueryEngine.sharedFileMemos) are where to look, and each documents its soundness as resting on there being one compile at a time.\n")
 		return false
@@ -248,6 +251,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target) returns bool 
 
 	// And B keeps its own answer too: a shared sink would show up as B LOSING diagnostics to A's check.
 	let secondBeside = checkOnce(second)
+
 	if secondBeside != secondBroken 'secondLostItsOwn'
 		printError("FAIL isolation: project B reported {secondBroken} diagnostic(s) and then {secondBeside} after A was checked in between.\n")
 		return false

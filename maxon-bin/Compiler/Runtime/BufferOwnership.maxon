@@ -239,6 +239,7 @@ export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, ele
 	if record.count() != ManagedRecordBytes 'sizeDrift'
 		panic("immortalRecordBytes: assembled {record.count()} bytes, not {ManagedRecordBytes} — a slot's width does not match its offset spacing")
 	end 'sizeDrift'
+
 	return record
 end 'immortalRecordBytes'
 
@@ -291,8 +292,10 @@ function recordCarriesImmortalCapacity(record ByteArray) returns bool
 
 	let sentinel = scalarImage(ImmortalRecordCapacity as ParsedInt, byteCount: ManagedRecordSlotBytes)
 	var offset = ManagedRecordCapacityOffset
+
 	for expected in sentinel 'eachByte'
 		let actual = try record.get(offset) otherwise panic("recordCarriesImmortalCapacity: a {record.count()}-byte record has no byte at {offset} — the length check above admits only records long enough to hold capacity@16")
+
 		if actual != expected 'differs'
 			return false
 		end 'differs'

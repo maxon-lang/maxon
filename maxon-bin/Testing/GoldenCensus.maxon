@@ -47,6 +47,7 @@ end 'GoldenRoot'
 
 function goldenRootIn(specDir FilePath) returns GoldenRoot
 	let root = specDir.join("{FragmentsSubdir}")
+
 	if not Directory.exists(root) 'noGoldensAtAll'
 		return GoldenRoot.none
 	end 'noGoldensAtAll'
@@ -118,6 +119,7 @@ function reportUncomparedUnder(fragmentsRoot FilePath, specDir FilePath, effecti
 		declaredSpecs.insert(specName)
 
 		let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget)) otherwise panic("GoldenCensus.reportUncomparedUnder: a spec the parent already parsed to build this run's plan no longer parses.")
+
 		// Every ACTIVE case this spec declares. A `<!-- disabled-test: … -->` case is deliberately NOT one:
 		// it is never compiled, never run and mints no golden (`SpecParser`'s header), so a `.test` bearing
 		// its name is a file nothing compares — which is precisely this census's finding, and an enabled
@@ -148,6 +150,7 @@ function goldenLanesIn(fragmentsRoot FilePath, entries StringArray) returns Gold
 
 	for entry in listed 'eachEntry'
 		let name = entry.filename()
+
 		if not Directory.isDirectory(entry) 'notALane'
 			entries.push(uncomparedEntry("{FragmentsSubdir}/{name}", reason: UncomparedReason.strayUnderFragmentsRoot))
 			continue
@@ -174,9 +177,11 @@ end 'goldenLanesIn'
 // compared to each other.
 function caseNameSetOf(tests SpecTestArray) returns SpecCaseNameSet
 	var names = SpecCaseNameSet.create()
+
 	for test in tests 'eachTest'
 		names.insert(test.name)
 	end 'eachTest'
+
 	return names
 end 'caseNameSetOf'
 
@@ -211,6 +216,7 @@ end 'selectableCaseNamesOn'
 // per-lane pinnable set are this arm's own; the walk itself is not — see `collectGoldensIn`.
 function collectUncomparedIn(lane GoldenLane, specName String, specFile SpecFile, roster SpecCaseNameSet, entries StringArray)
 	let specGoldens = lane.dir.join(specName)
+
 	if not Directory.isDirectory(specGoldens) 'laneHasNoneForThisSpec'
 		return
 	end 'laneHasNoneForThisSpec'
@@ -252,6 +258,7 @@ union UncomparedClassifier
 	// A spec of this name exists: the file is fine when the lane can select its case, and otherwise
 	// carries one of the two reasons `uncomparedReasonFor` tells apart.
 	againstRoster(pinnable SpecCaseNameSet, roster SpecCaseNameSet)
+
 	// No spec of this name exists, so nothing under here can be compared by anything and no per-file
 	// question is worth asking.
 	everyFileOfAVanishedSpec
@@ -309,6 +316,7 @@ function collectGoldensOfVanishedSpecs(lanes GoldenLaneArray, declaredSpecs Spec
 
 		for entry in listed 'eachEntry'
 			let specName = entry.filename()
+
 			if declaredSpecs.contains(specName) 'aSpecStillDeclaresIt'
 				continue
 			end 'aSpecStillDeclaresIt'
@@ -342,15 +350,20 @@ end 'uncomparedEntry'
 export union UncomparedReason
 	// The spec is there and active; it declares no case by that name. Rename debris, or a deletion.
 	noSuchCase(specName String, caseName String)
+
 	// The spec declares the case, but this lane can never select it — so its golden there is unreadable
 	// reference whatever the compiler emits.
 	laneCannotSelectIt(specName String, caseName String, laneName String)
+
 	// No spec of that name exists at all: a whole `.md` renamed or deleted, leaving its directory behind.
 	noSuchSpec(specName String)
+
 	// A `fragments/<name>` directory naming no target this compiler builds for.
 	laneNamesNoTarget(laneName String)
+
 	// A file where only a lane directory belongs.
 	strayUnderFragmentsRoot
+
 	// A file where only a per-spec directory belongs.
 	strayUnderLane
 end 'UncomparedReason'
@@ -360,6 +373,7 @@ end 'UncomparedReason'
 function uncomparedReasonText(reason UncomparedReason) returns String
 	return match reason 'reason'
 		noSuchCase(specName, caseName) gives "{specName} declares no case named `{caseName}`"
+
 		// Selection's remaining gates are all the spec's own text: a `<!-- unsupported-targets: … -->` restriction, a
 		// trace directive only x64-windows can capture, a section pin a container format cannot answer, or
 		// a `status: draft` spec. Naming WHICH would mean re-deriving `selectableThisRun`'s conjunction

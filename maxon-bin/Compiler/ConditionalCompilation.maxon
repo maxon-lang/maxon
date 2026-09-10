@@ -51,14 +51,18 @@ export union DirectiveError implements Error
 	// A `#if` still open at end of file. Positioned at the `#if` that has no `#endif` — the
 	// INNERMOST open one, which is the one whose partner is missing however many enclose it.
 	unterminatedIf(line LineNumber, column ColumnNumber)
+
 	// An `#else` or an `#endif` with no open `#if`. Carries the offending spelling so the message
 	// can name what it actually saw rather than enumerating both.
 	unmatchedDirective(spelling String, line LineNumber, column ColumnNumber)
+
 	// A condition calls a predicate that is not one of the five. See `predicateNamed`.
 	unknownPredicate(name String, line LineNumber, column ColumnNumber)
+
 	// A condition ran out of tokens, or holds something the grammar has no production for — a
 	// missing `)`, an operator with no right-hand side, a bare identifier with no argument list.
 	malformedCondition(line LineNumber, column ColumnNumber)
+
 	// A condition that PARSES, followed by more tokens on the same line. Its own case rather than a
 	// second use of `malformedCondition`, because the advice differs — there is nothing to correct
 	// in the condition itself — and because it is the one directive fault whose absence was a silent
@@ -72,6 +76,7 @@ end 'DirectiveError'
 type DirectiveFrame
 	// Is the branch currently being walked emitted?
 	export var branchLive as bool
+
 	// Has ANY arm of this `#if` been taken? What makes `#else` the complement of `#if` rather than
 	// a second unconditional arm. Distinct from `not branchLive`, which is also true while the
 	// `#if` arm is being skipped and its `#else` has not yet been reached.
@@ -81,6 +86,7 @@ type DirectiveFrame
 	// with its own home (`enclosingRegionIsLive`), and encoding it here as well would be the same
 	// rule in two places.
 	export var takenAlready as bool
+
 	// The `#if`'s own position, for the unterminated-region diagnostic.
 	export let line as LineNumber
 	export let column as ColumnNumber
@@ -137,6 +143,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 
 	while scan < tokens.count() 'walk'
 		let tok = try tokens.get(scan) otherwise panic("filterConditionalTokens: scan<count just checked but tokens.get({scan}) failed")
+
 		// Read ONCE per token, before any arm can push or pop: for an ordinary token this decides
 		// whether it survives, and for a `#if` it is the ENCLOSING region's liveness, which is what
 		// the new frame's own liveness is conjoined with.
@@ -172,6 +179,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			if frames.isEmpty() 'elseWithoutIf'
 				throw DirectiveError.unmatchedDirective(TokenKind.hashElse.rawValue, line: tok.line, column: tok.column)
 			end 'elseWithoutIf'
+
 			// The ENCLOSING region's liveness, read from the frame below this one — this frame's own
 			// `branchLive` describes the arm that just ended and says nothing about whether the `#if`
 			// was reachable at all. Without it, an `#else` inside a dead outer branch goes live.
@@ -187,6 +195,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			if frames.isEmpty() 'endifWithoutIf'
 				throw DirectiveError.unmatchedDirective(TokenKind.hashEndif.rawValue, line: tok.line, column: tok.column)
 			end 'endifWithoutIf'
+
 			_ = try frames.pop() otherwise panic("filterConditionalTokens: frames non-empty just checked but pop() failed")
 			scan = scan + 1
 			continue
@@ -205,6 +214,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 		if regionLive 'keep'
 			out.push(tok)
 		end 'keep'
+
 		scan = scan + 1
 	end 'walk'
 
@@ -245,6 +255,7 @@ function tokensHoldDirective(tokens TokenArray) returns bool
 			return true
 		end 'found'
 	end 'each'
+
 	return false
 end 'tokensHoldDirective'
 
@@ -255,6 +266,7 @@ function regionIsLive(frames DirectiveFrameArray) returns bool
 	if frames.isEmpty() 'topLevel'
 		return true
 	end 'topLevel'
+
 	return innermostFrame(frames).branchLive
 end 'regionIsLive'
 
@@ -265,6 +277,7 @@ function enclosingRegionIsLive(frames DirectiveFrameArray) returns bool
 	if frames.count() < 2 'innermostIsTopLevel'
 		return true
 	end 'innermostIsTopLevel'
+
 	let parent = try frames.get(frames.count() - 2) otherwise panic("enclosingRegionIsLive: count>=2 just checked but get() failed")
 	return parent.branchLive
 end 'enclosingRegionIsLive'
@@ -331,6 +344,7 @@ end 'evaluateCondition'
 // the parser's own line-end rules mean.
 function expectConditionEnd(tokens TokenArray, cursor ConditionCursor) throws DirectiveError
 	let tok = tokenAtOrEof(tokens, index: cursor.value)
+
 	if not tokenKindIsSkippedLayout(tok.kind) and tok.kind != TokenKind.eof 'trailing'
 		throw DirectiveError.trailingConditionTokens(tok.line, column: tok.column)
 	end 'trailing'
@@ -338,19 +352,23 @@ end 'expectConditionEnd'
 
 function evaluateOr(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
 	var result = try evaluateAnd(tokens, cursor: cursor, target: target)
+
 	while acceptKind(tokens, cursor: cursor, kind: TokenKind.or) 'orLoop'
 		let rhs = try evaluateAnd(tokens, cursor: cursor, target: target)
 		result = result or rhs
 	end 'orLoop'
+
 	return result
 end 'evaluateOr'
 
 function evaluateAnd(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
 	var result = try evaluateUnary(tokens, cursor: cursor, target: target)
+
 	while acceptKind(tokens, cursor: cursor, kind: TokenKind.and) 'andLoop'
 		let rhs = try evaluateUnary(tokens, cursor: cursor, target: target)
 		result = result and rhs
 	end 'andLoop'
+
 	return result
 end 'evaluateAnd'
 
@@ -359,6 +377,7 @@ function evaluateUnary(tokens TokenArray, cursor ConditionCursor, target Target)
 		let inner = try evaluateUnary(tokens, cursor: cursor, target: target)
 		return not inner
 	end 'isNot'
+
 	return try evaluateAtom(tokens, cursor: cursor, target: target)
 end 'evaluateUnary'
 
@@ -371,6 +390,7 @@ function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) 
 
 	let nameTok = try expectKind(tokens, cursor: cursor, kind: TokenKind.identifier)
 	try expectKind(tokens, cursor: cursor, kind: TokenKind.leftParen)
+
 	// The argument is an identifier (`Windows`, `x64`) or a bool keyword (`true`, `false`), which
 	// the lexer gives distinct kinds. Its TEXT is what every predicate reads, and `true`/`false`
 	// carry their own spelling in `value` — so one read serves them all.
@@ -451,6 +471,7 @@ export function acceptedPredicateList() returns String
 		if index > 0 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
+
 		if index == finalIndex 'lastItem'
 			rendered = "{rendered}or "
 		end 'lastItem'
@@ -467,9 +488,11 @@ end 'acceptedPredicateList'
 // "expected identifier" on the very spelling the documentation uses (`testing(true)`).
 function readConditionArgument(tokens TokenArray, cursor ConditionCursor) returns Token throws DirectiveError
 	let tok = tokenAtOrEof(tokens, index: cursor.value)
+
 	if tok.kind != TokenKind.identifier and tok.kind != TokenKind.true and tok.kind != TokenKind.false 'notAnArgument'
 		throw DirectiveError.malformedCondition(tok.line, column: tok.column)
 	end 'notAnArgument'
+
 	cursor.value = cursor.value + 1
 	return tok
 end 'readConditionArgument'
@@ -481,6 +504,7 @@ function tokenAtOrEof(tokens TokenArray, index TokenIndex) returns Token
 	if index >= tokens.count() 'pastEnd'
 		return Token.eof()
 	end 'pastEnd'
+
 	return try tokens.get(index) otherwise panic("tokenAtOrEof: index<count just checked but tokens.get({index}) failed")
 end 'tokenAtOrEof'
 
@@ -490,6 +514,7 @@ function acceptKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) r
 	if tokenAtOrEof(tokens, index: cursor.value).kind != kind 'notThere'
 		return false
 	end 'notThere'
+
 	cursor.value = cursor.value + 1
 	return true
 end 'acceptKind'
@@ -499,9 +524,11 @@ end 'acceptKind'
 // walk at an index the grammar never agreed to.
 function expectKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) returns Token throws DirectiveError
 	let tok = tokenAtOrEof(tokens, index: cursor.value)
+
 	if tok.kind != kind 'mismatch'
 		throw DirectiveError.malformedCondition(tok.line, column: tok.column)
 	end 'mismatch'
+
 	cursor.value = cursor.value + 1
 	return tok
 end 'expectKind'
@@ -516,14 +543,18 @@ function equalsIgnoringAsciiCase(a ByteArray, b ByteArray) returns bool
 	end 'lengthDiffers'
 
 	var i = 0
+
 	while i < a.count() 'compare'
 		let av = try a.get(i) otherwise panic("equalsIgnoringAsciiCase: i<count but a.get({i}) failed")
 		let bv = try b.get(i) otherwise panic("equalsIgnoringAsciiCase: i<count but b.get({i}) failed")
+
 		if toAsciiLower(av) != toAsciiLower(bv) 'differs'
 			return false
 		end 'differs'
+
 		i = i + 1
 	end 'compare'
+
 	return true
 end 'equalsIgnoringAsciiCase'
 
@@ -534,6 +565,7 @@ function toAsciiLower(b Byte) returns Byte
 	if b >= AsciiUpperA and b <= AsciiUpperZ 'isUpper'
 		return (b + AsciiCaseGap) as Byte
 	end 'isUpper'
+
 	return b
 end 'toAsciiLower'
 

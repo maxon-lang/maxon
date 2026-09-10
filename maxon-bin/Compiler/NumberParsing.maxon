@@ -17,6 +17,7 @@ export typealias ParsedIntArray = Array with ParsedInt
 // story for. There is now no arm without a raiser.
 export union ParserError
 	overflow
+
 	// ⚠ A byte the number grammar does not admit — `3,14`, `1.0x`, a value with no digit at all.
 	// DISTINCT from `overflow`, and the distinction is load-bearing rather than cosmetic: the two
 	// have different CAUSES and therefore different correct responses. An overflow is a real program
@@ -166,10 +167,13 @@ export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
 	var result = 0
 	var digitCount = 0
 	var leadingZeros = true
+
 	for pi in 0 upto sLen 'digits'
 		let b = try bytes.get(pi) otherwise panic("parseInt.digits: pi < sLen = bytes.count() but get({pi}) failed")
+
 		if b >= '0' and b <= '9' 'digit'
 			result = result * 10 + (b - '0')
+
 			if not leadingZeros or b != '0' 'significant'
 				leadingZeros = false
 				digitCount = digitCount + 1
@@ -186,22 +190,28 @@ export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
 	if digitCount == 19 'checkMax'
 		var mi = 0
 		var pastLeading = false
+
 		for pi in 0 upto sLen 'cmp'
 			let b = try bytes.get(pi) otherwise panic("parseInt.cmp: pi < sLen but get({pi}) failed")
+
 			if b == '_' 'skipUs'
 				continue
 			end 'skipUs'
+
 			if not pastLeading and b == '0' 'skipLz'
 				continue
 			end 'skipLz'
+
 			if b >= '0' and b <= '9' 'cmpDigit'
 				pastLeading = true
 				let maxByte = try I64MaxDigits.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = I64MaxDigits.count() but get({mi}) failed")
+
 				if b > maxByte 'bigger'
 					throw ParserError.overflow
 				end 'bigger' else if b < maxByte 'smaller'
 					return result
 				end 'smaller'
+
 				mi = mi + 1
 			end 'cmpDigit'
 		end 'cmp'
@@ -220,6 +230,7 @@ export function parseNegatedInt(bytes ByteArray) returns ParsedInt throws Parser
 	if digitsWithoutSeparators(bytes).equals(I64MinMagnitudeDigits) 'isI64Min'
 		return i64.min
 	end 'isI64Min'
+
 	return -(try parseInt(bytes))
 end 'parseNegatedInt'
 
@@ -228,11 +239,13 @@ end 'parseNegatedInt'
 // skips separators inline as it scans.
 function digitsWithoutSeparators(bytes ByteArray) returns ByteArray
 	var digits = ByteArray.create()
+
 	for b in bytes 'each'
 		if b != '_' 'keep'
 			digits.push(b)
 		end 'keep'
 	end 'each'
+
 	return digits
 end 'digitsWithoutSeparators'
 
@@ -241,10 +254,13 @@ function parseHexInt(s ByteArray, startIndex ByteOffset) returns ParsedInt throw
 	var result = 0
 	var digitCount = 0
 	var leadingZeros = true
+
 	for pi in startIndex upto s.count() 'hexDigits'
 		let b = try s.get(pi) otherwise panic("parseHexInt.hexDigits: pi < s.count() but get({pi}) failed")
+
 		if b >= '0' and b <= '9' 'decDigit'
 			result = result * 16 + (b - '0')
+
 			if not leadingZeros or b != '0' 'sigDec'
 				leadingZeros = false
 				digitCount = digitCount + 1
@@ -259,9 +275,11 @@ function parseHexInt(s ByteArray, startIndex ByteOffset) returns ParsedInt throw
 			digitCount = digitCount + 1
 		end 'upperHex'
 	end 'hexDigits'
+
 	if digitCount > 16 'overflow'
 		throw ParserError.overflow
 	end 'overflow'
+
 	return result
 end 'parseHexInt'
 
@@ -270,10 +288,13 @@ function parseBinaryInt(s ByteArray, startIndex ByteOffset) returns ParsedInt th
 	var result = 0
 	var digitCount = 0
 	var leadingZeros = true
+
 	for pi in startIndex upto s.count() 'binDigits'
 		let b = try s.get(pi) otherwise panic("parseBinaryInt.binDigits: pi < s.count() but get({pi}) failed")
+
 		if b == '0' 'zeroBit'
 			result = result * 2
+
 			if not leadingZeros 'sigZero'
 				digitCount = digitCount + 1
 			end 'sigZero'
@@ -283,9 +304,11 @@ function parseBinaryInt(s ByteArray, startIndex ByteOffset) returns ParsedInt th
 			digitCount = digitCount + 1
 		end 'oneBit'
 	end 'binDigits'
+
 	if digitCount > 64 'overflow'
 		throw ParserError.overflow
 	end 'overflow'
+
 	return result
 end 'parseBinaryInt'
 
@@ -296,22 +319,28 @@ function parseOctalInt(s ByteArray, startIndex ByteOffset) returns ParsedInt thr
 	var digitCount = 0
 	var leadingZeros = true
 	var firstSignificantDigit = 0
+
 	for pi in startIndex upto s.count() 'octDigits'
 		let b = try s.get(pi) otherwise panic("parseOctalInt.octDigits: pi < s.count() but get({pi}) failed")
+
 		if b >= '0' and b <= '7' 'octDigit'
 			result = result * 8 + (b - '0')
+
 			if not leadingZeros or b != '0' 'significant'
 				if leadingZeros 'firstSig'
 					firstSignificantDigit = b - '0'
 				end 'firstSig'
+
 				leadingZeros = false
 				digitCount = digitCount + 1
 			end 'significant'
 		end 'octDigit'
 	end 'octDigits'
+
 	// 64 bits = 21 octal digits max, but first digit can be at most 1 (0o1777...7)
 	if digitCount > 21 or (digitCount == 21 and firstSignificantDigit > 1) 'overflow'
 		throw ParserError.overflow
 	end 'overflow'
+
 	return result
 end 'parseOctalInt'

@@ -351,6 +351,7 @@ end 'emitSubpScratch'
 export enum SubprocessCommandShape
 	// Windows: `CreateProcessA` takes ONE command line and splits it itself, by the CRT's rules.
 	commandLine
+
 	// SysV: `posix_spawnp`/`execv` take a NULL-terminated `char *const argv[]` and split nothing.
 	argumentVector
 end 'SubprocessCommandShape'
@@ -383,6 +384,7 @@ enum EnvironmentSnapshotShape
 	// Windows: `GetEnvironmentStringsA` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
 	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsA`.
 	nulSeparatedBlock
+
 	// POSIX: `environ` is a NULL-terminated vector of `char *`. It is the live table rather than a copy, so
 	// there is nothing to release — which is why the `pointerVector` body emits no `osEnvBlockFree` and the
 	// arm64 lane needs no lowering for one.
@@ -477,6 +479,7 @@ function buildSubpShellCommand(module StdModule)
 	let commandFlag = emitSubpLiteralCString(module, block: entry, ids: ids, bytes: ShellCommandFlagBytes)
 	emitStoreField(module, block: entry, record: vec, offset: PointerFieldBytes as ByteOffset, value: commandFlag)
 	emitStoreField(module, block: entry, record: vec, offset: (2 * PointerFieldBytes) as ByteOffset, value: linePtr)
+
 	// The terminating NULL is the slab's own zero — the allocation is sized for it above.
 	module.setTerminator(entry, op: StdOp.ret(vec))
 
@@ -495,6 +498,7 @@ export function emitSubpLiteralCString(module StdModule, block IrBlock, ids Valu
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
 
 	var offset = 0 as ByteOffset
+
 	for ch in bytes 'each'
 		let value = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
 		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
@@ -752,6 +756,7 @@ function buildSubpArgvCmdline(module StdModule)
 	let argvLen = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordLengthOffset, ids: ids)
 	emitStoreField(module, block: entry, record: state, offset: ClArgvBuf, value: argvBuf)
 	emitStoreField(module, block: entry, record: state, offset: ClArgc, value: argc)
+
 	// The worst-case bound — see `ClBytesPerSourceByte`. One allocation, one pass, no growth logic.
 	let perByte = emitConst(module, block: entry, value: ClBytesPerSourceByte, ids: ids)
 	let byteRoom = emitBin(module, block: entry, a: argvLen, b: perByte, opcode: StdBinOpcode.mul, ids: ids)
@@ -1092,6 +1097,7 @@ function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, 
 		nulSeparatedBlock gives emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
 		pointerVector gives emitSubpEnvVectorCall(module, block: callerEnv, ids: ids, envRec: env)
 	end 'shape'
+
 	module.setTerminator(callerEnv, op: StdOp.branch(build.id))
 	callerEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(envPointer)))
 
@@ -1295,6 +1301,7 @@ function buildSubpWaitExit(module StdModule)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+
 	// The wait's DURATION, carried to `doWait` as its one block argument. This is the one place in the file
 	// where a block argument beats the scratch record the header argues for: it is a single value across a
 	// single merge with no loop anywhere near it, so it costs one register and nothing else — and the
@@ -1639,6 +1646,7 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	let advanced = emitBin(module, block: capped, a: pendC, b: written, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, value: advanced)
 	emitSubpAddProgress(module, block: capped, ids: ids, state: state, amount: written)
+
 	// A FAILED write is a broken pipe — the child closed its stdin, or exited — and the queue must be
 	// abandoned rather than retried every pass. Without this the feed makes no progress for ever while the
 	// loop waits on the exit check to save it, which it does, one millisecond at a time.
@@ -1821,6 +1829,7 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	let got = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fiveArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot, fifth: ownsPipe)))
 	emitStoreField(module, block: doRead, record: state, offset: WcAvail, value: got)
+
 	// ⚠ `<= 0`, not `== 0`: `__gt_subp_yield_read` answers `SubpReadFailedCount` for a read that FAILED, and
 	// a negative down the `keep` arm would advance the collected length past the bytes there are. A COLLECT
 	// has nowhere to report the difference — its answer is the bytes it gathered — so both stop the drain.
@@ -2038,6 +2047,7 @@ function buildSubpLastError(module StdModule)
 	let prefix = emitLiteralCString(module, block: render, ids: ids, text: SubpErrorPrefix)
 	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count(), ids: ids)
 	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
+
 	// The shared copy-out lays the PREFIX down and publishes `total` as the length; the digits are then
 	// copied into the tail it reserved. Publishing before the second copy is safe because the length is a
 	// header word the copy never touches — and it is what keeps the "publish the length" step in exactly one
@@ -2117,6 +2127,7 @@ function buildSubpEnvEntryFromVector(module StdModule)
 	let slot = emitBin(module, block: subscript, a: vector, b: displacement, opcode: StdBinOpcode.add, ids: ids)
 	let cursor = emitLoadField(module, block: subscript, record: slot, offset: 0 as ByteOffset, ids: ids)
 	let zeroCursor = emitConst(module, block: subscript, value: 0, ids: ids)
+
 	// The vector's own NULL terminator is what says "past the end" — the same fact the block shape reads off
 	// its second NUL.
 	let pastEnd = emitCmp(module, block: subscript, a: cursor, b: zeroCursor, pred: StdCmpPred.eq, ids: ids)
@@ -2250,6 +2261,7 @@ function buildSubpResolvePath(module StdModule)
 	emitStoreField(module, block: measuredName, record: state, offset: RpNameLen, value: nameLen)
 	var afterPath = emitSubpReadEnvInto(module, func: func, ids: ids, cur: measuredName, state: state, varName: PathVarName, outOffset: RpPath, fallback: EmptyPathFallback)
 	var afterExts = emitSubpReadEnvInto(module, func: func, ids: ids, cur: afterPath, state: state, varName: PathExtVarName, outOffset: RpExts, fallback: PathExtDefault)
+
 	// The candidate buffer is sized for the longest combination that can exist: any directory of PATH, a
 	// separator, the name and any extension of PATHEXT, plus a terminator. One allocation for the whole walk.
 	let pathV = emitLoadField(module, block: afterExts, record: state, offset: RpPath, ids: ids)
@@ -2381,6 +2393,7 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	let written = ids.mint()
 	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: firstBuf, bufLenId: firstSize))
 	emitStoreField(module, block: cur, record: state, offset: outOffset, value: firstBuf)
+
 	// The three answers, classified in the order `emitFilledBufferVerdict` states: 0 is "unset", `< size` is
 	// "written and NUL-terminated", anything else is the size it needs.
 	var fits = module.addBlock(func, label: b"rpenvfits")
@@ -2553,11 +2566,14 @@ export function installSubprocessRuntime(module StdModule, target Target)
 		commandLine then buildSubpArgvCmdline(module)
 		argumentVector then buildSubpArgvVector(module)
 	end 'shape'
+
 	let envShape = spawnEnvironmentShape(target)
+
 	match envShape 'envShape'
 		nulSeparatedBlock then break 'envShape'
 		pointerVector then buildSubpEnvVector(module)
 	end 'envShape'
+
 	buildSubpAttachedSpawn(module, shape: envShape)
 	buildSubpStreamSpawn(module, shape: envShape)
 	buildSubpGetPid(module)

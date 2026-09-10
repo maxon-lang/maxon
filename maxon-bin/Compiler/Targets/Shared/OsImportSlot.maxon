@@ -44,6 +44,7 @@ export enum OsImportSlot
 	mmap
 	munmap
 	madvise
+
 	// --- the arm64-macOS host surface (`Targets/Arm64/Arm64DarwinRuntime`) ---
 	//
 	// ⚠ **THESE ARE REACHED FROM ONE LANE ONLY, AND THE ENUM IS STILL THE RIGHT HOME.** Every slot above is
@@ -56,6 +57,7 @@ export enum OsImportSlot
 	// which is why three facilities cost one slot. `nanosleep` is the timed park.
 	clockGettimeNsecNp
 	nanosleep
+
 	// `sysconf` answers a numbered system parameter in x0 — `osCpuCount` asks it
 	// `_SC_NPROCESSORS_ONLN`. ⚠ **IT IS THE FIRST SLOT HERE WITH NO LINUX TWIN AT ALL**, where every slot
 	// above merely reaches its twin as a raw `svc`: Linux serves this parameter through a libc FUNCTION and
@@ -64,6 +66,7 @@ export enum OsImportSlot
 	// restate them here). That is why `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone, and why
 	// `lowerOsCpuCount` asks `arm64OsCallKind` before emitting a call through this slot.
 	sysconf
+
 	// --- MAC2: the `processInfo` facility's six libSystem entries ---
 	//
 	// ⚠ **SIX SLOTS FOR THREE OPS, AND THE ARITHMETIC IS THE POINT.** Windows answers each of these
@@ -90,6 +93,7 @@ export enum OsImportSlot
 	getpid
 	setpriority
 	getpriority
+
 	// --- MAC3: the green-thread floor's libSystem substrate ---
 	//
 	// ⭐⭐ **FIFTEEN SLOTS BECAUSE WIN32 ANSWERS THIS FAMILY WITH KERNEL OBJECTS AND POSIX ANSWERS IT WITH
@@ -130,6 +134,7 @@ export enum OsImportSlot
 	pthreadCreate
 	pthreadJoin
 	getenv
+
 	// ⭐⭐ **THE THREE ATTRIBUTE CALLS EXIST BECAUSE A WIN32 `CRITICAL_SECTION` IS RECURSIVE AND A DEFAULT
 	// POSIX MUTEX IS NOT — MEASURED, as a HANG.** `osLockInit`'s Std-tier callers take the same lock nested
 	// (`SchedRuntime`'s own header records it: *"a nested `LeaveCriticalSection` releases nothing"*), which
@@ -146,6 +151,7 @@ export enum OsImportSlot
 	pthreadMutexattrInit
 	pthreadMutexattrSettype
 	pthreadMutexattrDestroy
+
 	// --- MAC4/5/6/7: the filesystem, standard-input and argv substrate ---
 	//
 	// ⭐⭐ **`__error` IS THE WHOLE errno STORY, AND IT IS A FUNCTION RATHER THAN A LOCATION.** POSIX makes
@@ -194,6 +200,7 @@ export enum OsImportSlot
 	closedir
 	dirfd
 	fnmatch
+
 	// --- MAC8: the child-process substrate ---
 	//
 	// ⭐⭐ **THIRTEEN SLOTS BECAUSE `CreateProcessA` IS ONE CALL AND `posix_spawn` IS A BUILDER.** Win32
@@ -236,6 +243,7 @@ export enum OsImportSlot
 	posixSpawnattrSetflags
 	posixSpawnattrDestroy
 	nsGetEnviron
+
 	// --- Is standard output a TERMINAL? ---
 	//
 	// ⭐ **ONE SLOT FOR THE WHOLE `terminalDetection` FACILITY, AND IT HAS NO LINUX TWIN EITHER.** `isatty` is
@@ -243,6 +251,7 @@ export enum OsImportSlot
 	// a libc-less Linux image would make that call itself and reach nothing here, exactly as `sysconf` and the
 	// six `processInfo` entries above it are reached by one lane only.
 	isatty
+
 	// --- The BSD SOCKET band ---
 	//
 	// ⭐⭐ **SIX SLOTS FOR SEVEN OPS, BECAUSE `closesocket` IS `close` AND THAT IS THE WHOLE POINT OF A
@@ -267,6 +276,7 @@ export enum OsImportSlot
 	connect
 	send
 	recv
+
 	// --- The NAMED SHARED SECTION both ends of a DebugStream ring map ---
 	//
 	// ⭐⭐ **THREE SLOTS BECAUSE POSIX SEPARATES NAMING A SHARED OBJECT FROM SIZING IT, AND WIN32 DOES NOT.**
@@ -288,6 +298,7 @@ export enum OsImportSlot
 	shmOpen
 	shmUnlink
 	ftruncate
+
 	// ⭐⭐ **`sigaction` AND `sigaltstack` — THE FAULT HANDLER'S TWO PRIMITIVES, AND THE SECOND EXISTS ONLY
 	// BECAUSE OF THE FIRST'S `SA_ONSTACK` FLAG.** `sigaction` publishes `mrt_fault_handler` for SIGSEGV,
 	// SIGBUS and SIGFPE (`Arm64FaultRuntime`); `SA_ONSTACK` then says the kernel must switch to an alternate

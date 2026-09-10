@@ -226,15 +226,19 @@ export function managedDirectorySourceMethodName(callee ByteArray) returns ByteA
 	if callee.equals(ManagedDirectoryOpenSearchName) 'openSearch'
 		return ManagedDirectoryOpenSearchMethod
 	end 'openSearch'
+
 	if callee.equals(ManagedDirectoryNextName) 'next'
 		return ManagedDirectoryNextMethod
 	end 'next'
+
 	if callee.equals(ManagedDirectoryCreateName) 'create'
 		return ManagedDirectoryCreateMethod
 	end 'create'
+
 	if callee.equals(ManagedDirectoryCurrentPathName) 'currentPath'
 		return ManagedDirectoryCurrentPathMethod
 	end 'currentPath'
+
 	panic("managedDirectorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedDirectory` callee — this map is asked ONLY behind `isThrowingManagedDirectoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedDirectory*Method` constant. `installManagedDirectoryRuntime`'s drift guard asks this for every throwing `__md_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedDirectorySourceMethodName'
 
@@ -357,6 +361,7 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 
 	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
+
 	// PUBLISH the bytes. `__managed_reserve` sets the capacity and leaves the length 0 (that is its contract, and
 	// `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
 	// answer with the empty string.
@@ -387,6 +392,7 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	let search = ids.mint()
 	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
+
 	// The last error is captured IMMEDIATELY after the call — a `__mm_free` in between runs Win32 code of its
 	// own and could overwrite the thread's last-error. The same ordering `ManagedFileRuntime` states once.
 	let err = ids.mint()
@@ -502,6 +508,7 @@ function buildManagedDirectoryNext(module StdModule)
 	let byte1 = emitLoadByte(module, block: dot1, base: name, index: oneIndex, ids: ids)
 	let nul1 = emitConst(module, block: dot1, value: NulByte, ids: ids)
 	let isSingleDot = emitCmp(module, block: dot1, a: byte1, b: nul1, pred: StdCmpPred.eq, ids: ids)
+
 	// A bare `.` is skipped; anything else with a leading dot needs byte2 to decide.
 	module.setTerminator(dot1, op: StdOp.condBranch(isSingleDot, thenBlockId: fetch.id, elseBlockId: dot2.id))
 
@@ -577,6 +584,7 @@ function buildManagedDirectoryClose(module StdModule)
 	let slot = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedDirectoryClosedHandle, ids: ids)
 	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+
 	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
 	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
 	let handle = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
@@ -661,6 +669,7 @@ function buildManagedDirectoryExists(module StdModule)
 	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileAttributes(rawAttrs, pathPtrId: scratch))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+
 	// `GetFileAttributesA` answers a DWORD, so the comparison is against the MASKED value: a raw i64 register
 	// holding 0x00000000FFFFFFFF is not -1, and testing it against -1 would call every missing path present.
 	let mask = emitConst(module, block: afterCopy, value: DwordMask, ids: ids)
@@ -848,6 +857,7 @@ function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
 	directoryErrors.claim(ManagedDirectoryAccessDeniedCaseName, ordinal: ManagedDirectoryAccessDeniedOrdinal)
 	directoryErrors.claim(ManagedDirectoryOpenSearchFailedCaseName, ordinal: ManagedDirectoryOpenSearchFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryNextFailedCaseName, ordinal: ManagedDirectoryNextFailedOrdinal)
+
 	// `filename()` on an exhausted iterator is non-throwing — see the ordinal block at the top of this file.
 	directoryErrors.neverThrown(ManagedDirectoryIteratorInvalidCaseName, ordinal: ManagedDirectoryIteratorInvalidOrdinal)
 	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
@@ -874,11 +884,14 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 		if not isManagedDirectoryRuntimeCallee(func.name) 'notOurs'
 			continue
 		end 'notOurs'
+
 		let named = isThrowingManagedDirectoryRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
+
 		if stamped and not named 'stampedNotNamed'
 			panic("installManagedDirectoryRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedDirectoryRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.3)")
 		end 'stampedNotNamed'
+
 		if named and not stamped 'namedNotStamped'
 			panic("installManagedDirectoryRuntime: isThrowingManagedDirectoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.3)")
 		end 'namedNotStamped'

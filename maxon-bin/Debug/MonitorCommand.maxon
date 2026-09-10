@@ -75,6 +75,7 @@ end 'ChildStream'
 export function runMonitor(args MaxonArgs) returns ExitCode
 	var filterSpelling = ""
 	var exeIndex = 0 as ArgumentIndex
+
 	for argument in args.paths 'eachLeadingOption'
 		if not argument.startsWith(FilterOptionPrefix) 'theExecutable'
 			break
@@ -92,6 +93,7 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 	// ⭐ VALIDATED AT THE COMMAND LINE rather than in the decode loop, where the only available behaviours
 	// would be to throw or to silently show EVERY event — which is the opposite of what was asked for.
 	let filter = parseFamilyFilter(filterSpelling)
+
 	match filter 'chosen'
 		all then break 'chosen'
 		only then break 'chosen'
@@ -104,6 +106,7 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 	// `temp/x/out.exe` by a relative spelling shifted three `ElementBuffer` sizes by 26 bytes against the
 	// reference, which resolves the same way. The REFUSAL still names what was typed.
 	let target = try FilePath.from(spelling) otherwise return refuseMissingTarget(spelling)
+
 	if not File.exists(target) 'notThere'
 		return refuseMissingTarget(spelling)
 	end 'notThere'
@@ -127,6 +130,7 @@ end 'runMonitor'
 // ⭐ The timeline: drain, print, forward, repeat until the producer is gone and the ring is empty.
 function watchTarget(decoder DebugStreamDecoder, child StreamingSubprocess) returns ExitCode
 	var draining = true
+
 	while draining 'timeline'
 		// ⛔ SAMPLED BEFORE THE DRAIN READS THE CURSORS. If the producer is already gone by this read, every
 		// store it will ever make is in the ring, so the cursors read next are FINAL. The other order lets a
@@ -216,6 +220,7 @@ end 'spawnTarget'
 // untouched — this driver neither reads nor rewrites any of it.
 function childArguments(tail SourcePathSpellingArray, from ArgumentIndex) returns StringArray
 	var argv = StringArray.create()
+
 	for (position, argument) in tail.withIterator() 'eachArgument'
 		if position.index() as ArgumentIndex >= from 'aChildArgument'
 			argv.push(argument)
@@ -246,6 +251,7 @@ end 'hasExited'
 function forwardChildOutput(child StreamingSubprocess, waiting bool)
 	for stream in ChildStream.allCases 'eachStream'
 		var buffered = true
+
 		while buffered 'untilNothingIsBuffered'
 			match pollChildLine(child, stream: stream) 'polled'
 				line(text) then emitChildLine(text, stream: stream)
@@ -306,6 +312,7 @@ end 'printEvents'
 
 function indentFor(depth TraceDepth) returns String
 	var indent = ""
+
 	for _ in 0 upto depth 'eachLevel'
 		indent.append(DepthIndentUnit)
 	end 'eachLevel'
@@ -323,6 +330,7 @@ function reportSummary(decoder DebugStreamDecoder)
 	let total = decoder.totalEvents()
 	let dropped = decoder.droppedEvents()
 	let abandoned = decoder.abandonedCount()
+
 	if total == 0 and dropped == 0 and abandoned == 0 'nothingHappened'
 		return
 	end 'nothingHappened'

@@ -165,6 +165,7 @@ let sharedUnseededMinter = ValueMinter.create(0)
 type InlineCarve
 	// Takes the ORIGINAL result ids as its block args and holds every op that followed the call.
 	export var cont as IrBlock
+
 	// The `BlockRef` naming that continuation, CAPTURED at the split rather than searched for afterwards.
 	// The split is the one moment it is knowable in O(1) — `splitBlockExit` is the only `addBlock` inside
 	// it, so the continuation is the function's last-registered block exactly then and never again. A
@@ -180,6 +181,7 @@ end 'InlineCarve'
 // The two blocks every GUARDED carved site has, held together because every expander wires both.
 type InlineFrame
 	export var carve as InlineCarve
+
 	// Holds the original call, verbatim, defining FRESH result ids.
 	export var slow as IrBlock
 
@@ -222,6 +224,7 @@ end 'BoundedLoad'
 // Expand every inlinable `__ManagedMemory` primitive call in the module.
 export function inlineManagedPrimitives(project Project, module StdModule)
 	var expanded = 0 as InlinedSiteCount
+
 	for func in module.functions 'eachFunc'
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `lowerMaxonToStd` skip on, stated the same way. Here it is purely cost:
@@ -246,12 +249,14 @@ end 'inlineManagedPrimitives'
 type PrimitiveInliner
 	var module as StdModule
 	var func as IrFunction
+
 	// ⭐ **THE COMPILE-TIME `element_size@24` STAMP OF EVERY CALL SITE THAT HAS ONE (EC15)**, keyed by the
 	// call's own index in `module.ops` and written by `LowerMaxonToStd` — the tier that still holds the
 	// container's TYPE, which this one deliberately does not. Read through `stridePlanAt` and nowhere else;
 	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, which since EC17 is
 	// the ONLY pass between the write and this read.
 	let strides as StdOpElementStrideMap
+
 	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
 	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
 	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
@@ -285,6 +290,7 @@ type PrimitiveInliner
 	// following only those is what makes the walk terminate.
 	function run()
 		let originalBlockCount = self.func.blockRefs.count()
+
 		for i in 0 upto originalBlockCount 'eachBlock'
 			let blockRef = try self.func.blockRefs.get(i) otherwise panic("PrimitiveInliner.run: blockRefs.get OOB at {i} despite the snapshot bound")
 			self.expandChainFrom(blockRef)
@@ -311,8 +317,10 @@ type PrimitiveInliner
 	function expandChainFrom(blockRef BlockRef)
 		var current = blockRef
 		var pos = 0 as BlockOpPos
+
 		while pos < self.blockAt(current).opRefs.count() 'eachOp'
 			let next = self.expandAt(current, pos: pos)
+
 			if next == current 'nothingCarved'
 				pos = pos + 1
 				continue
@@ -368,6 +376,7 @@ type PrimitiveInliner
 				osWriteStdout or
 				rdataAddr then break 'op'
 			tryCall(resultId, errorFlagId, callee, args) then return self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+
 			// ⚠ Extended past `osThreadCpuTicks` when the allocator rung appended seven ops (memFill, the
 			// reserve/commit/decommit family, and the atomics). None is a CALL, so none can be a managed
 			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
@@ -480,6 +489,7 @@ type PrimitiveInliner
 		if callee.equals(ManagedCountName) 'count'
 			return self.rewriteCountInPlace(blockRef, pos: pos, args: args, resultId: resultId, callee: callee)
 		end 'count'
+
 		if callee.equals(ManagedGetUncheckedName) 'uncheckedGet'
 			return self.expandUncheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 		end 'uncheckedGet'
@@ -498,9 +508,11 @@ type PrimitiveInliner
 		if callee.equals(ManagedGetName) 'checkedGet'
 			return self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 		end 'checkedGet'
+
 		if callee.equals(ManagedSetName) 'set'
 			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordLengthOffset)
 		end 'set'
+
 		if callee.equals(ManagedMemSetName) 'memSet'
 			return self.expandElementStore(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, limitOffset: ManagedRecordCapacityOffset)
 		end 'memSet'
@@ -540,6 +552,7 @@ type PrimitiveInliner
 		// whether to expand. The other two expanders keep the bound and the ownership gates under every plan,
 		// so they always carve a frame and always have somewhere for a refusal to go.
 		let plan = self.stridePlanAt(blockRef, pos: pos)
+
 		match plan 'plan'
 			runtimeFork then break 'plan'
 			singleArm(stride) then return self.expandUncheckedGetUnguarded(blockRef, pos: pos, arr: arr, index: index, resultId: resultId, stride: stride)
@@ -547,6 +560,7 @@ type PrimitiveInliner
 		end 'plan'
 
 		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
+
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
 		end 'eachArm'
@@ -602,6 +616,7 @@ type PrimitiveInliner
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
 		let plan = self.stridePlanAt(blockRef, pos: pos)
+
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
@@ -622,6 +637,7 @@ type PrimitiveInliner
 
 		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel)
 		let value = self.valueIds().mint()
+
 		// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT
 		// REASON FROM THE ONE BELOW (EC3).** The byte arm reaches it with a `u8` load, which is a
 		// ZERO-EXTENDED byte in a general register — the same register file and the same machine word, so
@@ -633,6 +649,7 @@ type PrimitiveInliner
 		for arm in arms 'eachArm'
 			self.emitBoundedLoadArm(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, slow: frame.slow, loaded: loaded)
 		end 'eachArm'
+
 		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame)
 
 		return self.finish(frame.carve)
@@ -673,6 +690,7 @@ type PrimitiveInliner
 	// whole difference between the two shapes, and this is the half they share.
 	function emitBoundedLoad(cur IrBlock, arr ValueId, index ValueId, stride SingleOpStride, slow IrBlock) returns BoundedLoad
 		var at = self.guardIndexInRange(cur, arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: slow, next: InlineLoadLabel)
+
 		// Read before the load, which mints values and no blocks — `guardIndexInRange`'s own `addBlock` is
 		// still the last one, which is the only condition `registeredBlockRef` has.
 		let atRef = registeredBlockRef(self.module, func: self.func, block: at)
@@ -710,11 +728,13 @@ type PrimitiveInliner
 		let index = argAt(args, index: 1, callee: callee)
 		let value = argAt(args, index: 2, callee: callee)
 		let plan = self.stridePlanAt(blockRef, pos: pos)
+
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
 
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
+
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame)
 		end 'eachArm'
@@ -960,6 +980,7 @@ type PrimitiveInliner
 		_ = self.valueIds()
 
 		let cont = self.carve(blockRef, pos: pos)
+
 		// Read immediately, and CHECKED by identity — `carve` is the one moment the continuation is the
 		// function's last-registered block, and the `addBlock` on the next line ends it. The check is not
 		// belt-and-braces here: `expandAt` answers "the scan carries on in THIS block" vs "… in the
@@ -979,6 +1000,7 @@ type PrimitiveInliner
 		var cont = frame.carve.cont
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
+
 		// Every value these five primitives carry is a MACHINE WORD, and that is exact rather than a
 		// default: all five are declared `value(StdType.i64)` or void, so the `resultId` a call defined was
 		// already classed off that declaration (`StdLoweringShared.calleeResultClass`), and a dual-register

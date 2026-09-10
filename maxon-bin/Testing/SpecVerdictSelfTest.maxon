@@ -66,6 +66,7 @@ function checkLaunchFailureVerdicts(broken StringArray)
 		// FAIL — including on a lane whose OTHER cases are legitimately unrun. Excusing it is how a
 		// program this compiler had just emitted and could not start gets waved through.
 		let attempted = verdictOf(RunObservation.failed("the OS refused it"), target: target)
+
 		if not isFailVerdict(attempted) 'excusedAFailedLaunch'
 			broken.push("{key}: a binary that FAILED TO LAUNCH earned '{verdictLine(attempted, label: key)}' instead of a FAIL. A launch that was attempted and did not work is a defect, and running the program is what exists to catch it.\n")
 		end 'excusedAFailedLaunch'
@@ -74,6 +75,7 @@ function checkLaunchFailureVerdicts(broken StringArray)
 			individually gives false
 			wslBatch gives false
 			noneHere gives true
+
 			// Executions ARE performed on this lane — by a compiler inside the guest, which asks this
 			// same question of itself there and answers `individually`. The row below therefore does not
 			// apply, while the launch-failure row above still does and is asserted for every target.
@@ -151,6 +153,7 @@ function checkEveryOutcomeIsCounted(broken StringArray)
 	results.append(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.unrecorded))
 
 	let tally = tallyResults(results)
+
 	if tally.total() != results.count() 'notAllCounted'
 		broken.push("{results.count()} results but {tally.total()} counted across passed/failed/skipped/not-run-here. A verdict that falls out of every column has been dropped from the report — and a GOLDEN's answer must not be in that sum at all, because it is a second fact about a result that is already counted.\n")
 	end 'notAllCounted'
@@ -190,6 +193,7 @@ end 'checkOnlyAValidatedVerdictMints'
 // a reader in so many words.
 function checkNotRunHereDriftIsReported(broken StringArray)
 	let entries = goldenDriftEntries(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.drifted("a synthesized difference")))
+
 	if entries.count() == DriftedResultsSynthesized 'named'
 		return
 	end 'named'

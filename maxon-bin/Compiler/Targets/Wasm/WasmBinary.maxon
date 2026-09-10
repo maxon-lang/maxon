@@ -926,11 +926,13 @@ export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray
 	enc.push(wasmFunctypeForm)
 
 	writeUleb128(enc, value: params.count() as Wasm32Index)
+
 	for p in params 'eachParam'
 		enc.push(valTypeByte(p))
 	end 'eachParam'
 
 	writeUleb128(enc, value: results.count() as Wasm32Index)
+
 	for r in results 'eachResult'
 		enc.push(valTypeByte(r))
 	end 'eachResult'
@@ -969,6 +971,7 @@ function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
 	end 'each'
 
 	writeUleb128(buf, value: groupTypes.count() as Wasm32Index)
+
 	for (iter, gt) in groupTypes.withIterator() 'emit'
 		let count = try groupCounts.get(iter.index()) otherwise panic("writeLocalDecls: groupCounts/groupTypes fell out of lockstep at {iter.index()}")
 		writeUleb128(buf, value: count)
@@ -1201,6 +1204,7 @@ export type WasmModuleBuilder
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: self.funcTypes.count() as Wasm32Index)
+
 		for t in self.funcTypes 'each'
 			contents.append(t)
 		end 'each'
@@ -1210,12 +1214,14 @@ export type WasmModuleBuilder
 
 	function emitImportSection(module ByteArray)
 		let importCount = self.importModules.count()
+
 		if importCount == 0 'empty'
 			return
 		end 'empty'
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: importCount as Wasm32Index)
+
 		for (iter, moduleName) in self.importModules.withIterator() 'each'
 			let fieldName = try self.importFields.get(iter.index()) otherwise panic("emitImportSection: importFields out of lockstep with importModules at {iter.index()}")
 			let typeIdx = try self.importTypeIndices.get(iter.index()) otherwise panic("emitImportSection: importTypeIndices out of lockstep at {iter.index()}")
@@ -1231,12 +1237,14 @@ export type WasmModuleBuilder
 
 	function emitFunctionSection(module ByteArray)
 		let funcCount = self.funcTypeIndices.count()
+
 		if funcCount == 0 'empty'
 			return
 		end 'empty'
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: funcCount as Wasm32Index)
+
 		for typeIdx in self.funcTypeIndices 'each'
 			writeUleb128(contents, value: typeIdx)
 		end 'each'
@@ -1278,6 +1286,7 @@ export type WasmModuleBuilder
 		contents.push(wasmElemSegmentActiveFuncref)
 		writeI32ConstOffsetExpr(contents, offset: wasmElemTableStartOffset)
 		writeUleb128(contents, value: funcCount)
+
 		for funcIdx in 0 upto funcCount 'each'
 			writeUleb128(contents, value: funcIdx as Wasm32Index)
 		end 'each'
@@ -1300,12 +1309,14 @@ export type WasmModuleBuilder
 
 	function emitExportSection(module ByteArray)
 		let exportCount = self.exportEntries.count()
+
 		if exportCount == 0 'empty'
 			return
 		end 'empty'
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: exportCount as Wasm32Index)
+
 		for entry in self.exportEntries 'each'
 			writeWasmName(contents, name: entry.name)
 			contents.push(entry.kind)
@@ -1317,12 +1328,14 @@ export type WasmModuleBuilder
 
 	function emitCodeSection(module ByteArray)
 		let funcCount = self.funcBodies.count()
+
 		if funcCount == 0 'empty'
 			return
 		end 'empty'
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: funcCount as Wasm32Index)
+
 		for body in self.funcBodies 'each'
 			writeUleb128(contents, value: body.count() as Wasm32Index)
 			contents.append(body)
@@ -1337,12 +1350,14 @@ export type WasmModuleBuilder
 	// module.
 	function emitDataSection(module ByteArray)
 		let segmentCount = self.dataSegments.count()
+
 		if segmentCount == 0 'none'
 			return
 		end 'none'
 
 		var contents = ByteArray.create()
 		writeUleb128(contents, value: segmentCount as Wasm32Index)
+
 		for segment in self.dataSegments 'each'
 			contents.push(wasmDataSegmentActiveMem0)
 			writeI32ConstOffsetExpr(contents, offset: segment.base as ParsedInt)
@@ -1371,10 +1386,12 @@ export type WasmModuleBuilder
 		// see `funcDebugNames` for why it is not an arithmetic sum of the bands.
 		var namemap = ByteArray.create()
 		writeUleb128(namemap, value: self.funcDebugNames.count() as Wasm32Index)
+
 		for (iter, name) in self.funcDebugNames.withIterator() 'eachName'
 			writeUleb128(namemap, value: iter.index() as Wasm32Index)
 			writeWasmName(namemap, name: name)
 		end 'eachName'
+
 		writeIdTaggedBlob(contents, id: wasmNameSubsectionFunction, payload: namemap)
 
 		writeIdTaggedBlob(module, id: wasmSectionCustom, payload: contents)

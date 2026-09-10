@@ -56,10 +56,12 @@
 // that never writes `spawn`.
 export function installServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures)
 	let services = serviceTypeRoster(signatures)
+
 	// ⭐ **ONE WALK OF THE MODULE FOR EVERY SERVICE, NOT ONE PER SERVICE.** The walk is Θ(program), so
 	// driving it from inside the roster loop would multiply the whole module by the number of service types
 	// — the one place in this file where a per-type constant would become a per-type PASS.
 	let spawned = spawnedInstancesByService(module, services: services)
+
 	for i in 0 upto services.count() 'eachService'
 		let typeName = try services.get(i) otherwise panic("installServiceLoops: services.get OOB at {i} on a list walked to its own count")
 		buildServiceLoops(module, project: project, signatures: signatures, typeName: typeName, instances: try spawned.get(i) otherwise panic("installServiceLoops: spawned.get OOB at {i} — one bucket is pushed per service before the walk"))
@@ -113,25 +115,30 @@ typealias SpawnedInstanceSet = Set with GenericInstanceId
 // therefore deduped through a set rather than a scan.
 function spawnedInstancesByService(module MaxonModule, services ByteArrayArray) returns SpawnedInstanceBuckets
 	var buckets = SpawnedInstanceBuckets.create()
+
 	for _ in services 'eachService'
 		buckets.push(GenericInstanceIdArray.create())
 	end 'eachService'
 
 	var seen = SpawnedInstanceSet.create()
+
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("spawnedInstancesByService: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				noteSpawnedInstance(try module.ops.get(opIdx) otherwise panic("spawnedInstancesByService: opIdx {opIdx} not in module.ops"), func: func, services: services, buckets: buckets, seen: seen)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return buckets
 end 'spawnedInstancesByService'
 
 function noteSpawnedInstance(op MaxonOp, func IrFunction, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
 	match op 'op'
 		serviceSpawn(_, spawnedType, state) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
+
 		// Every other op starts no service, and each is named, so an op added later is a compile error here
 		// rather than an omission.
 		call or
@@ -176,6 +183,7 @@ end 'noteSpawnedInstance'
 function bucketSpawnedInstance(func IrFunction, spawnedType ByteArray, state ValueId, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
 	let tag = try func.valueTags.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-tag column")
 	let nameId = try func.valueNameIds.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-name column")
+
 	match serviceStateInstanceOfValueType(tag, nameId: nameId) 'stands'
 		monomorphic then return
 		at(gid) then noteDistinctInstance(gid, spawnedType: spawnedType, services: services, buckets: buckets, seen: seen)
@@ -189,6 +197,7 @@ function noteDistinctInstance(gid GenericInstanceId, spawnedType ByteArray, serv
 
 	for i in 0 upto services.count() 'eachService'
 		let listed = try services.get(i) otherwise panic("noteDistinctInstance: services.get OOB at {i} on a list walked to its own count")
+
 		if not listed.equals(spawnedType) 'anotherService'
 			continue
 		end 'anotherService'
@@ -247,6 +256,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 		monomorphic gives MaxonType.structRef(project.typeNames.intern(typeName))
 		at(id) gives MaxonType.genericInstance(id)
 	end 'i'
+
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(stateType)
 	paramTypes.push(MaxonType.integer)
@@ -273,6 +283,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	fn.emitPositionalCallDiscarding(MboxCloseName, args: argsOf(ServiceMailboxParam), range: range)
 
 	var armIds = BlockIdArray.create()
+
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
 	end 'eachVariant'
@@ -377,6 +388,7 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 	fn.terminate(MaxonOp.retVoid, range: range)
 
 	var armIds = BlockIdArray.create()
+
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		armIds.push(buildServiceAbandonArm(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, destruct: destruct, range: range).id)
 	end 'eachVariant'
@@ -391,6 +403,7 @@ end 'buildServiceAbandon'
 function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, destruct IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
 	let payloads = request.payloadsAt(caseIndex)
+
 	match serviceReplySlotIndex(payloads) 'reply'
 		absent then break 'reply'
 		at then fn.emitPositionalCallDiscarding(GtCellCompleteName, args: threeArgs(loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: box, range: range), second: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), third: fn.emitTypedLiteral(serviceStoppedErrorFlag(signatures), valueType: MaxonType.integer, range: range)), range: range)
@@ -409,6 +422,7 @@ let ServiceAbandonBoxParam = 0 as ValueId
 function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
 	let payloads = request.payloadsAt(caseIndex)
+
 	if request.caseNameAt(caseIndex).equals(ServiceShutdownCaseName) 'thePoisonPill'
 		// ⭐⭐ **THE PILL'S REPLY IS HANDED TO THE MAILBOX, NOT COMPLETED HERE (SV2), AND THAT IS WHAT MAKES
 		// `await h.shutdown()` A REAL RENDEZVOUS.** Completing it in this arm would resume the awaiter while
@@ -427,6 +441,7 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 
 	let methodName = request.caseNameAt(caseIndex)
 	let callee = qualifiedMethodName(typeName, methodName: methodName)
+
 	// The declaration this variant was built from. Its `paramTypes` count is how many of the variant's
 	// payloads are ARGUMENTS (the rest is the reply slot), which is what the loop below is bounded by; the
 	// "it cannot miss" invariant is `ServiceCompanions.serviceFirstDeclOf`'s, stated once for all four
@@ -439,6 +454,7 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 	var args = ValueIdArray.create()
 	args.push(ServiceStateParam)
 	var payloadClasses = PayloadClassArray.create()
+
 	for slot in 0 upto decl.paramTypes.count() 'eachParam'
 		let field = try payloads.get(slot) otherwise panic("buildServiceArm: `{String.from(request.name)}`'s variant `{String.from(methodName)}` declares {payloads.count()} payload(s) against `{String.from(callee)}`'s {decl.paramTypes.count()} parameter(s) — `ServiceCompanions.serviceRequestPayloads` builds one payload per parameter, plus a trailing reply slot")
 		let declared = signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())
@@ -485,6 +501,7 @@ function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, t
 	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
 
 	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, range: range)
+
 	// ⛔⛔ **THE CURRENT BLOCK, NOT `arm` — AND THE TWO ARE NOT THE SAME BLOCK FOR EVERY MESSAGE.** A THROWING
 	// handler is a `tryCall` whose error edge is a diamond (`emitServiceReplyCompletion`), so by this line the
 	// ops above have landed in that diamond's MERGE and `arm` was terminated by its `condBranch` several lines
@@ -535,6 +552,7 @@ end 'ServiceReplyTarget'
 union ServiceHandlerOutcome
 	// A non-throwing handler: one result register, which is `void` for a message that returns nothing.
 	answered(result ValueId)
+
 	// A throwing handler: the result register and the RAW error flag its `tryCall` set — raw, because the
 	// shift onto the reply's fused line belongs with the completion that writes the word.
 	routed(result ValueId, errorFlag ValueId)
@@ -566,6 +584,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, callee ByteArray, return
 		void gives ValueTypeTag.void
 		value(inner) gives maxonTypeTag(inner)
 	end 'r'
+
 	let resultNameId = match returned 'n'
 		void gives UnnamedTypeId
 		value(inner) gives typeNameIdOf(inner)
@@ -644,6 +663,7 @@ end 'serviceReplyResultWord'
 function emitFusedHandlerFlag(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, errorFlag ValueId, range SourceRange) returns ValueId
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise panic("emitFusedHandlerFlag: `{String.from(callee)}` reached the THROWN edge of its own dispatch arm with no `throws` clause — the caller emits that edge only for a callee `throwsClauseIsThrowing` accepted")
 	let shift = serviceReplyHandlerFusedShift(signatures, errorName: errorName.toByteArray())
+
 	if shift == 0 'alreadyOnTheLine'
 		return errorFlag
 	end 'alreadyOnTheLine'
@@ -672,11 +692,14 @@ end 'emitFusedHandlerFlag'
 // are recorded in (`Parser.recordScannedSignature` states it), and `args` is built in that same order.
 function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, range SourceRange)
 	let payloads = request.payloadsAt(caseIndex)
+
 	for slot in 0 upto classes.count() 'eachPayload'
 		let class = try classes.get(slot) otherwise panic("dropUnconsumedPayloads: classes.get OOB at {slot} — one class is pushed per loaded payload")
+
 		if not payloadClassIsManaged(class) 'ownsNoHeap'
 			continue
 		end 'ownsNoHeap'
+
 		if signatures.paramIsConsumed(callee, index: (slot + ServiceReceiverArgCount) as ParamCount) 'theHandlerTookIt'
 			continue
 		end 'theHandlerTookIt'

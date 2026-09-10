@@ -80,6 +80,7 @@ function resolveStringKey(argsDoc JsonDoc, argsId JsonNodeId) returns LookupKey 
 	end 'notStr'
 
 	let token = raw.trim()
+
 	if token.isEmpty() 'empty'
 		throw LookupArgError.missing
 	end 'empty'
@@ -99,15 +100,18 @@ function isCodeToken(token String) returns bool
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	var i = codeDigitsStart(bytes)
+
 	if i >= n 'noDigits'
 		return false
 	end 'noDigits'
 
 	while i < n 'scan'
 		let b = try bytes.get(i) otherwise panic("isCodeToken: bytes.get OOB — i bounded by n")
+
 		if not isAsciiDigit(b) 'notDigit'
 			return false
 		end 'notDigit'
+
 		i = i + 1
 	end 'scan'
 
@@ -129,11 +133,13 @@ function parseCodeToken(token String) returns CodeNumber throws LookupArgError
 	let bytes = token.toByteArray()
 	let n = bytes.count()
 	let start = codeDigitsStart(bytes)
+
 	if n - start != 4 'wrongLen'
 		throw LookupArgError.notFourDigits
 	end 'wrongLen'
 
 	var value = 0
+
 	for i in start upto n 'each'
 		let b = try bytes.get(i) otherwise panic("parseCodeToken: bytes.get OOB — i bounded by n")
 		value = value * 10 + (b - 0x30)
@@ -159,6 +165,7 @@ end 'clampToCodeRange'
 type RegistryEntry
 	export var name as String
 	export var code as CodeNumber
+
 	// Filled in by `parseRegistry` from the comment run above the case; the line
 	// parser sees only the case line itself.
 	export var doc as String = ""
@@ -184,6 +191,7 @@ function parseRegistry(text String) returns RegistryEntryArray
 
 	let lines = text.split("\n")
 	let n = lines.count()
+
 	for i in 0 upto n 'each'
 		let raw = try lines.get(i) otherwise panic("parseRegistry: lines.get OOB — i bounded by n")
 		let line = raw.trim()
@@ -213,6 +221,7 @@ function parseCaseLine(line String) returns RegistryEntry throws NotFound
 	let pos = try findByteSequence(bytes, needle: CaseMarker)
 
 	let name = sliceBytes(bytes, from: 0, until: pos)
+
 	if name.isEmpty() 'noName'
 		throw NotFound.notFound
 	end 'noName'
@@ -220,21 +229,26 @@ function parseCaseLine(line String) returns RegistryEntry throws NotFound
 	// Four digits and a closing quote, then end of line.
 	let digitsStart = pos + CaseMarker.byteLength()
 	let digitsEnd = digitsStart + 4
+
 	if digitsEnd + 1 != total 'notACaseShape'
 		throw NotFound.notFound
 	end 'notACaseShape'
 
 	let closing = try bytes.get(digitsEnd) otherwise panic("parseCaseLine: bytes.get OOB — digitsEnd < total")
+
 	if closing != 0x22 'noCloseQuote'
 		throw NotFound.notFound
 	end 'noCloseQuote'
 
 	var value = 0
+
 	for i in digitsStart upto digitsEnd 'digits'
 		let b = try bytes.get(i) otherwise panic("parseCaseLine: bytes.get OOB — i bounded by digitsEnd")
+
 		if not isAsciiDigit(b) 'notDigit'
 			throw NotFound.notFound
 		end 'notDigit'
+
 		value = value * 10 + (b - 0x30)
 	end 'digits'
 
@@ -251,8 +265,10 @@ end 'parseCaseLine'
 
 function findEntry(entries RegistryEntryArray, key LookupKey) returns RegistryEntry throws NotFound
 	let n = entries.count()
+
 	for i in 0 upto n 'scan'
 		let entry = try entries.get(i) otherwise panic("findEntry: entries.get OOB — i bounded by n")
+
 		if matchesKey(entry, key: key) 'hit'
 			return entry
 		end 'hit'
@@ -292,8 +308,10 @@ function collectSpecFilesReferencing(repoRoot FilePath, code CodeNumber) returns
 
 	let needle = "E{code}"
 	let n = files.count()
+
 	for i in 0 upto n 'each'
 		let entry = try files.get(i) otherwise panic("collectSpecFilesReferencing: files.get OOB — i bounded by n")
+
 		if not entry.path.endsWith(".md") 'notMd'
 			continue
 		end 'notMd'
@@ -319,6 +337,7 @@ function buildOutcome(entry RegistryEntry, specFiles StringArray) returns ToolOu
 
 	var specIds = JsonNodeIdArray.create()
 	let sn = specFiles.count()
+
 	for i in 0 upto sn 'eachSpec'
 		let path = try specFiles.get(i) otherwise panic("buildOutcome: specFiles.get OOB — i bounded by sn")
 		specIds.push(doc.add(JsonNode.stringNode(path)))

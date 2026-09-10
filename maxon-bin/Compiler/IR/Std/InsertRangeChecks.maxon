@@ -217,6 +217,7 @@ end 'ParamAliasLookup'
 // without touching their blocks.
 export function insertRangeChecks(project Project, module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
+
 	for func in module.functions 'eachFunc'
 		// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED, AND THE REASON IS NOT MERELY
 		// WASTED WORK — IT IS THE LOADER'S BYTE-NEUTRALITY INVARIANT (P1.8 Slice E).** Dead-function
@@ -274,9 +275,11 @@ export function insertRangeChecks(project Project, module StdModule)
 		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
+
 		if not project.rangeChecks.contains(func.name) 'noChecks'
 			continue
 		end 'noChecks'
+
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
 		var emitter = RangeCheckEmitter.create(project, module: module, func: func)
 		emitter.run(checks)
@@ -311,6 +314,7 @@ type RangeCheckEmitter
 	var module as StdModule
 	var func as IrFunction
 	var nextId as ValueId
+
 	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
 	// number, a float `const`'s is an IEEE-754 bit pattern, and the two must never be read as each
 	// other. Filled by `collectConsts` at the top of `run`; a site consults the map that matches its
@@ -318,12 +322,14 @@ type RangeCheckEmitter
 	// guard — see `needsRuntimeGuard`.
 	var intConsts as ConstValueMap
 	var floatConsts as ConstValueMap
+
 	// ⭐ **WHICH OF THIS FUNCTION'S CONSTANTS THE SOURCE WROTE AS NEGATIVE NUMBERS** — the one fact about a
 	// constant that this tier cannot recover from the constant, because `-1`, `u64.max` and
 	// `0xFFFFFFFFFFFFFFFE` are the same 64 bits. Handed over by the parser on `FunctionRangeChecks` and
 	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
 	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
 	var writtenNegativeLiterals as ValueMarkColumn
+
 	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
 	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
 	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
@@ -331,6 +337,7 @@ type RangeCheckEmitter
 	// SHARED empty one and is REPLACED by a real index on first use — see `sharedEmptyGuardChainTail`
 	// and `guardSiteAt`.
 	var guardChainTail as ValueIdArray
+
 	// ⭐ **WHERE EACH CHAIN-END BLOCK BEGINS, IN ITS ORIGINAL BLOCK'S COORDINATES** — one position per
 	// block id, and the other half of what makes site positions and the guard CHAIN compose. A site's
 	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the
@@ -340,6 +347,7 @@ type RangeCheckEmitter
 	// exactly as `guardChainTail` is — the three chain columns are one index in three columns, so one
 	// `isEmpty` decides all of them.
 	var guardChainBase as BlockOpPosArray
+
 	// ⭐⭐ **THE OP LIST EACH GUARDED BLOCK HELD BEFORE ITS FIRST GUARD SPLIT IT — THE ONE LIST EVERY
 	// SEGMENT OF ITS CHAIN IS CARVED OUT OF, AND THE REASON THIS PASS IS LINEAR IN ITS BYTES.** A
 	// chain-end block is carved by copying out the ops between the previous split point and this one; the
@@ -372,10 +380,12 @@ type RangeCheckEmitter
 	// are original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
 		self.collectConsts()
+
 		// The parser's answer to the one question a constant's 64 bits cannot answer — stashed beside the
 		// const maps because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
 		// `writtenNegativeLiterals`.
 		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
+
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
 		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
@@ -393,6 +403,7 @@ type RangeCheckEmitter
 		for site in checks.sites 'eachSite'
 			self.processSite(site, filePath: checks.filePath)
 		end 'eachSite'
+
 		// ⚠ **AFTER THE LAST ALIAS-NAMED SITE AND BEFORE THE RETURN SITES, AND BOTH HALVES ARE
 		// LOAD-BEARING.** A chained split leaves its continuation's ops PENDING (`splitChainEnd`), so
 		// until this runs the last continuation of every guarded block is empty — and `guardReturns`
@@ -404,6 +415,7 @@ type RangeCheckEmitter
 		for argSite in checks.argSites 'eachArgSite'
 			self.processArgSite(argSite, filePath: checks.filePath)
 		end 'eachArgSite'
+
 		if not checks.returnAliasName.isEmpty() 'rangedReturn'
 			self.processReturnSites(checks)
 		end 'rangedReturn'
@@ -446,6 +458,7 @@ type RangeCheckEmitter
 		if not self.needsRuntimeGuard(value, alias: alias, aliasName: aliasName, line: line, column: column, filePath: filePath) 'settledAtCompileTime'
 			return RangeGuardVerdict.noGuard
 		end 'settledAtCompileTime'
+
 		if guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
 			return RangeGuardVerdict.noGuard
 		end 'compileTimeHalfOnly'
@@ -507,6 +520,7 @@ type RangeCheckEmitter
 
 		let entryRef = try self.func.blockRefs.get(0) otherwise panic("guardRangedParams: '{String.from(self.func.name)}' declares a ranged parameter but has no entry block")
 		let entryId = self.module.getBlock(entryRef).id
+
 		for site in checks.paramSites 'eachRangedParam'
 			self.guardRangedParam(site, entryId: entryId, filePath: checks.filePath)
 		end 'eachRangedParam'
@@ -552,6 +566,7 @@ type RangeCheckEmitter
 	// binding's read is already a `loadIndirect` by the time either sees it.
 	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
 		let paramValue = rangedParamValue(site)
+
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
 			guard(alias) then self.emitParamGuard(site, alias: alias, entryId: entryId, filePath: filePath)
@@ -579,6 +594,7 @@ type RangeCheckEmitter
 		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount as BlockOpPos)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
+
 		// ⭐ **THE ID SPACE BEFORE AND AFTER IS WHAT ENUMERATES THE CASCADE'S OWN BLOCKS.** Everything
 		// `emitGuardAt` mints — the `__rc_ok` continuation, the `__rc_panic`, one `__rc_chk` per extra bound
 		// — goes through `IrModule.addBlock`, which hands out `func.nextBlockId` and bumps it. So the ids in
@@ -586,17 +602,20 @@ type RangeCheckEmitter
 		// list to keep in step with the three places that mint them.
 		let firstMintedId = self.func.nextBlockId
 		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+
 		if ok.id == headId 'bothBoundsElided'
 			return
 		end 'bothBoundsElided'
 
 		var owned = BlockIdArray.create()
 		owned.push(headId)
+
 		for mintedId in firstMintedId upto self.func.nextBlockId 'eachMintedBlock'
 			if mintedId != ok.id 'notTheContinuation'
 				owned.push(mintedId)
 			end 'notTheContinuation'
 		end 'eachMintedBlock'
+
 		self.func.recordParamGuard(site.index, alias: alias, headBlockId: headId, okBlockId: ok.id, ownedBlockIds: owned)
 	end 'emitParamGuard'
 
@@ -615,6 +634,7 @@ type RangeCheckEmitter
 	function requireGuardHeadHoldsOnlyParams(site GuardSite)
 		for pos in 0 upto site.position 'eachPrefixOp'
 			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
+
 			match self.opAtIndex(opIdx) 'op'
 				const or
 					binOp or
@@ -798,6 +818,7 @@ type RangeCheckEmitter
 	// scans `paramNames`), and it adds no growth shape this call did not already have.
 	function paramAliasOf(site RangeCheckArgSite) returns ParamAliasLookup
 		let calleeChecks = try self.project.rangeChecks.get(site.callee) otherwise return ParamAliasLookup.none
+
 		if calleeChecks.paramSites.isEmpty() 'noRangedParam'
 			return ParamAliasLookup.none
 		end 'noRangedParam'
@@ -806,10 +827,12 @@ type RangeCheckEmitter
 		// statement apart and under the same name, so a callee present in one and absent from the other is a
 		// broken invariant rather than a program the user could write.
 		let signature = try self.project.funcSignatures.get(site.callee) otherwise panic("paramAliasOf: '{String.from(site.callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
+
 		// `argSlotPosition` is the ONE label->position mapping in the compiler; asking it here is what keeps
 		// a labelled argument checked against the parameter it actually lands on rather than the one it
 		// happens to sit beside.
 		let slot = argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)
+
 		for paramSite in calleeChecks.paramSites 'eachRangedParam'
 			if paramSite.index == slot 'thisArgumentsParameter'
 				return ParamAliasLookup.found(paramSite.aliasName, declFilePath: calleeChecks.filePath)
@@ -842,6 +865,7 @@ type RangeCheckEmitter
 			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: checks.returnAliasName, line: site.line, column: site.column, filePath: checks.filePath) 'noGuard'
 				continue
 			end 'noGuard'
+
 			if self.entryGuardAlreadyCovers(site.value, checks: checks) 'guardedAtTheEntry'
 				continue
 			end 'guardedAtTheEntry'
@@ -915,11 +939,14 @@ type RangeCheckEmitter
 		let isFloat = aliasIsFloat(alias)
 
 		let literals = self.floatConsts if isFloat else self.intConsts
+
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
+
 			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value)) 'outOfRange'
 				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat, rawBitWidth: alias.rawBitWidth), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
+
 			return false
 		end 'literal'
 
@@ -947,6 +974,7 @@ type RangeCheckEmitter
 	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
+
 		if checks.isEmpty() 'noBoundNeeded'
 			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
 			// guard, and nothing was split, so the chain end is where it was.
@@ -956,6 +984,7 @@ type RangeCheckEmitter
 		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
 		// LOAD-BEARING** — see `extendGuardChain`.
 		let ok = self.splitFor(site, chain: chain)
+
 		// ⚠ **THE DEREFERENCE GOES IN BETWEEN, AND ITS POSITION IS THE WHOLE OF WHY IT IS HERE AND NOT AT
 		// THE CALLER.** `site.block` is the guard's HEAD: after the split it holds exactly the ops that
 		// stood before the site, so appending the load here puts it past the `param` ops and immediately
@@ -1008,6 +1037,7 @@ type RangeCheckEmitter
 	// reads it as.
 	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt BlockOpPos)
 		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
+
 		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
 			panic("extendGuardChain: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlock` returned — a block was appended between the split and this record, so the chain would advance onto the wrong block")
 		end 'notTheContinuation'
@@ -1048,6 +1078,7 @@ type RangeCheckEmitter
 	// copies again, so the whole chain moves B op refs in total.
 	function splitChainEnd(site GuardSite, sourceBlockId BlockId) returns IrBlock
 		let source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
+
 		// The block is about to hand its list over to the segment carved below, so park the pre-split list
 		// where the rest of the chain can still read it. Idempotent after the first split: `chainSourceOps`
 		// hands back the row this wrote.
@@ -1058,10 +1089,12 @@ type RangeCheckEmitter
 		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
 		var headBlock = site.block
 		var segment = OpIndexArray.create()
+
 		for i in base upto base + site.position 'carveSegment'
 			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
 			segment.push(opIdx)
 		end 'carveSegment'
+
 		headBlock.opRefs = segment
 
 		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
@@ -1102,20 +1135,24 @@ type RangeCheckEmitter
 
 		for blockId in 0 upto self.guardChainTail.count() 'eachBlockId'
 			let tailRef = try self.guardChainTail.get(blockId) otherwise panic("materializeChainTails: guardChainTail has no row for block id {blockId}, which is inside the column's own width")
+
 			if tailRef == 0 'notInThisFunction'
 				continue
 			end 'notInThisFunction'
 
 			var chainEnd = self.module.getBlock(((tailRef - 1) as BlockRef))
+
 			if chainEnd.id == blockId 'neverSplit'
 				continue
 			end 'neverSplit'
+
 			if not chainEnd.opRefs.isEmpty() 'alreadyHoldsOps'
 				panic("materializeChainTails: the chain end of block {blockId} in '{String.from(self.func.name)}' already holds {chainEnd.opRefs.count()} op(s) — a continuation is minted empty and receives its ops only here, so something appended to one before its tail was placed")
 			end 'alreadyHoldsOps'
 
 			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
 			let source = self.chainSourceOps(blockId, chainEnd: chainEnd)
+
 			for i in base upto source.count() 'eachPendingOp'
 				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
 				chainEnd.opRefs.push(opIdx)
@@ -1190,6 +1227,7 @@ type RangeCheckEmitter
 		let operandType = StdType.f64 if isFloat else StdType.i64
 		var current = head
 		let lastIndex = checks.count() - 1
+
 		for i in 0 upto checks.count() 'eachCheck'
 			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
 			let boundId = self.mintId()
@@ -1198,6 +1236,7 @@ type RangeCheckEmitter
 			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: operandType))
 
 			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
+
 			if i == lastIndex 'lastCheck'
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
 			end 'lastCheck' else 'moreChecks'
@@ -1272,6 +1311,7 @@ type RangeCheckEmitter
 
 		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
 		let base = try self.guardChainBase.get(blockId) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {blockId}, which blockById just resolved within the function")
+
 		if stdOpPos < base 'behindTheChain'
 			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
 		end 'behindTheChain'
@@ -1283,6 +1323,7 @@ type RangeCheckEmitter
 		// stands, every guard after the first in a block would read a count of zero and this would fire on
 		// a program with nothing wrong with it.
 		let sourceOps = self.chainSourceOps(blockId, chainEnd: block)
+
 		if stdOpPos > sourceOps.count() 'pastTheBlock'
 			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
 		end 'pastTheBlock'
@@ -1319,11 +1360,13 @@ type RangeCheckEmitter
 		self.ensureChainIndex()
 
 		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
+
 		if not block.hasTerminatorOp() 'noRetLeft'
 			return RetBlockLookup.notFound
 		end 'noRetLeft'
 
 		let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
+
 		if not retMatchesValue(term, target: site.value) 'notThisSitesRet'
 			return RetBlockLookup.notFound
 		end 'notThisSitesRet'
@@ -1381,8 +1424,10 @@ type RangeCheckEmitter
 	function collectConsts()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
 			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
+
 			match op 'c'
 				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
+
 				// A NEGATED INTEGER literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a
 				// `const`, not a folded `const`, so the E3005 literal check would miss it and emit a runtime
 				// guard where the spec expects a COMPILE error. Fold it here — the `const` operand is already
@@ -1426,10 +1471,12 @@ type RangeCheckEmitter
 					osWaitHandle or
 					osFreePages then break 'c'
 				switch then break 'c'
+
 				// A witness call's result is a call return, not a foldable constant — nothing to record, and
 				// neither of the throwing form's two results is one either.
 				witnessCall then break 'c'
 				witnessTryCall then break 'c'
+
 				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
 				osPipeCreate or
 					osIocpCreate or
@@ -1445,8 +1492,10 @@ type RangeCheckEmitter
 					osGetPid or
 					osPipeCreateOutbound or
 					osWriteFile then break 'c'
+
 				// The wall-clock read produces no ranged-typealias value to range-check.
 				osReadWallClock then break 'c'
+
 				// R4.1 + R4.2: a raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
 				osFileOpenRead or
 					osFileClose or
@@ -1461,19 +1510,24 @@ type RangeCheckEmitter
 					osDirCreate or
 					osDirCurrentPath or
 					osFileAttributes then break 'c'
+
 				// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 				osPanicValue then break 'c'
 				osCommandLine then break 'c'
+
 				// W5: a raw OS handle and a character count are not ranged-typealias values.
 				osStdHandle then break 'c'
 				osExecutablePath then break 'c'
+
 				// W35: the byte count the OS reports for a stream write is not a ranged-typealias value.
 				osWriteStderr then break 'c'
+
 				// A frame address is not a ranged-typealias value.
 				stackRecordAddr then break 'c'
 				osOpenNamedSegment or
 					osMapNamedSegment or
 					osTickCountMs then break 'c'
+
 				// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 				// band, the machine query AND the thread-CPU read — are import calls too.
 				osHandleSetInherit or
@@ -1490,13 +1544,17 @@ type RangeCheckEmitter
 					osSocketClose or
 					osCpuCount or
 					osThreadCpuTicks then break 'c'
+
 				// F1a: the decommit defines nothing, so it can never define a negated int constant.
 				osDecommitPages then break 'c'
+
 				// F1b: a fill defines nothing, so it can never define a negated int constant.
 				memFill then break 'c'
+
 				// F1c: a reserve and a commit define a page base the OS chose, never a negated int constant.
 				osCommitPages or
 					osReservePages then break 'c'
+
 				// F2 + G1: every value-defining member of this range answers something the machine produces at run
 				// time, never a negated int constant.
 				atomicCas or
@@ -1527,6 +1585,7 @@ type RangeCheckEmitter
 			self.floatConsts.upsert(resultId, value: value)
 			return
 		end 'float'
+
 		self.intConsts.upsert(resultId, value: value)
 	end 'recordConst'
 end 'RangeCheckEmitter'
@@ -1582,10 +1641,12 @@ let RangeCheckOkLabel = b"__rc_ok"
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position BlockOpPos, label ByteArray) returns IrBlock
 	var headBlock = head
 	var tailOps = OpIndexArray.create()
+
 	for i in position upto headBlock.opRefs.count() 'moveTail'
 		let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
 		tailOps.push(opIdx)
 	end 'moveTail'
+
 	headBlock.opRefs.truncate(position as ElementIndex)
 
 	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
@@ -1669,9 +1730,11 @@ function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeB
 	if rangeNeedsLowerCheck(low, isFloat: isFloat) 'lower'
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 	end 'lower'
+
 	if rangeNeedsUpperCheck(low, high: high, isFloat: isFloat) 'upper'
 		checks.push(RangeBoundCheck.create(StdCmpPred.gt, bound: high))
 	end 'upper'
+
 	return checks
 end 'boundChecks'
 
@@ -1681,9 +1744,11 @@ function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueI
 	if opcode != StdUnaryOpcode.neg 'notNeg'
 		return
 	end 'notNeg'
+
 	if not constMap.contains(operand) 'operandNotConst'
 		return
 	end 'operandNotConst'
+
 	constMap.upsert(resultId, value: -constMap.constantOf(operand))
 end 'recordConstNeg'
 
@@ -1710,6 +1775,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			condBranch or
 			branch gives false
 		ret(retValId) gives retValId == target
+
 		// `retVoid` is in this range and belongs there: it returns no value, so no site can name it.
 		param or
 			call or
@@ -1721,6 +1787,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osWriteStdout or
 			rdataAddr or
 			tryCall gives false
+
 		// ⭐⭐ **A THROWING FUNCTION LEAVES THROUGH `errorReturn`, NOT `ret`, AND READING ONLY `ret` HERE
 		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION (G14).** `LowerMaxonToStd.emitRetOrErrorReturn`
 		// picks the terminator off the THROWS clause — *"the ONE place the ABI decides ret-vs-errorReturn"* — so
@@ -1746,12 +1813,15 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages gives false
+
 		// The jump table is a branch terminator, not a `ret` — it returns no value.
 		switch gives false
+
 		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the
 		// throwing form: it is a body op with two results, neither of them a return terminator.
 		witnessCall gives false
 		witnessTryCall gives false
+
 		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
 		osPipeCreate or
 			osIocpCreate or
@@ -1767,8 +1837,10 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile gives false
+
 		// The wall-clock read is a body op, never a `ret`.
 		osReadWallClock gives false
+
 		// R4.1 + R4.2: every file op is a body op, never a `ret`.
 		osFileOpenRead or
 			osFileClose or
@@ -1783,19 +1855,24 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osDirCreate or
 			osDirCurrentPath or
 			osFileAttributes gives false
+
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives false
 		osCommandLine gives false
+
 		// W5: both are body ops, never a `ret`.
 		osStdHandle gives false
 		osExecutablePath gives false
+
 		// W35: a stream write is a body op, never a `ret`.
 		osWriteStderr gives false
+
 		// A promoted record's address is a body op, never a `ret`.
 		stackRecordAddr gives false
 		osOpenNamedSegment or
 			osMapNamedSegment or
 			osTickCountMs gives false
+
 		// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
 		// band, the machine query AND the thread-CPU read — are import calls too.
 		osHandleSetInherit or
@@ -1812,13 +1889,17 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osSocketClose or
 			osCpuCount or
 			osThreadCpuTicks gives false
+
 		// F1a: the decommit is a body op, never the `ret` this asks about.
 		osDecommitPages gives false
+
 		// F1b: a fill is a body op, never the `ret` this asks about.
 		memFill gives false
+
 		// F1c: a reserve and a commit are body ops too, never the `ret` this asks about.
 		osCommitPages or
 			osReservePages gives false
+
 		// F2 + G1: every member of this range is a body op, never the `ret` this asks about.
 		atomicCas or
 			atomicRmw or

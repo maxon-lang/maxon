@@ -43,7 +43,9 @@ function ensureCategoryLevels()
 	if categoryLevelsInitialized 'alreadyDone'
 		return
 	end 'alreadyDone'
+
 	categoryLevelsInitialized = true
+
 	// One override slot per LogCategory case, indexed by `category.ordinal`.
 	for _ in 0 upto LogCategory.allCases.count() 'fill'
 		categoryLogLevels.push(0)
@@ -54,10 +56,12 @@ function effectiveLogLevel(category LogCategory) returns StoredLevel
 	if categoryLevelsInitialized 'hasLevels'
 		// Sentinel: 0 = "no category-specific override"; caller falls through to globalLogLevel.
 		let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
+
 		if stored > 0 'hasOverride'
 			return stored - 1
 		end 'hasOverride'
 	end 'hasLevels'
+
 	return globalLogLevel
 end 'effectiveLogLevel'
 
@@ -89,6 +93,7 @@ end 'setCategoryLogLevel'
 // Parses a log option string like "debug" or "lexer:trace".
 export function parseLogOption(option String) returns bool
 	let parts = option.split(":")
+
 	if parts.count() == 1 'noColon'
 		let level = try LogLevel.fromName(option.toUpper()) otherwise return false
 		setLogLevel(level)
@@ -139,6 +144,7 @@ end 'setTraceUnit'
 // but keeping it at the top makes that visible.
 module function logEvent(category LogCategory, level LogLevel, name TraceName, arg0 TraceArg = 0, arg1 TraceArg = 0)
 	let effectiveLevel = effectiveLogLevel(category)
+
 	if level.rawValue <= effectiveLevel 'check'
 		__DebugStream.event(name, category.ordinal, level.rawValue, currentTraceUnit, arg0, arg1)
 	end 'check'
@@ -156,6 +162,7 @@ end 'logEvent'
 // there is a structured tier above it.
 function log(category LogCategory, level LogLevel, message LazyMessage)
 	let effectiveLevel = effectiveLogLevel(category)
+
 	if level.rawValue <= effectiveLevel 'check'
 		let msg = message()
 

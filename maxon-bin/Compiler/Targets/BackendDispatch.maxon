@@ -96,6 +96,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// reported at the index. Its root set raises the same code for the other half of that rule (a name the
 	// compiler ROOTS, in a program that installs nothing under it) — see `markCompilerOwnedRoot`.
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
+
 	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH (A2l).** It comes back from the
 	// prune rather than being built here because the prune is what makes an earlier one stale, and it is
 	// built at all because NOTHING APPENDS A FUNCTION AFTER THIS LINE: every `install*Runtime` ran in
@@ -140,6 +141,7 @@ end 'buildWasmBackend'
 // machine-code emission → CodeResult.
 function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
+
 	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
 	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
 	// once sections are laid out — see `lowerStdToX64`.
@@ -171,6 +173,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
+
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
 	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
 	// never installed does not link.
@@ -179,9 +182,11 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()
+
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: usage.usesGt, target: target))
 	end 'eachFunc'
+
 	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than
 	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
 	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
@@ -201,6 +206,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		macos or
 			wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
+
 	// The x64-LINUX host surface — the `mrt_host_*` file, directory and standard-input bodies, which are
 	// raw `syscall` sequences with no TargetOp spelling for the same reason the panic runtime above has
 	// none. Each rides the `RuntimeUsage` bit its Std-tier installer was gated on, so the list is empty for
@@ -209,6 +215,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	if target.os == Os.linux 'linuxHostSurface'
 		appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
 	end 'linuxHostSurface'
+
 	// The three hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
 	// `__gt_morestack`) and, under `usesIocp`, the IOCP completion-drain loop are part of the GT
 	// runtime's INSTALLATION, so they ride the same bits `installGtRuntime` was gated on rather than a
@@ -216,6 +223,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	if usage.usesGt 'gtChunks'
 		appendX64GtRuntimeChunks(chunks, usesIocp: usage.usesIocp, target: target)
 	end 'gtChunks'
+
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
@@ -313,6 +321,7 @@ end 'refuseDuplicateChunkName'
 function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+
 		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
 		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
 		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
@@ -355,6 +364,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	appendConsoleOutputCodePage(module, block: block)
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
 	// silently drop exactly the allocations a program makes before `main`. Nothing is live across it —
@@ -579,6 +589,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	appendLinuxArgvCapture(module, block: block, captureArgv: captureArgv)
 	appendLinuxEnvpCapture(module, block: block, captureEnvp: captureEnvp)
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+
 	// ⭐ The producer attaches before `__module_init`, which is the first thing that can allocate — an eager
 	// managed global's box belongs in the trace, and attaching after it would drop exactly the allocations a
 	// program makes before `main`. See `prependEntryStub`, whose bracket this mirrors.
@@ -653,6 +664,7 @@ function appendLinuxEnvpCapture(module TargetModule, block IrBlock, captureEnvp 
 
 	module.appendOp(block, op: TargetOp.loadRegBaseDisp(envp, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
 	module.appendOp(block, op: TargetOp.leaRegRegImm32(envp, base: envp, disp: LinuxEntryEnvpSkippedWords))
+
 	// The scale is the machine word, because what is being indexed is a vector of POINTERS.
 	module.appendOp(block, op: TargetOp.leaRegBaseIndexScale(envp, base: x64PhysReg(X64Register.rsp), index: envp, scale: MemoryIndexScale.byEight))
 	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: LinuxEnvpLabel))
@@ -665,9 +677,11 @@ end 'appendLinuxEnvpCapture'
 function prependFunction(module TargetModule, func IrFunction)
 	var reordered = IrFunctionArray.create()
 	reordered.push(func)
+
 	for existing in module.functions 'eachFunc'
 		reordered.push(existing)
 	end 'eachFunc'
+
 	module.functions = reordered
 end 'prependFunction'
 

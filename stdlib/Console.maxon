@@ -59,12 +59,15 @@ type Stdin
 		if eofSeen 'alreadyEof'
 			return
 		end 'alreadyEof'
+
 		let mm = __Builtins.readStdin(chunkSize)
 		let len = mm.length()
+
 		if len == 0 'eofNow'
 			eofSeen = true
 			return
 		end 'eofNow'
+
 		let chunk = ByteArray.init(mm)
 		pending.append(chunk)
 	end 'fillOnce'
@@ -85,6 +88,7 @@ type Stdin
 				fillOnce()
 				continue
 			end 'keepFilling'
+
 			let lineBytes = takePrefix(nl)
 			discardOne()
 			return String.from(stripTrailingCR(lineBytes))
@@ -95,9 +99,11 @@ type Stdin
 			if pending.count() == 0 'empty'
 				throw ConsoleError.endOfFile
 			end 'empty'
+
 			let rest = takePrefix(pending.count())
 			return String.from(rest)
 		end 'noTerminator'
+
 		let lineBytes = takePrefix(nl)
 		discardOne()
 		return String.from(stripTrailingCR(lineBytes))
@@ -112,9 +118,11 @@ type Stdin
 
 		let available = pending.count()
 		var take = n
+
 		if available < n 'cap'
 			take = available
 		end 'cap'
+
 		return takePrefix(take)
 	end 'readBytes'
 
@@ -124,15 +132,19 @@ type Stdin
 	function findNewline() returns BytePos throws NotFound
 		let len = pending.count()
 		var i = 0
+
 		while i < len 'scan'
 			let b = try pending.get(i) otherwise 'getErr'
 				panic("Stdin.findNewline: index just bounds-checked")
 			end 'getErr'
+
 			if b == 10 'nl'
 				return i
 			end 'nl'
+
 			i = i + 1
 		end 'scan'
+
 		throw NotFound.notFound
 	end 'findNewline'
 
@@ -141,13 +153,16 @@ type Stdin
 	function takePrefix(n BytePos) returns ByteArray
 		var out = ByteArray.create()
 		var i = 0
+
 		while i < n 'copy'
 			let b = try pending.get(i) otherwise 'getErr'
 				panic("Stdin.takePrefix: index just bounds-checked by caller")
 			end 'getErr'
+
 			out.push(b)
 			i = i + 1
 		end 'copy'
+
 		shiftLeft(n)
 		return out
 	end 'takePrefix'
@@ -162,13 +177,16 @@ type Stdin
 		let len = pending.count()
 		var rebuilt = ByteArray.create()
 		var i = n
+
 		while i < len 'copy'
 			let b = try pending.get(i) otherwise 'getErr'
 				panic("Stdin.shiftLeft: index just bounds-checked")
 			end 'getErr'
+
 			rebuilt.push(b)
 			i = i + 1
 		end 'copy'
+
 		pending = rebuilt
 	end 'shiftLeft'
 end 'Stdin'
@@ -177,24 +195,31 @@ end 'Stdin'
 // just the line content. LF-terminated lines pass through unchanged.
 function stripTrailingCR(bytes ByteArray) returns ByteArray
 	let len = bytes.count()
+
 	if len == 0 'empty'
 		return bytes
 	end 'empty'
+
 	let last = try bytes.get(len - 1) otherwise 'getErr'
 		panic("stripTrailingCR: len-1 bounds-checked by len > 0")
 	end 'getErr'
+
 	if last != 13 'noCR'
 		return bytes
 	end 'noCR'
+
 	var out = ByteArray.create()
 	var i = 0
+
 	while i < len - 1 'copy'
 		let b = try bytes.get(i) otherwise 'getErr'
 			panic("stripTrailingCR: index bounds-checked by loop guard")
 		end 'getErr'
+
 		out.push(b)
 		i = i + 1
 	end 'copy'
+
 	return out
 end 'stripTrailingCR'
 

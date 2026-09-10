@@ -343,11 +343,13 @@ export let LinuxDirentRecordLengthMask = 0xFFFF as Imm32
 // commented, which is this project's cure ladder: an offset moved without its neighbour fails the build.
 export function assertLinuxSearchGeometry()
 	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as ParsedInt
+
 	if patternBytes < MaxPathBytes 'patternRegion'
 		panic("LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {MaxPathBytes} (`PosixPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
 	end 'patternRegion'
 
 	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as ParsedInt
+
 	if prefixBytes < MaxPathBytes 'prefixRegion'
 		panic("LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {MaxPathBytes} — it would run into the `getdents64` buffer above it")
 	end 'prefixRegion'
@@ -661,6 +663,7 @@ export let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reach
 // would be corrupted.
 export function assertLinuxLockFits()
 	let needed = (LinuxLockOffDepth as ParsedInt) + SpillSlotBytes
+
 	if OsLockBytes < needed 'tooSmall'
 		panic("LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")
 	end 'tooSmall'

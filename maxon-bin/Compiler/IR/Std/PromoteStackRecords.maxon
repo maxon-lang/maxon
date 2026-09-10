@@ -139,6 +139,7 @@
 // One field of a recognized record constructor: WHERE it goes and WHAT goes there.
 type RecordField
 	export var offset as ByteOffset
+
 	// The width the constructor's own `storeIndirect` used. Carried rather than re-derived, so the store
 	// rebuilt at the call site is the store the factory would have made.
 	export var storeType as StdType
@@ -162,6 +163,7 @@ end 'RecordFieldSource'
 // A function's verdict: is it a RECORD CONSTRUCTOR, and if so what does it build?
 union RecordConstructor
 	notAConstructor
+
 	// `sizeBytes` is the payload size `__mm_alloc` was asked for; `fields` tile it exactly.
 	constructor(sizeBytes ByteOffset, fields RecordFieldArray)
 end 'RecordConstructor'
@@ -224,6 +226,7 @@ type RecordPromotion
 	export var callOpIndex as OpIndex
 	export var recordValue as ValueId
 	export var sizeBytes as ByteOffset
+
 	// Filled by `assignFrameSlots` once the whole function's promotions are known — see it for why the
 	// slots are laid out in a pass of their own rather than as each promotion is decided.
 	export var slot as SpillSlot
@@ -299,12 +302,12 @@ export function promoteStackRecords(project Project, module StdModule, usesGreen
 end 'promoteStackRecords'
 
 function promoteWithNameIndex(module StdModule, byName FunctionNameIndex)
-
 	// ⭐ **PHASE 1 IS THE GATE FOR PHASES 2 AND 3, and it is an allocation-free walk.** A module that
 	// declares no record constructor can promote nothing whatever its call sites look like, and the
 	// parameter-escape summary — one scan and five columns per function that HAS parameters — is then pure
 	// dead work. Most programs in the corpus are exactly that module.
 	let constructors = buildRecordConstructors(module)
+
 	if not anyConstructor(constructors) 'nothingIsEverBuilt'
 		return
 	end 'nothingIsEverBuilt'
@@ -324,19 +327,23 @@ end 'promoteWithNameIndex'
 function anyConstructor(constructors RecordConstructorArray) returns bool
 	for funcIndex in 0 upto constructors.count() 'eachFunc'
 		let verdict = try constructors.get(funcIndex) otherwise panic("anyConstructor: constructors.get OOB at {funcIndex}")
+
 		match verdict 'verdict'
 			notAConstructor then break 'verdict'
 			constructor then return true
 		end 'verdict'
 	end 'eachFunc'
+
 	return false
 end 'anyConstructor'
 
 function buildRecordConstructors(module StdModule) returns RecordConstructorArray
 	var table = RecordConstructorArray.create()
+
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		table.push(recognizeRecordConstructor(module, func: module.getFunc(funcIndex)))
 	end 'eachFunc'
+
 	return table
 end 'buildRecordConstructors'
 
@@ -370,6 +377,7 @@ function recognizeRecordConstructor(module StdModule, func IrFunction) returns R
 	if block.blockArgs.count() != 0 'carriesPhis'
 		return RecordConstructor.notAConstructor
 	end 'carriesPhis'
+
 	if not block.hasTerminatorOp() 'unterminated'
 		return RecordConstructor.notAConstructor
 	end 'unterminated'
@@ -382,12 +390,15 @@ end 'recognizeRecordConstructor'
 
 function scanConstructorBody(module StdModule, func IrFunction, block IrBlock, box ValueId) returns RecordConstructor
 	var scan = ConstructorScan.create(func.paramCount)
+
 	for opIdx in block.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("scanConstructorBody: opIdx {opIdx} not in module.ops")
+
 		if not scan.admit(op, box: box) 'refused'
 			return RecordConstructor.notAConstructor
 		end 'refused'
 	end 'eachOp'
+
 	return scan.verdict()
 end 'scanConstructorBody'
 
@@ -531,6 +542,7 @@ type ConstructorScan
 	var allocSize as ByteOffset
 	var allocSeen as bool
 	var fields as RecordFieldArray
+
 	// Slot index -> written, so clause 5's tiling is checked without sorting the fields.
 	var slotWritten as BoolArray
 	var paramCount as ParamCount
@@ -647,6 +659,7 @@ type ConstructorScan
 			osFileOpenWriteExecutable gives false
 			osEnvBlock or
 				osEnvBlockFree gives false
+
 			// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
 			// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 			loadAcquire or
@@ -674,6 +687,7 @@ type ConstructorScan
 		if resultId != valueIdAtParamPosition(index) or index >= self.paramCount 'notTheContractsIdentity'
 			return false
 		end 'notTheContractsIdentity'
+
 		self.paramOfValue.upsert(resultId, value: index)
 		return true
 	end 'admitParam'
@@ -684,6 +698,7 @@ type ConstructorScan
 		if not callee.equals(MmAllocName) 'notTheAllocation'
 			return false
 		end 'notTheAllocation'
+
 		if self.allocSeen or resultId != box or args.count() != MmAllocArgCount 'notTheOneReturnedBox'
 			return false
 		end 'notTheOneReturnedBox'
@@ -692,9 +707,11 @@ type ConstructorScan
 		let destructorId = try args.get(1) otherwise panic("ConstructorScan.admitAlloc: args.get(1) OOB on a two-argument `__mm_alloc`")
 		let size = try self.constOfValue.get(sizeId) otherwise return false
 		let destructor = try self.constOfValue.get(destructorId) otherwise return false
+
 		if destructor != TrivialDestructor 'hasADestructorCascade'
 			return false
 		end 'hasADestructorCascade'
+
 		if size <= 0 or (size mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
 			return false
 		end 'notAWholeNumberOfSlots'
@@ -711,12 +728,14 @@ type ConstructorScan
 		if addrId != box or valueId == box or not self.allocSeen 'notAFieldOfTheBox'
 			return false
 		end 'notAFieldOfTheBox'
+
 		if valueType.rawValue.storageBytes != SpillSlotBytes or (offset mod SpillSlotBytes) != 0 or offset >= self.allocSize 'notAWholeSlotOfTheRecord'
 			return false
 		end 'notAWholeSlotOfTheRecord'
 
 		let slot = offset / SpillSlotBytes
 		let already = try self.slotWritten.get(slot) otherwise panic("ConstructorScan.admitStore: slotWritten.get OOB at {slot} — the column is sized to the record's slot count")
+
 		if already 'writtenTwice'
 			return false
 		end 'writtenTwice'
@@ -725,6 +744,7 @@ type ConstructorScan
 			notRebuildable then return false
 			found(source) then self.recordField(slot, offset: offset, storeType: valueType, source: source)
 		end 'source'
+
 		return true
 	end 'admitStore'
 
@@ -741,6 +761,7 @@ type ConstructorScan
 			let constType = try self.constTypeOfValue.get(valueId) otherwise panic("ConstructorScan.sourceOf: value {valueId} has a recorded constant but no recorded type — `admitConst` writes both columns together")
 			return FieldSourceLookup.found(RecordFieldSource.fromConstant(value, constType: constType))
 		end 'notAParameter'
+
 		return FieldSourceLookup.found(RecordFieldSource.fromParameter(param))
 	end 'sourceOf'
 
@@ -750,12 +771,15 @@ type ConstructorScan
 		if not self.allocSeen 'allocatedNothing'
 			return RecordConstructor.notAConstructor
 		end 'allocatedNothing'
+
 		for slot in 0 upto self.slotWritten.count() 'eachSlot'
 			let written = try self.slotWritten.get(slot) otherwise panic("ConstructorScan.verdict: slotWritten.get OOB at {slot}")
+
 			if not written 'left'
 				return RecordConstructor.notAConstructor
 			end 'left'
 		end 'eachSlot'
+
 		return RecordConstructor.constructor(self.allocSize, fields: self.fields)
 	end 'verdict'
 end 'ConstructorScan'
@@ -782,10 +806,12 @@ type ParamNodeSpace
 	export static function create(module StdModule) returns ParamNodeSpace
 		var base = CsrColumn.create()
 		var next = 0 as CsrIndex
+
 		for funcIndex in 0 upto module.funcCount() 'eachFunc'
 			base.push(next)
 			next = next + (module.getFunc(funcIndex).paramCount as CsrIndex)
 		end 'eachFunc'
+
 		return Self{base: base, nodeCount: next}
 	end 'create'
 
@@ -832,6 +858,7 @@ function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) retur
 
 	var seeds = BoolArray.create()
 	seeds.growFilled(nodes.nodeCount as ElementIndex, value: false)
+
 	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
 	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
 	var edgeFrom = CsrColumn.create()
@@ -839,6 +866,7 @@ function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) retur
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
+
 		if func.paramCount == 0 'nothingToTrack'
 			continue
 		end 'nothingToTrack'
@@ -865,6 +893,7 @@ function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex Fun
 		// ⚠ **A PARAMETER WITH NO `param` OP IS SEEDED ESCAPING**, not left alone. Untracked, nothing in the
 		// walk can mark it, and an unseeded node reads as "does not escape" — the unsafe direction.
 		let untracked = not (try tracked.get(param) otherwise panic("seedEscapingParams: tracked.get OOB at {param} — the column is sized to the function's parameter count"))
+
 		if untracked or scan.escapedLocallyAt(param) or scan.dropSitesAt(param) > 0 'realEscapeSite'
 			try seeds.set(nodes.nodeOf(funcIndex, param: param), value: true) otherwise panic("seedEscapingParams: seeds.set OOB for parameter {param} of function {funcIndex}")
 		end 'realEscapeSite'
@@ -874,9 +903,11 @@ end 'seedEscapingParams'
 function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes ParamNodeSpace, funcIndex FuncIndex, func IrFunction, scan PointerScan)
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let pointer = try scan.forwardedPointers.get(edge) otherwise panic("collectParamForwardEdges: forwardedPointers.get OOB at {edge}")
+
 		if pointer >= valueIdAtParamPosition(func.paramCount) 'notAParameterOfThisFunction'
 			continue
 		end 'notAParameterOfThisFunction'
+
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("collectParamForwardEdges: forwardedCallees.get OOB at {edge}")
 		let position = try scan.forwardedPositions.get(edge) otherwise panic("collectParamForwardEdges: forwardedPositions.get OOB at {edge}")
 		edgeFrom.push(nodes.nodeOf(callee, param: position))
@@ -886,17 +917,22 @@ end 'collectParamForwardEdges'
 
 function publishParamMasks(module StdModule, nodes ParamNodeSpace, marked BoolArray) returns ParamPositionMaskArray
 	var masks = ParamPositionMaskArray.create()
+
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 		var mask = NoParamPositions
+
 		for param in 0 upto func.paramCount 'eachParam'
 			let escapes = try marked.get(nodes.nodeOf(funcIndex, param: param)) otherwise panic("publishParamMasks: marked.get OOB for parameter {param} of function {funcIndex}")
+
 			if escapes 'escaping'
 				mask = maskWithParam(mask, param: param)
 			end 'escaping'
 		end 'eachParam'
+
 		masks.push(mask)
 	end 'eachFunc'
+
 	return masks
 end 'publishParamMasks'
 
@@ -905,8 +941,10 @@ end 'publishParamMasks'
 function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns BoolArray
 	var tracked = BoolArray.create()
 	tracked.growFilled(func.paramCount as ElementIndex, value: false)
+
 	for opIdx in liveOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("parameterValues: live op index {opIdx} not in module.ops")
+
 		// ⭐ **THE ROLE ANSWERS FOR EVERY OTHER VARIANT.** `OpRole.param` is declared on `param` alone, so one
 		// test replaces 108 arms that named themselves only to say "not a parameter".
 		//
@@ -921,6 +959,7 @@ function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction
 			default panic("parameterValues: `role: param` on an op this match does not name — StdOpMeta's role and this match have come apart")
 		end 'op'
 	end 'eachOp'
+
 	return tracked
 end 'parameterValues'
 
@@ -931,6 +970,7 @@ function markParameterValue(tracked BoolArray, resultId ValueId, index ParamCoun
 	if resultId != valueIdAtParamPosition(index) or resultId >= tracked.count() 'notTheContractsIdentity'
 		return
 	end 'notTheContractsIdentity'
+
 	try tracked.set(resultId, value: true) otherwise panic("markParameterValue: tracked.set OOB at {resultId}")
 end 'markParameterValue'
 
@@ -967,6 +1007,7 @@ function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray
 	// safe.
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("scanPointerUses: blockRef from func.blockRefs not in module.blocks")
+
 		for edge in block.branchEdges 'eachEdge'
 			for argId in edge.argIds 'eachArg'
 				markIfTracked(tracked, v: argId, scan: scan)
@@ -987,6 +1028,7 @@ function isTracked(tracked BoolArray, v ValueId) returns bool
 	if v >= tracked.count() 'outsideTheTrackedSpace'
 		return false
 	end 'outsideTheTrackedSpace'
+
 	return try tracked.get(v) otherwise panic("isTracked: tracked.get OOB at {v} after a bounds test")
 end 'isTracked'
 
@@ -1018,9 +1060,11 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 		call(_, callee, args) then scanCallOperands(module, callee: callee, args: args, tracked: tracked, byName: byName, scan: scan)
 		retVoid or
 			globalAddr then collectStdOpUses(op, referenced: readByOtherOps)
+
 		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
 		// needs nothing recorded at all.
 		loadIndirect then break 'shape'
+
 		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
 		// container / global / error-payload escape route, and is not.
 		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
@@ -1133,6 +1177,7 @@ end 'scanOneOp'
 function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray, tracked BoolArray, byName FunctionNameIndex, scan PointerScan)
 	if callee.equals(MmDecrefName) and args.count() == MmDecrefArgCount 'theDrop'
 		let dropped = try args.get(0) otherwise panic("scanCallOperands: args.get(0) OOB on a one-argument `__mm_decref`")
+
 		if isTracked(tracked, v: dropped) 'ours'
 			scan.noteDrop(dropped)
 			return
@@ -1156,15 +1201,18 @@ end 'markEveryTrackedArg'
 function forwardCallArguments(args ValueIdArray, tracked BoolArray, calleeFuncIndex FuncIndex, calleeParamCount ParamCount, scan PointerScan)
 	for position in 0 upto args.count() 'eachArg'
 		let argId = try args.get(position) otherwise panic("forwardCallArguments: args.get OOB at {position}")
+
 		if not isTracked(tracked, v: argId) 'notOurs'
 			continue
 		end 'notOurs'
+
 		// An argument past the callee's declared parameters is a call this pass cannot reason about, so it
 		// escapes rather than being forwarded to a position that does not exist.
 		if position >= calleeParamCount 'beyondTheSignature'
 			scan.markEscaped(argId)
 			continue
 		end 'beyondTheSignature'
+
 		scan.noteForward(argId, calleeFuncIndex: calleeFuncIndex, position: position)
 	end 'eachArg'
 end 'forwardCallArguments'
@@ -1183,6 +1231,7 @@ end 'forwardCallArguments'
 // call: Θ(ops × constructions) in a function that builds many records.
 function promoteInFunction(module StdModule, func IrFunction, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray)
 	let liveOps = module.liveOpIndices(func)
+
 	if not functionBuildsARecord(module, liveOps: liveOps, byName: byName, constructors: constructors) 'noConstructorCall'
 		return
 	end 'noConstructorCall'
@@ -1192,6 +1241,7 @@ function promoteInFunction(module StdModule, func IrFunction, byName FunctionNam
 
 	let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: candidates, byName: byName)
 	let plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams)
+
 	if plans.count() == 0 'nothingProvable'
 		return
 	end 'nothingProvable'
@@ -1204,12 +1254,14 @@ end 'promoteInFunction'
 function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns BoolArray
 	var candidates = BoolArray.create()
 	candidates.growFilled(valueBound as ElementIndex, value: false)
+
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
 			notAConstructorCall then break 'site'
 			builds(resultId, _, _, _) then try candidates.set(resultId, value: true) otherwise panic("collectConstructorResults: candidates.set OOB at {resultId} — the column is sized to the function's value space")
 		end 'site'
 	end 'eachOp'
+
 	return candidates
 end 'collectConstructorResults'
 
@@ -1222,6 +1274,7 @@ function functionBuildsARecord(module StdModule, liveOps OpIndexArray, byName Fu
 			builds then return true
 		end 'site'
 	end 'eachOp'
+
 	return false
 end 'functionBuildsARecord'
 
@@ -1362,6 +1415,7 @@ function constructorCallIn(module StdModule, resultId ValueId, calleeFuncIndex F
 	if args.count() != module.getFunc(calleeFuncIndex).paramCount 'arityDisagrees'
 		return ConstructorCallSite.notAConstructorCall
 	end 'arityDisagrees'
+
 	let verdict = try constructors.get(calleeFuncIndex) otherwise panic("constructorCallOf: the constructor table has no row for function index {calleeFuncIndex} — it is built with one row per module function")
 	return match verdict 'verdict'
 		notAConstructor gives ConstructorCallSite.notAConstructorCall
@@ -1384,8 +1438,10 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 	// `__mm_decref` was deleted, which is a leak or a double free rather than a missed optimization. Walking
 	// the very set that will be rewritten makes that unreachable by construction rather than by that panic.
 	var plans = RecordPromotionArray.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("planPromotions: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
 				notAConstructorCall then break 'site'
@@ -1393,6 +1449,7 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 			end 'site'
 		end 'eachOp'
 	end 'eachBlock'
+
 	return plans
 end 'planPromotions'
 
@@ -1400,16 +1457,20 @@ end 'planPromotions'
 function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray
 	var retained = BoolArray.create()
 	retained.growFilled(valueBound as ElementIndex, value: false)
+
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("retainedByACallee: forwardedCallees.get OOB at {edge}")
 		let position = try scan.forwardedPositions.get(edge) otherwise panic("retainedByACallee: forwardedPositions.get OOB at {edge}")
 		let mask = try escapingParams.get(callee) otherwise panic("retainedByACallee: the escape summary has no row for function index {callee} — it is built with one row per module function")
+
 		if not maskHasParam(mask, param: position) 'calleeLeavesItAlone'
 			continue
 		end 'calleeLeavesItAlone'
+
 		let pointer = try scan.forwardedPointers.get(edge) otherwise panic("retainedByACallee: forwardedPointers.get OOB at {edge}")
 		try retained.set(pointer, value: true) otherwise panic("retainedByACallee: retained.set OOB at {pointer} — the column is sized to the function's value space")
 	end 'eachForward'
+
 	return retained
 end 'retainedByACallee'
 
@@ -1417,6 +1478,7 @@ function planOnePromotion(opIdx OpIndex, resultId ValueId, sizeBytes ByteOffset,
 	if not recordIsFrameLocal(resultId, scan: scan, retained: retained) 'escapes'
 		return
 	end 'escapes'
+
 	plans.push(RecordPromotion.create(opIdx, recordValue: resultId, sizeBytes: sizeBytes, fields: fields, callArgs: args))
 end 'planOnePromotion'
 
@@ -1434,11 +1496,13 @@ end 'planOnePromotion'
 // answered before the code is safe.
 function assignFrameSlots(func IrFunction, plans RecordPromotionArray)
 	var reserved = 0 as StackSize
+
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		var plan = try plans.get(planIndex) otherwise panic("assignFrameSlots: plans.get OOB at {planIndex}")
 		plan.slot = (reserved / SpillSlotBytes) as SpillSlot
 		reserved = reserved + (plan.sizeBytes as StackSize)
 	end 'eachPlan'
+
 	func.stackSize = reserved
 end 'assignFrameSlots'
 
@@ -1449,9 +1513,11 @@ function recordIsFrameLocal(record ValueId, scan PointerScan, retained BoolArray
 	if scan.escapedLocallyAt(record) 'escapedHere'
 		return false
 	end 'escapedHere'
+
 	if scan.dropSitesAt(record) == 0 'neverDropped'
 		return false
 	end 'neverDropped'
+
 	let calleeRetainsIt = try retained.get(record) otherwise panic("recordIsFrameLocal: retained.get OOB at {record} — the column is sized to the function's value space")
 	return not calleeRetainsIt
 end 'recordIsFrameLocal'
@@ -1468,15 +1534,18 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	// `ValueMinter.create` is seeded with the first FREE id, which for a synthesized function is its
 	// parameter count and here is the whole value space — the same meaning, a different way of knowing it.
 	var mint = ValueMinter.create(valueBound as ParamCount)
+
 	// ⚠ THE PLANS ARE KEYED BY OP INDEX, not scanned per op. Walked as a list inside the rebuild, the
 	// rewrite is Θ(ops × promotions) — and a function that builds many records is exactly the one with many
 	// promotions, so the two factors grow together.
 	var planAtOp = PlanIndexByOpIndex.create()
+
 	// A dense column over the function's value space, NOT a `StdValueUseSet`: that type's whole contract is
 	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
 	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
 	var promoted = BoolArray.create()
 	promoted.growFilled(valueBound as ElementIndex, value: false)
+
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		let plan = try plans.get(planIndex) otherwise panic("applyPromotions: plans.get OOB at {planIndex}")
 		try promoted.set(plan.recordValue, value: true) otherwise panic("applyPromotions: promoted.set OOB at {plan.recordValue} — the column is sized to the function's value space")
@@ -1486,9 +1555,11 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
 		var rebuilt = OpIndexArray.create()
+
 		for opIdx in block.opRefs 'eachRef'
 			appendRewrittenOp(module, opIdx: opIdx, plans: plans, planAtOp: planAtOp, promoted: promoted, mint: mint, rebuilt: rebuilt)
 		end 'eachRef'
+
 		block.opRefs = rebuilt
 	end 'eachBlock'
 end 'applyPromotions'
@@ -1503,11 +1574,13 @@ function appendRewrittenOp(module StdModule, opIdx OpIndex, plans RecordPromotio
 		if opDropsAPromotedRecord(module, opIdx: opIdx, promoted: promoted) 'theDrop'
 			return
 		end 'theDrop'
+
 		rebuilt.push(opIdx)
 		return
 	end 'notAConstruction'
 
 	let plan = try plans.get(planIndex) otherwise panic("appendRewrittenOp: plans.get OOB at {planIndex} — the index came from the plan-by-op map, which is built from this very array")
+
 	// The frame address and its stores ARE the constructor call, so they answer to the same statement it
 	// did. Read off the op being replaced rather than threaded in: `plan` is keyed by that very index.
 	module.spans.current = module.spans.at(opIdx)
@@ -1516,6 +1589,7 @@ end 'appendRewrittenOp'
 
 function emitPromotedRecord(module StdModule, plan RecordPromotion, mint ValueMinter, rebuilt OpIndexArray)
 	rebuilt.push(appendModuleOp(module, op: StdOp.stackRecordAddr(plan.recordValue, slot: plan.slot)))
+
 	for fieldIndex in 0 upto plan.fields.count() 'eachField'
 		let field = try plan.fields.get(fieldIndex) otherwise panic("emitPromotedRecord: fields.get OOB at {fieldIndex}")
 		let stored = fieldValueId(module, source: field.source, callArgs: plan.callArgs, mint: mint, rebuilt: rebuilt)
@@ -1656,6 +1730,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 		osFileOpenWriteExecutable gives false
 		osEnvBlock or
 			osEnvBlockFree gives false
+
 		// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
 		// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 		loadAcquire or
@@ -1673,9 +1748,12 @@ function callDropsAPromotedRecord(callee ByteArray, args ValueIdArray, promoted 
 	if not callee.equals(MmDecrefName) or args.count() != MmDecrefArgCount 'notTheDrop'
 		return false
 	end 'notTheDrop'
+
 	let dropped = try args.get(0) otherwise panic("callDropsAPromotedRecord: args.get(0) OOB on a one-argument `__mm_decref`")
+
 	if dropped >= promoted.count() 'outsideTheValueSpace'
 		return false
 	end 'outsideTheValueSpace'
+
 	return try promoted.get(dropped) otherwise panic("callDropsAPromotedRecord: promoted.get OOB at {dropped} after a bounds test")
 end 'callDropsAPromotedRecord'

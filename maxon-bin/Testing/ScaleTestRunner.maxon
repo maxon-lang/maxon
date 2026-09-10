@@ -332,6 +332,7 @@ export function parseRepeatCount(raw String) returns RepeatCountArg
 	if value < MinRepeatCount or value > MaxRepeatCount 'outOfRange'
 		return RepeatCountArg.invalid
 	end 'outOfRange'
+
 	return RepeatCountArg.valid(value as RepeatCount)
 end 'parseRepeatCount'
 
@@ -358,6 +359,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	end 'badCorpus'
 
 	let lockExit = acquireTreeLock(corpusRoot)
+
 	if lockExit != 0 'busyTree'
 		return lockExit
 	end 'busyTree'
@@ -405,6 +407,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 	// outlives the session that made it — see ScaleHistory on why every row states where it was
 	// measured. This is the same question one level up: WHAT was measured.
 	let freshnessExit = refuseIfStale(compilerExe, role: "the scale-test compiler")
+
 	if freshnessExit != 0 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
@@ -455,6 +458,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 
 	printRungHeader()
 	var results = RungResultArray.create()
+
 	for rung in ladder 'eachRung'
 		// One rung compiled is this run's unit of progress, and the tree lock's heartbeat is what
 		// says the holder is still making it. The compiles themselves are CHILD processes, so none
@@ -518,6 +522,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 
 	if not args.note.isEmpty() 'record'
 		let recorded = recordRun(results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+
 		if recorded != 0 'recordFailed'
 			return recorded
 		end 'recordFailed'
@@ -565,6 +570,7 @@ function recordRun(results RungResultArray, note String, mintedAt String, bytes 
 	try recordScaleRun(results, note: note, mintedAt: mintedAt) otherwise (error) 'writeFailed'
 		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
 	end 'writeFailed'
+
 	return 0
 end 'recordRun'
 
@@ -585,6 +591,7 @@ function corpusRootPath(args MaxonArgs) returns FilePath throws FilePathError
 	if not args.emitCorpus.isEmpty() 'explicit'
 		return try FilePath.from(args.emitCorpus)
 	end 'explicit'
+
 	return try FilePath.from(CorpusRelativeRoot)
 end 'corpusRootPath'
 
@@ -692,8 +699,10 @@ function leastCpuRung(first RungResult, again RungResult, run RepeatCount) retur
 	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt` read back.
 	var phases = PhaseMetricArray.create()
 	var regAlloc = PhaseMetricArray.create()
+
 	for source in scalePhaseSources() 'eachSource'
 		let least = try leastCpuPhase(phaseMetricOf(source, result: first), again: phaseMetricOf(source, result: again), what: phaseSourceName(source), rung: first.rung, run: run)
+
 		match source 'dest'
 			compilePhase then phases.push(least)
 			regAllocPhase then regAlloc.push(least)
@@ -739,9 +748,11 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 	// on phase 0 the moment its column became a struct. Pushing is correct at both.
 	var phases = PhaseMetricArray.create()
 	var regAlloc = PhaseMetricArray.create()
+
 	for _ in 0 upto CompilePhase.allCases.count() 'seedPhases'
 		phases.push(PhaseMetric.zero())
 	end 'seedPhases'
+
 	for _ in 0 upto RegAllocPhase.allCases.count() 'seedRegAlloc'
 		regAlloc.push(PhaseMetric.zero())
 	end 'seedRegAlloc'
@@ -758,11 +769,13 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 
 	for line in text.split(MetricsRowSep) 'eachLine'
 		let trimmed = line.trim()
+
 		if trimmed.isEmpty() or trimmed.startsWith(MetricsCommentPrefix) 'skip'
 			continue
 		end 'skip'
 
 		let fields = trimmed.split(MetricsColumnSep)
+
 		if fields.count() != MetricsFieldCount 'malformed'
 			throw ScaleError.reason("malformed metrics row (expected {MetricsFieldCount} tab-separated fields, got {fields.count()}): {trimmed}")
 		end 'malformed'
@@ -797,12 +810,14 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 	if not totalSeen 'noTotal'
 		throw ScaleError.reason("metrics for rung {rung.index} carried no `total` row")
 	end 'noTotal'
+
 	if not codeSeen 'noCode'
 		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the corpus self-check cannot run without it")
 	end 'noCode'
 
 	for phase in CompilePhase.allCases 'checkSeen'
 		let seen = try phaseSeen.get(phase.ordinal) otherwise panic("parseRungMetrics: phaseSeen.get OOB for '{phase.name}'")
+
 		if not seen 'missing'
 			throw ScaleError.reason("metrics for rung {rung.index} never reported phase '{phase.name}' — a phase added to CompilePhase but not to the metrics output would silently vanish from every curve and every trend column")
 		end 'missing'
@@ -834,17 +849,21 @@ export function parseCount(raw String) returns ParsedCount throws ScaleError
 	end 'empty'
 
 	let digits = raw.toByteArray()
+
 	if digits.count() > MaxDecimalDigits 'tooManyDigits'
 		throw ScaleError.reason("'{raw}' has {digits.count()} digits — no count in this suite exceeds {MaxDecimalDigits}")
 	end 'tooManyDigits'
 
 	var value = 0 as ParsedCount
+
 	for digit in digits 'eachDigit'
 		if digit < AsciiDigitZero or digit > AsciiDigitNine 'notADigit'
 			throw ScaleError.reason("expected a number, got '{raw}'")
 		end 'notADigit'
+
 		value = value * 10 + ((digit - AsciiDigitZero) as ParsedCount)
 	end 'eachDigit'
+
 	return value
 end 'parseCount'
 
@@ -922,6 +941,7 @@ end 'growthAgainstPrevious'
 export enum ScaleMeasure
 	allocations
 	bytes
+
 	// ⚠ The one measure here that is NOT bit-reproducible — see PhaseMetric's header. It is the only
 	// one that can see a cost which allocates nothing, which is why it is worth its noise band.
 	cpuTicks
@@ -950,9 +970,11 @@ function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat R
 
 	var header = StringBuilder.create()
 	header.append(padRight("  phase", width: PhaseColumnWidth))
+
 	for result in results 'eachRung'
 		header.append(padLeft("rung {result.rung}", width: PhaseCountColumnWidth))
 	end 'eachRung'
+
 	header.append(padLeft("x", width: GrowthColumnWidth))
 	print("{header.build()}\n")
 
@@ -987,6 +1009,7 @@ function exactColumnNote(repeat RepeatCount) returns String
 	if repeat == 1 'oneCompile'
 		return "from ONE compile per rung (--repeat=1). Exact and reproducible; a repeat would only re-check it."
 	end 'oneCompile'
+
 	return "from the FIRST of {repeat} compiles per rung, and IDENTICAL in every one of them — checked, not assumed."
 end 'exactColumnNote'
 
@@ -994,6 +1017,7 @@ function leastCpuNote(repeat RepeatCount) returns String
 	if repeat == 1 'oneCompile'
 		return "from ONE compile per rung (--repeat=1): a single sample, undefended against a stall."
 	end 'oneCompile'
+
 	return "the LEAST of {repeat} compiles per rung — the least-disturbed sample, since noise can only ADD to a CPU reading."
 end 'leastCpuNote'
 
@@ -1041,6 +1065,7 @@ end 'topRungGrowth'
 // saying `path-independent`.
 function printMemoryTrend(results RungResultArray, trend LoggedMemory, mintedAt String, bytes ByteDelta, moved bool)
 	print("\n")
+
 	match trend 'm'
 		absent then printNoPreviousRun()
 		present(date, _, note, allocs, loggedBytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: loggedBytes, mintedAt: mintedAt, bytes: bytes, moved: moved)
@@ -1150,6 +1175,7 @@ function byteDeltaText(current HeapByteCount, logged ByteCountArray, rung Ladder
 		withheld then return WithheldDeltaText
 		comparable then break 'b'
 	end 'b'
+
 	let before = try logged.get(rung) otherwise return NoBaselineText
 	return signedDeltaText(current as Delta, before: before as Delta)
 end 'byteDeltaText'
@@ -1163,6 +1189,7 @@ function signedDeltaText(current Delta, before Delta) returns String
 	if current > before 'grew'
 		return "+{groupDigits(current - before)}"
 	end 'grew'
+
 	return groupDigits(current - before)
 end 'signedDeltaText'
 
@@ -1231,6 +1258,7 @@ let StdlibWalkLabelWidth = 15 as ColumnWidth
 // a program that was actually compiled, rather than one that folded away to nothing.
 function printCorpusGrowth(results RungResultArray)
 	print("\n")
+
 	if results.count() < MinRungsForGrowth 'tooFewRungs'
 		print("  corpus: {results.count()} rung(s) — too few to say anything about GROWTH, this check included.\n")
 		return
@@ -1238,6 +1266,7 @@ function printCorpusGrowth(results RungResultArray)
 
 	var line = StringBuilder.create()
 	line.append("  corpus: emitted code grows")
+
 	for i in 1 upto results.count() 'eachRung'
 		line.append(" {growthText(codeGrowthAt(results, rung: i))}")
 	end 'eachRung'

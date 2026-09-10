@@ -117,20 +117,24 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 
 	let ncmds = imageReadU32(image, at: MhNcmdsOffset)
 	var cmdStart = MachHeaderSize as ByteOffset
+
 	for _ in 0 upto ncmds 'eachCommand'
 		let cmd = imageReadU32(image, at: cmdStart + LcCmdOffset)
 		let cmdSize = imageReadU32(image, at: cmdStart + LcCmdSizeOffset)
 
 		if cmd == LcSegment64 and imageNameAt(image, at: cmdStart + SegSegnameOffset, maxBytes: MachoNameBytes) == segname 'thisSegment'
 			let nsects = imageReadU32(image, at: cmdStart + SegNsectsOffset)
+
 			for s in 0 upto nsects 'eachSection'
 				let sectStart = cmdStart + SegmentCommandBaseSize + s * SectionHeaderSize
+
 				if imageNameAt(image, at: sectStart + SectSectnameOffset, maxBytes: MachoNameBytes) != sectname 'notThisSection'
 					continue
 				end 'notThisSection'
 
 				let size = imageReadU64(image, at: sectStart + SectSizeOffset)
 				let fileOffset = imageReadU32(image, at: sectStart + SectFileOffsetOffset)
+
 				if not imageRangeFits(image, start: fileOffset as ByteOffset, count: size as BytePos) 'runsPastEof'
 					throw MachoReadError.truncated(path, sectionName: sectname)
 				end 'runsPastEof'

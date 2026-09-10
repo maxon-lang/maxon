@@ -143,6 +143,7 @@ export type DebugLocalDecl
 	export var name as ByteArray
 	export var declaredType as MaxonType
 	export var valueIds as ValueIdArray
+
 	// ⭐ **THE NAME DENOTES A CELL ADDRESS, NOT THE VALUE** — a `var` another frame may write, or a
 	// by-reference parameter. Its values locate the CELL, so a register or a slot stated for one of them
 	// would be the address rendered as the contents; the format has no indirect kind, and the honest
@@ -239,6 +240,7 @@ export type IrFunction
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
 	// the way to the COFF symbol table, which writes it as bytes anyway.
 	export var name as ByteArray
+
 	// ⛔ **AN `IrFunction` CARRIES NO NAMESPACE, AND MUST NOT GROW ONE.** A `dir.fn()` reference is resolved
 	// at PARSE time, against `ProgramSignatures.namespaceQualifiedFunctions`, and it resolves to the BARE
 	// declared name — so by the time an `IrFunction` exists there is no namespace left to consult, and the
@@ -250,6 +252,7 @@ export type IrFunction
 	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at
 	// none for the whole of P1: any file could call any other file's non-exported function.
 	export var visibility as Visibility
+
 	// Absolute / virtual path of the declaring file — the visibility anchor for
 	// cross-file callers. Empty for synthesized functions.
 	export var sourceFilePath as FilePath
@@ -257,9 +260,11 @@ export type IrFunction
 	export var blockRefs as BlockRefArray
 	export var nextBlockId as BlockId
 	export var returnLine as LineNumber
+
 	// Line and column of the function-name token; zero for synthesized functions.
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
+
 	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
 	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
 	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
@@ -294,6 +299,7 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
+
 	// THE MAXON TIER'S PER-VALUE TYPE ORACLE: the source-level type of every SSA value this
 	// function's ops define, DENSE by ValueId (parameter `i` owns id `i`, so `valueTags[i]` is
 	// parameter `i`'s declared type from the very first lookup).
@@ -315,6 +321,7 @@ export type IrFunction
 	// Empty on a Std-phase function (`createFromStd`) — the tier that reads it is upstream of
 	// those.
 	export var valueTags as ValueTypeTagArray
+
 	// THE PARALLEL NAME COLUMN: the interned `TypeNameId` behind each SSA value's type, DENSE by
 	// ValueId in lockstep with `valueTags` (a scalar's slot holds the `UnnamedTypeId` filler). A
 	// `named`/`structRef` value carries a real id here; every other tag's is filler and is never
@@ -330,12 +337,14 @@ export type IrFunction
 	//
 	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
 	export var valueNameIds as TypeNameIdArray
+
 	// ⭐ **THE PER-VALUE BRAND COLUMN, DENSE in the same lockstep.** The generic-instance `typealias` a value
 	// was declared, built or read under (`Xs` for an `Array with Integer` an `Xs.create()` produced), or
 	// `UnnamedTypeId` for a value no alias names. An instance id is one type under several brands, and a
 	// brand is compared only once two instance ids agree (`ProgramSignatures.aggregatesConflict`). Interner
 	// ids, remapped at merge exactly as `valueNameIds` is.
 	export var valueBrandIds as TypeNameIdArray
+
 	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN (P1.5-A2b-2), DENSE by ValueId in lockstep with
 	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
 	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
@@ -347,6 +356,7 @@ export type IrFunction
 	// arguments land at function-typed parameters, so it publishes each value's environment here and the
 	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
 	export var valueClosureEnv as ValueIdArray
+
 	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK (P1.5-A2b-2), DENSE by ValueId in lockstep with `valueTags`.**
 	// True iff a value is a capturing closure LITERAL born in this function (its env is this frame's — see
 	// `Parser.markCapturingClosure`). PUBLISHED (like `valueClosureEnv`) because the INTERPROCEDURAL escape
@@ -356,6 +366,7 @@ export type IrFunction
 	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
 	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
 	export var valueIsCapturingClosure as BoolArray
+
 	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId.** For a
 	// value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER half — the
 	// `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the second half of
@@ -377,6 +388,7 @@ export type IrFunction
 	// interface-typed parameters, so it publishes each value's witness here and the lowering reads it.
 	// Empty on a Std-phase function (`createFromStd`).
 	export var valueWitnessIds as ValueIdArray
+
 	// ⭐⭐ **THE PER-VALUE EXISTENTIAL-INSTANCE COLUMN (W57), SPARSE by ValueId** — see
 	// `ValueExistentialInstanceMap` above for what a `Base with Args` instance is doing beside a value whose
 	// type says only `interfaceRef(Base)`.
@@ -401,8 +413,10 @@ export type IrFunction
 	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
 	// existential, which is very nearly all of them.
 	export var valueExistentialInstances as ValueExistentialInstanceMap
+
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
+
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
 	// functions leave this empty.
 	export var scope as Scope
@@ -415,10 +429,12 @@ export type IrFunction
 	// Total number of slot-addressed variables used by ISel; spill slots sit
 	// below the variable area.
 	export var varSlotCount as VarSlot
+
 	// Running tally of bytes the function needs on the stack (locals + spills +
 	// callee-save area); the cold-spill splitter sets it to its spill-slot bytes,
 	// and the prologue/epilogue pass aligns and emits `sub rsp, N`.
 	export var stackSize as StackSize
+
 	// Bytes reserved at the bottom of the frame for outgoing call args that
 	// overflow the register file.
 	export var outgoingArgSize as StackSize
@@ -677,6 +693,7 @@ export type IrFunction
 	// `Parser.borrowFactsOf` is the copy-on-write. Empty for a Std-phase function: the tier that reads
 	// it is upstream.
 	export var borrowFacts as BorrowFacts
+
 	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS (EC7)** —
 	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
 	// narrowed parameter; it therefore survives `shallowCopy`/`relocateFunction` as the shared empty by
@@ -684,6 +701,7 @@ export type IrFunction
 	// it. Read by `InlineLeaves`, which is the only pass that can prove a cascade dead from OUTSIDE the
 	// function it stands in.
 	export var paramGuards as RangeCheckParamGuardArray
+
 	// ⭐ **THE SOURCE BINDINGS OF THIS FUNCTION, PUBLISHED BY THE PARSER FOR THE DEBUG-INFO SIDECAR** (see
 	// `DebugLocalDecl`). Empty unless the build is writing one — no pass reads it and nothing branches on
 	// it, which is what keeps the emitted image byte-identical either way.
@@ -692,6 +710,7 @@ export type IrFunction
 	// because the same `IrFunction` object is carried through Maxon → Std → Target and ids pass through
 	// verbatim (`LowerMaxonToStd`'s header).
 	export var debugLocals as DebugLocalDeclArray
+
 	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
 	// record in its `valueIds` order, spliced home by the register allocator (`spliceRegAllocResult`). Kept
 	// beside the roster it answers rather than inside it, because the two are filled by tiers a worker-pool
@@ -909,9 +928,11 @@ export type IrFunction
 	// source's body blocks in place.
 	export static function relocateFunction(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
 		var relocated = IrFunction.shallowCopy(src)
+
 		for blockRef in src.blockRefs 'eachBlock'
 			relocated.blockRefs.push(blockRef + blockOffset)
 		end 'eachBlock'
+
 		return relocated
 	end 'relocateFunction'
 
@@ -926,6 +947,7 @@ export type IrFunction
 		if self.paramGuards is sharedEmptyParamGuards 'stillShared'
 			self.paramGuards = RangeCheckParamGuardArray.create()
 		end 'stillShared'
+
 		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
 	end 'recordParamGuard'
 

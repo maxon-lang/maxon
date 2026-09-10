@@ -190,6 +190,7 @@ end 'clonedStringRecord'
 function builtUnionCaseBox(fn SynthesizedFunction, tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, range SourceRange) returns ValueId
 	let box = fn.emitBoxAlloc(boxSize as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 	fn.emit(MaxonOp.storeIndirect(box, offset: UnionTagOffset, value: fn.emitTypedLiteral(tag, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
+
 	for offset in payloadSlotOffsets 'zeroFill'
 		fn.emit(MaxonOp.storeIndirect(box, offset: offset, value: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
 	end 'zeroFill'
@@ -239,6 +240,7 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	// decided, so it answers this too rather than a second test living in the synthesis.
 	if elements.count() > 0 'hasElements'
 		let add = elementAddCallee(create, count: elements.count())
+
 		for element in elements 'eachElement'
 			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'eachElement'
@@ -259,9 +261,11 @@ end 'builtContainerRecord'
 // carries no `sizing` field at all.
 function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, valueType MaxonType, range SourceRange) returns ValueId
 	var args = ValueIdArray.create()
+
 	for stamp in create.stamps 'eachStamp'
 		args.push(containerStampValue(fn, stamp: stamp, range: range))
 	end 'eachStamp'
+
 	return fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'bornContainerRecord'
 
@@ -276,8 +280,10 @@ end 'bornContainerRecord'
 // `initializerNodeRecord`, exactly as a factory ARGUMENT does.
 function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, entries GlobalInitMapEntryArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+
 	if entries.count() > 0 'hasPairs'
 		let add = keyedElementAddCallee(create, count: entries.count())
+
 		for entry in entries 'eachPair'
 			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, range: range)
 		end 'eachPair'
@@ -298,8 +304,10 @@ end 'builtMapLiteralRecord'
 // a double free.
 function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, elements GlobalInitValueAndTypeArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+
 	if elements.count() > 0 'hasElements'
 		let add = elementAddCallee(create, count: elements.count())
+
 		for element in elements 'eachElement'
 			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'eachElement'
@@ -342,6 +350,7 @@ function elementAddCallee(create ContainerCreateCall, count ParsedInt) returns B
 	return match create.elementAdd 'add'
 		push(callee) gives callee
 		unsupported panic("ModuleInit.elementAddCallee: `{String.from(create.callee)}` was handed {count} element(s) and `ProgramSignatures.containerCreateCall` names no add callee for it — a top-level form is producing elements for a container the router does not know how to fill")
+
 		// A KEYED add takes `(record, key, value:)`, and this caller holds ONE value per element — so passing
 		// it here would put a key where a value belongs, silently. `builtMapLiteralRecord` is the builder that
 		// has a pair to give; a one-column element list reaching a keyed container is a description built by
@@ -415,6 +424,7 @@ end 'initializerNodeRecord'
 function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	var values = ValueIdArray.create()
 	var labels = ByteArrayArray.create()
+
 	for arg in args 'eachArgument'
 		values.push(materializedValue(fn, value: arg.value, valueType: arg.valueType, calls: calls, range: range))
 		labels.push(arg.label)
@@ -445,6 +455,7 @@ end 'calledFactoryRecord'
 // (`ConstFactoryCall.construct`).
 function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields GlobalStructFieldArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	let box = fn.emitBoxAlloc(sizeBytes as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+
 	for field in fields 'eachField'
 		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, range: range)
 		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), range: range)
@@ -459,6 +470,7 @@ function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentAr
 	for i in 0 upto args.count() 'eachArgument'
 		let arg = try args.get(i) otherwise panic("dropBorrowedArguments: args.get OOB at {i} below count {args.count()}")
 		let value = try values.get(i) otherwise panic("dropBorrowedArguments: values.get OOB at {i} — the materialization above pushes one value per argument")
+
 		match arg.cleanup 'cleanup'
 			none then continue
 			dropAfterCall(dropCallee) then fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(value), range: range)
@@ -504,10 +516,12 @@ function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, rang
 	return match element 'element'
 		integer(payload) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, range: range)
 		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, range: range)
+
 		// A Character element is the String arm at a different TAG, which is the whole of the difference in
 		// The compiler: `Parser.emitCharacterLiteral` emits the same `stringLiteral` op and the same `__str_clone`
 		// promotes it, and the tag is what makes the value a `Character` for the set's key check.
 		character(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.character, range: range)
+
 		// ⭐ **AN ENUM CASE IS THE INTEGER ARM, and it is written out rather than folded into it because the
 		// two bind different shapes.** A payload-free enum's value IS its tag, so the slot takes the same i64
 		// the integer arm stores — and it is typed `integer` here for the same reason `emitEnumTagLiteral`
@@ -570,8 +584,10 @@ end 'anchorRange'
 export type SynthesizedFunction
 	var module as MaxonModule
 	var project as Project
+
 	// This function's position in `module.functions` — the key `ValueOriginTable` files an origin under.
 	var funcIndex as FuncIndex
+
 	// The function itself, so a second block can be minted into it. Held BESIDE the index rather than looked
 	// up from it because `MaxonModule` exposes no by-index accessor, and adding one to serve a single caller
 	// would be a wider API than the need.
@@ -592,6 +608,7 @@ export type SynthesizedFunction
 		var valueBrandIds = TypeNameIdArray.create()
 		var valueClosureEnv = ValueIdArray.create()
 		var valueIsCapturingClosure = BoolArray.create()
+
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
@@ -739,6 +756,7 @@ export type SynthesizedFunction
 	// disagree about which tables an op joins.
 	function recordOpTables(op MaxonOp, opIndex OpIndex, range SourceRange)
 		self.project.opRanges.record(opIndex, range: range)
+
 		match maxonOpResultValue(op) 'result'
 			none then break 'result'
 			value(id) then self.project.valueOrigins.record(self.funcIndex, valueId: id, opIndex: opIndex)

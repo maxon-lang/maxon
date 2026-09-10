@@ -178,6 +178,7 @@ export type MxdbgReader
 	var localTally as MxdbgIndex
 	var covTableOff as ByteOffset
 	var covTally as MxdbgIndex
+
 	// Function indices in code-start order, which is what makes `functionContaining` a binary search. It is
 	// a sort rather than a claim about the writer: a sidecar may store its table in emission order, so a walk
 	// in file order would answer wrongly. A profiler resolves ten frames per sample at a kilohertz over a
@@ -190,12 +191,14 @@ export type MxdbgReader
 		end 'badMagic'
 
 		let version = imageReadU32(image, at: MxdbgOffVersion) as MxdbgIndex
+
 		if version != MxdbgFormatVersion 'wrongVersion'
 			throw MxdbgReadError.unsupportedVersion(version)
 		end 'wrongVersion'
 
 		let stringPoolOff = imageReadU32(image, at: MxdbgOffStringPoolOff) as ByteOffset
 		let poolSize = imageReadU32(image, at: MxdbgOffStringPoolSize) as BytePos
+
 		if not imageRangeFits(image, start: stringPoolOff, count: poolSize) 'poolPastEnd'
 			throw MxdbgReadError.truncated
 		end 'poolPastEnd'
@@ -206,6 +209,7 @@ export type MxdbgReader
 		let funcTally = imageReadU32(image, at: MxdbgOffFuncCount) as MxdbgIndex
 		let lineTableOff = imageReadU32(image, at: MxdbgOffLineTableOff) as ByteOffset
 		let lineTally = imageReadU32(image, at: MxdbgOffLineCount) as MxdbgIndex
+
 		if not imageRangeFits(image, start: fileTableOff, count: (fileTally * MxdbgFileEntrySize) as BytePos) or not imageRangeFits(image, start: funcTableOff, count: (funcTally * MxdbgFuncEntrySize) as BytePos) or not imageRangeFits(image, start: lineTableOff, count: (lineTally * MxdbgLineEntrySize) as BytePos) 'tablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'tablePastEnd'
@@ -219,12 +223,14 @@ export type MxdbgReader
 		let fieldTally = imageReadU32(image, at: MxdbgOffFieldCount) as MxdbgIndex
 		let localTableOff = imageReadU32(image, at: MxdbgOffLocalTableOff) as ByteOffset
 		let localTally = imageReadU32(image, at: MxdbgOffLocalCount) as MxdbgIndex
+
 		if not imageRangeFits(image, start: typeTableOff, count: (typeTally * MxdbgTypeEntrySize) as BytePos) or not imageRangeFits(image, start: fieldTableOff, count: (fieldTally * MxdbgFieldEntrySize) as BytePos) or not imageRangeFits(image, start: localTableOff, count: (localTally * MxdbgLocalEntrySize) as BytePos) 'recordTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'recordTablePastEnd'
 
 		let covTableOff = imageReadU32(image, at: MxdbgOffCovTableOff) as ByteOffset
 		let covTally = imageReadU32(image, at: MxdbgOffCovCount) as MxdbgIndex
+
 		if not imageRangeFits(image, start: covTableOff, count: (covTally * MxdbgCovEntrySize) as BytePos) 'coverageTablePastEnd'
 			throw MxdbgReadError.truncated
 		end 'coverageTablePastEnd'
@@ -358,8 +364,10 @@ export type MxdbgReader
 		// disjoint, so a containment miss there means the offset lies in a gap.
 		var lo = 0 as MxdbgIndex
 		var hi = self.funcOrder.count() as MxdbgIndex
+
 		while lo < hi 'partition'
 			let mid = lo + ((hi - lo) shr 1)
+
 			if self.funcCodeStartAt(mid) > codeOffset 'startsPastIt'
 				hi = mid
 			end 'startsPastIt' else 'startsAtOrBeforeIt'
@@ -373,6 +381,7 @@ export type MxdbgReader
 
 		let candidate = try self.funcOrder.get(lo - 1) otherwise panic("MxdbgReader.functionContaining: the partition point {lo} is inside a list of {self.funcOrder.count()} indices")
 		let rec = self.funcTableOff + (candidate * MxdbgFuncEntrySize) as ByteOffset
+
 		if codeOffset >= (imageReadU32(self.image, at: rec + MxdbgFuncCodeEnd) as MxdbgCodeOffset) 'inAGap'
 			return MxdbgFunctionLookup.none
 		end 'inAGap'
@@ -400,8 +409,10 @@ export type MxdbgReader
 
 	function lastRowAtOrBefore(fn MxdbgFunctionInfo, codeOffset MxdbgCodeOffset) returns MxdbgLineLookup
 		var best = MxdbgLineLookup.none
+
 		for i in fn.lineFirst upto fn.lineFirst + fn.lineCount 'eachRow'
 			let row = self.lineRecord(i as MxdbgIndex)
+
 			if row.codeOffset > codeOffset 'pastTheOffset'
 				break
 			end 'pastTheOffset'
@@ -426,6 +437,7 @@ end 'MxdbgReader'
 // a lazily-filled field could not be written through one (E3063).
 function functionOrderByCodeStart(image ByteArray, tableOff ByteOffset, tally MxdbgIndex) returns MxdbgFuncOrder
 	var order = MxdbgFuncOrder.create()
+
 	for i in 0 upto tally 'each'
 		order.push(i as MxdbgIndex)
 	end 'each'

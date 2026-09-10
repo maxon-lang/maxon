@@ -31,6 +31,7 @@ typealias EnvEntryBytePos = int(0 to u64.max)
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
 public enum ProcessIntrospectionError implements Error
 	pathUnavailable
+
 	/// No entry of this process's environment carries the name asked for. DISTINCT from a variable
 	/// whose value is the empty string, which is a value a caller may legitimately have set.
 	variableUnset
@@ -114,6 +115,7 @@ public type Process
 
 		while true 'eachEntry'
 			let entry = String.init(__Builtins.osEnvironmentEntry(index))
+
 			if entry.isEmpty() 'pastTheEnd'
 				break
 			end 'pastTheEnd'
@@ -161,8 +163,10 @@ public type Process
 	/// them the empty name, and they would then collide with each other in the override lookup.
 	static function envEntrySeparatorAt(bytes ByteArray) returns EnvEntryBytePos
 		let n = bytes.count()
+
 		for i in 1 upto n 'eachByte'
 			let b = try bytes.get(i) otherwise panic("envEntrySeparatorAt: i < n = bytes.count() but get({i}) failed")
+
 			if b == EnvNameValueSeparator 'atSeparator'
 				return i
 			end 'atSeparator'
@@ -173,6 +177,7 @@ public type Process
 
 	static function envEntryBytes(bytes ByteArray, from EnvEntryBytePos, to EnvEntryBytePos) returns String
 		var taken = ByteArray.create()
+
 		for i in from upto to 'eachByte'
 			taken.push(try bytes.get(i) otherwise panic("envEntryBytes: i < to <= bytes.count() but get({i}) failed"))
 		end 'eachByte'

@@ -29,16 +29,19 @@ public extension Array
 	// Stable: when both heads compare equal, the left head wins.
 	public function mergeTwoPointer(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		Log.trace("merge.twoPointer")
+
 		// Copy the entire range [lo, hi) into scratch[0..n), then merge back.
 		// Using two halves of `managed` directly would clobber the source.
 		var k = 0 as SortIndex
 		var idx = lo
+
 		while idx < hi 'copy'
 			let v = try managed.get(idx) otherwise panic("mergeTwoPointer: get OOB during copy; idx < hi <= length")
 			try scratch.set(k, value: v) otherwise panic("mergeTwoPointer: scratch.set OOB during copy")
 			k = k + 1
 			idx = idx + 1
 		end 'copy'
+
 		// Two-pointer merge from scratch[0..leftLen) and scratch[leftLen..n)
 		// back into managed[lo..hi).
 		let leftLen = mid - lo
@@ -46,10 +49,12 @@ public extension Array
 		var i = 0 as SortIndex
 		var j = leftLen
 		var out = lo
+
 		while i < leftLen and j < totalLen 'pick'
 			let l = try scratch.get(i) otherwise panic("mergeTwoPointer: scratch.get OOB at i")
 			let r = try scratch.get(j) otherwise panic("mergeTwoPointer: scratch.get OOB at j")
 			let ord = cmp(l, r)
+
 			if ord != Ordering.greaterThan 'takeLeft'
 				try managed.set(out, value: l) otherwise panic("mergeTwoPointer: set OOB at out (left)")
 				i = i + 1
@@ -57,8 +62,10 @@ public extension Array
 				try managed.set(out, value: r) otherwise panic("mergeTwoPointer: set OOB at out (right)")
 				j = j + 1
 			end 'takeRight'
+
 			out = out + 1
 		end 'pick'
+
 		// Drain whichever side still has elements.
 		while i < leftLen 'drainLeft'
 			let l = try scratch.get(i) otherwise panic("mergeTwoPointer: scratch.get OOB at i (drainL)")
@@ -66,6 +73,7 @@ public extension Array
 			i = i + 1
 			out = out + 1
 		end 'drainLeft'
+
 		while j < totalLen 'drainRight'
 			let r = try scratch.get(j) otherwise panic("mergeTwoPointer: scratch.get OOB at j (drainR)")
 			try managed.set(out, value: r) otherwise panic("mergeTwoPointer: set OOB at out (drainR)")
@@ -85,6 +93,7 @@ public extension Array
 	public function mergeBuffered(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
+
 		if leftLen <= rightLen 'leftIsSmaller'
 			self.mergeBufferedLeft(lo, mid: mid, hi: hi, scratch: scratch, cmp: cmp)
 		end 'leftIsSmaller' else 'rightIsSmaller'
@@ -109,17 +118,21 @@ public extension Array
 	function mergeBufferedLeft(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		var i = 0 as SortIndex
+
 		while i < leftLen 'copyLeft'
 			let v = try managed.get(lo + i) otherwise panic("mergeBufferedLeft: get OOB during copy")
 			try scratch.set(i, value: v) otherwise panic("mergeBufferedLeft: scratch.set OOB")
 			i = i + 1
 		end 'copyLeft'
+
 		var l = 0 as SortIndex
 		var r = mid
 		var out = lo
+
 		while l < leftLen and r < hi 'pick'
 			let lv = try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB at l")
 			let rv = try managed.get(r) otherwise panic("mergeBufferedLeft: get OOB at r")
+
 			if cmp(lv, rv) == Ordering.greaterThan 'takeRight'
 				try managed.set(out, value: rv) otherwise panic("mergeBufferedLeft: set OOB at out (right)")
 				r = r + 1
@@ -127,14 +140,17 @@ public extension Array
 				try managed.set(out, value: lv) otherwise panic("mergeBufferedLeft: set OOB at out (left)")
 				l = l + 1
 			end 'takeLeft'
+
 			out = out + 1
 		end 'pick'
+
 		while l < leftLen 'drainLeft'
 			let lv = try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB drain")
 			try managed.set(out, value: lv) otherwise panic("mergeBufferedLeft: set OOB drain")
 			l = l + 1
 			out = out + 1
 		end 'drainLeft'
+
 		// Right tail is already in place; no drain needed.
 	end 'mergeBufferedLeft'
 
@@ -153,11 +169,13 @@ public extension Array
 	function mergeBufferedRight(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, cmp SortComparator)
 		let rightLen = hi - mid
 		var i = 0 as SortIndex
+
 		while i < rightLen 'copyRight'
 			let v = try managed.get(mid + i) otherwise panic("mergeBufferedRight: get OOB during copy")
 			try scratch.set(i, value: v) otherwise panic("mergeBufferedRight: scratch.set OOB")
 			i = i + 1
 		end 'copyRight'
+
 		// Exclusive end-pointers: lEnd = first index past unconsumed left;
 		// rEnd = first index past unconsumed scratch; outEnd = first index
 		// past the next slot to write. All three start one past the rightmost
@@ -165,9 +183,11 @@ public extension Array
 		var lEnd = mid
 		var rEnd = rightLen
 		var outEnd = hi
+
 		while lEnd > lo and rEnd > 0 'pick'
 			let lv = try managed.get(lEnd - 1) otherwise panic("mergeBufferedRight: get OOB at lEnd-1")
 			let rv = try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at rEnd-1")
+
 			if cmp(lv, rv) == Ordering.greaterThan 'takeLeft'
 				try managed.set(outEnd - 1, value: lv) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (left)")
 				lEnd = lEnd - 1
@@ -175,8 +195,10 @@ public extension Array
 				try managed.set(outEnd - 1, value: rv) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (right)")
 				rEnd = rEnd - 1
 			end 'takeRight'
+
 			outEnd = outEnd - 1
 		end 'pick'
+
 		// Drain remaining scratch (right). Any remaining left tail is already
 		// in place since `managed` was untouched there during the copy.
 		while rEnd > 0 'drainRight'
@@ -195,6 +217,7 @@ public extension Array
 		if lo == mid or mid == hi 'noOp'
 			return
 		end 'noOp'
+
 		self.reverseRange(lo, hi: mid)
 		self.reverseRange(mid, hi: hi)
 		self.reverseRange(lo, hi: hi)
@@ -209,15 +232,18 @@ public extension Array
 	function lowerBound(lo SortIndex, hi SortIndex, target Element, cmp SortComparator) returns SortIndex
 		var l = lo
 		var h = hi
+
 		while l < h 'binSearch'
 			let m = l + (h - l) / 2
 			let v = try managed.get(m) otherwise panic("lowerBound: get OOB at m")
+
 			if cmp(v, target) == Ordering.lessThan 'goRight'
 				l = m + 1
 			end 'goRight' else 'goLeft'
 				h = m
 			end 'goLeft'
 		end 'binSearch'
+
 		return l
 	end 'lowerBound'
 
@@ -231,29 +257,35 @@ public extension Array
 		Log.trace("rotationMerge.fire")
 		let leftLen = mid - lo
 		let rightLen = hi - mid
+
 		if leftLen == 0 or rightLen == 0 'trivial'
 			return
 		end 'trivial'
+
 		// Pick the longer side; binary-search the shorter side for the
 		// split that mates with the longer side's midpoint.
 		if leftLen >= rightLen 'leftLonger'
 			let q = lo + leftLen / 2
 			let qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (left)")
 			let r = self.lowerBound(mid, hi: hi, target: qVal, cmp: cmp)
+
 			// Rotate [q+1, mid) and [mid, r) so the right-side elements
 			// less-than-or-equal-to qVal land just past q.
 			// We rotate [q, mid) with [mid, r) — exclude q itself since
 			// qVal is the partition value.
 			self.rotateRange(q, mid: mid, hi: r)
 			let newMid = q + (r - mid)
+
 			// Recurse on left of newMid (excludes the partition slot at newMid).
 			self.mergeRotation(lo, mid: q, hi: newMid, cmp: cmp)
+
 			// Recurse on right of newMid + 1 — q's value already sits at newMid.
 			self.mergeRotation(newMid + 1, mid: r, hi: hi, cmp: cmp)
 		end 'leftLonger' else 'rightLonger'
 			let q = mid + rightLen / 2
 			let qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (right)")
 			let l = self.upperBound(lo, hi: mid, target: qVal, cmp: cmp)
+
 			// Rotate [l, mid) and [mid, q+1) so q's value lands at the
 			// new partition point.
 			self.rotateRange(l, mid: mid, hi: q + 1)
@@ -269,15 +301,18 @@ public extension Array
 	function upperBound(lo SortIndex, hi SortIndex, target Element, cmp SortComparator) returns SortIndex
 		var l = lo
 		var h = hi
+
 		while l < h 'binSearch'
 			let m = l + (h - l) / 2
 			let v = try managed.get(m) otherwise panic("upperBound: get OOB at m")
+
 			if cmp(v, target) == Ordering.greaterThan 'goLeft'
 				h = m
 			end 'goLeft' else 'goRight'
 				l = m + 1
 			end 'goRight'
 		end 'binSearch'
+
 		return l
 	end 'upperBound'
 
@@ -309,13 +344,16 @@ public extension Array
 		Log.trace("partitionMerge.fire")
 		let leftLen = mid - lo
 		let rightLen = hi - mid
+
 		// Pick the pivot from the longer run's midpoint.
 		var pivotPos = lo  // will hold the pivot's CURRENT index pre-rotation
 		var splitL = lo
 		var splitR = mid
+
 		if leftLen >= rightLen 'pickLeft'
 			pivotPos = lo + leftLen / 2
 			let pVal = try managed.get(pivotPos) otherwise panic("mergePartition: get OOB at pivot (left)")
+
 			// In RIGHT run, find first slot where insertion would land
 			// >= pivot. Equivalent to: how many right elements are < pivot.
 			splitR = self.lowerBound(mid, hi: hi, target: pVal, cmp: cmp)
@@ -323,11 +361,13 @@ public extension Array
 		end 'pickLeft' else 'pickRight'
 			pivotPos = mid + rightLen / 2
 			let pVal = try managed.get(pivotPos) otherwise panic("mergePartition: get OOB at pivot (right)")
+
 			// In LEFT run, find first slot > pivot. For stability we keep
 			// equal-keyed left elements BEFORE the right-side pivot.
 			splitL = self.upperBound(lo, hi: mid, target: pVal, cmp: cmp)
 			splitR = pivotPos + 1
 		end 'pickRight'
+
 		// Rotate the middle block so partitioned-equal-or-less is contiguous:
 		//   before: [lo, splitL) [splitL, mid) [mid, splitR) [splitR, hi)
 		//             < pivot     >= pivot      < pivot       >= pivot
@@ -335,6 +375,7 @@ public extension Array
 		//             < pivot     < pivot       >= pivot       >= pivot
 		// The middle two regions, [splitL, mid) and [mid, splitR), swap.
 		self.rotateRange(splitL, mid: mid, hi: splitR)
+
 		// After the rotation:
 		//   Left sub-merge spans [lo, newMid), with old midpoint moved to
 		//     newMid = splitL + (splitR - mid). Its two sorted halves are
@@ -367,11 +408,13 @@ public extension Array
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 		let smaller = leftLen if leftLen < rightLen else rightLen
+
 		if smaller <= scratchCap 'fitsBuffer'
 			Log.trace("mergeBuffer.fits")
 			self.mergeBuffered(lo, mid: mid, hi: hi, scratch: scratch, cmp: cmp)
 			return
 		end 'fitsBuffer'
+
 		Log.trace("mergeBuffer.exhausted")
 		self.mergeRotation(lo, mid: mid, hi: hi, cmp: cmp)
 	end 'mergeAdaptive'
@@ -380,28 +423,36 @@ public extension Array
 	// O(n) scratch buffer once and reuses it across every pass.
 	public function mergeSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
+
 		if n <= 1 'trivial'
 			return
 		end 'trivial'
+
 		// Allocate a scratch buffer the same length as the sorted slice.
 		var scratch = MergeScratchArray.create()
 		scratch.resize(n)
+
 		// Doubling-run loop: width = 1, 2, 4, ..., up to the smallest power
 		// of two >= n. Each pass merges adjacent runs of size `width` into
 		// runs of size `2 * width`.
 		var width = 1 as SortIndex
+
 		while width < n 'doubling'
 			Log.trace("mergeSort.pass")
 			var leftStart = lo
+
 			while leftStart + width < hi 'merge'
 				let midPoint = leftStart + width
 				var rightEnd = leftStart + 2 * width
+
 				if rightEnd > hi 'clampRight'
 					rightEnd = hi
 				end 'clampRight'
+
 				self.mergeTwoPointer(leftStart, mid: midPoint, hi: rightEnd, scratch: scratch, cmp: cmp)
 				leftStart = leftStart + 2 * width
 			end 'merge'
+
 			width = width * 2
 		end 'doubling'
 	end 'mergeSortRange'

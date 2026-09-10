@@ -20,18 +20,23 @@ export typealias ReportedTestCount = int(0 to u64.max)
 export enum UnitTestOutcome
 	// The body returned. Reported by the binary itself.
 	passed
+
 	// The body threw. A test throws exactly `TestFailure`, so this is a failed assertion or a foreign
 	// error the compiler's substituted handler converted — the attached `ThrownReport`, if any, is
 	// what tells those apart.
 	failed
+
 	// The test began and never ended: it took the process down with it. `panic` is uncatchable, so
 	// nothing inside the binary can report this — only the missing end marker can.
 	crashed
+
 	// The test was selected for a process that died before reaching it. NOT a pass: nothing observed
 	// it, and calling that green is the exact lie this whole command exists to prevent.
 	didNotRun
+
 	// The process outlived `--timeout` while this test was running, and was killed.
 	timedOut
+
 	// The test held an allocation at exit. Detected process-globally (exit code 101), so it is only
 	// ever attributed to a test by re-running that test alone.
 	leaked
@@ -48,6 +53,7 @@ export type UnitTestOutcomeSpelling
 	// What the text report prints for an outcome that did not finish under its own power, and what
 	// heads a failure's detail block.
 	export let label as String
+
 	// What `--json` writes as the result's `state`.
 	export let jsonState as String
 
@@ -83,9 +89,11 @@ export typealias ReportedSourceLine = int(0 to u64.max)
 export type ThrownTestError
 	// The callee's declared `throws` TYPE name.
 	export let errorType as String
+
 	// The thrown value rendered by the language's own interpolation rule — the live case for a union
 	// and a plain enum, the raw value for an enum that declared one.
 	export let errorCase as String
+
 	// The `try` that threw, NOT the reporting function: `file`/`line` locate the author's line.
 	export let file as String
 	export let line as ReportedSourceLine
@@ -108,14 +116,17 @@ end 'ThrownReport'
 export type UnitTestResult
 	// Position in DISCOVERY order — the number that crossed the wire, and what a selection names.
 	export let index as TestRunIndex
+
 	// What was discovered, carrying both of the test's names plus its file and line.
 	export let test as DiscoveredTest
 	export let outcome as UnitTestOutcome
+
 	// Wall time the BINARY measured around the body, or 0 for an outcome that never produced an end
 	// marker. Measured inside the process rather than around it, so it is the test's own cost and not
 	// the harness's.
 	export let nanos as DurationNanos
 	export let thrown as ThrownReport
+
 	// The stderr this test wrote, attributed by its position between the begin and end markers. For a
 	// crash it is the process's dying output, which is where the panic message is.
 	export let output as String
@@ -169,6 +180,7 @@ export function tallyTestRun(files TestFileResultsArray) returns TestRunTally
 	for file in files 'eachFile'
 		for result in file.results 'eachResult'
 			total = total + 1
+
 			if result.isFailure() 'notGreen'
 				failed = failed + 1
 			end 'notGreen' else 'green'
@@ -184,10 +196,13 @@ end 'tallyTestRun'
 export type TestRunReport
 	// Results grouped by file, in the order `reportFileOrder` defines.
 	export let files as TestFileResultsArray
+
 	// Wall time spent producing the test binary.
 	export let compileMs as DurationMs
+
 	// Wall time spent running it, including every re-run attribution needed.
 	export let runMs as DurationMs
+
 	// Whether `--bail` stopped the run before every selected test had been claimed. It is reported
 	// because the totals then describe what RAN and not what was SELECTED, and a reader who does not
 	// know that would read a short green list as a complete one.

@@ -56,6 +56,7 @@ export let Arm64CalleeSavedFpEnd = 16
 // Insert prologue/epilogue ops for every function in the module.
 export function insertArm64PrologueEpilogue(module TargetModule, target Target)
 	logDebug(LogCategory.codegen, message: function() gives "arm64 prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -73,6 +74,7 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	let usedCallee = arm64UsedCalleeSaved(module, func: func)
 	let spillSlotCount = func.stackSize / SpillSlotBytes
 	let calleeBytes = usedCallee.count() * SpillSlotBytes
+
 	// ⭐ **THE OUTGOING STACK-ARGUMENT REGION SITS AT THE VERY BOTTOM OF THE FRAME**, below the frame
 	// record, because AAPCS64 fixes where it must be: a callee reads its first stack argument at its OWN
 	// entry SP, which is this frame's SP. So the record moves UP by exactly `outgoingArgSize` and x29
@@ -88,12 +90,14 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	resolveArm64IncomingArgs(module, func: func, frameSize: frameSize, outgoingArgSize: func.outgoingArgSize)
 
 	var isFirstBlock = true
+
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64PrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
 			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
 		end 'entry'
+
 		isFirstBlock = false
 
 		if blockEndsWithArm64Return(module, block: block) 'returnBlock'
@@ -121,6 +125,7 @@ end 'insertArm64FrameForFunction'
 // have, since it does not know the frame size).
 function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSize StackSize, outgoingArgSize StackSize)
 	let incomingBase = frameSize - outgoingArgSize
+
 	// The `add x17, x29, #hi` folds this pass has to splice in, in ASCENDING block position. Collected
 	// per block and spliced ONCE, because `insertOpRef` shifts a suffix of `opRefs` on every call — the
 	// same reason the splitter batches its reloads. Reused across blocks rather than reallocated.
@@ -135,6 +140,7 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 		for pos in 0 upto block.opRefs.count() 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("resolveArm64IncomingArgs: opRefs.get OOB at {pos}")
 			let op = try module.ops.get(opIdx) otherwise panic("resolveArm64IncomingArgs: opIdx {opIdx} not in module.ops")
+
 			match op 'o'
 				arm64LoadIncomingArg(dest, slot) then resolveOneArm64IncomingArg(module, opIdx: opIdx, at: pos, dest: dest, byteOffset: incomingBase + (slot as StackSize) * SpillSlotBytes, foldPositions: foldPositions, foldOps: foldOps)
 				prologue or
@@ -255,17 +261,21 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 					arm64JumpTable or
 					callMem then break 'o'
 				arm64StoreOutgoingArg then break 'o'
+
 				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
 				arm64FmovGprFp or
 					arm64FmovFpGpr then break 'o'
+
 				// A frame address is already concrete: it names a SLOT, which the ENCODER resolves off x29 with
 				// no frame-size term (`arm64SlotDisplacement`) — unlike an incoming stack argument, whose
 				// displacement depends on the frame this pass has just sized.
 				leaRegSlot then break 'o'
+
 				// F1b: a fill ladder names no frame fact at all — its two operands are already in fixed physical
 				// registers and its only field is a constant byte, so there is nothing for this pass to resolve.
 				x64MemFill or
 					arm64MemFill then break 'o'
+
 				// F2: an atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
 				// the encoder's, so there is nothing for this pass to resolve.
 				x64LockCmpxchg or
@@ -276,22 +286,28 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 					arm64AtomicCas or
 					arm64AtomicRmw or
 					arm64ThreadPointer then break 'o'
+
 				// EC16: a scaled-index address or access names no frame fact — its base, index and value are
 				// ordinary coloured registers and its scale/displacement are immediates.
 				leaRegBaseIndexScale or
 					loadRegBaseIndexScale or
 					storeBaseIndexScaleReg or
 					arm64AddLsl then break 'o'
+
 				// EC18: the high multiply names no frame fact either — one coloured register operand and an
 				// implicit RAX/RDX pair. (x64-only; it cannot appear in an arm64 program at all.)
 				imulHighReg then break 'o'
+
 				// `fneg` names no frame fact — two coloured FP registers.
 				arm64Fneg then break 'o'
+
 				// G3: an ordered access names no frame fact — a coloured base, a coloured value, no displacement.
 				arm64LoadAcquire or
 					arm64StoreRelease then break 'o'
+
 				// EC18: the arm64 high multiply names no frame fact — three ordinary coloured registers.
 				arm64Smulh then break 'o'
+
 				// A coverage counter names no operand and no coloured register: it reaches its address through
 				// the reserved x16/x17 pair and a stack-borrowed word it gives straight back.
 				covInc then break 'o'
@@ -324,6 +340,7 @@ function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at Block
 	// rather than 32760, and the predicate would then admit exactly what the encoder panics on.
 	let width = X64AccessWidth.word64
 	let disp = byteOffset as Imm32
+
 	if arm64DispHasScaledForm(disp, width: width) 'direct'
 		arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64FramePointerRegNum, disp: disp, width: width)
 		return
@@ -354,6 +371,7 @@ function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCall
 		let reg = try usedCallee.get(i) otherwise panic("insertArm64PrologueAtEntry: usedCallee.get OOB")
 		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: arm64PhysVReg(reg)))
 	end 'eachSave'
+
 	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize, recordOffset: recordOffset))
 end 'insertArm64PrologueAtEntry'
 
@@ -365,6 +383,7 @@ function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, use
 		let reg = try usedCallee.get(i) otherwise panic("appendArm64EpilogueBeforeReturn: usedCallee.get OOB")
 		module.appendOp(block, op: TargetOp.loadRegSlot(arm64PhysVReg(reg), slot: spillSlotCount + i))
 	end 'eachRestore'
+
 	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize, recordOffset: recordOffset))
 end 'appendArm64EpilogueBeforeReturn'
 
@@ -382,8 +401,10 @@ function arm64UsedCalleeSaved(module TargetModule, func IrFunction) returns Arm6
 			used.push(reg)
 		end 'isUsed'
 	end 'gprs'
+
 	for k in Arm64CalleeSavedFpFirst upto Arm64CalleeSavedFpEnd 'fps'
 		let reg = fpBase + k
+
 		if regMaskContains(mask, regNum: reg) 'isUsed'
 			used.push(reg)
 		end 'isUsed'
@@ -401,9 +422,11 @@ function arm64ScanPhysicalRegs(module TargetModule, func IrFunction) returns Reg
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("arm64ScanPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			mask = mask or arm64OpPhysicalRegs(try module.ops.get(opIdx) otherwise panic("arm64ScanPhysicalRegs: opIdx {opIdx} not in module.ops"), buf: buf)
 		end 'eachOp'
+
 		if block.hasTerminatorOp() 'hasTerm'
 			mask = mask or arm64OpPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("arm64ScanPhysicalRegs: terminator not in module.ops"), buf: buf)
 		end 'hasTerm'
@@ -438,6 +461,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			leaRegRegImm32 or
 			imulRegRegImm32 or
 			cmpRegImm32 gives arm64MaskFromOperands(op, buf: buf)
+
 		// The tail range extends past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`,
 		// x64-linux `x64Syscall`): like every other op here they are read through the shared operand model
 		// (their operands are declared in `targetOpOperands`), so no per-op register list is respelled.
@@ -538,30 +562,37 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			leaRegFunc or
 			callReg or
 			x64Syscall gives arm64MaskFromOperands(op, buf: buf)
+
 		// The jump tables are read through the shared operand model like every other op (`arm64JumpTable`
 		// names its biased index; `x64JumpTable` never appears on arm64). No per-op register list respelled.
 		x64JumpTable or
 			arm64JumpTable gives arm64MaskFromOperands(op, buf: buf)
+
 		// The x64-only `callMem` never runs the arm64 prologue pass; the arm keeps the match exhaustive.
 		callMem gives arm64MaskFromOperands(op, buf: buf)
+
 		// The stack-argument pair is read through the shared operand model like every other op — an outgoing
 		// store's source and an incoming load's destination can both be coloured into a callee-saved register,
 		// so both MUST be counted here or the prologue would not preserve it.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives arm64MaskFromOperands(op, buf: buf)
+
 		// Each bit reinterpretation names a GPR — the outbound one's DEST, the inbound one's SOURCE — and
 		// either can be coloured into a callee-saved register, so both MUST be counted. Read through the
 		// shared operand model like every other op.
 		arm64FmovGprFp or
 			arm64FmovFpGpr gives arm64MaskFromOperands(op, buf: buf)
+
 		// Its dest can be coloured into a callee-saved register, so it MUST be counted — the same
 		// real-miscompile trap every other register-naming arm here documents.
 		leaRegSlot gives arm64MaskFromOperands(op, buf: buf)
+
 		// F1b: a fill ladder has NO operands (see `targetOpOperands`), so the shared operand model correctly
 		// reports an empty mask. Its four fixed registers are x0..x3, all caller-saved, so the prologue owes
 		// them nothing — and reading them through the same door keeps that a derivation rather than a claim.
 		x64MemFill or
 			arm64MemFill gives arm64MaskFromOperands(op, buf: buf)
+
 		// F2: every atomic operand can be coloured into a callee-saved register, so all of them MUST be counted —
 		// read through the shared operand model like every other arm here, which is what keeps the answer a
 		// derivation rather than a second hand-written operand list. The x16/x17 encoder scratch is deliberately
@@ -574,6 +605,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives arm64MaskFromOperands(op, buf: buf)
+
 		// EC16: `arm64AddLsl`'s three operands can each be coloured into a callee-saved register, so all
 		// MUST be counted — read through the shared operand model like every other arm here. The x64
 		// forms never reach an arm64 program and answer through the same derivation rather than a second
@@ -582,16 +614,20 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives arm64MaskFromOperands(op, buf: buf)
+
 		// EC18: x64-only, and answered through the same shared derivation as the other x64 forms rather
 		// than a second hand-written list.
 		imulHighReg gives arm64MaskFromOperands(op, buf: buf)
+
 		// `fneg`'s two FP operands, through the same shared derivation as every other register op.
 		arm64Fneg gives arm64MaskFromOperands(op, buf: buf)
 		arm64LoadAcquire or
 			arm64StoreRelease gives arm64MaskFromOperands(op, buf: buf)
+
 		// EC18: `SMULH`'s three operands can each be coloured into a callee-saved register, so all three
 		// MUST be counted — through the shared derivation like every other arm here.
 		arm64Smulh gives arm64MaskFromOperands(op, buf: buf)
+
 		// A coverage counter names no operand, so the shared derivation answers 0 — the same route every
 		// arm here takes.
 		covInc gives arm64MaskFromOperands(op, buf: buf)
@@ -604,11 +640,13 @@ end 'arm64OpPhysicalRegs'
 function arm64MaskFromOperands(op TargetOp, buf OperandList) returns RegMask
 	targetOpOperands(op, buf: buf)
 	var mask = 0 as RegMask
+
 	for operand in buf 'each'
 		if not operandIsVirtual(operand) 'physical'
 			mask = regMaskAdd(mask, regNum: operandPayload(operand) as RegNum)
 		end 'physical'
 	end 'each'
+
 	return mask
 end 'arm64MaskFromOperands'
 
@@ -633,6 +671,7 @@ end 'arm64PhysVReg'
 function arm64PrependOp(module TargetModule, block IrBlock, op TargetOp)
 	let opIdx = module.ops.count()
 	module.ops.push(op)
+
 	// Frame setup is the ABI's, not the author's — it precedes the function's first statement.
 	module.spans.pushNone(opIdx)
 	insertOpRef(block, at: 0, opIdx: opIdx)
@@ -645,6 +684,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 	if not block.hasTerminatorOp() 'noTerm'
 		return false
 	end 'noTerm'
+
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithArm64Return: terminator not in module.ops")
 	return match op 'check'
 		prologue or
@@ -707,6 +747,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 			movqXmmGpr or
 			negF64RegReg gives false
 		arm64Ret gives true
+
 		// Extended past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`, x64-linux
 		// `x64Syscall`): none is `arm64Ret`, so the block does not end in an arm64 return (and none ever
 		// appears on arm64 at all).
@@ -764,22 +805,29 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 			leaRegFunc or
 			callReg or
 			x64Syscall gives false
+
 		// The jump tables are branch terminators, not an `arm64Ret`.
 		x64JumpTable or
 			arm64JumpTable gives false
+
 		// The x64-only `callMem` is a body op, never an `arm64Ret`.
 		callMem gives false
+
 		// Both stack-argument ops are body ops, never an `arm64Ret`.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives false
+
 		// Both bit reinterpretations are body ops, never an `arm64Ret`.
 		arm64FmovGprFp or
 			arm64FmovFpGpr gives false
+
 		// A frame address is a body op, never an `arm64Ret`.
 		leaRegSlot gives false
+
 		// F1b: a fill ladder is a body op, never an `arm64Ret` — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives false
+
 		// F2: every atomic is a body op, never an `arm64Ret`.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -789,20 +837,26 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
+
 		// EC16: an address computation and a memory access are body ops, never an `arm64Ret`.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
+
 		// EC18: the high multiply is a body op, never an `arm64Ret`.
 		imulHighReg gives false
+
 		// `fneg` is a body op, never an `arm64Ret`.
 		arm64Fneg gives false
+
 		// G3: an ordered access is a body op, never an `arm64Ret`.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
+
 		// EC18: the high multiply is a body op, never an `arm64Ret`.
 		arm64Smulh gives false
+
 		// A coverage counter is a body op, never an `arm64Ret`.
 		covInc gives false
 	end 'check'

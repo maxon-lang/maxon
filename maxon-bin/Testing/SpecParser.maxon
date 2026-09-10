@@ -250,6 +250,7 @@ let DebugInfoMarker = "<!-- DebugInfo"
 export enum TraceFamily
 	// The memory manager's own events — `mm_alloc` / `mm_incref` / `mm_decref` / `mm_free`.
 	mm
+
 	// The events the program AUTHORS through `__DebugStream` — `log_phase_begin` / `log_event` /
 	// `log_text` / `log_phase_end`.
 	log
@@ -732,8 +733,10 @@ export type SpecSourceFile
 	// The path from the marker, RELATIVE (`app/main.maxon`) — to the test's own scratch directory for
 	// a file, to the staged `stdlib/` for an overlay. Written there, subdirectories and all.
 	export let name as String
+
 	// The file's own text, trimmed — exactly what is written to disk and compiled.
 	export let source as String
+
 	// Add this to a line number the COMPILER reports for this file, and you get the line number in
 	// the MERGED fragment — which is what the golden shows and what every `/specs` expectation was
 	// authored against (`specs/fragments/<spec>/<test>.test:11:9`). Without it a multi-file
@@ -775,10 +778,12 @@ export typealias ProgramArgArray = Array with String
 export union SpecTraceCapture
 	// Not a capture case: built and run exactly as any other.
 	off
+
 	// In capture mode with no golden. The program is built with `--debugstream` and run under the monitor,
 	// and the trace is compared against NOTHING — so the case fails unless the family it names is silent,
 	// and `--update-required` mints the block that makes it a real assertion.
 	unpinned(family TraceFamily)
+
 	// In capture mode with a golden, normalized and compared line for line.
 	pinned(family TraceFamily, trace String)
 end 'SpecTraceCapture'
@@ -816,6 +821,7 @@ end 'traceCaptureFamilyOf'
 export union SpecNetwork
 	// Reaches no external host. Selected by every run, which is every case not carrying the marker.
 	none
+
 	// Opens a socket to a REAL EXTERNAL HOST. Left out of a default run and selected under `--network`.
 	live
 end 'SpecNetwork'
@@ -836,6 +842,7 @@ export union SpecProcs
 	// No marker: the program is spawned with the parent's environment unchanged, so
 	// `SchedRuntime.emitResolveMaxProcs` resolves the default — one P per processor the machine reports.
 	unset
+
 	// `<!-- procs: N -->`: `MAXON_MAX_PROCS=N` is placed in the environment of this case's program alone.
 	pinned(count ProcessorCount)
 end 'SpecProcs'
@@ -850,9 +857,11 @@ export union SpecStdin
 	// No marker: the null device, which answers every read at once with EOF. This is `Subprocess`'s own
 	// default (`InputSource.none`) and the stdin every case in the corpus had before the marker existed.
 	closed
+
 	// `<!-- stdin: hold -->`: a pipe nobody ever writes to, held open for the child's whole life, so a
 	// read BLOCKS in the kernel rather than being answered.
 	held
+
 	// `<!-- stdin: delayed -->`: the same pipe, written to with one line about a second after the program's
 	// first stdout byte and then closed, so a read BLOCKS and then COMPLETES and the program can still exit
 	// on its own.
@@ -862,31 +871,37 @@ end 'SpecStdin'
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
+
 	// The block VERBATIM — markers and all. This is what the golden `.test` fragment shows and, for
 	// a single-file test, what is compiled. It is never re-derived from `sourceFiles`: the merged
 	// text is the thing the spec author wrote, and a round-trip through the split would let the two
 	// drift.
 	export let source as String
 	export let expectation as SpecExpectation
+
 	// The `// --- file:` sections, or EMPTY for the ordinary single-file test. Empty is not a
 	// sentinel — it is the literal count of file markers in the block, and "no markers" is exactly
 	// what a single-file test is.
 	export let sourceFiles as SpecSourceFileArray
+
 	// The `// --- stdlib-overlay:` sections, or EMPTY for every test that compiles against the
 	// checkout's own `stdlib/` — which is all but a handful. Empty is the literal count of overlay
 	// markers, not a sentinel, exactly as `sourceFiles` is.
 	export let stdlibOverlays as SpecSourceFileArray
+
 	// The `targetToString` forms this test CANNOT run on (an `<!-- unsupported-targets: … -->` marker),
 	// or EMPTY for the ordinary test that runs on every target. The runner SKIPS a test whose list
 	// names the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a draft or
 	// filtered-out test gets, never a failure. ⚠ Distinct from a SKIPPED result, which is a test that
 	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let unsupportedTargets as TargetKeyArray
+
 	// The emitted runtime functions this test's golden renders (a ```RequiredRuntime block). It rides
 	// on the TEST rather than on the expectation because it is not something the run is checked
 	// against: it changes what the COMPILE is asked to print, which is a property of how this test is
 	// built (like `targets`), not of what its execution must do.
 	export let runtimeNames as RuntimeFunctionNameArray
+
 	// The arguments this case's program is SPAWNED with (an `<!-- Args: … -->` marker), or EMPTY for
 	// the ordinary test that reads no argv. Like `targets` and `runtimeNames` it rides on the TEST
 	// rather than on the expectation: it changes how the run is PERFORMED, not what the run must
@@ -1098,20 +1113,24 @@ function parseStatus(lines StringArray) returns String
 	var status = ""
 
 	let lineCount = lines.count()
+
 	if lineCount == 0 'noLines'
 		return status
 	end 'noLines'
 
 	let firstLine = try lines.get(0) otherwise ""
+
 	if firstLine.trim() != FrontmatterFence 'noFrontmatter'
 		return status
 	end 'noFrontmatter'
 
 	var i = 1
+
 	while i < lineCount 'scan'
 		let line = try lines.get(i) otherwise panic("SpecParser.parseStatus: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
 		let trimmed = line.trim()
+
 		if trimmed == FrontmatterFence 'endFrontmatter'
 			break
 		end 'endFrontmatter'
@@ -1131,9 +1150,11 @@ end 'parseStatus'
 // `key.byteLength()` ASCII positions lands exactly past the key.
 function valueAfterKey(line String, key String) returns String
 	var pos = line.startIndex()
+
 	for _ in 0 upto key.byteLength() 'skipKey'
 		pos = try line.indexAfter(pos) otherwise return ""
 	end 'skipKey'
+
 	return line.slice(pos, endIndex: line.endIndex()).trim()
 end 'valueAfterKey'
 
@@ -1164,6 +1185,7 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 	// Locate the `## Tests` heading; the active-test region begins on the next line.
 	var i = 0
 	var inTests = false
+
 	while i < lineCount 'find'
 		let line = try lines.get(i) otherwise panic("SpecParser.extractTests: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
@@ -1195,6 +1217,7 @@ function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey S
 		// disagree with this one about where a test's blocks end, and the failure
 		// mode of that disagreement is a shelved case silently RUNNING.
 		let openings = markerOpeningsIn(line)
+
 		if openingsCarry(openings, marker: DisabledTestMarker) 'isDisabledMarker'
 			disabledCount = disabledCount + 1
 			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
@@ -1289,6 +1312,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var source = ""
 	var haveSource = false
 	var exitCode = SpecExitCode.unpinned
+
 	// The three slots a spec may state TWICE — once portably and once for a named target. Each holds both
 	// blocks until the whole run of a test's blocks has been read, because the two fences may appear in
 	// either order; `TargetPreferredText` carries the preference and the reason.
@@ -1301,15 +1325,19 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var programArgs = ProgramArgArray.create()
 	var asyncTrace = false
 	var debugInfo = false
+
 	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
 	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
 	var traceCapture = SpecTraceCapture.off
+
 	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
 	// answer for a case that reaches no host, not a default standing in for an unread marker.
 	var network = SpecNetwork.none
+
 	// `unset` unless a `<!-- procs: … -->` marker says otherwise — the literal answer for a case that names
 	// no count and takes the process default, not a default standing in for an unread marker.
 	var procs = SpecProcs.unset
+
 	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
 	// program is handed the null device, not a default standing in for an unread marker.
 	var stdin = SpecStdin.closed
@@ -1329,6 +1357,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
 			break
 		end 'sectionEnd'
+
 		// Computed ONCE and asked of every family below — see `markerOpeningsIn` for why that matters here
 		// in particular: this loop runs over every line of every case and asks nine questions of each.
 		let openings = markerOpeningsIn(line)
@@ -1532,6 +1561,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 				i = block.nextIndex
 				continue
 			end 'badExitCode'
+
 			exitCode = SpecExitCode.pinned(parsed as ExitCodeValue)
 			i = block.nextIndex
 			continue
@@ -1613,6 +1643,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// types, each naming ITS stream; everything above the constructor is already shared.
 	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
 	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
+
 	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, traceCapture: traceCapture) 'pinsNothing'
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
@@ -1691,6 +1722,7 @@ function pushRuntimeNames(lines StringArray, openIndex LineIndex, testName Strin
 
 	for rawLine in block.text.split("\n") 'eachLine'
 		let name = rawLine.trim()
+
 		if not name.isEmpty() 'nonBlank'
 			names.push(name)
 		end 'nonBlank'
@@ -1734,18 +1766,22 @@ function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdo
 			unpinned then break 'trace'
 		pinned then return true
 	end 'trace'
+
 	match exitCode 'exit'
 		unpinned then break 'exit'
 		pinned then return true
 	end 'exit'
+
 	match stderr 'err'
 		unpinned then break 'err'
 		pinned then return true
 	end 'err'
+
 	match stdout 'out'
 		unpinned then break 'out'
 		pinned then return true
 	end 'out'
+
 	return sectionPins.count() > 0
 end 'pinsAnyResult'
 
@@ -1828,6 +1864,7 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceSections: index {i} >= lineCount {lineCount} despite the upto bound")
 
 		let opensFile = line.startsWith(FileMarker)
+
 		if not opensFile and not line.startsWith(StdlibOverlayMarker) 'notAMarker'
 			// ⭐ A line WEARING the marker shape but matching neither is a typo, and the failure mode of
 			// letting it through is silence: it becomes a comment inside whichever section precedes it,
@@ -1840,6 +1877,7 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 			if haveMarker 'insideASection'
 				body = "{body}\n{line}"
 			end 'insideASection'
+
 			continue
 		end 'notAMarker'
 
@@ -1851,6 +1889,7 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 		name = valueAfterKey(line, key: FileMarker if opensFile else StdlibOverlayMarker)
 		body = ""
 		haveMarker = true
+
 		// This section's first line is the one AFTER the marker: 0-based block index `i + 1`, which is
 		// block LINE NUMBER `i + 2`, which is fragment line number `i + 2 + FragmentHeaderLines - 1`.
 		// The section's own line 1 must land there, so the offset added to a per-section line is that
@@ -1875,6 +1914,7 @@ end 'splitSourceSections'
 // list, which trimming and which offset a section gets.
 function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, isOverlay bool, name String, body String, offset LineIndex)
 	let section = SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset)
+
 	if isOverlay 'toOverlays'
 		overlays.push(section)
 	end 'toOverlays' else 'toFiles'
@@ -1894,6 +1934,7 @@ export function markerValue(line String) returns String
 	for opening in markerOpeningsIn(line) 'eachOpening'
 		let body = markerBodyOf(opening)
 		let colonIdx = try body.findFirst(MarkerNameSep) otherwise continue
+
 		// Advance one index past the ':' rather than measuring the separator's length — a method call
 		// directly on a top-level `let` constant is a parse error. `trim()` then drops whatever
 		// whitespace the author put on either side, which is the grammar's `\s*` exactly.
@@ -1937,6 +1978,7 @@ function markerOpeningsIn(line String) returns StringArray
 	end 'prose'
 
 	var seenFirst = false
+
 	for piece in line.split(CommentOpen) 'eachPiece'
 		if not seenFirst 'textBeforeTheFirstOpening'
 			seenFirst = true
@@ -2015,8 +2057,10 @@ end 'carriesMarker'
 function parseUnsupportedTargetKeys(line String, specPath FilePath, testName String) returns TargetKeyArray
 	var result = TargetKeyArray.create()
 	let rawValue = markerValue(line)
+
 	for part in rawValue.split(TargetSeparator) 'eachTarget'
 		let trimmed = part.trim()
+
 		if not trimmed.isEmpty() 'nonEmpty'
 			if not namesSupportedTarget(trimmed) 'unknownKey'
 				panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{UnsupportedTargetsMarker} … -->` naming '{trimmed}', which is not a target this compiler supports ({supportedTargetKeyList()}). A key nothing matches changes which lanes run the case while reading as though it described them, so it is refused here rather than tolerated")
@@ -2049,6 +2093,7 @@ end 'namesSupportedTarget'
 // refused key needs the legal ones in the same breath, and neither panic may spell the roster itself.
 function supportedTargetKeyList() returns String
 	var listed = ""
+
 	for candidate in supportedTargets() 'each'
 		if not listed.isEmpty() 'separator'
 			listed = "{listed}{TargetSeparator} "
@@ -2071,6 +2116,7 @@ end 'supportedTargetKeyList'
 // missing arm.
 function parseNetworkValue(line String, specPath FilePath, testName String) returns SpecNetwork
 	let value = markerValue(line)
+
 	if value == NetworkLiveValue 'live'
 		return SpecNetwork.live
 	end 'live'
@@ -2107,6 +2153,7 @@ end 'parseProcsValue'
 // blocked — a green result from a program that never entered the state under test.
 function parseStdinValue(line String, specPath FilePath, testName String) returns SpecStdin
 	let value = markerValue(line)
+
 	if value == StdinHoldValue 'held'
 		return SpecStdin.held
 	end 'held'
@@ -2153,6 +2200,7 @@ function parseProgramArgs(line String) returns ProgramArgArray
 
 	let length = payload.count()
 	var at = 0 as GraphemeIndex
+
 	while at < length 'eachCharacter'
 		let ch = payload.slice(pos, length: 1)
 		let isQuote = ch == ArgQuote
@@ -2185,6 +2233,7 @@ function parseProgramArgs(line String) returns ProgramArgArray
 	end 'eachCharacter'
 
 	current.append(payload.slice(segmentStart, endIndex: payload.endIndex()))
+
 	if haveArg 'flushLast'
 		args.push(current.build())
 	end 'flushLast'
@@ -2297,9 +2346,11 @@ function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 		// has a genuine content line ending in ` ``` `, so this changes nothing else.
 		if line.endsWith(FenceDelimiter) 'inlineClose'
 			var stop = line.startIndex()
+
 			for _ in 0 upto line.byteLength() - FenceDelimiter.byteLength() 'toFence'
 				stop = try line.indexAfter(stop) otherwise panic("SpecParser.readFence: indexAfter failed before the inline closing fence — the byte length and the index walk disagree on an ASCII line")
 			end 'toFence'
+
 			text.push(line.slice(line.startIndex(), endIndex: stop))
 			return FenceBlock.create(text.build(), nextIndex: i + 1)
 		end 'inlineClose'

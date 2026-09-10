@@ -343,6 +343,7 @@ end 'elementStrideOf'
 // negative stride were a byte width.
 function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
 	let byteStride = stride as ParsedInt
+
 	if stride < 0 'subBytePacked'
 		let bits = count * -byteStride
 		return (bits + (BitsPerByte - 1)) / BitsPerByte
@@ -410,6 +411,7 @@ function constantElementsImage(values ParsedIntArray, stride ElementStride) retu
 	end 'subBytePacked'
 
 	var out = ByteArray.create()
+
 	for value in values 'eachElement'
 		appendLittleEndianScalar(out, value: value, byteCount: stride as BytePos)
 	end 'eachElement'
@@ -433,6 +435,7 @@ end 'constantElementsImage'
 // slot is the byte `0xFF`, which is what the sign-extending read turns back into `-1`.
 export function appendLittleEndianScalar(image ByteArray, value ParsedInt, byteCount BytePos)
 	let bits = value as MachineWord
+
 	for i in 0 upto byteCount 'eachByte'
 		image.push((bits shr (i * BitsPerByte)) and ByteMask)
 	end 'eachByte'
@@ -465,12 +468,14 @@ function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) 
 	out.resize(elementsByteLen(values.count(), stride: -packedBits) as ElementIndex)
 
 	let fieldMask = (1 shl packedBits) - 1
+
 	for i in 0 upto values.count() 'eachElement'
 		let value = try values.get(i) otherwise panic("packConstantElements: values.get({i}) failed inside its own upto bound")
 		let bitPos = (i as ParsedInt) * packedBits
 		let byteIndex = (bitPos / BitsPerByte) as ElementIndex
 		let shift = bitPos mod BitsPerByte
 		let occupied = (try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")) as ParsedInt
+
 		// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
 		// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
 		// straddle would silently corrupt the next element instead of failing.
@@ -567,12 +572,14 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		function then return 8
 		structRef then panic("primitiveTypeByteSize: a `structRef` is an aggregate — size it through StructLayout.sizeBytes, not this helper")
 		genericInstance then panic("primitiveTypeByteSize: a `genericInstance` is an aggregate — size it through its base StructLayout.sizeBytes, not this helper")
+
 		// A Character is a POINTER to the fused byte record — one machine word in a slot, exactly as a
 		// String is. `sizeof(Character)` is therefore the pointer, not the record.
 		character then return MachineWordBytes
 		typeParameter then panic("primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read, not a compile-time constant")
 		unresolved then panic("primitiveTypeByteSize: an `unresolved` type reached sizeof — TypeResolution should have eliminated it or SemanticCheck rejected the reference")
 		void then panic("primitiveTypeByteSize: `void` is not a value type and has no size")
+
 		// ⭐ AN EXISTENTIAL IS THE ONE TAG WHOSE STORAGE IS NOT ONE MACHINE WORD — it is the fat pointer
 		// `{value, witness}`, two adjacent words (see MaxonType's `interfaceRef` arm). `sizeof(Iface)` answers
 		// it here and a struct field's two-slot carve-out DIVIDES it by the slot size
@@ -580,6 +587,7 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		// used to claim they already did while the carve-out was a literal `2`; it is true now because the
 		// division landed, not because it was asserted.
 		interfaceRef then return InterfaceValueBytes
+
 		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
 		cstring then return MachineWordBytes
 	end 'size'
@@ -605,6 +613,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		typeParameter then panic("primitiveTypeTagName: a `typeParameter` is never a concrete instance's argument, so it never reaches a descriptor label")
 		unresolved then panic("primitiveTypeTagName: an `unresolved` type reached descriptor labelling — TypeResolution should have eliminated it")
 		void then panic("primitiveTypeTagName: `void` is not a value type and names no descriptor")
+
 		// ⚠ **THIS SENTENCE USED TO NAME ONE DOOR AND IT WAS THE WRONG SHAPE OF CLAIM.** It said an interface
 		// type is refused by `Parser.checkGenericArgType` — true of a generic ARGUMENT and false of the other
 		// ways a type reaches a slot, which is exactly why nobody guarded the one that did not: a TUPLE
@@ -650,18 +659,23 @@ end 'LayoutDescriptor'
 module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
 	var buf = ByteArray.create()
 	buf.reserve(layoutDescriptorBytesFor(typeParamCount) as ElementIndex)
+
 	for _ in 0 upto typeParamCount 'eachTypeParam'
 		writeLayoutWord(buf, value: d.size)
 		writeLayoutWord(buf, value: d.alignment)
 		writeLayoutWord(buf, value: d.elementSize)
+
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_MID 'zeroSlots'
 			writeLayoutWord(buf, value: 0)
 		end 'zeroSlots'
+
 		writeLayoutWord(buf, value: d.elementLogicalSize)
+
 		for _ in 0 upto LAYOUT_ZERO_SLOTS_TAIL 'tailZeroSlots'
 			writeLayoutWord(buf, value: 0)
 		end 'tailZeroSlots'
 	end 'eachTypeParam'
+
 	return buf
 end 'encodeLayoutDescriptor'
 

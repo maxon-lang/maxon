@@ -59,6 +59,7 @@ export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippet
 	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
 		throw SourceArgError.missingSource
 	end 'noSrc'
+
 	let kind = try argsDoc.getString(sourceId, key: "kind") otherwise 'noKind'
 		throw SourceArgError.missingKind
 	end 'noKind'
@@ -67,10 +68,12 @@ export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippet
 		let pathStr = try argsDoc.getString(sourceId, key: "path") otherwise 'noPath'
 			throw SourceArgError.missingPath
 		end 'noPath'
+
 		let file = try FilePath.from(pathStr) otherwise panic("resolveProjectSource: FilePath.from('{pathStr}') failed — path validation should happen upstream")
 		let parent = try parentDirOrThrow(file) otherwise 'noParent'
 			throw SourceArgError.missingPath
 		end 'noParent'
+
 		return ResolvedSource.file(parent, mainFile: file)
 	end 'fileKind'
 
@@ -78,6 +81,7 @@ export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippet
 		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
 			throw SourceArgError.missingCode
 		end 'noCode'
+
 		return materializeSnippetProject(code, prefix: snippetPrefix, repoRoot: repoRoot)
 	end 'snippetKind'
 
@@ -92,6 +96,7 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
 		throw SourceArgError.missingSource
 	end 'noSrc'
+
 	let kind = try argsDoc.getString(sourceId, key: "kind") otherwise 'noKind'
 		throw SourceArgError.missingKind
 	end 'noKind'
@@ -100,7 +105,9 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 		let pathStr = try argsDoc.getString(sourceId, key: "path") otherwise 'noPath'
 			throw SourceArgError.missingPath
 		end 'noPath'
+
 		let file = try FilePath.from(pathStr) otherwise panic("resolveFileSource: FilePath.from('{pathStr}') failed")
+
 		// projectDir is the parent if there is one; otherwise we fall back
 		// to "." since file-mode callers only consume `mainFile` anyway.
 		let parent = try parentDirOrThrow(file) otherwise try FilePath.from(".") otherwise panic("resolveFileSource: '.' must be a valid path")
@@ -111,6 +118,7 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
 			throw SourceArgError.missingCode
 		end 'noCode'
+
 		return materializeSnippetFile(code, prefix: snippetPrefix, repoRoot: repoRoot)
 	end 'snippetKind'
 
@@ -133,9 +141,11 @@ let SnippetMainFile = "main.maxon"
 // forever after — invisible to anyone whose `temp/` already existed.
 function ensureSnippetScratchDir(repoRoot FilePath) returns FilePath
 	let scratch = childPath(repoRoot, segment: SnippetScratchDir)
+
 	if not Directory.create(scratch) 'mkErr'
 		panic("ensureSnippetScratchDir: Directory.create returned false for {scratch.path}")
 	end 'mkErr'
+
 	return scratch
 end 'ensureSnippetScratchDir'
 
@@ -146,13 +156,16 @@ function materializeSnippetProject(code String, prefix String, repoRoot FilePath
 	let stamp = Clock.nowMs()
 	let scratch = ensureSnippetScratchDir(repoRoot)
 	let projectDir = childPath(scratch, segment: "{prefix}-{stamp}")
+
 	if not Directory.create(projectDir) 'mkErr'
 		panic("materializeSnippetProject: Directory.create returned false for {projectDir.path}")
 	end 'mkErr'
+
 	let mainFile = childPath(projectDir, segment: SnippetMainFile)
 	try File.writeText(mainFile, content: code) otherwise 'writeErr'
 		panic("materializeSnippetProject: cannot write snippet to {mainFile.path}")
 	end 'writeErr'
+
 	return ResolvedSource.snippet(projectDir, mainFile: mainFile)
 end 'materializeSnippetProject'
 
@@ -166,6 +179,7 @@ function materializeSnippetFile(code String, prefix String, repoRoot FilePath) r
 	try File.writeText(target, content: code) otherwise 'writeErr'
 		panic("materializeSnippetFile: cannot write snippet to {target.path}")
 	end 'writeErr'
+
 	// projectDir is unused in file mode; carry the scratch dir for symmetry.
 	return ResolvedSource.snippet(scratch, mainFile: target)
 end 'materializeSnippetFile'
@@ -178,22 +192,28 @@ export function cleanupResolvedSource(resolved ResolvedSource, repoRoot FilePath
 	if not resolved.isSnippet 'keep'
 		return
 	end 'keep'
+
 	// Try the project dir; if it doesn't list (e.g. fmt's single-file
 	// variant points at the temp/ root, which contains other tools'
 	// scratch) fall back to deleting just the main file.
 	let projectDir = resolved.projectDir
 	let mainFile = resolved.mainFile
+
 	// Heuristic: if the project dir is exactly `<repo>/temp` we're in
 	// file-mode (materializeSnippetFile); only the main file is ours.
 	let tempDir = childPath(repoRoot, segment: "temp")
+
 	if projectDir.path.equals(tempDir.path) 'fileMode'
 		try File.delete(mainFile) otherwise ignore
 		return
 	end 'fileMode'
+
 	let entries = try Directory.list(projectDir) otherwise 'listErr'
 		return
 	end 'listErr'
+
 	let n = entries.count()
+
 	for i in 0 upto n 'each'
 		let entry = try entries.get(i) otherwise panic("cleanupResolvedSource: entries.get OOB — i bounded by n")
 		try File.delete(entry) otherwise ignore

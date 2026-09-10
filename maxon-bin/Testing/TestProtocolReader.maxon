@@ -18,11 +18,14 @@ export union TestEvent
 	// A test is about to run. Written BEFORE the body, which is what makes a process death
 	// attributable at all.
 	began(index TestRunIndex)
+
 	// A test finished under its own power, passing or failing.
 	ended(index TestRunIndex, passed bool, nanos DurationNanos)
+
 	// An error reached the end of a test body unhandled, reported by the handler the compiler
 	// substitutes. It arrives BEFORE the `ended` of the test it belongs to.
 	threw(errorType String, errorCase String, file String, line ReportedSourceLine)
+
 	// A stderr line that was NOT protocol — the test's own diagnostics, an assertion's report, or the
 	// runtime's panic text.
 	outputLine(text String)
@@ -99,12 +102,14 @@ end 'ProtocolLineParse'
 // which a chatty test could print — yields a different shape and is passed through as output.
 function parseProtocolLine(line String) returns ProtocolLineParse
 	let parts = line.split(TestProtocolWrapper)
+
 	if parts.count() != WrappedLineParts 'notWrappedExactlyOnce'
 		return ProtocolLineParse.notProtocol
 	end 'notWrappedExactlyOnce'
 
 	let before = try parts.get(0) otherwise panic("parseProtocolLine: part 0 exists — the count was checked one line above")
 	let after = try parts.get(2) otherwise panic("parseProtocolLine: part 2 exists — the count was checked two lines above")
+
 	if not before.isEmpty() or not after.isEmpty() 'textOutsideTheWrapper'
 		return ProtocolLineParse.notProtocol
 	end 'textOutsideTheWrapper'
@@ -134,6 +139,7 @@ function parseBeganLine(fields StringArray) returns ProtocolLineParse
 	end 'wrongShape'
 
 	let index = try fields.get(1) otherwise panic("parseBeganLine: field 1 exists — the count was checked one line above")
+
 	match parseProtocolNumber(index) 'theIndex'
 		invalid then return ProtocolLineParse.notProtocol
 		value(number) then return ProtocolLineParse.event(TestEvent.began(number as TestRunIndex))

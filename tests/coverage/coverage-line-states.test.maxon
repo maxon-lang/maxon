@@ -128,6 +128,7 @@ end 'anchorsUnderTest'
 // one row out — which otherwise reads as a complete, plausible listing.
 function requireRowNamesItsOwnLine(report String, staged FilePath, anchor String) throws TestFailure
 	let line = anchoredLineNumber(staged, anchor: anchor)
+
 	match listingRow(report, line: line) 'listed'
 		none then try Expect.fail("the annotated listing prints no row for line {line}, which the staged fixture anchors as `{anchor}`. The listing prints EVERY line of a reported file — that is what makes a blank marker mean 'no coverage point' rather than 'not shown' — so a missing line is one whose state a reader cannot ask about at all. The report reads:{LineFeed}{report}")
 		found(row) then try Expect.contains(rowSourceText(row), needle: "{AnchorPrefix}{anchor}", message: "the listing's row for line {line} does not print the source line the staged fixture anchors as `{anchor}`. The marker column and the line-number column come from the same point table, so a listing walk that is one row out prints a full, plausible set of markers against the wrong lines. The row reads: {row}")
@@ -138,6 +139,7 @@ end 'requireRowNamesItsOwnLine'
 // absence here is that assertion broken rather than a state to report.
 function anchoredMarker(report String, staged FilePath, anchor String) returns String
 	let line = anchoredLineNumber(staged, anchor: anchor)
+
 	match listingRow(report, line: line) 'listed'
 		none then panic("coverage tests: `{anchor}` has no listing row, which `requireRowNamesItsOwnLine` refuses before any marker is read.")
 		found(row) then return rowMarker(row)
@@ -150,11 +152,13 @@ end 'anchoredMarker'
 function listingRow(report String, line FixtureLineNumber) returns ListingRowLookup
 	for text in outputLines(report) 'eachLine'
 		let columns = text.split(ColumnSeparator)
+
 		if columns.count() < ListingRowColumns 'notAListingRow'
 			continue
 		end 'notAListingRow'
 
 		let numbered = try columns.get(LineNumberColumn) otherwise continue
+
 		if decimalValue(numbered) as FixtureLineNumber == line 'theRow'
 			return ListingRowLookup.found(text)
 		end 'theRow'
@@ -177,6 +181,7 @@ function rowSourceText(row String) returns String
 	var rendered = ""
 	var atStart = true
 	var column = 0
+
 	for piece in row.split(ColumnSeparator) 'eachColumn'
 		if column >= SourceColumnStart 'partOfTheSource'
 			rendered.append(piece if atStart else "{ColumnSeparator}{piece}")

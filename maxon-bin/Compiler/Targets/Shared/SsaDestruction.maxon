@@ -26,8 +26,10 @@ typealias MoveIndex = int(0 to u64.max)
 enum EdgePlacement
 	// Pred has ONE successor: the moves run at the predecessor's end.
 	predEnd
+
 	// Succ has ONE predecessor: the moves run at the successor's start.
 	succStart
+
 	// A CRITICAL edge (pred has >1 successor AND succ has >1 predecessor): a fresh
 	// block on the edge holds the moves, so they run on exactly this edge.
 	split
@@ -48,6 +50,7 @@ type EdgeMovePlan
 	export var succLocal as CfgIndex
 	export var predBlockId as BlockId
 	export var succBlockId as BlockId
+
 	// Flat `module.blocks` indices — the splice mutates `module` while holding the
 	// block, which requires a FIELD-level borrow (`module.blocks.get`), not the
 	// whole-module borrow `getBlockByIdIn` takes.
@@ -110,8 +113,10 @@ export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, l
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		let predBlock = blockAt(module, topo: topo, local: predLocal)
+
 		for edge in predBlock.branchEdges 'eachEdge'
 			let plan = buildEdgePlan(module, topo: topo, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
+
 			if plan.moveCount() > 0 'hasMoves'
 				counters.copiesInserted = counters.copiesInserted + (plan.moveCount() as EventCount)
 				plans.push(plan)
@@ -129,9 +134,11 @@ function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock
 
 	var dsts = RegNumColumn.create()
 	var srcs = RegNumColumn.create()
+
 	for k in 0 upto view.count 'eachPhi'
 		let dstReg = alloc.regNumOf(view.phiValueIdAt(k))
 		let srcReg = alloc.regNumOf(view.incomingAt(k))
+
 		if dstReg != srcReg 'needsMove'
 			dsts.push(dstReg)
 			srcs.push(srcReg)
@@ -152,9 +159,11 @@ function classifyPlacement(topo FuncTopology, predLocal CfgIndex, succLocal CfgI
 	if topo.succ.degree(predLocal as CsrIndex) == 1 'predSingleSucc'
 		return EdgePlacement.predEnd
 	end 'predSingleSucc'
+
 	if topo.pred.degree(succLocal as CsrIndex) == 1 'succSinglePred'
 		return EdgePlacement.succStart
 	end 'succSinglePred'
+
 	return EdgePlacement.split
 end 'classifyPlacement'
 
@@ -176,11 +185,13 @@ function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns Move
 		// leave, and the one a preceding `xchg` just fulfilled (its source, rewritten
 		// through the swap, now equals its dst). Emitting `xchg r, r` would be a no-op.
 		removeSatisfiedMoves(dsts, ps: srcs)
+
 		if dsts.count() == 0 'allDone'
 			break
 		end 'allDone'
 
 		let leaf = findLeafMove(dsts, ps: srcs)
+
 		if leaf < dsts.count() 'foundLeaf'
 			let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB")
 			let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB")
@@ -203,10 +214,12 @@ end 'sequenceParallelCopy'
 function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex
 	for i in 0 upto pd.count() 'eachMove'
 		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
+
 		if not isAnySource(ps, reg: d) 'leaf'
 			return i
 		end 'leaf'
 	end 'eachMove'
+
 	return pd.count()
 end 'findLeafMove'
 
@@ -214,10 +227,12 @@ end 'findLeafMove'
 // copy). Scans back-to-front so removals do not shift not-yet-visited indices.
 function removeSatisfiedMoves(pd RegNumColumn, ps RegNumColumn)
 	let n = pd.count()
+
 	for ri in 0 upto n 'each'
 		let i = n - 1 - ri
 		let d = try pd.get(i) otherwise panic("removeSatisfiedMoves: pd.get OOB")
 		let s = try ps.get(i) otherwise panic("removeSatisfiedMoves: ps.get OOB")
+
 		if d == s 'satisfied'
 			removeMoveAt(pd, ps: ps, idx: i)
 		end 'satisfied'
@@ -230,6 +245,7 @@ function isAnySource(ps RegNumColumn, reg RegNum) returns bool
 			return true
 		end 'match'
 	end 'each'
+
 	return false
 end 'isAnySource'
 
@@ -243,6 +259,7 @@ end 'removeMoveAt'
 function rewriteSourcesThroughSwap(ps RegNumColumn, a RegNum, b RegNum)
 	for i in 0 upto ps.count() 'each'
 		let s = try ps.get(i) otherwise panic("rewriteSourcesThroughSwap: ps.get OOB")
+
 		if s == a 'wasA'
 			try ps.set(i, value: b) otherwise panic("rewriteSourcesThroughSwap: ps.set OOB")
 		end 'wasA' else if s == b 'wasB'
@@ -274,11 +291,13 @@ end 'applyAllocation'
 // copies under, so a copy is spliced before exactly the op that could not coalesce into its input.
 function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan)
 	var seq = 0 as OpSeq
+
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 		let bodyCount = block.opRefs.count()
 
 		var newRefs = OpIndexArray.create()
+
 		// ⭐ **THE TWO-RESULT CAPTURE OF A `tryCall`** — a call op followed by TWO virtual-dest /
 		// physical-src moves (`result ← R8/x0`, `flag ← R10/x9`). A single-result call is followed by
 		// ONE; parameter moves have the same shape but are at function entry, never after a call — so
@@ -288,8 +307,10 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		// them safely, breaking a cycle with `xchg` (no scratch), exactly as the phi-edge copies do.
 		var prevWasCall = false
 		var skipNext = false
+
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB")
+
 			if skipNext 'flagCaptureHandled'
 				skipNext = false
 				continue
@@ -315,12 +336,15 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 			prevWasCall = colored.rawValue.isCall
+
 			if isPhysicalSelfMove(colored) 'selfMove'
 				continue
 			end 'selfMove'
+
 			spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: seq + pos, newRefs: newRefs)
 			newRefs.push(opIdx)
 		end 'eachOp'
+
 		block.opRefs = newRefs
 		seq = seq + bodyCount
 
@@ -448,27 +472,35 @@ function isCaptureMove(op TargetOp) returns bool
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel gives false
+
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
 		leaRegFunc or
 			callReg or
 			x64Syscall gives false
+
 		// The jump tables are multiway terminators, not a `movRegReg`, so neither is a capture move.
 		x64JumpTable or
 			arm64JumpTable gives false
+
 		// The witness call is a call, not a `movRegReg`, so it is not a capture move.
 		callMem gives false
+
 		// Neither stack-argument op is a `movRegReg`, so neither is a call-result capture move.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives false
+
 		// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is a call-result capture move.
 		arm64FmovGprFp or
 			arm64FmovFpGpr gives false
+
 		// A frame address is not a `movRegReg`, so it is not a call-result capture move.
 		leaRegSlot gives false
+
 		// F1b: a fill ladder is not a `movRegReg`, so it is not a call-result capture move.
 		x64MemFill or
 			arm64MemFill gives false
+
 		// F2: no atomic is a `movRegReg`, so none is a call-result capture move.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -478,20 +510,26 @@ function isCaptureMove(op TargetOp) returns bool
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
+
 		// EC16: no scaled-index form is a `movRegReg`, so none is a call-result capture move.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
+
 		// EC18: the high multiply is not a `movRegReg`, so it is not a call-result capture move.
 		imulHighReg gives false
+
 		// arm64 `fneg` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Fneg gives false
+
 		// G3: an ordered access is not a `movRegReg`, so it is not a call-result capture move.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
+
 		// EC18: `SMULH` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Smulh gives false
+
 		// A coverage counter is not a `movRegReg`, so never a call-result capture move.
 		covInc gives false
 	end 'm'
@@ -521,6 +559,7 @@ end 'vregIsPhysical'
 function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
 	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMovePairAt: opRefs.get OOB at {pos}")
 	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMovePairAt: opIdx {opIdx} not in module.ops")
+
 	if not isCaptureMove(op) 'notTheFirstHalf'
 		return false
 	end 'notTheFirstHalf'
@@ -556,12 +595,14 @@ function emitResequencedCapture(module TargetModule, resultDst RegNum, resultSrc
 	srcs.push(flagSrc)
 
 	let moves = sequenceParallelCopy(dsts, srcs: srcs)
+
 	for i in 0 upto moves.count() 'eachMove'
 		let dst = TargetVReg.physical(try moves.dsts.get(i) otherwise panic("emitResequencedCapture: dsts.get OOB"))
 		let src = TargetVReg.physical(try moves.srcs.get(i) otherwise panic("emitResequencedCapture: srcs.get OOB"))
 		let swap = try moves.isSwap.get(i) otherwise panic("emitResequencedCapture: isSwap.get OOB")
 		let opIdx = module.ops.count()
 		module.ops.push(TargetOp.xchgRegReg(dst, b: src) if swap else TargetOp.movRegReg(dst, srcReg: src))
+
 		// A parallel-copy move is the ALLOCATOR's op, not the author's.
 		module.spans.pushNone(opIdx)
 		newRefs.push(opIdx)
@@ -647,6 +688,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			popReg then return false
 		storeSlotReg or
 			loadRegSlot then return false
+
 		// None of the data-section band is a register-to-register move, so none can be a self-move.
 		andRegReg or
 			orRegReg or
@@ -681,6 +723,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			minMaxSdRegReg or
 			movqXmmGpr or
 			negF64RegReg then return false
+
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret or
@@ -735,20 +778,25 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel then return false
+
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not register-to-register moves
 		// (a `lea`, a call, a syscall), so none can be a `mov r, r` self-move.
 		leaRegFunc or
 			callReg or
 			x64Syscall then return false
+
 		// The jump tables are terminators, not register-to-register moves, so neither is a self-move.
 		x64JumpTable or
 			arm64JumpTable then return false
+
 		// The witness call is a call, not a register-to-register move, so it is not a self-move.
 		callMem then return false
+
 		// Neither stack-argument op is a register-to-register move (one touches memory at each end), so
 		// neither can be a `mov r, r` self-move.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg then return false
+
 		// The arm64 bit reinterpretation is not a `movRegReg`, so it is not a self-move — the same
 		// structural reason every arm above returns `false`. Only the `movRegReg` arm compares two
 		// register NUMBERS at all; nothing here ever asks whether `fmov`'s two ends are equal.
@@ -767,11 +815,14 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// the match would not be exhaustive without it.
 		arm64FmovGprFp or
 			arm64FmovFpGpr then return false
+
 		// Not a move at all, so never a physical self-move.
 		leaRegSlot then return false
+
 		// F1b: not a move at all, so never a physical self-move.
 		x64MemFill or
 			arm64MemFill then return false
+
 		// F2: not a move at all, so never a physical self-move.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -781,20 +832,26 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer then return false
+
 		// EC16: not a move at all, so never a physical self-move.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl then return false
+
 		// EC18: not a move at all, so never a physical self-move.
 		imulHighReg then return false
+
 		// arm64 `fneg` is not a move at all, so never a physical self-move.
 		arm64Fneg then return false
+
 		// G3: an ordered access is not a move at all, so never a physical self-move.
 		arm64LoadAcquire or
 			arm64StoreRelease then return false
+
 		// EC18: `SMULH` is not a move at all, so never a physical self-move.
 		arm64Smulh then return false
+
 		// A coverage counter is not a move at all, so never a physical self-move.
 		covInc then return false
 	end 'sm'
@@ -894,13 +951,17 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 	// so the original CFG's classification stays valid across all of them.
 	var predRefs = BlockRefArray.create()
 	var succIds = BlockIdArray.create()
+
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		if topo.succ.degree(predLocal) <= 1 'singleSucc'
 			continue
 		end 'singleSucc'
+
 		let predBlock = blockAt(module, topo: topo, local: predLocal)
+
 		for edge in predBlock.branchEdges 'eachEdge'
 			let succLocal = try topo.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
+
 			if topo.pred.degree(succLocal as CsrIndex) > 1 'critical'
 				predRefs.push(try topo.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
 				succIds.push(edge.targetBlockId)
@@ -965,6 +1026,7 @@ function extractPredEdge(module TargetModule, predRef BlockRef, succId BlockId) 
 	var found = false
 	var keptEdges = BranchEdgeArray.create()
 	var predBlock = try module.blocks.get(predRef) otherwise panic("extractPredEdge: predRef not in module.blocks")
+
 	for edge in predBlock.branchEdges 'eachEdge'
 		if (not found) and edge.targetBlockId == succId 'moveThis'
 			movedArgs = edge.argIds
@@ -973,9 +1035,11 @@ function extractPredEdge(module TargetModule, predRef BlockRef, succId BlockId) 
 			keptEdges.push(edge)
 		end 'keep'
 	end 'eachEdge'
+
 	if not found 'noEdge'
 		panic("extractPredEdge: predecessor block ref {predRef} has no branch edge to block id {succId}")
 	end 'noEdge'
+
 	predBlock.branchEdges = keptEdges
 	return movedArgs
 end 'extractPredEdge'
@@ -1010,6 +1074,7 @@ end 'buildFuncTopologyByIndex'
 // to invalidate.
 export function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
+
 	// ⚠ **THE PREDECESSOR IS READ OUT AND LET GO BEFORE THE FIRST WRITE.** `module.blocks.get` hands back a
 	// BORROW of `module` (E3070), and every `retarget*` below writes `module.ops` — so holding the block
 	// across them is refused, and rightly: the block record belongs to the array being written through.
@@ -1049,8 +1114,10 @@ end 'retargetControlOp'
 // across the writes these arms make (see the caller).
 function retargetCondBranchOp(module TargetModule, opIdx OpIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
+
 	match op 'cond'
 		jcc(cond, target) then return retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
+
 		// The arm64 conditional branches: a flag test (`b.cond`) or a register zero-test (`cbz`/`cbnz`).
 		// Each carries its own target block id, retargeted the same way the `jcc` is.
 		arm64CondBranch(cond, target) then return retargetArm64CondBranch(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
@@ -1064,6 +1131,7 @@ end 'retargetCondBranchOp'
 // the roster the caller used to carry inline.
 function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget BlockId, newTarget BlockId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
+
 	match op 'term'
 		jmp(target) then return retargetJmp(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)
 		ret then return false
@@ -1124,6 +1192,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 			minMaxSdRegReg or
 			movqXmmGpr or
 			negF64RegReg then panic("retargetTerminatorOp: non-terminator op as terminator")
+
 		// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
 		// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
 		// branches, ALU, frame, call ops — is not a terminator here.
@@ -1179,6 +1248,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel then panic("retargetTerminatorOp: an arm64 non-terminator op reached as a terminator")
+
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
 		// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 		leaRegFunc or
@@ -1200,6 +1270,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer then panic("retargetTerminatorOp: an atomic or a thread-token read is a body op, not a terminator — the arm64 retry loop's branches are internal to its own encoding and name no block")
+
 		// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 		// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 		// CFG edge redirects all of them through the one split block.
@@ -1222,6 +1293,7 @@ function retargetJcc(module TargetModule, opIdx OpIndex, cond X64CondCode, targe
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.jcc(cond, targetBlockId: newTarget)) otherwise panic("retargetJcc: ops.set OOB")
 	return true
 end 'retargetJcc'
@@ -1230,6 +1302,7 @@ function retargetJmp(module TargetModule, opIdx OpIndex, target BlockId, oldTarg
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.jmp(newTarget)) otherwise panic("retargetJmp: ops.set OOB")
 	return true
 end 'retargetJmp'
@@ -1241,6 +1314,7 @@ function retargetArm64CondBranch(module TargetModule, opIdx OpIndex, cond Arm64C
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.arm64CondBranch(cond, targetBlockId: newTarget)) otherwise panic("retargetArm64CondBranch: ops.set OOB")
 	return true
 end 'retargetArm64CondBranch'
@@ -1249,6 +1323,7 @@ function retargetArm64Cbz(module TargetModule, opIdx OpIndex, reg TargetVReg, ta
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.arm64Cbz(reg, targetBlockId: newTarget)) otherwise panic("retargetArm64Cbz: ops.set OOB")
 	return true
 end 'retargetArm64Cbz'
@@ -1257,6 +1332,7 @@ function retargetArm64Cbnz(module TargetModule, opIdx OpIndex, reg TargetVReg, t
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.arm64Cbnz(reg, targetBlockId: newTarget)) otherwise panic("retargetArm64Cbnz: ops.set OOB")
 	return true
 end 'retargetArm64Cbnz'
@@ -1265,6 +1341,7 @@ function retargetArm64Branch(module TargetModule, opIdx OpIndex, target BlockId,
 	if target != oldTarget 'notThis'
 		return false
 	end 'notThis'
+
 	try module.ops.set(opIdx, value: TargetOp.arm64Branch(newTarget)) otherwise panic("retargetArm64Branch: ops.set OOB")
 	return true
 end 'retargetArm64Branch'
@@ -1278,6 +1355,7 @@ function retargetJumpTableX64(module TargetModule, opIdx OpIndex, indexReg Targe
 	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
 		return false
 	end 'notThis'
+
 	let newDefault = newTarget if defaultTarget == oldTarget else defaultTarget
 	let newTargets = remapJumpTargets(caseTargets, oldTarget: oldTarget, newTarget: newTarget)
 	try module.ops.set(opIdx, value: TargetOp.x64JumpTable(indexReg, defaultTarget: newDefault, caseTargets: newTargets, tableLabel: tableLabel)) otherwise panic("retargetJumpTableX64: ops.set OOB")
@@ -1288,6 +1366,7 @@ function retargetJumpTableArm64(module TargetModule, opIdx OpIndex, indexReg Tar
 	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
 		return false
 	end 'notThis'
+
 	let newDefault = newTarget if defaultTarget == oldTarget else defaultTarget
 	let newTargets = remapJumpTargets(caseTargets, oldTarget: oldTarget, newTarget: newTarget)
 	try module.ops.set(opIdx, value: TargetOp.arm64JumpTable(indexReg, defaultTarget: newDefault, caseTargets: newTargets, tableLabel: tableLabel)) otherwise panic("retargetJumpTableArm64: ops.set OOB")
@@ -1304,9 +1383,11 @@ end 'jumpTableNamesTarget'
 // The case-target table with every `oldTarget` slot rewritten to `newTarget`, others verbatim.
 function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget BlockId) returns BlockIdArray
 	var out = BlockIdArray.create()
+
 	for t in caseTargets 'eachSlot'
 		out.push(newTarget if t == oldTarget else t)
 	end 'eachSlot'
+
 	return out
 end 'remapJumpTargets'
 
@@ -1314,9 +1395,11 @@ end 'remapJumpTargets'
 function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp
 	let dst = TargetVReg.physical(plan.moveDstAt(i))
 	let src = TargetVReg.physical(plan.moveSrcAt(i))
+
 	if plan.moveIsSwapAt(i) 'swap'
 		return TargetOp.xchgRegReg(dst, b: src)
 	end 'swap'
+
 	return TargetOp.movRegReg(dst, srcReg: src)
 end 'moveOpOf'
 

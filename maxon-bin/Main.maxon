@@ -349,6 +349,7 @@ let RuntimeNameSeparator = ","
 // rather than an integer, so slicing at a byte offset is not the simpler alternative it looks like.
 function defineValueAfterName(cut StringArray) returns String
 	var value = ""
+
 	for i in 1 upto cut.count() 'eachPiece'
 		let piece = try cut.get(i) otherwise ""
 		let separator = "" if i == 1 else DefineNameValueSeparator
@@ -425,6 +426,7 @@ module function parseBuildTarget(spec String) returns TargetResolution
 			return TargetResolution.resolved(candidate)
 		end 'match'
 	end 'each'
+
 	return TargetResolution.unrecognized(spec)
 end 'parseBuildTarget'
 
@@ -445,6 +447,7 @@ end 'supportedTargets'
 // has to come from the set, or the next backend that lands is missing from both the moment it lands.
 function supportedTargetList() returns String
 	var out = ""
+
 	for candidate in supportedTargets() 'each'
 		if out.isEmpty() 'first'
 			out = targetToString(candidate)
@@ -452,6 +455,7 @@ function supportedTargetList() returns String
 			out = "{out}, {targetToString(candidate)}"
 		end 'rest'
 	end 'each'
+
 	return out
 end 'supportedTargetList'
 
@@ -463,6 +467,7 @@ module function resolveTargetFlag(spec String) returns TargetResolution
 	if spec.isEmpty() 'host'
 		return TargetResolution.resolved(detectHostTarget())
 	end 'host'
+
 	return parseBuildTarget(spec)
 end 'resolveTargetFlag'
 
@@ -536,6 +541,7 @@ function manifestBuilds(doc JsonDoc) returns JsonNodeIdArray
 		let id = try doc.arrayAt(doc.root, index: i) otherwise 'badElem'
 			return builds
 		end 'badElem'
+
 		builds.push(id)
 	end 'eachBuild'
 
@@ -550,6 +556,7 @@ end 'manifestTargetName'
 
 function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 	let manifest = Directory.currentPath().join(BuildManifestFileName)
+
 	if not File.exists(manifest) 'noManifest'
 		if not targetName.isEmpty() 'nameWithoutManifest'
 			return ManifestRun.noSuchTarget
@@ -580,9 +587,11 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 
 	if run.exitCode() != 0 'manifestFailed'
 		printError("error: {BuildManifestFileName} exited {run.exitCode()} and described no build\n")
+
 		if not run.stderr.isEmpty() 'hasStderr'
 			printError("{run.stderr}\n")
 		end 'hasStderr'
+
 		return ManifestRun.ran(1)
 	end 'manifestFailed'
 
@@ -620,18 +629,22 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	// ⭐ ONE TARGET NEEDS NO NAME; SEVERAL ARE LISTED RATHER THAN GUESSED AT. Picking the first of
 	// several would build something the caller did not ask for and report success for it.
 	var chosen = doc.root
+
 	if targetName.isEmpty() 'noNameGiven'
 		if buildCount != 1 'severalTargets'
 			printError("{BuildManifestFileName} declares {buildCount} targets. Name one:\n")
+
 			for id in builds 'eachTargetName'
 				printError("  {manifestTargetName(doc, build: id)}\n")
 			end 'eachTargetName'
+
 			return ManifestRun.ran(1)
 		end 'severalTargets'
 
 		chosen = try builds.get(0) otherwise panic("buildFromManifestOutput: builds.get OOB — buildCount is 1")
 	end 'noNameGiven' else 'nameGiven'
 		var found = false
+
 		for id in builds 'findTarget'
 			if manifestTargetName(doc, build: id) == targetName 'nameMatches'
 				chosen = id
@@ -669,6 +682,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	end 'noPaths'
 
 	var inputPaths = MaxonSourcePathArray.create()
+
 	for i in 0 upto count 'eachSource'
 		let elemId = try doc.arrayAt(sourcesId, index: i) otherwise 'badElem'
 			printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` entry {i} could not be read\n")
@@ -680,6 +694,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 			printError("error: {BuildManifestFileName} named an invalid source path: {spelling}\n")
 			return ManifestRun.ran(1)
 		end 'badSourcePath'
+
 		inputPaths.push(path)
 	end 'eachSource'
 
@@ -688,6 +703,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	let outputOverride = chosenOutput(output, fromFlag: args.outputOverride)
 
 	var target = detectHostTarget()
+
 	match resolveTargetFlag(args.targetSpec) 'manifestTarget'
 		resolved(t) then target = t
 		unrecognized(spec) then return ManifestRun.ran(reportUnknownTarget(spec))
@@ -706,6 +722,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	// `output`, for the same reason. Resolution binds a name to one declaration and stamps it, and a
 	// later stamp replaces an earlier one, so ORDER is what expresses that precedence.
 	var defines = manifestDefines(doc, build: chosen)
+
 	for supplied in args.defines 'eachCommandLineDefine'
 		defines.push(supplied)
 	end 'eachCommandLineDefine'
@@ -734,6 +751,7 @@ function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray
 		let elemId = try doc.arrayAt(listId, index: i) otherwise continue
 		let pair = doc.get(elemId).stringValue
 		let cut = pair.split(DefineNameValueSeparator)
+
 		if cut.count() < 2 'noValueGiven'
 			continue
 		end 'noValueGiven'
@@ -760,6 +778,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	// declare falls through to the path meaning below, so a manifest never breaks an ordinary build.
 	if args.paths.count() == 1 'maybeTargetName'
 		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
+
 		match runBuildManifest(args, targetName: only) 'namedBuild'
 			ran(code) then return code
 			noSuchTarget then return runBuildPaths(args)
@@ -773,15 +792,18 @@ end 'runBuild'
 // the fallback above is a RETURN rather than a match arm that does nothing.
 function runBuildPaths(args MaxonArgs) returns ExitCode
 	var inputPaths = MaxonSourcePathArray.create()
+
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
 			printError("error: invalid path: {spelling}\n")
 			return 1
 		end 'badPath'
+
 		inputPaths.push(path)
 	end 'eachPositional'
 
 	var target = detectHostTarget()
+
 	match resolveTargetFlag(args.targetSpec) 'targetSel'
 		resolved(t) then target = t
 		unrecognized(spec) then return reportUnknownTarget(spec)
@@ -825,6 +847,7 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	end 'unsupportedCoverage'
 
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
+
 	if lockExit != 0 'busyTree'
 		return lockExit
 	end 'busyTree'
@@ -918,11 +941,13 @@ end 'compileAndReport'
 // were already printed by the pipeline).
 function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-warm-rebuild <file>"
+
 	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
 		return 1
 	end 'tooManyPaths'
 
 	let spelling = args.solePositional()
+
 	if spelling.isEmpty() 'noPath'
 		printError("Usage: {usage}\n")
 		return 1
@@ -951,11 +976,13 @@ end 'runVerifyWarmRebuild'
 // host target, and the same "the gate printed its own reasons" exit rule.
 function runVerifyRecheck(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-recheck <file|dir>"
+
 	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
 		return 1
 	end 'tooManyPaths'
 
 	let spelling = args.solePositional()
+
 	if spelling.isEmpty() 'noPath'
 		printError("Usage: {usage}\n")
 		return 1
@@ -1027,6 +1054,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// Resolving before the worker branch prints nothing on the success path (only an unrecognized
 	// spelling prints, to stderr, and returns), so the worker's stdout wire stays untouched.
 	var effectiveTarget = detectHostTarget()
+
 	match resolveTargetFlag(args.targetSpec) 'targetSel'
 		resolved(t) then effectiveTarget = t
 		unrecognized(spec) then return reportUnknownTarget(spec)
@@ -1071,6 +1099,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// phrase: a trailing relative clause put the verb behind "…it tests is STALE" and the sentence
 	// stopped parsing as English.
 	let freshnessExit = refuseIfStale(harnessExe, role: "the spec-test harness (which is also the compiler it tests)")
+
 	if freshnessExit != 0 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
@@ -1132,6 +1161,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// tree (see `requireHarnessRefusalsFire`), so acquiring here would refuse against its own parent.
 	// The predicate is the one the self-test already uses to recognise itself.
 	let lockExit = acquireSuiteTreeLock(specDir)
+
 	if lockExit != 0 'busyTree'
 		return lockExit
 	end 'busyTree'
@@ -1176,6 +1206,7 @@ end 'runFmt'
 union FmtSelection
 	// The files to rewrite, in the order they will be visited.
 	files(paths FilePathArray)
+
 	// The argument names nothing on disk.
 	notFound
 end 'FmtSelection'
@@ -1208,6 +1239,7 @@ end 'fmtSelection'
 // file that is already canonical is not rewritten: `fmt` over a clean tree must leave every mtime alone.
 function formatEachFile(files FilePathArray) returns ExitCode
 	var changed = 0 as FormattedFileCount
+
 	for file in files 'eachFile'
 		let original = try File.readText(file) otherwise 'unreadable'
 			printError("fmt: could not read {file}\n")
@@ -1215,6 +1247,7 @@ function formatEachFile(files FilePathArray) returns ExitCode
 		end 'unreadable'
 
 		let formatted = format(original)
+
 		if formatted != original 'differs'
 			try File.writeText(file, content: formatted) otherwise 'unwritable'
 				printError("fmt: could not write {file}\n")
@@ -1246,13 +1279,16 @@ let PathListSeparator = ", "
 function joinedWith(values SourcePathSpellingArray, separator String) returns String
 	var out = StringBuilder.create()
 	var first = true
+
 	for value in values 'eachValue'
 		if not first 'needsSeparator'
 			out.append(separator)
 		end 'needsSeparator'
+
 		out.append(value)
 		first = false
 	end 'eachValue'
+
 	return out.build()
 end 'joinedWith'
 
@@ -1352,6 +1388,7 @@ function filterSuffix(filter String) returns String
 	if filter.isEmpty() 'noFilter'
 		return ""
 	end 'noFilter'
+
 	return " matching --filter={filter}"
 end 'filterSuffix'
 
@@ -1385,9 +1422,11 @@ end 'resolveSpecDir'
 // so the "make it absolute" rule above reads once instead of once per branch.
 function specDirSpelling(args MaxonArgs) returns String
 	let spelled = args.solePositional()
+
 	if spelled.isEmpty() 'useDefault'
 		return DefaultSpecDir
 	end 'useDefault'
+
 	return spelled
 end 'specDirSpelling'
 
@@ -1516,6 +1555,7 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	if tally.failed > 0 'anyFailed'
 		return 1
 	end 'anyFailed'
+
 	return 0
 end 'reportResults'
 
@@ -1544,6 +1584,7 @@ function firstBadOption(current String, arg String) returns String
 	if current.isEmpty() 'firstBad'
 		return arg
 	end 'firstBad'
+
 	return current
 end 'firstBadOption'
 
@@ -1573,6 +1614,7 @@ module function reportCompileError(e CompileError)
 		fileNotFound(p) then emitDiagnosticLine("error: file not found: {p}")
 		directoryNotFound(p) then emitDiagnosticLine("error: directory not found: {p}")
 		noSourceFiles(r) then emitDiagnosticLine("error: no source files under {r}")
+
 		// NOT "share no directory": that is true of two drives and FALSE of two top-level directories on
 		// one, whose common directory is the drive root — a directory `FilePath` cannot hold, because
 		// `parent` cuts the separator off (see `Compiler.commonAncestorOf`). The sentence names what the
@@ -1667,6 +1709,7 @@ let WordSeparator = " "
 enum CommandAudience
 	// Someone USING this compiler on a program of their own. What `maxon` with no arguments lists.
 	usingTheCompiler
+
 	// Someone WORKING ON this compiler.
 	workingOnTheCompiler
 end 'CommandAudience'
@@ -1677,13 +1720,17 @@ end 'CommandAudience'
 type CommandReference
 	// The word that selects the command.
 	export var word as String
+
 	// Its argument sketch, or empty for a command that takes none.
 	export var arguments as String
+
 	// ONE line, and the whole of what `maxon` with no arguments says about this command.
 	export var summary as String
+
 	// The rest of the prose, or empty when the summary says everything. Paragraphs are separated by
 	// `ParagraphSeparator`; nothing here is wrapped or padded by hand.
 	export var detail as String
+
 	// Who it is for, which decides which listings show it. See `CommandAudience`.
 	export var audience as CommandAudience
 
@@ -1812,6 +1859,7 @@ end 'optionReference'
 // roster comes through here, so the skip is stated ONCE and a printer cannot forget it.
 function namedCommands() returns MaxonCommandArray
 	var named = MaxonCommandArray.create()
+
 	for command in MaxonCommand.allCases 'eachCase'
 		if command != MaxonCommand.unknown 'itNamesACommand'
 			named.push(command)
@@ -1828,6 +1876,7 @@ function commandsFor(audience CommandAudience) returns MaxonCommandArray
 
 	for command in namedCommands() 'eachCommand'
 		let reference = try commandReference(command) otherwise panic("commandsFor: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
+
 		if reference.audience == audience 'thisAudience'
 			selected.push(command)
 		end 'thisAudience'
@@ -1844,6 +1893,7 @@ end 'commandsFor'
 function commandFromWord(word String) returns MaxonCommand
 	for command in namedCommands() 'eachCommand'
 		let reference = try commandReference(command) otherwise panic("commandFromWord: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
+
 		if reference.word == word 'thisOne'
 			return command
 		end 'thisOne'
@@ -1932,6 +1982,7 @@ function printCommandList()
 	end 'eachCommand'
 
 	print("\n")
+
 	// ⚠ **IT SAYS THAT SOMETHING IS NOT SHOWN.** A short list that quietly omitted the commands for
 	// working on the compiler would leave a reader who needs `{SpecTestCommandName}` with no reason to
 	// look further; naming the omission is what makes the list short rather than incomplete.
@@ -1945,6 +1996,7 @@ function printCommandSection(command MaxonCommand)
 
 	for option in HelpOption.allCases 'eachOption'
 		let entry = optionReference(option)
+
 		if entry.commands.contains(command) 'thisCommandReadsIt'
 			printHelpEntry("  {entry.spelling}", text: entry.description)
 		end 'thisCommandReadsIt'
@@ -1996,12 +2048,14 @@ function runHelp(args MaxonArgs) returns ExitCode
 	end 'unexpectedArgument'
 
 	let named = args.solePositional()
+
 	if named.isEmpty() 'theWholeReference'
 		printFullReference()
 		return 0
 	end 'theWholeReference'
 
 	let command = commandFromWord(named)
+
 	if command == MaxonCommand.unknown 'noSuchCommand'
 		printError("error: unknown command: {named}\n")
 		printCommandList()
@@ -2043,39 +2097,49 @@ end 'noCommandGiven'
 // ⚠ Nothing reads a case's ordinal or raw value, so this order decides the listing and nothing else.
 enum MaxonCommand
 	build
+
 	// `maxon coverage <run|report> <exe>` — read back what a `--coverage` binary counted. Tail-stopping
 	// like `monitor`, and for the sharper form of its reason: the tail is a CHILD's command line.
 	coverage
+
 	// `maxon debug --dump-info <exe>` / `--symbolize <exe> <offset...>` — the read-only faces of the
 	// `.mxdbg` sidecar. Tail-stopping like `monitor`; see `DebugCommandName`.
 	debug
+
 	// `maxon fmt` - re-print `.maxon` sources in canonical layout, IN PLACE. See `runFmt`.
 	fmt
+
 	// `maxon help [<command>]` — the reference this driver prints about itself. See `runHelp`; the
 	// withdrawn flag spellings for the same question are refused by name at `WithdrawnHelpFlag`.
 	help
 	lspServer
+
 	// `maxon monitor` — run a `--debugstream` binary with a DebugStream ring attached and print the
 	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
 	// driver; see the `monitorTail` arm in `parse`.
 	monitor
+
 	// `maxon profile run <exe>` — sample a running program and report where its CPU time went. Tail-stopping
 	// like `coverage`, and for exactly its reason: the tail is a CHILD's command line.
 	profile
+
 	// `maxon run <file|directory> [args...]` — compile a program, or reuse a cached build of it, and run
 	// it. Tail-stopping like `profile`, and reached by a second door with no word at all: see
 	// `RunCommandName`.
 	run
 	scaleTest
 	specTest
+
 	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
 	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
 	test
 	verifyRecheck
 	verifyWarmRebuild
+
 	// `maxon version` — which binary is this. See `runVersion`; the withdrawn flag spellings for the same
 	// question are refused by name at `WithdrawnVersionFlag`.
 	version
+
 	// ⛔ NOT A COMMAND and therefore not in the sorted run above: it is the ABSENCE of one, which is why
 	// `namedCommands` leaves it out of every listing. See `HelpReferenceError`.
 	unknown
@@ -2095,6 +2159,7 @@ export typealias SourcePathSpellingArray = Array with String
 // spec-test runner takes them from inside Main.
 module type MaxonArgs
 	export var command as MaxonCommand
+
 	// ⭐⭐ **EVERY POSITIONAL, IN THE ORDER TYPED (A3m).** `build` compiles them all and the ORDER is
 	// load-bearing — `Compiler.loadSourceFiles` registers sources in exactly this order, which is how
 	// a caller states which of two sibling files declares first without the loader ever sorting (see
@@ -2104,42 +2169,53 @@ module type MaxonArgs
 	export var paths as SourcePathSpellingArray
 	export var outputOverride as String
 	export var emitIr as bool
+
 	// Whether this build emits the green-thread async trace (`--async-trace`). See `AsyncTraceFlag`.
 	export var asyncTrace as bool
+
 	// Whether this build emits the DebugStream producer (`--debugstream`). See `DebugStreamFlag`.
 	export var debugStream as bool
+
 	// Whether this build writes the `<output>.mxdbg` sidecar. TRUE unless `--no-debug-info` was typed —
 	// see that flag for why the default is on. Read only by `build`.
 	export var debugInfo as bool
+
 	// Whether this build instruments for code coverage (`--coverage`). See that flag. Read only by
 	// `build`, which refuses it against `debugInfo` and against a target with no file surface.
 	export var coverage as bool
+
 	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
 	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
 	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
 	// request for the printing.
 	export var runtimeIrNames as RuntimeFunctionNameArray
+
 	// `--filter=<pattern>` (spec-test only): run only the tests whose `<spec>/<test>` label
 	// contains <pattern>. Empty selects the whole suite.
 	export var filter as String
+
 	// `--update-required` (spec-test only): REWRITE the committed `.test` goldens instead of
 	// checking the emitted IR against them. The goldens are a code-quality gate — running a test
 	// proves its allocation is CORRECT, but only the pinned IR can say the code did not get WORSE
 	// (an extra spill still computes the right answer). So regenerating them is the one way a
 	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
 	export var updateRequired as bool
+
 	// `--workers=<n>` (spec-test only): how many persistent worker subprocesses the pool runs. 1 is
 	// the SAME pool with one worker in it, not a serial in-process branch — see runSpecTest.
 	export var workers as WorkerCount
+
 	// ⚠ Whether a `--workers=` was typed on this command line. Read by the delegated Linux lane
 	// (`SpecTestRunner.spawnGuestSuite`), which forwards the flag only when it was: the field above
 	// cannot answer that, because a typed count is free to equal the default this host computed.
 	export var workersOverridden as bool
+
 	// `--worker-persistent` (spec-test only, INTERNAL): this process IS a pool worker. Set by the
 	// parent dispatcher on the command line it spawns, never typed by a person, and therefore left
 	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
 	// worker whose own flag was not understood would fail to start at all.
 	export var workerPersistent as bool
+
 	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
 	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
 	// `--log=compiler:debug`, which prints the same numbers as a table.
@@ -2148,17 +2224,21 @@ module type MaxonArgs
 	export var defines as DefineArray
 
 	export var metricsPath as String
+
 	// `--emit-corpus=<dir>` (scale-test only): dump the generated scaling corpus to <dir> for
 	// inspection instead of the temp directory it is otherwise built into and thrown away.
 	export var emitCorpus as String
+
 	// `--rungs=<n>` (scale-test only): how many rungs of the ladder to climb. Each doubles the
 	// program, so this is exponential in cost — see ScaleCorpus.
 	export var rungs as RungCount
+
 	// `--repeat=<n>` (scale-test only): how many times each rung is compiled. The CPU column takes
 	// the MINIMUM of the repeats (the least-disturbed sample); the memory columns take the first and
 	// are cross-checked for equality across the rest, since they are bit-for-bit reproducible and a
 	// difference is a broken run — see ScaleTestRunner's header.
 	export var repeat as RepeatCount
+
 	// `--note=<text>` (scale-test only): RECORD this run in docs/optimization-log.md, with <text> as
 	// the reason. A run without it reports and records nothing — scale-test is run dozens of times a
 	// day against dirty trees, and a log of all of them would be a log nobody reads. WITH it the row is
@@ -2167,6 +2247,7 @@ module type MaxonArgs
 	// never see why, so the reason is demanded at the one moment it is still known — see
 	// Testing/ScaleHistory.maxon.
 	export var note as String
+
 	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung and per-phase
 	// memory, and the deltas from the last recorded run — as JSON.
 	//
@@ -2174,37 +2255,48 @@ module type MaxonArgs
 	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
 	// mis-parse rather than fail. A caller that wants data gets data.
 	export var resultJson as String
+
 	// `--target=<cpu>-<os>` (build, spec-test): use this target instead of the host
 	// (`detectHostTarget`). Empty selects the host. Resolved to a Target via `resolveTargetFlag` in
 	// both `runBuild` and `runSpecTest`; an unknown spelling aborts. Needed to cross-compile
 	// x64-windows on an arm64 host for golden verification, to select arm64-macos explicitly, and to
 	// drive the spec suite through the wasm32-wasi backend (cross-compile-and-run under wasmtime).
 	export var targetSpec as String
+
 	// Whether this spec run may reach a real external host (`--network`). FALSE by default, and the
 	// default is the whole point — see `NetworkFlag`.
 	export var includeNetwork as bool
+
 	// `--list` (test only): print the tests that WOULD run and compile nothing.
 	export var listOnly as bool
+
 	// `--json` (test only): emit the report as one JSON document instead of text.
 	export var jsonReport as bool
+
 	// `--no-timing` (test only): omit durations, which is what makes a run's stdout byte-reproducible.
 	// TRUE by default — the flag turns it off, so the field reads as what it controls rather than as
 	// the flag's own name.
 	export var showTiming as bool
+
 	// `--color=` (test only): when the report may use colour. See `TestRender.ReportColorMode` — `auto`
 	// is the default and asks the host through `__Builtins.stdoutWantsAnsiColor()`.
 	export var colorMode as ReportColorMode
+
 	// `--isolate` (test only): run every test in its own process, rather than a process per FILE.
 	export var isolate as bool
+
 	// `--bail[=N]` (test only): stop claiming new work once N tests have failed.
 	export var bail as BailPolicy
+
 	// `--timeout=<ms>` (test only): how long ONE test process may run before it is killed.
 	export var testTimeoutMs as DurationMs
+
 	// ⚠ Whether a `--log=` was accepted on this command line. Read by `test` alone, which SILENCES the
 	// compiler's INFO chatter so its stdout is a report rather than a build log — and must not do that
 	// behind the back of a caller who asked for the chatter. A bool and not the spec string: the spec was
 	// already applied by `parseLogOption`, and keeping it would be that setting stored twice.
 	export var logOverridden as bool
+
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
 	// ⛔⛔ **EVERY `-`-LEADING ARGUMENT, RECORDED REGARDLESS OF WHICH ARM CONSUMES IT OR WHERE IT SAT.**
@@ -2220,6 +2312,7 @@ module type MaxonArgs
 	// reach around.
 	export var anyOption as String
 	export var badOption as String
+
 	// ⭐ Set when an argument names an option this driver ONCE HAD and deliberately withdrew. A
 	// separate field from `badOption` because the two owe the reader different sentences and `main`
 	// prints them in different words: an unknown option was never understood, a withdrawn one was and
@@ -2274,6 +2367,7 @@ module type MaxonArgs
 
 		let args = CommandLine.args()
 		var i = 1
+
 		while i < args.count() 'each'
 			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
 
@@ -2368,6 +2462,7 @@ module type MaxonArgs
 			// a LATER one an ordinary path through the restore block below, exactly as every other command
 			// word is.
 			let named = commandFromWord(arg)
+
 			if named != MaxonCommand.unknown 'commandWord'
 				parsed.command = named
 			end 'commandWord' else if arg == OutputFlagName 'dashOutput'
@@ -2399,10 +2494,12 @@ module type MaxonArgs
 				// exactly what it pinned before while claiming otherwise. One check, on the value that
 				// actually reaches the printer.
 				let named = splitRuntimeNames(try CommandLine.optionValue(arg) otherwise "")
+
 				if named.count() == 0 'noRuntimeNames'
 					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'noRuntimeNames' else 'hasRuntimeNames'
 					parsed.runtimeIrNames = named
+
 					// A list of functions to PRINT is a request for the printing. Without this the flag
 					// would be silently inert whenever `--emit-ir` was forgotten — a no-op that looks like
 					// a rendering, which is the one outcome the printer's own refusals exist to prevent.
@@ -2447,6 +2544,7 @@ module type MaxonArgs
 			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
 				let pair = try CommandLine.optionValue(arg) otherwise ""
 				let cut = pair.split(DefineNameValueSeparator)
+
 				// A `--define` with no `=` names no value. Recorded as a BAD OPTION rather than read as
 				// "define it to the empty string": the two are different requests, and `--define=X` is far
 				// more likely a truncated command line than a deliberate empty one — which `--define=X=`
@@ -2461,6 +2559,7 @@ module type MaxonArgs
 				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
 			end 'emitCorpusFlag' else if arg.startsWith(RungsFlagPrefix) 'rungsFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
+
 				// A bad value is recorded as a BAD OPTION, not clamped to the default. `main` refuses
 				// to run on a command line it only partly understood, which is the only honest
 				// response to `--rungs=99`: the caller asked for a ladder this suite will not climb
@@ -2472,6 +2571,7 @@ module type MaxonArgs
 				end 'rungsArg'
 			end 'rungsFlag' else if arg.startsWith(RepeatFlagPrefix) 'repeatFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
+
 				// The same door as `--rungs` and `--workers`: a bad value is a BAD OPTION, not a
 				// clamp. `--repeat=0` asks for a rung that is never compiled, and quietly compiling
 				// it three times would answer a question the caller never asked — the run they get
@@ -2523,11 +2623,13 @@ module type MaxonArgs
 				// no pattern would select EVERYTHING, which is the opposite of what was typed.
 				i = i + 1
 				parsed.filter = try args.get(i) otherwise ""
+
 				if parsed.filter.isEmpty() 'namesNoPattern'
 					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'namesNoPattern'
 			end 'shortFilterSeparated' else if arg.startsWith("--log=") 'logFlag'
 				let spec = try CommandLine.optionValue(arg) otherwise ""
+
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
 				end 'badSpec' else 'goodSpec'
@@ -2590,6 +2692,7 @@ typealias CommandLineIndex = int(0 to u32.max)
 // that loop carries one register per live local and is already at the limit its own note records.
 function monitorTail(args StringArray, from CommandLineIndex) returns SourcePathSpellingArray
 	var tail = SourcePathSpellingArray.create()
+
 	for position in from upto args.count() 'eachTailArgument'
 		tail.push(try args.get(position) otherwise panic("monitorTail: index {position} is past args.count() despite the upto bound"))
 	end 'eachTailArgument'
@@ -2603,11 +2706,14 @@ end 'monitorTail'
 // more thing a reader has to check.
 function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
 	var names = RuntimeFunctionNameArray.create()
+
 	for part in value.split(RuntimeNameSeparator) 'eachName'
 		let trimmed = part.trim()
+
 		if not trimmed.isEmpty() 'nonEmpty'
 			names.push(trimmed)
 		end 'nonEmpty'
 	end 'eachName'
+
 	return names
 end 'splitRuntimeNames'

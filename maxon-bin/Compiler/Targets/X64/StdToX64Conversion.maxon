@@ -57,6 +57,7 @@ export function constMaterializationOp(dest TargetVReg, value MachineWord) retur
 	if value >= Imm32ZeroExtendedMin and value <= u32.max 'fitsUnsigned32'
 		return TargetOp.movRegImm32(dest, value: value)
 	end 'fitsUnsigned32'
+
 	return TargetOp.movRegImm(dest, value: value)
 end 'constMaterializationOp'
 
@@ -520,6 +521,7 @@ function x64RegisterArgCapacity() returns RegisterArgCapacity
 	if argRegisters.count() != argFpRegisters.count() 'filesDiffer'
 		panic("x64RegisterArgCapacity: the integer file holds {argRegisters.count()} argument registers and the float file {argFpRegisters.count()} — the shared placement rule asks ONE capacity of both files, so they must be the same depth")
 	end 'filesDiffer'
+
 	return argRegisters.count() as RegisterArgCapacity
 end 'x64RegisterArgCapacity'
 
@@ -622,9 +624,11 @@ function condCodeForPred(pred StdCmpPred, isFloat bool, isUnsigned bool) returns
 	if isFloat 'float'
 		return floatCondCodeForPred(pred)
 	end 'float'
+
 	if isUnsigned 'unsignedInteger'
 		return unsignedCondCodeForPred(pred)
 	end 'unsignedInteger'
+
 	return signedCondCodeForPred(pred)
 end 'condCodeForPred'
 
@@ -794,6 +798,7 @@ function x64AtomicAdd(resultId ValueId, addrId ValueId, operandId ValueId, prior
 	if not priorValueIsRead 'priorValueDiscarded'
 		return TargetOp.x64LockAdd(TargetVReg.virtual(addrId), srcReg: TargetVReg.virtual(operandId))
 	end 'priorValueDiscarded'
+
 	return TargetOp.x64LockXadd(TargetVReg.virtual(resultId), src: TargetVReg.virtual(operandId), addrReg: TargetVReg.virtual(addrId))
 end 'x64AtomicAdd'
 
@@ -808,6 +813,7 @@ end 'x64AtomicAdd'
 // makes it impossible to have one without the other.
 export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
 	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
+
 	// ⭐ **THE STD COLUMN CAME OUT EVEN, ASKED HERE BECAUSE THIS IS WHERE THAT MODULE STOPS BEING
 	// APPENDED TO.** It is the one tier whose column nothing else counts: the walk below reads it BY
 	// INDEX, so a pass that pushed onto `ops` without recording leaves it short and every span from that
@@ -819,6 +825,7 @@ export function lowerStdToX64(stdModule StdModule, target Target, globalData Glo
 	// skeleton, because `prepareSkeleton` is the first thing that can append.
 	lowering.targetModule.spans.armed = stdModule.spans.armed
 	lowering.prepareSkeleton()
+
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
 	// `srcFunc` borrowed out of `stdModule.functions` may be handed to it. This is the rule
@@ -839,23 +846,29 @@ end 'lowerStdToX64'
 type StdToX64Lowering
 	// Exported like `targetModule`: `lowerStdToX64` hands both to the shared `buildValueClassColumns`.
 	export var stdModule as StdModule
+
 	// The compilation target — read for its OS by the three OS-primitive lowerings
 	// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages`), which route through `x64OsCallKind` to a
 	// Windows IAT call or a raw Linux syscall. The arm64 isel carries the same field for the same reason.
 	var target as Target
+
 	// The backend's data table — where a float constant's `.rdata` island is registered. Shared
 	// with concat, which resolves each `movsdRegRip`'s label against it once sections are laid out.
 	var globalData as GlobalDataTable
+
 	// Exported so the free-function entry can read the finished module after
 	// driving the per-function loop (M5's fan-out driver reads it too).
 	export var targetModule as TargetModule
+
 	// Which compares this function keeps in the EFLAGS and which must write their boolean to a
 	// register — the TARGET-INDEPENDENT analysis both native isels read (`CompareFusionCensus`, in the
 	// shared lowering). Created ONCE and recomputed per function, like `scaledIndexFolds` below.
 	var compareFusion as CompareFusionCensus
+
 	// The `ordered` block minted for each float-equality branch — see OrderedBlockIdMap and
 	// `reserveFloatEqualityBlocks`. Reset per function beside the census.
 	var orderedBlockIds as OrderedBlockIdMap
+
 	// EC16 — the `base + index*scale` chains this function's element accesses spell, and which of them
 	// the memory op itself can carry (`ScaledIndexFolds`, in the shared lowering). x64 answers
 	// `foldsIntoMemoryOps: true`: its `mov`/`movsd`/`movzx` all take a full SIB operand with a
@@ -863,6 +876,7 @@ type StdToX64Lowering
 	//
 	// Created ONCE and RESET per function, unlike the three tables above — see the type's `create`.
 	var scaledIndexFolds as ScaledIndexFolds
+
 	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
 	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
 	// callee's result come back in?" — XMM0 for a float-returning callee, R8 otherwise (see
@@ -871,6 +885,7 @@ type StdToX64Lowering
 	// fact rather than two that could disagree. Exported like `targetModule`: `lowerStdToX64` reads it to
 	// thread the same index into `buildValueClassColumns`.
 	export let funcNames as FunctionNameIndex
+
 	// Callee name → its parameters' register FILES as a bitmask. Built ONCE here (not per call site), FROM
 	// the index above — so its key set is the checked one — and read by `emitCallArgMoves` to route each
 	// argument to a GPR or an XMM arg register by the callee's declared parameter type. It is a real FOLD
@@ -915,9 +930,11 @@ type StdToX64Lowering
 		for srcBlock in self.stdModule.blocks 'relocateBlocks'
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			dstBlock.blockArgs = srcBlock.blockArgs
+
 			for srcEdge in srcBlock.branchEdges 'eachEdge'
 				dstBlock.branchEdges.push(BranchEdge.create(srcEdge.targetBlockId, argIds: srcEdge.argIds))
 			end 'eachEdge'
+
 			self.targetModule.blocks.push(dstBlock)
 		end 'relocateBlocks'
 
@@ -941,25 +958,31 @@ type StdToX64Lowering
 			// Both stream writes marshal the SAME `WriteFile` call, so both reserve the same two slots.
 			osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
 			osWriteStderr gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
+
 			// A frame address is a `lea`; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
+
 			// O3: `GetEnvironmentVariableA` (3 arguments) then `OpenFileMappingA` (3) are register-only, and
 			// the tick read takes none at all.
 			osOpenNamedSegment gives 0
 			osTickCountMs gives 0
+
 			// ⚠⚠ **`MapViewOfFile` TAKES FIVE, SO ITS `dwNumberOfBytesToMap` IS A REAL OUTGOING STACK
 			// ARGUMENT AND THE FRAME MUST RESERVE THE SLOT.** `lowerOsMapNamedSegment` writes it at
 			// `win64OutgoingArgDisp(0)`; reserving nothing puts `spillSlotBaseDisp`'s SPILL SLOT 0 at that
 			// exact displacement, so the store lands on a spilled value — the silent stack corruption this
 			// band's own header exists to prevent.
 			osMapNamedSegment gives win64OutgoingArgBytes(MapViewOfFileStackArgWords)
+
 			// CreateProcessA passes its last six of ten arguments on the stack (see `win64OutgoingArgDisp`).
 			// Every other op of the ORIGINAL subprocess band is ≤4-argument and register-only.
 			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
+
 			// PeekNamedPipe passes its last two of six arguments on the stack — so `osProcessSpawn` above is
 			// not the only stack-arg subprocess op, and this comment used to claim it was.
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
 			osHandleSetInherit gives 0
+
 			// ⚠ **THIS ARM NOW COVERS TWELVE OPS, AND ITS COMMENT ONCE SAID "the other three appended ops".**
 			// `osEnvRead` and `osProcessTerminate` finish the attached-subprocess band, then the eight
 			// `ws2_32` socket ops follow, then `osCpuCount` and `osThreadCpuTicks` close it. All twelve are
@@ -980,24 +1003,29 @@ type StdToX64Lowering
 				osSocketClose or
 				osCpuCount or
 				osThreadCpuTicks gives 0
+
 			// F1a: `VirtualFree(MEM_DECOMMIT)` is three register arguments — inside the Win64 register file's
 			// capacity — so it reserves no outgoing stack space. Its Linux twin is a three-argument syscall,
 			// which never uses the stack at all.
 			osDecommitPages gives 0
+
 			// F1b: the byte fill calls nothing at all — it is a store ladder emitted inline — so there is no
 			// outgoing-argument region for it to reserve.
 			memFill gives 0
+
 			// F1c: `VirtualAlloc` is four register arguments — exactly the Win64 register file's capacity — and
 			// the Linux `mmap` is a SIX-argument syscall, which passes all six in registers and never uses the
 			// stack. So neither the reserve nor the commit reserves outgoing stack space.
 			osCommitPages or
 				osReservePages gives 0
+
 			// F2: the two atomics are single inline instructions and reserve nothing. The thread token is one
 			// inline load on Windows, and on Linux a ZERO-argument `gettid` syscall — a syscall never touches
 			// the stack, so the largest of the three still reserves no outgoing-argument region.
 			atomicCas or
 				atomicRmw or
 				currentThreadToken gives 0
+
 			// G1: `TlsAlloc` takes none, `TlsSetValue` and `SetEvent` take two and one — all register-only under
 			// Win64 — and the `gs:` slot read is a single inline load that makes no call at all.
 			tlsAlloc or
@@ -1017,6 +1045,7 @@ type StdToX64Lowering
 				branch or
 				ret or
 				param gives 0
+
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
 			// same mask through the same `calleeArgFloatMask`).
@@ -1028,16 +1057,19 @@ type StdToX64Lowering
 				osAllocPages gives 0
 			rdataAddr gives 0
 			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
+
 			// `errorReturn`/`osExit` have no outgoing args; a `funcAddr` is a register-only `lea`.
 			errorReturn or
 				osExit or
 				funcAddr gives 0
+
 			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
 			// up by), and overflow through the identical shared rule.
 			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPanic or
 				osReadClock or
 				osSleepMs gives 0
+
 			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
 			osProcessExitCode or
@@ -1045,12 +1077,15 @@ type StdToX64Lowering
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages gives 0
+
 			// The jump table makes no call — it reserves no outgoing argument stack.
 			switch gives 0
 			witnessCall(_, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+
 			// The throwing witness call marshals its arguments identically (its extra result is a REGISTER
 			// capture, not an outgoing argument), so it reserves the same outgoing space.
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+
 			// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
 			// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
 			// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
@@ -1065,22 +1100,28 @@ type StdToX64Lowering
 				osLockEnter or
 				osLockLeave gives 0
 			osLastError gives 0
+
 			// CancelIoEx (2 args) and GetCurrentProcessId (0 args) are register-only — no outgoing stack space.
 			osCancelIo or
 				osGetPid gives 0
+
 			// P1.5 dogfood slice 1b: the stdin pipe reserves the same CreateNamedPipeW/CreateFileW region as
 			// `osPipeCreate`; `osWriteFile` reserves ONE word for WriteFile's `lpOverlapped` (its bytes-written
 			// out-param is a caller-supplied pointer passed in r9, not a stack scratch like `osWriteStdout`'s).
 			osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
 			osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
+
 			// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
 			osReadWallClock gives 0
+
 			// R4.1: CreateFileA takes SEVEN arguments — four in registers, three on the stack.
 			osFileOpenRead gives win64OutgoingArgBytes(CreateFileStackArgWords)
+
 			// ⚠ `CloseHandle` takes ONE argument, in rcx — register-only, like `osCancelIo` two arms up. It
 			// used to reserve `CreateFileStackArgWords` here, which was three dead frame words per file-using
 			// function and a comment claiming a shape the call does not have (R4.2).
 			osFileClose gives 0
+
 			// R4.2. `ReadFile` is `WriteFile`'s mirror (one stack word, `lpOverlapped`); `CreateFileA` for the
 			// write open is the read open's seven. The remaining five are ≤4-argument register-only calls:
 			// `GetFileSizeEx`/`FindFirstFileA` take two, `MoveFileExA` three, `DeleteFileA`/`FindClose` one.
@@ -1095,24 +1136,31 @@ type StdToX64Lowering
 				osDirCreate or
 				osDirCurrentPath or
 				osFileAttributes gives 0
+
 			// A rendered panic calls `mrt_panic` with one REGISTER argument, exactly as `osPanic` does.
 			osPanicValue gives 0
+
 			// `GetCommandLineA` takes NO arguments at all, so nothing lands on the stack.
 			osCommandLine gives 0
+
 			// W5: `GetStdHandle` takes one argument and `GetModuleFileNameA` three, so both are
 			// register-only under Win64's rcx/rdx/r8/r9 and neither lands anything on the stack.
 			osStdHandle gives 0
 			osExecutablePath gives 0
 			osFileOpenWriteExecutable gives win64OutgoingArgBytes(CreateFileStackArgWords)
+
 			// `GetEnvironmentStringsA` takes no arguments and `FreeEnvironmentStringsA` one, so neither
 			// lands anything on the stack — `osCommandLine`'s case exactly.
 			osEnvBlock or
 				osEnvBlockFree gives 0
+
 			// G3: an ordered load/store is one instruction with no argument marshalling at all.
 			loadAcquire or
 				storeRelease gives 0
+
 			// `GetFileType` takes ONE argument, so nothing overflows onto the stack — `osEnvBlockFree`'s case exactly.
 			osHandleFileType gives 0
+
 			// ⚠⚠ **`CreateFileMappingA` TAKES SIX, SO ITS LAST TWO ARE REAL OUTGOING STACK ARGUMENTS** and the
 			// frame must reserve both slots, exactly as `osMapNamedSegment` reserves its one — reserving nothing
 			// puts a SPILL SLOT at the same displacement and the store lands on a spilled value.
@@ -1121,6 +1169,7 @@ type StdToX64Lowering
 			osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint gives 0
+
 			// ⚠ **ONE RESERVATION FOR THIRTEEN SERVICES, SIZED BY THE WIDEST.** A six-argument member's last
 			// two words are real outgoing stack arguments; a narrower service simply leaves those two slots
 			// unread. Sizing this per service would need the `ProfileHostCall` selector here — which the op
@@ -1148,6 +1197,7 @@ type StdToX64Lowering
 		// original block's ops into it a second time.
 		let originalBlockCount = self.stdBlockCountOf(funcIdx)
 		self.orderedBlockIds = self.reserveFloatEqualityBlocks(funcIdx)
+
 		// The op walk returns the OUTGOING stack-argument bytes the function's x64 lowering needs (nonzero
 		// only for a `__print_string`, whose `WriteFile` lowering has two stack arguments). Applied to the
 		// TARGET function AFTER the walk, in a scope holding no `srcFunc` borrow of the same object.
@@ -1163,6 +1213,7 @@ type StdToX64Lowering
 		if bytes == 0 'none'
 			return
 		end 'none'
+
 		var func = self.targetModule.getFunc(funcIdx)
 		func.outgoingArgSize = bytes
 	end 'applyOutgoingArgSize'
@@ -1188,15 +1239,18 @@ type StdToX64Lowering
 	// `lowerFunction`.
 	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
+
 		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES the
 		// region, so it is the largest single call's need, not their sum). An import call past four arguments
 		// and a compiler call past six of one file both contribute. Accumulated from the op already in hand, so no
 		// extra pass, and returned for `lowerFunction` to record once the walk's borrow is released.
 		var outgoingArgBytes = 0 as StackSize
+
 		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
 		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did (Θ(params²)
 		// per function, for an answer that never changes within one).
 		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
+
 		for i in 0 upto originalBlockCount 'eachBlock'
 			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToX64: blockRefs.get OOB at {i} despite the captured bound")
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
@@ -1205,9 +1259,11 @@ type StdToX64Lowering
 			for opIdx in srcBlock.opRefs 'eachOp'
 				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToX64: opIdx from srcBlock.opRefs not in stdModule.ops")
 				let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
+
 				if opOutgoing > outgoingArgBytes 'largerArgRegion'
 					outgoingArgBytes = opOutgoing
 				end 'largerArgRegion'
+
 				// The Target ops this one call appends inherit the Std op's span. Set here rather than
 				// threaded, for the reason `DebugSpanColumn` gives: this file appends from hundreds of sites.
 				self.targetModule.spans.current = self.stdModule.spans.at(opIdx)
@@ -1247,6 +1303,7 @@ type StdToX64Lowering
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
 			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
+
 			// `binOpImm`'s `operandType` (X5) is a WIDTH, and every x64 integer op `lowerBinOpImm`
 			// selects is 64-bit whatever the Std type says — `lea`, the 3-operand `imul`, the word ALU
 			// forms, an imm8 shift count — because a narrow value arrives zero-extended in a full
@@ -1271,6 +1328,7 @@ type StdToX64Lowering
 			globalAddr(resultId, label) then self.lowerGlobalAddr(resultId, label: label, dstBlock: dstBlock)
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
+
 			// ⭐⭐⭐ **G3 — THE ORDERED PAIR LOWERS TO THE PLAIN PAIR'S INSTRUCTION, AND THAT IS THE ISA'S
 			// ANSWER RATHER THAN A GAP.** x86-64 is TOTAL STORE ORDER: stores are never reordered with other
 			// stores, loads are never reordered with other loads, and a load is never reordered ahead of an
@@ -1293,13 +1351,16 @@ type StdToX64Lowering
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstBlock: dstBlock)
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
+
 			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			osPanic(label) then self.lowerPanic(label, dstBlock: dstBlock)
+
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
 			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstBlock: dstBlock)
+
 			// P1.5 subprocess seed: the green-thread SUBPROCESS substrate's spawn/wait/exit-code/close.
 			osProcessSpawn(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: false, dstBlock: dstBlock)
 			osHandleSetInherit(handleId) then self.lowerOsHandleSetInherit(handleId, dstBlock: dstBlock)
@@ -1309,11 +1370,13 @@ type StdToX64Lowering
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
 			osHandleFileType(resultId, handleId) then self.lowerOsHandleFileType(resultId, handleId: handleId, dstBlock: dstBlock)
 			osCreateNamedSegment(resultId, namePtrId, sizeId) then self.lowerOsCreateNamedSegment(resultId, namePtrId: namePtrId, sizeId: sizeId, dstBlock: dstBlock)
+
 			// The LENGTH the op carries is `munmap`'s and is dead on the import route: `UnmapViewOfFile` derives
 			// the extent from the base alone (`StdOp.osUnmapNamedSegment`). Both operands travel here because
 			// the op serves both routes.
 			osUnmapNamedSegment(baseId, sizeId) then self.lowerOsUnmapNamedSegment(baseId, sizeId: sizeId, dstBlock: dstBlock)
 			osUnpublishNamedSegment(namePtrId) then self.lowerOsUnpublishNamedSegment(namePtrId, dstBlock: dstBlock)
+
 			// One instruction, no operand, no register: the counter's address is a link-time constant.
 			covPoint(pointId) then self.targetModule.appendOp(dstBlock, op: TargetOp.covInc(pointId))
 			osHostSample(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostSample(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
@@ -1326,6 +1389,7 @@ type StdToX64Lowering
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
+
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
 			osThreadCpuTicks(handleId, outPtrId) then self.lowerOsThreadCpuTicks(handleId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1333,15 +1397,19 @@ type StdToX64Lowering
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+
 			// P1.5-B1a′ relocating morestack: release a completed GT's (possibly grown) stack. F1a widened this to
 			// the full page-lifecycle trio, which is NOT x64-windows-gated: `osAllocPages` runs on every lane, so
 			// its free/decommit/recommit twins must too.
 			osFreePages(addrId, sizeId) then self.lowerOsFreePages(addrId, sizeId: sizeId, dstBlock: dstBlock)
+
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+
 			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
+
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import ops.
 			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
 			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)
@@ -1355,22 +1423,28 @@ type StdToX64Lowering
 			osProcessSpawnInherit(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: true, dstBlock: dstBlock)
 			osCancelIo(handleId, ovlId) then self.lowerOsCancelIo(handleId, ovlId: ovlId, dstBlock: dstBlock)
 			osGetPid(resultId) then self.lowerOsGetPid(resultId, dstBlock: dstBlock)
+
 			// P1.5 dogfood slice 1b: the streaming subprocess stdin pipe + synchronous write.
 			osPipeCreateOutbound(namePtrId, saPtrId, childReadPtrId, parentWritePtrId) then self.lowerOsPipeCreateOutbound(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+
 			// The `__Builtins` WALL clock: read the host's calendar into the caller's out-param word.
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstBlock: dstBlock)
 			osOpenNamedSegment(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsOpenNamedSegment(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
 			osMapNamedSegment(resultId, handleId, sizeId) then self.lowerOsMapNamedSegment(resultId, handleId: handleId, sizeId: sizeId, dstBlock: dstBlock)
 			osTickCountMs(resultId) then self.lowerOsTickCountMs(resultId, dstBlock: dstBlock)
+
 			// R4.1: open a file for reading; the raw handle lands in `resultId`.
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+
 			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstBlock: dstBlock)
+
 			// The rest of the file-IO primitives. Each routes on `x64OsCallKind` — one import call on Windows,
 			// one host chunk on Linux.
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+
 			// ⭐ **`openWriteExecutable` REACHES THE SAME LOWERING ON THIS LANE, AND NOW BY A DIFFERENT ROUTE.**
 			// It used to be the same OP; MAC4 split the two because POSIX has a permission mask and Win32 does
 			// not, so the two intents are now two ops that happen to be ONE `CreateFileA` call here. That
@@ -1382,6 +1456,7 @@ type StdToX64Lowering
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
+
 			// The four directory primitives, routed the same way, each capturing its answer out of RAX.
 			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerOsFileFindNext(resultId, handleId: handleId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
@@ -1391,26 +1466,33 @@ type StdToX64Lowering
 			osCommandLine(resultId) then self.lowerOsCommandLine(resultId, dstBlock: dstBlock)
 			osStdHandle(resultId, whichId) then self.lowerOsStdHandle(resultId, whichId: whichId, dstBlock: dstBlock)
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+
 			// W35: the same graph as the stdout write, one selector/descriptor over.
 			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstBlock: dstBlock)
+
 			// A promoted record's address: `lea dest, [rsp + slotDisp]`, the frame-slot mirror of `globalAddr`'s
 			// `lea [rip + disp]`. The slot's displacement is not known until the encoder (see `TargetOp.leaRegSlot`).
 			stackRecordAddr(resultId, slot) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
+
 			// F1a: the decommit twin of the page release above. Both routes are real on this backend —
 			// `VirtualFree(MEM_DECOMMIT)` and `madvise(MADV_DONTNEED)` — so neither is gated.
 			osDecommitPages(addrId, sizeId) then self.lowerOsDecommitPages(addrId, sizeId: sizeId, dstBlock: dstBlock)
+
 			// F1b: the byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
 			memFill(destId, byteCountId, value) then self.lowerMemFill(destId, byteCountId: byteCountId, value: value, dstBlock: dstBlock)
+
 			// F1c: the two halves of the reserve/commit split. Both routes are real on both OSes this backend
 			// serves, so neither is gated — see the two lowerings for what each OS is actually asked.
 			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstBlock: dstBlock)
+
 			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — a `lock` prefix is
 			// the ISA's, not the platform's — while the token IS, because only one of the two OSes here has a
 			// thread-pointer register a raw static binary may read (see `lowerCurrentThreadToken`).
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstBlock: dstBlock)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstBlock: dstBlock)
+
 			// G1: the multi-M substrate. Three route through `x64OsCallKind` like every other Win32 lowering here;
 			// the `gs:` slot read is an ISA fact with no OS call in it, so it takes no route — see each lowering.
 			tlsAlloc(resultId) then self.lowerTlsAlloc(resultId, dstBlock: dstBlock)
@@ -1431,10 +1513,12 @@ type StdToX64Lowering
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: true)
+
 			// `blockRef` is what `lowerCondBranch` looks its reserved `ordered` block up by — the
 			// float-equality split is decided per BLOCK, before the walk, not per op.
 			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock, blockRef: blockRef)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
+
 			// The dense-match jump table lowers to the x64 jump-table target op, registering its `.rdata`
 			// slot blob. Routed through a helper so the `denseTargetBlockIds` Array is not bound in this big
 			// match (the tail-slot-Array corruption `lowerIndirectCall` documents; here `defaultBlockId`
@@ -1523,13 +1607,16 @@ type StdToX64Lowering
 				osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			osCpuCount then panic("lowerStdToX64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 			osThreadCpuTicks then panic("lowerStdToX64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
+
 			// F1a: a decommit is a body op, exactly as the page release above is — a page-lifecycle op transfers
 			// control nowhere.
 			osDecommitPages then panic("lowerStdToX64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
 			memFill then panic("lowerStdToX64: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
+
 			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
 			osCommitPages or
 				osReservePages then panic("lowerStdToX64: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
+
 			// F2: all three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas or
@@ -1561,6 +1648,7 @@ type StdToX64Lowering
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			return
 		end 'float'
+
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: value as MachineWord))
 	end 'lowerConst'
 
@@ -1655,9 +1743,11 @@ type StdToX64Lowering
 		if not binOpcodeIsCommutative(opcode) 'orderIsTheAnswer'
 			return false
 		end 'orderIsTheAnswer'
+
 		if not integerBinOpIsTwoAddress(opcode) 'nothingToCoalesceWith'
 			return false
 		end 'nothingToCoalesceWith'
+
 		// Both halves are required, and in this order: a second reader on the left is what a copy needs
 		// to exist at all, and a right operand that PROVABLY dies here is the register the destination
 		// takes instead. Without the second test a swap could MOVE the copy rather than remove it — or,
@@ -1665,6 +1755,7 @@ type StdToX64Lowering
 		if not self.scaledIndexFolds.valueHasASecondReader(lhs) 'leftDiesHereToo'
 			return false
 		end 'leftDiesHereToo'
+
 		return self.scaledIndexFolds.valueDiesAtItsOnlyReader(rhs, readerId: resultId)
 	end 'commutesForCoalescing'
 
@@ -1695,6 +1786,7 @@ type StdToX64Lowering
 			div or
 				min or
 				max gives false
+
 			// EC18 — `imul r/m64` is a FIXED-REGISTER form, not a two-address one: it reads RAX and
 			// writes RDX:RAX, both implicitly, so its ONE explicit operand shares a register with
 			// nothing and no operand order can cost or save a copy. (It is genuinely commutative —
@@ -1737,20 +1829,24 @@ type StdToX64Lowering
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(leftId)
 		let rhsReg = TargetVReg.virtual(rightId)
+
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: lhsReg, index: rhsReg))
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+
 			// The word ALU ops are two-address exactly like `sub` — same reuse-def model, so
 			// the allocator (not ISel) supplies the seed copy, and only when `lhs` outlives.
 			bitAnd then self.targetModule.appendOp(dstBlock, op: TargetOp.andRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			bitOr then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			bitXor then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+
 			// One arm for all three shifts: they differ only in WHICH group-2 instruction they
 			// name, and `shiftInstructionOf` is the one place that is decided.
 			shl or
 				shr or
 				shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rightId, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+
 			// ⚠ INTEGER `binOp(div)` IS ILLEGAL, and the Std dialect's validator says so before this
 			// can fire: `binOp` is the PURE arithmetic band, and integer division is not pure —
 			// `idiv` faults on a zero divisor and on `i64.min / -1`, so it must not be reordered or
@@ -1760,6 +1856,7 @@ type StdToX64Lowering
 			div or
 				min or
 				max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Float division rides the pure arith band because `divsd` cannot fault, while integer division traps and is `StdOp.div`; `min`/`max` have no integer form at all and their operands are promoted by the parser. See StdBinOpcode.")
+
 			// EC18 — the high half of the 128-bit signed product. Three ops, not one, because x64's only
 			// form of it pins RAX and RDX; see `lowerMulHighSigned`.
 			mulHighSigned then self.lowerMulHighSigned(resultId, lhsReg: lhsReg, rhsReg: rhsReg, dstBlock: dstBlock)
@@ -1808,11 +1905,13 @@ type StdToX64Lowering
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
 		let rhsReg = TargetVReg.virtual(rhs)
+
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.mulsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			div then self.targetModule.appendOp(dstBlock, op: TargetOp.divsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+
 			// ⭐ `min`/`max` ARE ONE INSTRUCTION HERE AND TWO ON THE OTHER TWO TARGETS — the reverse of
 			// `abs`, which x64 alone has to synthesize. `minsd` computes `lhs < rhs ? lhs : rhs` and
 			// `maxsd` computes `lhs > rhs ? lhs : rhs`, each including the unordered and signed-zero
@@ -1822,6 +1921,7 @@ type StdToX64Lowering
 			// operand, decided by `floatMinMaxKindFor` for all three targets at once.
 			min or
 				max then self.targetModule.appendOp(dstBlock, op: TargetOp.minMaxSdRegReg(dest, lhs: lhsReg, rhs: rhsReg, kind: floatMinMaxKindFor(opcode)))
+
 			// The word ALU and the shifts have no float form, and it is the TYPE SYSTEM that keeps
 			// them out rather than this arm: `and`/`or`/`xor`/`shl`/`shr` are integer operators, and
 			// a float operand is rejected long before lowering. An f64 reaching here under one of
@@ -1832,6 +1932,7 @@ type StdToX64Lowering
 				shl or
 				shr or
 				shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise and shift operators are integer-only, and a float operand is rejected at the Maxon tier")
+
 			// EC18's high multiply is INTEGER-ONLY (`stdBinOpcodeIsFloatOnly` says so): there is no
 			// 128-bit float product to take the top half of. It is minted only by
 			// `StrengthReduceDivision`, over integer operands, so reaching here means an f64 was handed
@@ -1883,6 +1984,7 @@ type StdToX64Lowering
 
 	function lowerShiftCl(dest TargetVReg, lhsReg TargetVReg, countId ValueId, instr ShiftInstruction, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(countId)))
+
 		match instr 'i'
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegCl(dest, lhs: lhsReg))
 			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegCl(dest, lhs: lhsReg))
@@ -1896,6 +1998,7 @@ type StdToX64Lowering
 	// truncating a count.
 	function lowerShiftImm8(dest TargetVReg, base TargetVReg, imm Imm32, instr ShiftInstruction, dstBlock IrBlock)
 		let count = imm as ShiftCount
+
 		match instr 'i'
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(dest, lhs: base, imm: count))
 			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(dest, lhs: base, imm: count))
@@ -1925,10 +2028,12 @@ type StdToX64Lowering
 
 		let dest = TargetVReg.virtual(resultId)
 		let src = TargetVReg.virtual(operand)
+
 		match opcode 'op'
 			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest, src: src))
 			bitNot then self.targetModule.appendOp(dstBlock, op: TargetOp.notReg(dest, src: src))
 			logicalNot then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: src, imm: LogicalNotMask))
+
 			// The CONVERSION PAIR — two of the three ops in the dialect that read one register file
 			// and write the other (`bitcastF64ToI64` below is the third, and converts nothing).
 			// `operandType` is the SOURCE, and the OPCODE names the result:
@@ -1941,6 +2046,7 @@ type StdToX64Lowering
 			// mnemonics one letter apart, and a wrong answer between them.
 			siToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtsi2sdRegReg(dest, src: src))
 			fpToSi then self.targetModule.appendOp(dstBlock, op: TargetOp.cvttsd2siRegReg(dest, src: src))
+
 			// The MATH INTRINSICS. `sqrtsd` is its own instruction; the other three are ONE
 			// instruction — `roundsd` — differing only in the rounding they ask for, and WHICH rounding
 			// each asks for is not an x64 fact: `floatRoundModeFor` answers it once for both native
@@ -1949,20 +2055,24 @@ type StdToX64Lowering
 				ceil or
 				round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.targetModule.appendOp(dstBlock, op: TargetOp.sqrtsdRegReg(dest, src: src))
+
 			// `abs` is the ONE math intrinsic x64 has no instruction for — SSE2 offers no scalar float
 			// absolute value — so it lowers to a sign-bit CLEAR the encoder spells as a `psllq`/`psrlq`
 			// pair. `TargetOp.absF64RegReg` carries the whole argument, including why the compiler does not use
 			// an `andpd` against an `.rdata` mask.
 			abs then self.targetModule.appendOp(dstBlock, op: TargetOp.absF64RegReg(dest, src: src))
+
 			// The sign-bit FLIP, `abs`'s twin: SSE2 has no XMM negate either, so this too is a synthesized
 			// two-address op — `xorpd` against a mask the encoder builds in a scratch XMM.
 			// `TargetOp.negF64RegReg` carries the whole argument.
 			fneg then self.targetModule.appendOp(dstBlock, op: TargetOp.negF64RegReg(dest, src: src))
+
 			// The BIT REINTERPRETATION (`float.hash`). `movq r64, xmm` moves the SAME 64 bits across
 			// the file boundary — it is not a convert, so there is no rounding and no value change.
 			// `dest` is GPR-classed and `src` XMM-classed, each from its own value's Std type
 			// (`unaryResultClass`), so the operand model needs nothing special for it.
 			bitcastF64ToI64 then self.targetModule.appendOp(dstBlock, op: TargetOp.movqGprXmm(dest, src: src))
+
 			// Its INVERSE (`__Builtins.bitsToFloat`, the decimal reader's answer becoming a `float`).
 			// `movq xmm, r64` — the same 64 bits, back across the boundary. `dest` is XMM-classed and
 			// `src` GPR-classed, again each from its own value's Std type, so nothing here changes
@@ -1984,24 +2094,29 @@ type StdToX64Lowering
 
 		let dest = TargetVReg.virtual(resultId)
 		let base = TargetVReg.virtual(lhs)
+
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: imm))
+
 			// `a - imm` is `lea dest, [base - imm]`, a NEGATIVE displacement. `foldConstOperands`
 			// only emits a `sub` immediate for |imm| <= i32.max, so `-imm` always fits Imm32; the
 			// checked cast documents that the range-widened `-imm` cannot overflow here.
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: -imm as Imm32))
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(dest, src: base, imm: imm))
+
 			// The word ALU immediate forms are two-address (`and dest, imm` modifies dest in
 			// place), UNLIKE the `lea`/`imul` forms above whose destination is independent of
 			// their source. So they carry a reuse-def, and the allocator supplies the copy.
 			bitAnd then self.targetModule.appendOp(dstBlock, op: TargetOp.andRegImm32(dest, lhs: base, imm: imm))
 			bitOr then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegImm32(dest, lhs: base, imm: imm))
 			bitXor then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: base, imm: imm))
+
 			// A CONSTANT shift count needs no RCX at all — the whole reason `foldConstOperands`
 			// bothers to fold it.
 			shl or
 				shr or
 				shrLogical then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+
 			// PERMANENTLY unreachable, and it is the hardware that says so: no SSE instruction
 			// takes an immediate operand, so a float `binOp` has no immediate form to fold to
 			// and `foldConstOperands` refuses one. If this ever fires, that guard is gone and
@@ -2009,6 +2124,7 @@ type StdToX64Lowering
 			div or
 				min or
 				max then panic("lowerBinOpImm: `{opcode.name}` is FLOAT-ONLY and no SSE form takes an immediate — foldConstOperands must never produce this")
+
 			// EC18: x64's one-operand `imul` has NO immediate form, and the multiplier this opcode carries
 			// is a full 64-bit magic number an `Imm32` could not hold anyway.
 			// `constFitsBinOpImmediate` answers `false` for it, so this is unreachable by construction.
@@ -2100,11 +2216,13 @@ type StdToX64Lowering
 	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
 	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness, resultReg X64Register, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(lhs)))
+
 		if signedness == IntegerSignedness.signed 'signExtendIntoRdx'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
 		end 'signExtendIntoRdx' else 'zeroRdx'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: UnsignedDividendHighHalf))
 		end 'zeroRdx'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.divideReg(TargetVReg.virtual(rhs), signedness: signedness))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(resultReg)))
 	end 'lowerDivMod'
@@ -2142,6 +2260,7 @@ type StdToX64Lowering
 	//     from the DESTINATION's class, which the value-class column set from the f64 Std type.
 	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstBlock IrBlock)
 		let capacity = x64RegisterArgCapacity()
+
 		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
 			let stackSlot = abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity)
 			self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rbp), disp: win64IncomingArgDisp(stackSlot as MachineWord), width: X64AccessWidth.word64))
@@ -2287,10 +2406,12 @@ type StdToX64Lowering
 	// the two-phase order safe in the other direction too.
 	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstBlock IrBlock)
 		let capacity = x64RegisterArgCapacity()
+
 		for k in 0 upto args.count() 'eachStackArg'
 			if not abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'inRegister'
 				continue
 			end 'inRegister'
+
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
 			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity) as MachineWord), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
 		end 'eachStackArg'
@@ -2299,8 +2420,10 @@ type StdToX64Lowering
 			if abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'onStack'
 				continue
 			end 'onStack'
+
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
 			let slot = abiFileSlotIndex(argFloatMask, index: k)
+
 			if argMaskBit(argFloatMask, argIndex: k) 'floatArg'
 				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'floatArg' else 'intArg'
@@ -2443,6 +2566,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsAllocPagesWin64(sizeId, dstBlock: dstBlock)
 			syscall then self.lowerOsAllocPagesLinux(sizeId, dstBlock: dstBlock)
 		end 'route'
+
 		// RAX, not R8 — Win64's VirtualAlloc and the Linux mmap syscall both return in RAX, where Maxon's
 		// own ABI returns in R8. This capture is the whole reason `osAllocPages` is its own op.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
@@ -2556,6 +2680,7 @@ type StdToX64Lowering
 	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsReadClockWin64(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
+
 			// `clock_gettime(CLOCK_MONOTONIC)` answers a `timespec`, and the caller's TWO out-param pointers
 			// must survive a call that writes somewhere else — so it is a chunk rather than an inline pair.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostMonotonicClockName, args: twoArgs(ticksPtrId, second: freqPtrId))
@@ -2582,6 +2707,7 @@ type StdToX64Lowering
 	function lowerOsReadWallClock(ftPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.GetSystemTimeAsFileTime, arg0: ftPtrId, dstBlock: dstBlock)
+
 			// The calendar's POSIX spelling is `clock_gettime(CLOCK_REALTIME)`, whose `timespec` needs a frame to
 			// hold the caller's out-param across it — so it is a chunk rather than an inline sequence.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWallClockName, args: argsOf(ftPtrId))
@@ -2593,6 +2719,7 @@ type StdToX64Lowering
 	function lowerOsSleepMs(msId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSleepMsWin64(msId, dstBlock: dstBlock)
+
 			// `clock_nanosleep` takes a `struct timespec *`, and the millisecond→`timespec` split needs two
 			// frame words to form one — which a chunk has and an isel lowering does not.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostSleepMsName, args: argsOf(msId))
@@ -2624,6 +2751,7 @@ type StdToX64Lowering
 		// free — each reads its virtual and writes to the frame, clobbering no other operand's register.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessStartupInfoSlot), src: TargetVReg.virtual(startupPtrId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessProcInfoSlot), src: TargetVReg.virtual(procInfoPtrId), width: X64AccessWidth.word64))
+
 		// dwCreationFlags (arg 6) and lpCurrentDirectory (arg 8) are VALUE operands, so they go to their slots
 		// with every register still free, exactly as the two out-struct pointers above did. ⚠ Both used to be
 		// part of the zeroed run below; a NULL `lpCurrentDirectory` still means "inherit the parent's cwd" and a
@@ -2631,6 +2759,7 @@ type StdToX64Lowering
 		// gets exactly the bytes this lowering emitted before it was widened.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCreationFlagsSlot), src: TargetVReg.virtual(creationFlagsId), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCurrentDirSlot), src: TargetVReg.virtual(cwdPtrId), width: X64AccessWidth.word64))
+
 		// lpEnvironment (arg 7) joined those two at the `procs:` rung, and for their reason exactly: a NULL
 		// still means "inherit the parent's environment", so a builder with nothing to say passes 0 and gets
 		// exactly the bytes this lowering emitted before it was widened.
@@ -2640,23 +2769,28 @@ type StdToX64Lowering
 		// assembled out of THIS process's own entries is already in the narrow encoding CreateProcessA reads
 		// without it. Setting the flag would make it read those same bytes two at a time as UTF-16.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessEnvironmentSlot), src: TargetVReg.virtual(envPtrId), width: X64AccessWidth.word64))
+
 		// lpCommandLine (arg 2) -> rdx.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(cmdlinePtrId)))
+
 		// The one remaining FALSE middle stack arg (5): a zeroed scratch register (rax, clobbered by the call
 		// anyway) stored into its slot. An 8-byte zero store into a slot the callee reads as a 4-byte BOOL is
 		// correct — CreateProcessA reads only the low bytes and the high bytes are its own slot's padding.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+
 		// The three NULL register args: lpApplicationName=rcx (1), lpProcessAttributes=r8 (3), lpThreadAttributes=r9 (4).
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+
 		// osProcessSpawnInherit OVERWRITES the bInheritHandles stack slot (arg 5, zeroed above) with TRUE so the child
 		// inherits the pipe write end its STARTUPINFO names as hStdOutput; osProcessSpawn leaves the 0. rax is free here.
 		if inheritHandles 'inherit'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: InheritHandlesTrue))
 			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		end 'inherit'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessA)))
 	end 'lowerOsProcessSpawnWin64'
 
@@ -2692,6 +2826,7 @@ type StdToX64Lowering
 	function lowerOsPipePeek(resultId ValueId, handleId ValueId, availPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPipePeekWin64(resultId, handleId: handleId, availPtrId: availPtrId, dstBlock: dstBlock)
+
 			// `ppoll` on one descriptor with a zeroed `timespec`. `PosixPipeReadyBytes` carries why the count
 			// it publishes is a pipe-buffer's worth rather than the true one, and why EOF arrives through the
 			// READ instead.
@@ -2799,6 +2934,7 @@ type StdToX64Lowering
 	function lowerOsProcessTerminate(handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.TerminateProcess, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
+
 			// `kill(pid, SIGKILL)` plus the one thing POSIX cannot carry across a signal: the CODE the caller
 			// named, which the chunk records so the reap reports it instead of `128 + SIGKILL`.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostProcTerminateName, args: twoArgs(handleId, second: exitCodeId))
@@ -2822,6 +2958,7 @@ type StdToX64Lowering
 	function lowerOsWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWaitHandlesWin64(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+
 			// POSIX has no multi-object wait, so the chunk POLLS the handle array — and there is no `bWaitAll`
 			// to marshal, because the netpoll only ever asks for ANY.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWaitAnyName, args: threeArgs(handleArrayPtrId, second: countId, third: timeoutMsId))
@@ -2840,6 +2977,7 @@ type StdToX64Lowering
 	function lowerOsCloseHandle(handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
+
 			// POSIX has no one type in common for the four things Win32 calls a handle, so the chunk dispatches
 			// on the kind the value carries (`PosixHandleKindShift`).
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWaitCloseName, args: argsOf(handleId))
@@ -2935,6 +3073,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsReservePagesWin64(sizeId, dstBlock: dstBlock)
 			syscall then self.lowerOsReservePagesLinux(sizeId, dstBlock: dstBlock)
 		end 'route'
+
 		// RAX, for `lowerOsAllocPages`'s reason: both `VirtualAlloc` and the `mmap` syscall answer there, where
 		// Maxon's own ABI would answer in R8.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
@@ -2978,6 +3117,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsCommitPagesWin64(addrId, sizeId: sizeId, dstBlock: dstBlock)
 			syscall then self.lowerOsCommitPagesLinux(addrId, sizeId: sizeId, dstBlock: dstBlock)
 		end 'route'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
 	end 'lowerOsCommitPages'
 
@@ -3087,6 +3227,7 @@ type StdToX64Lowering
 		let insn = match opcode 'op'
 			add gives x64AtomicAdd(resultId, addrId: addrId, operandId: operandId, priorValueIsRead: priorValueIsRead)
 		end 'op'
+
 		self.targetModule.appendOp(dstBlock, op: insn)
 	end 'lowerAtomicRmw'
 
@@ -3117,6 +3258,7 @@ type StdToX64Lowering
 	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWaitHandleWin64(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+
 			// The one wait that dispatches on the object's KIND — a futex sleep for an event, a join for a
 			// worker M, a reap loop for a child.
 			syscall then self.lowerLinuxHostChunkValue(resultId, args: twoArgs(handleId, second: timeoutMsId), chunk: HostWaitOneName, dstBlock: dstBlock)
@@ -3188,10 +3330,12 @@ type StdToX64Lowering
 	// exactly as `lowerCall`'s own argument moves are.
 	function emitLinuxHostChunkCall(dstBlock IrBlock, chunk ByteArray, args ValueIdArray)
 		var index = 0 as ParamCount
+
 		for arg in args 'eachArg'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(hostChunkArgRegisterAt(index)), srcReg: TargetVReg.virtual(arg)))
 			index = index + 1
 		end 'eachArg'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(chunk))
 	end 'emitLinuxHostChunkCall'
 
@@ -3256,6 +3400,7 @@ type StdToX64Lowering
 	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
+
 			// ⚠ **THE NAME, THE `SECURITY_ATTRIBUTES` AND THE COMPLETION PORT ARE ALL DROPPED.** Windows needs a
 			// uniquely NAMED pipe to get overlapped reads and a port for the packet to land on; a POSIX pipe is
 			// anonymous, inheritance is the spawn's business, and a read here completes in its caller.
@@ -3276,6 +3421,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateNamedPipeW)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(readPtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+
 		// 2) CreateFileW(name, GenericWrite, FileShareNone, saPtr, OpenExisting, FileAttributeNormal, NULL) → write end.
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
@@ -3286,17 +3432,20 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(saPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(writePtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+
 		// 3) SetHandleInformation(readEnd, HandleFlagInherit, HandleFlagClear) — strip inheritance from the parent read end.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagClear))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetHandleInformation)))
+
 		// 4) CreateIoCompletionPort(readEnd, iocp, key=0, threads=0) — register the read end with the process IOCP.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(iocpId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpNoConcurrentThreads))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
+
 		// 5) SetFileCompletionNotificationModes(readEnd, FileSkipCompletionPortOnSuccess) — a SYNC read posts no packet.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileSkipCompletionPortOnSuccess))
@@ -3774,6 +3923,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call2(IatSlot.GetFileSizeEx, arg0: handleId, arg1: sizeOutPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileSizeName, args: twoArgs(handleId, second: sizeOutPtrId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileSize'
 
@@ -3784,6 +3934,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call1(IatSlot.DeleteFileA, arg0: pathPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileDeleteName, args: argsOf(pathPtrId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileDelete'
 
@@ -3812,6 +3963,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call2(IatSlot.FindFirstFileA, arg0: pathPtrId, arg1: findDataPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirFindFirstName, args: twoArgs(pathPtrId, second: findDataPtrId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindFirst'
 
@@ -3832,6 +3984,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call2(IatSlot.FindNextFileA, arg0: handleId, arg1: findDataPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirFindNextName, args: twoArgs(handleId, second: findDataPtrId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindNext'
 
@@ -3863,6 +4016,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call2(IatSlot.GetCurrentDirectoryA, arg0: bufLenId, arg1: bufPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirCurrentPathName, args: twoArgs(bufPtrId, second: bufLenId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsDirCurrentPath'
 
@@ -3874,6 +4028,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileAttributesName, args: argsOf(pathPtrId))
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileAttributes'
 
@@ -3915,6 +4070,7 @@ type StdToX64Lowering
 			importCall then self.lowerOsWin64Call1(IatSlot.GetStdHandle, arg0: whichId, dstBlock: dstBlock)
 			syscall then self.emitLinuxStdHandle(whichId, dstBlock: dstBlock)
 		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsStdHandle'
 
@@ -3934,6 +4090,7 @@ type StdToX64Lowering
 	function lowerOsOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsOpenNamedSegmentWin64(namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
+
 			// The chunk reads the variable into the caller's buffer with `mrt_host_env_read` — a static image
 			// has no `getenv` — and opens the `/dev/shm` path built from what it read.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxShmOpenName, args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId))
@@ -3998,6 +4155,7 @@ type StdToX64Lowering
 	function lowerOsCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCreateNamedSegmentWin64(namePtrId, sizeId: sizeId, dstBlock: dstBlock)
+
 			// POSIX takes two calls where Win32 takes one: the open only NAMES, so the chunk sizes what it
 			// opened with `ftruncate` and undoes the name if that fails.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: LinuxShmCreateName, args: twoArgs(namePtrId, second: sizeId))
@@ -4057,6 +4215,7 @@ type StdToX64Lowering
 	function lowerOsTickCountMs(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetTickCount64)))
+
 			// The chunk asks `mrt_host_monotonic_clock` rather than reading a clock of its own, so a subprocess
 			// deadline and a scheduler deadline cannot drift apart by being measured off two different clocks.
 			syscall then self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(HostTickMsName))
@@ -4117,6 +4276,7 @@ type StdToX64Lowering
 	function lowerOsEventCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsEventCreateWin64(resultId, dstBlock: dstBlock)
+
 			// `mrt_host_wait_new(kind: event)` — an auto-reset event is one futex word on this lane, and the
 			// chunk is what mints the object and tags its handle.
 			syscall then self.lowerOsEventCreateLinux(resultId, dstBlock: dstBlock)
@@ -4172,6 +4332,7 @@ type StdToX64Lowering
 	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.TlsSetValue, arg0: indexId, arg1: valueId, dstBlock: dstBlock)
+
 			// ⚠ A CHUNK rather than an inline `mov fs:[key*8], value`, because the store owes an assertion the
 			// Win32 import does not: it needs a slot BLOCK, and a thread that has none would write into the
 			// null page (`buildX64LinuxTlsSetChunk`).
@@ -4209,6 +4370,7 @@ type StdToX64Lowering
 	function lowerOsReadOverlapped(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsReadOverlappedWin64(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
+
 			// ⚠ **THE `OVERLAPPED` OPERAND IS DROPPED, AND THAT IS THE SHAPE DIFFERENCE RATHER THAN AN
 			// OMISSION.** It exists so a completion packet has somewhere to land; a read on this lane completes
 			// in its caller (`IoCompletionShape.inlineCompletion`), so the same body serves it as serves
@@ -4248,6 +4410,7 @@ type StdToX64Lowering
 	function lowerOsCancelIo(handleId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.CancelIoEx, arg0: handleId, arg1: ovlId, dstBlock: dstBlock)
+
 			// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable: nothing on
 			// this lane sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm cannot fire.
 			// A compile-time panic here would refuse every program that merely CONTAINS the arm.
@@ -4260,6 +4423,7 @@ type StdToX64Lowering
 	function lowerOsGetPid(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsGetPidWin64(resultId, dstBlock: dstBlock)
+
 			// ⚠ **NO WIDENING, UNLIKE THE arm64 TWIN.** `getpid` answers a 32-bit `pid_t` and the Linux syscall
 			// sign-extends it into a full `long`, while writing EAX zeroes the upper half architecturally — so
 			// `process-id.fits-in-a-dword` holds here for free where that lane has to buy it.
@@ -4283,6 +4447,7 @@ type StdToX64Lowering
 	function lowerOsPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsPipeCreateOutboundWin64(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
+
 			// ⚠ **THE NAME AND THE `SECURITY_ATTRIBUTES` ARE DROPPED.** The first uniquifies a Windows NAMED
 			// pipe so two overlapped reads cannot collide; the second makes the ends inheritable. A POSIX pipe
 			// is anonymous and inheritance is the spawn's business, so the same `pipe2` serves both directions.
@@ -4302,6 +4467,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateNamedPipeW)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(parentWritePtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+
 		// 2) CreateFileW(name, GenericRead, FileShareNone, saPtr, OpenExisting, FileAttributeNormal, NULL) → inheritable child READ end.
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
@@ -4312,6 +4478,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(saPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(childReadPtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+
 		// 3) SetHandleInformation(parentWriteEnd, HandleFlagInherit, HandleFlagClear) — strip inheritance from the parent write end.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(parentWritePtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
@@ -4352,6 +4519,7 @@ type StdToX64Lowering
 	// occupies no register.
 	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(lhs), imm: imm))
+
 		// ⚠ THE OP'S OWN TYPE, NOT A RESTATED `StdType.i64` (X5 review). This read `operandType:
 		// StdType.i64` under a comment beginning "`cmpImm` carries no `operandType`" — true when it was
 		// written and made FALSE by X5, which gave the op the field and updated the SIBLING reader
@@ -4382,6 +4550,7 @@ type StdToX64Lowering
 			self.lowerFloatCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
 			return
 		end 'float'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(TargetVReg.virtual(lhs), rhsReg: TargetVReg.virtual(rhs)))
 		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
 	end 'lowerCmp'
@@ -4410,10 +4579,12 @@ type StdToX64Lowering
 		if not self.compareFusion.valueIsReadFromRegister(resultId) 'flagsOnly'
 			return
 		end 'flagsOnly'
+
 		if stdTypeIsFloat(operandType) and predicateIsEquality(pred) 'floatEquality'
 			self.materializeFloatEquality(resultId, pred: pred, dstBlock: dstBlock)
 			return
 		end 'floatEquality'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType), isUnsigned: stdTypeIsUnsigned(operandType))))
 	end 'materializeCompareIfRead'
 
@@ -4564,11 +4735,13 @@ type StdToX64Lowering
 	// Drop every branch edge of `block` except the one to `keepTarget` — see the caller.
 	function keepOnlyBranchEdgeIn(block IrBlock, keepTarget BlockId)
 		var kept = BranchEdgeArray.create()
+
 		for edge in block.branchEdges 'each'
 			if edge.targetBlockId == keepTarget 'keep'
 				kept.push(edge)
 			end 'keep'
 		end 'each'
+
 		block.branchEdges = kept
 	end 'keepOnlyBranchEdgeIn'
 
@@ -4579,6 +4752,7 @@ type StdToX64Lowering
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
+
 		return condCodeForPred(self.compareFusion.fusedPredicateOf(blockRef), isFloat: self.compareFusion.fusedCompareIsFloat(condId), isUnsigned: self.compareFusion.fusedCompareIsUnsigned(condId))
 	end 'branchConditionCode'
 
@@ -4636,9 +4810,11 @@ type StdToX64Lowering
 		let toSplit = self.blocksNeedingFloatEqualitySplit(funcIdx)
 
 		var reserved = OrderedBlockIdMap.create()
+
 		for blockRef in toSplit 'eachSplit'
 			reserved.upsert(blockRef, value: self.buildOrderedBlock(funcIdx, blockRef: blockRef))
 		end 'eachSplit'
+
 		return reserved
 	end 'reserveFloatEqualityBlocks'
 
@@ -4657,11 +4833,13 @@ type StdToX64Lowering
 	function blocksNeedingFloatEqualitySplit(funcIdx FuncIndex) returns BlockRefArray
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		var toSplit = BlockRefArray.create()
+
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			if self.settleFloatEqualityBranch(blockRef) 'needsSplit'
 				toSplit.push(blockRef)
 			end 'needsSplit'
 		end 'eachBlock'
+
 		return toSplit
 	end 'blocksNeedingFloatEqualitySplit'
 
@@ -4672,9 +4850,11 @@ type StdToX64Lowering
 	// instead of a note about pass ordering.
 	function settleFloatEqualityBranch(blockRef BlockRef) returns bool
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("settleFloatEqualityBranch: blockRef {blockRef} not in stdModule.blocks")
+
 		if not block.hasTerminatorOp() 'noTerm'
 			return false
 		end 'noTerm'
+
 		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("settleFloatEqualityBranch: terminatorIndex not in stdModule.ops")
 		return match term 'term'
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(blockRef, condId: condId)
@@ -4697,6 +4877,7 @@ type StdToX64Lowering
 				osAllocPages or
 				osWriteStdout or
 				rdataAddr gives false
+
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
 			tryCall or
@@ -4713,11 +4894,14 @@ type StdToX64Lowering
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages gives false
+
 			// The jump table is not a float-equality condBranch.
 			switch gives false
+
 			// A witness call is a body op, never a float-equality condBranch — nor is its throwing form.
 			witnessCall gives false
 			witnessTryCall gives false
+
 			// P1.5 dogfood slice 1a: an IOCP op is never a terminator, let alone a float-equality condBranch.
 			osPipeCreate or
 				osIocpCreate or
@@ -4733,8 +4917,10 @@ type StdToX64Lowering
 				osGetPid or
 				osPipeCreateOutbound or
 				osWriteFile gives false
+
 			// The wall-clock read is never a terminator, let alone a float-equality condBranch.
 			osReadWallClock gives false
+
 			// R4.1 + R4.2: no file op is ever a terminator, let alone a float-equality condBranch.
 			osFileOpenRead or
 				osFileClose or
@@ -4749,15 +4935,20 @@ type StdToX64Lowering
 				osDirCreate or
 				osDirCurrentPath or
 				osFileAttributes gives false
+
 			// A panic is never a terminator, so it is never the float-equality condBranch this asks about.
 			osPanicValue gives false
+
 			// A command-line read is never a terminator either.
 			osCommandLine gives false
+
 			// W5: nor is a standard-handle read or an executable-path fill.
 			osStdHandle gives false
 			osExecutablePath gives false
+
 			// W35: nor is a stream write.
 			osWriteStderr gives false
+
 			// Nor is a frame address.
 			stackRecordAddr gives false
 			osOpenNamedSegment or
@@ -4777,17 +4968,22 @@ type StdToX64Lowering
 				osSocketClose or
 				osCpuCount or
 				osThreadCpuTicks gives false
+
 			// F1a: a decommit is never a terminator, let alone a float-equality condBranch.
 			osDecommitPages gives false
+
 			// F1b: nor is a byte fill.
 			memFill gives false
+
 			// F1c: nor is a page reserve or commit.
 			osCommitPages or
 				osReservePages gives false
+
 			// F2: nor is an atomic or a thread-token read.
 			atomicCas or
 				atomicRmw or
 				currentThreadToken gives false
+
 			// G1: nor is a TLS op or an event signal.
 			tlsAlloc or
 				tlsSetValue or
@@ -4831,6 +5027,7 @@ type StdToX64Lowering
 		if not self.isFusedFloatEquality(blockRef, condId: condId) 'notFloatEquality'
 			return false
 		end 'notFloatEquality'
+
 		if not self.compareFusion.valueIsReadFromRegister(condId) 'flagsOnly'
 			return true
 		end 'flagsOnly'
@@ -4849,6 +5046,7 @@ type StdToX64Lowering
 		if not self.compareFusion.blockFusesCompare(blockRef) 'notFused'
 			return false
 		end 'notFused'
+
 		return self.compareFusion.fusedCompareIsFloat(condId) and predicateIsEquality(self.compareFusion.fusedPredicateOf(blockRef))
 	end 'isFusedFloatEquality'
 
@@ -4913,9 +5111,11 @@ type StdToX64Lowering
 	function cloneBranchEdgesOf(blockRef BlockRef) returns BranchEdgeArray
 		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
 		var copied = BranchEdgeArray.create()
+
 		for edge in block.branchEdges 'each'
 			copied.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))
 		end 'each'
+
 		return copied
 	end 'cloneBranchEdgesOf'
 
@@ -4954,6 +5154,7 @@ type StdToX64Lowering
 				osAllocPages or
 				osWriteStdout or
 				rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
 			tryCall or
@@ -5143,6 +5344,7 @@ type StdToX64Lowering
 		if stdReturnTypeIsVoid(returnType) 'void'
 			panic("lowerStdToX64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
+
 		self.emitReturnValueMove(retValId, dstBlock: dstBlock, returnType: returnType)
 	end 'emitPrimaryReturnMove'
 end 'StdToX64Lowering'

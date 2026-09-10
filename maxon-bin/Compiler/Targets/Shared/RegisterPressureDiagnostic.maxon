@@ -111,6 +111,7 @@ typealias CandidateOrder = Array with CandidateIndex
 // thing the `maxoncstderr` block compares).
 export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	let message = buildRegisterPressureMessage(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+
 	// Whole-program-anchored (line 0), so `Diagnostic.render` emits `error E5001:` once and
 	// the multi-line body — which embeds each source location itself — flows through verbatim.
 	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.registerPressure, message: message))
@@ -138,6 +139,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// CONFINED and trips this panic instead of reporting the error the user must act on.
 	let available = regMaskPopcount(peak.witness)
 	let classPoolSize = classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)
+
 	if available != classPoolSize 'confinedPeak'
 		panic("buildRegisterPressureMessage: E5001 reached with a CONFINED peak (witness {peak.witness}, {available} of the {classPoolSize} {peak.witnessClass.name} registers) — such a point fits the machine and is relieved by a forced store/reload bracket, so `noVictimAtPeak` must have panicked before this. Reporting it as user register pressure would be the false positive this design treats as its worst possible bug.")
 	end 'confinedPeak'
@@ -178,6 +180,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// been — the committed `maxoncstderr` goldens on four targets pin it, and three of those targets cannot
 	// be executed on any one host, so it is left untouched rather than re-derived.
 	var msg = StringBuilder.create()
+
 	if peakInLoop 'inLoop'
 		msg.append("the loop at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
 		msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
@@ -217,11 +220,13 @@ end 'minCount'
 // a count and the noun describing it cannot come apart.
 function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String, regionNoun String) returns String
 	var out = StringBuilder.create()
+
 	for idx in order 'each'
 		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
 		let plural = "" if c.readsInRegion == 1 else "s"
 		out.append("    {filePath}:{c.line}:{c.column}   read {c.readsInRegion} time{plural} in {regionNoun}\n")
 	end 'each'
+
 	return out.build()
 end 'candidateList'
 
@@ -237,6 +242,7 @@ end 'candidateList'
 // rather than in each route.
 function pressureAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
 	var scanned = 0 as LineNumber
+
 	if peakInLoop 'loop'
 		scanned = regionAnchorLine(module, project: project, funcIndex: funcIndex, regionOps: regionOps)
 	end 'loop' else 'straightLine'
@@ -258,6 +264,7 @@ end 'pressureAnchorLine'
 function earliestCandidateLine(candidates PressureCandidateArray) returns LineNumber
 	var best = 0 as LineNumber
 	var found = false
+
 	for c in candidates 'each'
 		if (not found) or c.line < best 'smaller'
 			best = c.line
@@ -289,17 +296,21 @@ function regionAnchorLine(module TargetModule, project Project, funcIndex FuncIn
 	var best = 0 as LineNumber
 	var found = false
 	var buf = OperandList.create()
+
 	for opIdx in regionOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("regionAnchorLine: op {opIdx} not in module.ops")
 		let line = firstOriginLineOfOp(project, funcIndex: funcIndex, op: op, buf: buf)
+
 		if line == 0 'noOrigin'
 			continue
 		end 'noOrigin'
+
 		if (not found) or line < best 'smaller'
 			best = line
 			found = true
 		end 'smaller'
 	end 'eachOp'
+
 	return best
 end 'regionAnchorLine'
 
@@ -324,14 +335,18 @@ end 'regionAnchorLine'
 function collectRegionOps(module TargetModule, cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns OpIndexArray
 	let region = regionBlocks(cfg, peak: peak, peakInLoop: peakInLoop)
 	var ops = OpIndexArray.create()
+
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let inRegion = try region.get(i) otherwise panic("collectRegionOps: region.get OOB at block {i}")
+
 		if not inRegion 'outside'
 			continue
 		end 'outside'
+
 		let block = blockAt(module, topo: cfg.topo, local: i)
 		collectBlockOps(block, out: ops)
 	end 'eachBlock'
+
 	return ops
 end 'collectRegionOps'
 
@@ -353,6 +368,7 @@ end 'regionBlocks'
 // `pressureAnchorLine` turns a 0 from the peak op itself into the earliest blocking value's line.
 function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, buf OperandList) returns LineNumber
 	targetOpOperands(op, buf: buf)
+
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
 			match project.valueOrigins.lookup(funcIndex, valueId: operandValueId(o)) 'origin'
@@ -361,6 +377,7 @@ function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, 
 			end 'origin'
 		end 'def'
 	end 'eachOperand'
+
 	return 0
 end 'firstOriginLineOfOp'
 
@@ -382,6 +399,7 @@ function collectCandidates(project Project, module TargetModule, func IrFunction
 		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
 			continue
 		end 'notLive'
+
 		let range = defRangeOf(project, module: module, func: func, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
 		let readCount = readsInRegion(module, regionOps: regionOps, valueId: v)
 		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, readsInRegion: readCount))
@@ -397,20 +415,25 @@ end 'collectCandidates'
 // register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
 function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
 	var order = CandidateOrder.create()
+
 	for i in 0 upto candidates.count() 'seed'
 		order.push(i)
 	end 'seed'
 
 	let n = order.count()
+
 	for i in 1 upto n 'each'
 		let keyIndex = try order.get(i) otherwise panic("sortedOrder: order.get OOB at {i}")
 		var j = i
+
 		while j > 0 and candidateAtGreater(candidates, aIndex: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB"), bIndex: keyIndex) 'shift'
 			try order.set(j, value: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB")) otherwise panic("sortedOrder: order.set OOB")
 			j = j - 1
 		end 'shift'
+
 		try order.set(j, value: keyIndex) otherwise panic("sortedOrder: order.set OOB")
 	end 'each'
+
 	return order
 end 'sortedOrder'
 
@@ -419,9 +442,11 @@ end 'sortedOrder'
 function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
+
 	if a.readsInRegion != b.readsInRegion 'byReads'
 		return a.readsInRegion > b.readsInRegion
 	end 'byReads'
+
 	return a.valueId > b.valueId
 end 'candidateAtGreater'
 
@@ -445,15 +470,18 @@ end 'candidateAtGreater'
 function readsInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionReadCount
 	var count = 0 as RegionReadCount
 	var buf = OperandList.create()
+
 	for opIdx in regionOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("readsInRegion: op {opIdx} not in module.ops")
 		targetOpOperands(op, buf: buf)
+
 		for o in buf 'eachOperand'
 			if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
 				count = count + 1
 			end 'use'
 		end 'eachOperand'
 	end 'eachOp'
+
 	return count
 end 'readsInRegion'
 
@@ -468,11 +496,14 @@ end 'readsInRegion'
 union ValueSource
 	// A function parameter — its declaration span (from `ParamOriginTable`).
 	param(range SourceRange)
+
 	// A splitter-minted value (a reload / a rematerialized constant) — the ORIGINAL value it
 	// derives from, chased recursively (its source may itself be derived, or a phi/param/op).
 	derived(sourceId ValueId)
+
 	// A value defined by a Maxon op — that op's index (into `project.opRanges`).
 	opDefined(opIndex OpIndex)
+
 	// No direct source: a phi/block-arg, chased to the incoming values its edges pass it.
 	phi
 end 'ValueSource'
@@ -487,10 +518,12 @@ function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, li
 		found(range) then return ValueSource.param(range)
 		none then break 'param'
 	end 'param'
+
 	match lineage.sourceOf(valueId) 'derived'
 		source(sourceId) then return ValueSource.derived(sourceId)
 		none then break 'derived'
 	end 'derived'
+
 	match project.valueOrigins.lookup(funcIndex, valueId: valueId) 'origin'
 		found(opIndex) then return ValueSource.opDefined(opIndex)
 		none then return ValueSource.phi
@@ -530,6 +563,7 @@ function collectReachableRanges(project Project, module TargetModule, topo FuncT
 	if bitsetTest(visited, base: 0, bit: valueId as BitIndex) 'seen'
 		return
 	end 'seen'
+
 	bitsetAdd(visited, base: 0, bit: valueId as BitIndex)
 
 	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
@@ -555,14 +589,18 @@ end 'chasePhiIncomings'
 // targets that block. Empty when `phiValueId` is not a block-arg of any block.
 function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId ValueId) returns ValueIdArray
 	var result = ValueIdArray.create()
+
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
 		let pos = blockArgPosition(block, valueId: phiValueId)
+
 		if pos == block.blockArgs.count() 'notHere'
 			continue
 		end 'notHere'
+
 		gatherIncomingAtPosition(module, topo: topo, targetBlock: block, position: pos, out: result)
 	end 'eachBlock'
+
 	return result
 end 'phiIncomingValues'
 
@@ -571,10 +609,12 @@ end 'phiIncomingValues'
 function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
 	for k in 0 upto block.blockArgs.count() 'each'
 		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
+
 		if arg.valueId == valueId 'match'
 			return k
 		end 'match'
 	end 'each'
+
 	return block.blockArgs.count()
 end 'blockArgPosition'
 
@@ -585,10 +625,12 @@ end 'blockArgPosition'
 function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlock IrBlock, position PhiIndex, out ValueIdArray)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
+
 		for edge in block.branchEdges 'eachEdge'
 			if edge.targetBlockId != targetBlock.id 'notThisEdge'
 				continue
 			end 'notThisEdge'
+
 			let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.registerPressureDiagnostic)
 			out.push(view.incomingAt(position))
 		end 'eachEdge'
@@ -602,12 +644,15 @@ end 'gatherIncomingAtPosition'
 // arises for the distinct declarations of a real overflow, but the order must still be total).
 function earliestRange(ranges SourceRangeArray) returns SourceRange
 	var best = try ranges.get(0) otherwise panic("earliestRange: ranges is empty")
+
 	for idx in 1 upto ranges.count() 'each'
 		let range = try ranges.get(idx) otherwise panic("earliestRange: ranges.get OOB")
+
 		if rangeEarlier(range, best: best) 'earlier'
 			best = range
 		end 'earlier'
 	end 'each'
+
 	return best
 end 'earliestRange'
 
@@ -616,11 +661,14 @@ function rangeEarlier(range SourceRange, best SourceRange) returns bool
 	if range.line != best.line 'byLine'
 		return range.line < best.line
 	end 'byLine'
+
 	if range.column != best.column 'byColumn'
 		return range.column < best.column
 	end 'byColumn'
+
 	if range.startByte != best.startByte 'byStart'
 		return range.startByte < best.startByte
 	end 'byStart'
+
 	return range.endByte < best.endByte
 end 'rangeEarlier'

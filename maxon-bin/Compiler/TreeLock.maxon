@@ -218,6 +218,7 @@ end 'touchTreeLock'
 // distinguishes them, and it is the reason the record carries one at all.
 export function releaseTreeLock()
 	let held = try ownedLocks.get(0) otherwise return
+
 	// CLONED out of the array, because `removeOwnRecord` empties the array the borrow would otherwise
 	// pin (E3070) — the same reason the spec pool clones a job out of its in-flight slot.
 	let owned = held.clone()
@@ -279,6 +280,7 @@ end 'claimOverExisting'
 function takeLock(lockPath FilePath) returns ExitCode
 	let sinceUnix = WallClock.nowUnixSeconds()
 	let pid = __Builtins.currentProcessId()
+
 	// Unique across every process that could contend: a pid cannot be shared by two live processes,
 	// and the two clocks separate a REUSED pid from the one that held this lock before it.
 	let token = "{pid}-{sinceUnix}-{Clock.nowNanos()}"
@@ -354,12 +356,15 @@ end 'appendField'
 // record whose fields can be forged by an argument is not a record.
 function joinArgs() returns String
 	var out = StringBuilder.create()
+
 	for (iter, arg) in CommandLine.args().withIterator() 'each'
 		if iter.index() > 0 'separator'
 			out.append(" ")
 		end 'separator'
+
 		out.append(arg.replace(RecordLineSeparator, with: " "))
 	end 'each'
+
 	return out.build()
 end 'joinArgs'
 
@@ -380,11 +385,13 @@ end 'recordCarriesToken'
 // `CommandLine.optionValue` carries the scar from making exactly that mistake.
 function fieldValue(text String, key String) returns String
 	let prefix = "{key}{FieldSeparator}"
+
 	for line in text.split(RecordLineSeparator) 'eachLine'
 		if line.startsWith(prefix) 'found'
 			return line.replaceFirst(prefix, with: "")
 		end 'found'
 	end 'eachLine'
+
 	return ""
 end 'fieldValue'
 
@@ -392,9 +399,11 @@ end 'fieldValue'
 // wall clock is forced here and what it does when it steps backwards.
 function secondsSince(stamp UnixSeconds) returns LockSeconds
 	let now = WallClock.nowUnixSeconds()
+
 	if now <= stamp 'clockWentBackwards'
 		return 0
 	end 'clockWentBackwards'
+
 	return now - stamp
 end 'secondsSince'
 
@@ -416,11 +425,14 @@ end 'reportBusy'
 // message.
 function indentedRecord(record String) returns String
 	var out = StringBuilder.create()
+
 	for line in record.split(RecordLineSeparator) 'eachLine'
 		if line.isEmpty() 'blank'
 			continue
 		end 'blank'
+
 		out.append("    {line}{RecordLineSeparator}")
 	end 'eachLine'
+
 	return out.build().trimEnd()
 end 'indentedRecord'

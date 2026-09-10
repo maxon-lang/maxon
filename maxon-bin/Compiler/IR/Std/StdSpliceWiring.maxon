@@ -29,6 +29,7 @@
 // "just in case" would be generality no call site can reach and no test can redden.
 module function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
 	var predBlock = pred
+
 	if predBlock.branchEdges.count() != 0 'alreadyWired'
 		panic("attachEdge: block '{String.from(predBlock.label)}' already carries {predBlock.branchEdges.count()} outgoing edge(s) — every predecessor a splice wires is one it minted in the same breath")
 	end 'alreadyWired'
@@ -50,14 +51,17 @@ end 'attachEdge'
 // leave a float-returning leaf's result in an XMM.
 module function attachBlockArgs(block IrBlock, valueIds ValueIdArray, argType StdType)
 	var target = block
+
 	if target.blockArgs.count() != 0 'alreadyHasArgs'
 		panic("attachBlockArgs: block '{String.from(target.label)}' already carries {target.blockArgs.count()} block arg(s) — a continuation a splice minted has none")
 	end 'alreadyHasArgs'
 
 	var blockArgs = IrBlockArgArray.create()
+
 	for valueId in valueIds 'each'
 		blockArgs.push(IrBlockArg.create(valueId, argType: argType))
 	end 'each'
+
 	target.blockArgs = blockArgs
 end 'attachBlockArgs'
 

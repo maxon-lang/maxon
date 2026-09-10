@@ -47,6 +47,7 @@ let LineFeedByte = 10 as Utf8Byte
 /// Find the end of the grapheme cluster that starts at `startPos`.
 public function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 	let len = s.byteLength()
+
 	if startPos >= len 'atEnd'
 		return startPos
 	end 'atEnd'
@@ -58,26 +59,31 @@ public function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 	let firstByte = try s.byteAt(startPos) otherwise 'firstByteErr'
 		panic("grapheme: firstByte OOB — caller guarantees startPos < len")
 	end 'firstByteErr'
+
 	if firstByte < AsciiLimit 'isAscii'
 		if firstByte == CarriageReturnByte 'isCR'
 			if startPos + 1 < len 'hasNext'
 				let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr'
 					panic("grapheme: nextByte OOB — startPos+1 < len checked above")
 				end 'nextByteErr'
+
 				if nextByte == LineFeedByte 'isCRLF'
 					return startPos + 2
 				end 'isCRLF'
 			end 'hasNext'
 		end 'isCR'
+
 		// Check if a non-ASCII byte follows that could be a combining mark
 		if startPos + 1 < len 'hasNextByte'
 			let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr2'
 				panic("grapheme: nextByte OOB — startPos+1 < len checked above")
 			end 'nextByteErr2'
+
 			if nextByte >= AsciiLimit 'nextIsMultibyte'
 				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
 				let nextCp = utf8DecodeAt(s, pos: startPos + 1)
 				let nextGbp = graphemeBreakProperty(nextCp)
+
 				// GB9: don't break before Extend(4) or ZWJ(5); GB9a: don't break before SpacingMark(8)
 				if nextGbp != 4 and nextGbp != 5 and nextGbp != 8 'notCombining'
 					return startPos + 1
@@ -130,13 +136,17 @@ end 'findGraphemeEnd'
 // Walks backward skipping UTF-8 continuation bytes (10xxxxxx).
 function findPrevCodepointStart(s String, pos BytePos) returns BytePos
 	var p = pos - 1
+
 	while p > 0 'back'
 		let b = try s.byteAt(p) otherwise panic("findPrevCodepointStart: byteAt OOB — caller guarantees pos within the string")
+
 		if not utf8IsContinuation(b) 'notContinuation'
 			break
 		end 'notContinuation'
+
 		p = p - 1
 	end 'back'
+
 	return p
 end 'findPrevCodepointStart'
 
@@ -160,10 +170,12 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 		if gbp == 2 and pos > 0 'check_crlf'
 			var prevPos = findPrevCodepointStart(s, pos: pos)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
+
 			if prevCp == 13 'is_crlf'
 				return prevPos
 			end 'is_crlf'
 		end 'check_crlf'
+
 		return pos
 	end 'control_stop'
 
@@ -216,6 +228,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			// Found ZWJ, now check if Extended_Pictographic precedes it
 			let epPos = findPrevCodepointStart(s, pos: prevPos)
 			let epCp = utf8DecodeAt(s, pos: epPos)
+
 			if isExtendedPictographic(epCp) 'found_emoji_base'
 				// This is an emoji ZWJ sequence - recurse to find the full start
 				return findGraphemeStart(s, beforePos: pos)
@@ -228,6 +241,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 		var prevPos = findPrevCodepointStart(s, pos: pos)
 		var prevCp = utf8DecodeAt(s, pos: prevPos)
 		var prevGbp = graphemeBreakProperty(prevCp)
+
 		if prevGbp == 7 'is_prepend'
 			pos = prevPos
 		end 'is_prepend'
@@ -240,6 +254,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			var prevPos = findPrevCodepointStart(s, pos: pos)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
 			var prevGbp = graphemeBreakProperty(prevCp)
+
 			if prevGbp == 11 'more_t'
 				pos = prevPos
 			end 'more_t' else 'not_t'
@@ -252,6 +267,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 						pos = prevPos
 						gbp = prevGbp
 					end 'v_before_t'
+
 					break
 				end 'not_hangul_before_t'
 			end 'not_t'
@@ -264,6 +280,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			var prevPos = findPrevCodepointStart(s, pos: pos)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
 			var prevGbp = graphemeBreakProperty(prevCp)
+
 			if prevGbp == 10 and gbp == 10 'more_v'
 				pos = prevPos
 			end 'more_v' else 'not_v'
@@ -271,6 +288,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 					pos = prevPos
 					break
 				end 'l_before_v'
+
 				break
 			end 'not_v'
 		end 'hangul_v_back'
@@ -282,6 +300,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			var prevPos = findPrevCodepointStart(s, pos: pos)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
 			var prevGbp = graphemeBreakProperty(prevCp)
+
 			if prevGbp == 9 'l_before_lvt'
 				pos = prevPos
 			end 'l_before_lvt'
@@ -294,6 +313,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			var prevPos = findPrevCodepointStart(s, pos: pos)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
 			var prevGbp = graphemeBreakProperty(prevCp)
+
 			if prevGbp == 9 'more_l'
 				pos = prevPos
 			end 'more_l' else 'not_l'
@@ -308,10 +328,12 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 	if gbp == 6 'ri_check'
 		var riStart = pos
 		var riCount = 1
+
 		while riStart > 0 'ri_back'
 			var prevPos = findPrevCodepointStart(s, pos: riStart)
 			var prevCp = utf8DecodeAt(s, pos: prevPos)
 			var prevGbp = graphemeBreakProperty(prevCp)
+
 			if prevGbp == 6 'more_ri'
 				riStart = prevPos
 				riCount = riCount + 1
@@ -319,6 +341,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 				break
 			end 'not_ri'
 		end 'ri_back'
+
 		// RIs pair from the start. If total count is even, pos is the start of the last pair.
 		// If odd, the first RI is unpaired, then pairs follow.
 		// We need the start of the pair that contains 'pos'.
@@ -333,6 +356,7 @@ public function findGraphemeStart(s String, beforePos BytePos) returns BytePos
 			// pos is the second RI in its pair. Step back one RI for the pair start.
 			pos = findPrevCodepointStart(s, pos: pos)
 		end 'even_count'
+
 		// else: pos is already at the start of its pair (or unpaired)
 	end 'ri_check'
 
@@ -368,6 +392,7 @@ end 'findGraphemeStart'
 /// only caller was this function, passing the whole string.
 public function countGraphemes(s String) returns GraphemeIndex
 	let len = s.byteLength()
+
 	// One byte per cluster, so the byte length IS the cluster count — the cast is the change of purpose.
 	if s.hasSingleByteGraphemes() 'oneByteEach'
 		return len
@@ -375,10 +400,12 @@ public function countGraphemes(s String) returns GraphemeIndex
 
 	var graphemeCount = 0
 	var pos = 0
+
 	while pos < len 'countLoop'
 		pos = findGraphemeEnd(s, startPos: pos)
 		graphemeCount = graphemeCount + 1
 	end 'countLoop'
+
 	return graphemeCount
 end 'countGraphemes'
 
@@ -386,6 +413,7 @@ end 'countGraphemes'
 /// Returns the number of grapheme clusters before the byte position
 public function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns GraphemeIndex
 	let len = s.byteLength()
+
 	// The byte offset IS the grapheme index. The walk below stops at the end of the string when
 	// `byteIdx` runs past it, so this must too. `byteIdx` needs no guard of the kind
 	// `graphemeOffsetToBytePos`'s `count` does: it is never caller-supplied, arriving only from
@@ -399,10 +427,12 @@ public function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns Grap
 
 	var graphemeIdx = 0
 	var pos = 0
+
 	while pos < byteIdx and pos < len 'count'
 		pos = findGraphemeEnd(s, startPos: pos)
 		graphemeIdx = graphemeIdx + 1
 	end 'count'
+
 	return graphemeIdx
 end 'byteIndexToGraphemeIndex'
 
@@ -410,6 +440,7 @@ end 'byteIndexToGraphemeIndex'
 /// Returns the byte position after advancing by `count` graphemes
 public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeIndex) returns BytePos
 	let len = s.byteLength()
+
 	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic.
 	// The comparisons need a non-negative `count`, and `GraphemeIndex`'s checked door supplies it
 	// before the body runs.
@@ -418,18 +449,22 @@ public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count Gr
 	// and the sum is only formed when it is already known to land below `len`.
 	if s.hasSingleByteGraphemes() and startBytePos < len 'oneByteEach'
 		let countBytes = count as BytePos
+
 		if countBytes < len - startBytePos 'inRange'
 			return startBytePos + countBytes
 		end 'inRange'
+
 		return len
 	end 'oneByteEach'
 
 	var pos = startBytePos
 	var i = 0
+
 	while i < count and pos < len 'advance'
 		pos = findGraphemeEnd(s, startPos: pos)
 		i = i + 1
 	end 'advance'
+
 	return pos
 end 'graphemeOffsetToBytePos'
 
@@ -471,6 +506,7 @@ public function graphemeBreakProperty(cp Codepoint) returns BreakProperty
 	// Hangul syllables U+AC00..U+D7A3
 	if cp >= 44032 and cp <= 55203 'hangul'
 		let sindex = cp - 44032
+
 		if sindex mod 28 == 0 'lv'
 			return 12  // LV
 		end 'lv' else 'lvt'
@@ -613,7 +649,6 @@ end 'graphemeStateRiIsOdd'
 //
 // Returns true if there should be a break BEFORE the current codepoint
 function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Codepoint, state GraphemeStateBits) returns bool
-
 	// GB3: Do not break between CR and LF (CR × LF)
 	// prevGbp == 1 (CR) and currGbp == 2 (LF)
 	if prevGbp == 1 and currGbp == 2 'gb3'
@@ -706,6 +741,7 @@ end 'isGraphemeBreak'
 function graphemeStateUpdate(state GraphemeStateBits, gbp BreakProperty, cp Codepoint) returns GraphemeStateBits
 	// Track Regional Indicator sequences (gbp == 6)
 	var riCount = 0 as RegionalIndicatorCount
+
 	if gbp == 6 'ri_update'
 		// The shift UNPACKS a count out of the bitfield, so the pattern becomes a quantity here — a
 		// zero-filling shift on an unsigned-topped operand, so the result cannot be negative.
@@ -714,6 +750,7 @@ function graphemeStateUpdate(state GraphemeStateBits, gbp BreakProperty, cp Code
 
 	// Track emoji sequences for GB11
 	var inEmojiSeq = false
+
 	if isExtendedPictographic(cp) 'emoji_base'
 		inEmojiSeq = true
 	end 'emoji_base' else 'not_emoji_base'

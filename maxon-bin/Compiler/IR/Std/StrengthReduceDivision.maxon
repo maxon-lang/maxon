@@ -135,9 +135,11 @@ end 'targetLowersMulHighSigned'
 enum DivisionReductionKind
 	// Keep the `div`/`mod` exactly as it is — see the four refusals in this file's header.
 	notReducible
+
 	// `|K|` is `2^shift`: an arithmetic shift with a bias that makes it truncate toward zero (signed),
 	// or a plain logical shift / mask (unsigned).
 	powerOfTwo
+
 	// The general signed case: multiply by `magic`, take the high half, shift, add the sign bit.
 	magicMultiply
 end 'DivisionReductionKind'
@@ -149,8 +151,10 @@ end 'DivisionReductionKind'
 // shift, so no field here can be read as a sentinel.
 type DivisionReduction
 	export var kind as DivisionReductionKind
+
 	// `|K|`, always in `2 .. i64.max` when `kind` is not `notReducible`.
 	export var divisorMagnitude as ParsedInt
+
 	// Whether the emitted QUOTIENT must be negated. True exactly for a `/` by a NEGATIVE constant: the
 	// sequences below compute `x / |K|`, and truncating division is odd, so `x / K` is `-(x / |K|)`.
 	// A `mod` never negates — a truncating remainder takes the DIVIDEND's sign and its magnitude is
@@ -159,15 +163,19 @@ type DivisionReduction
 	// ⚠ The negation cannot overflow, which is what makes this identity exact rather than nearly so:
 	// `|K| >= 2`, so `|x / |K||` is at most `2^62` and its negative is representable.
 	export var negateQuotient as bool
+
 	// `powerOfTwo`: `log2(|K|)`. `magicMultiply`: the right shift the magic's fixed-point scale needs,
 	// which may be 0 (in which case no shift op is emitted at all).
 	export var shift as ShiftCount
+
 	// `magicMultiply` only: the multiplier, read as a SIGNED 64-bit number.
 	export var magic as ParsedInt
+
 	// `magicMultiply` only: whether the magic's true (unsigned) value was at least `2^63`, i.e. whether
 	// the signed `magic` above came out negative. The sequence then adds the dividend back — see
 	// `emitMagicQuotient`.
 	export var magicIsNegative as bool
+
 	// Whether the division reads its operands as UNSIGNED. Only the power-of-two shapes are reduced
 	// unsigned (see the header's fourth refusal), and they need no sign correction at all.
 	export var isUnsigned as bool
@@ -284,6 +292,7 @@ function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
 	var r2 = seedRemainder
 
 	var p = SignBitIndex
+
 	for _ in 0 upto MaxMagicRefinements 'refine'
 		p = p + 1
 
@@ -310,11 +319,13 @@ function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
 		end 'noCarryOutOfR2'
 
 		let delta = divisor - r2
+
 		// ⚠ Hacker's Delight writes this as a do-WHILE, so the published expression is the CONTINUE
 		// condition and the loop stops when it stops holding. Transcribing it as an EXIT condition is
 		// the one transcription error this routine can make and the one a reader should check for:
 		// with the sense inverted, `x / 3` derives no magic at all and the refinement runs away.
 		let keepRefining = q1 < delta or (q1 == delta and r1 == 0)
+
 		if not keepRefining 'converged'
 			out.found = true
 			out.multiplier = q2 + 1
@@ -341,6 +352,7 @@ function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder Parse
 	let modulus = m as ParsedInt
 	let q0 = (i64.max / m) as ParsedInt
 	let r0 = i64.max - q0 * modulus
+
 	if r0 + 1 == modulus 'theIncrementCompletesOneMoreDivisor'
 		quotient = q0 + 1
 		remainder = 0
@@ -366,10 +378,12 @@ export function log2OfPowerOfTwo(v ParsedInt) returns ParsedInt
 
 	var shift = 0 as ParsedInt
 	var rest = v
+
 	while rest > 1 'shiftDown'
 		rest = rest shr 1
 		shift = shift + 1
 	end 'shiftDown'
+
 	return shift
 end 'log2OfPowerOfTwo'
 
@@ -405,6 +419,7 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 	end 'unsignedDivisorAboveTheSignedRange'
 
 	let magnitude = divisor if divisor > 0 else -divisor
+
 	// A `mod` never negates: a truncating remainder's magnitude is `|x| mod |K|` and its sign is the
 	// DIVIDEND's, so the divisor's sign cannot reach the answer.
 	//
@@ -414,6 +429,7 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 	let negate = divisor < 0 and not isRemainder
 
 	let log2 = log2OfPowerOfTwo(magnitude)
+
 	if log2 != NotAPowerOfTwo 'shiftSequence'
 		out.recordPowerOfTwo(magnitude, log2Magnitude: log2 as ShiftCount, negate: negate, unsigned: unsigned)
 		return
@@ -427,6 +443,7 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 	end 'noUnsignedMagic'
 
 	deriveSignedMagic(magnitude, out: magic)
+
 	if not magic.found 'outsideTheDerivableRange'
 		return
 	end 'outsideTheDerivableRange'
@@ -456,6 +473,7 @@ export function strengthReduceDivision(project Project, module StdModule, firstF
 	end 'targetCannotSpellTheMultiply'
 
 	logDebug(LogCategory.ir, message: function() gives "strengthReduceDivision: function {firstFuncIndex} onward of {module.funcCount()}")
+
 	// ONE record of each kind for the whole module, refilled per site and never re-created — the
 	// allocation discipline `StdArithOperands` and `StdFoldableDef` both state.
 	var reduction = DivisionReduction.create()
@@ -484,6 +502,7 @@ function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction Divi
 	end 'noDivision'
 
 	let opIndices = module.liveOpIndices(func)
+
 	// ⚠ A `ConstValueMap` does not partition by DOMAIN (an integer `const`'s payload is a number and a
 	// float's is an IEEE bit pattern), and this pass needs no partition: `StdOp.div`/`mod` are INTEGER
 	// division — float division is `binOp(div)`, which never reaches this pass — so a divisor read out
@@ -491,6 +510,7 @@ function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction Divi
 	let constMap = collectConstValues(module, opIndices: opIndices, def: def)
 
 	var mint = ValueMinter.create(nextFreeValueId(module, func: func) as ParamCount)
+
 	// The divisor `const`s of every site this pass rewrote. A rewritten division reads its divisor
 	// NOWHERE — the magic and the multiply-back are fresh constants — so such a `const` is left with
 	// one fewer reader, and is dead when it had no other. Same narrow rule `foldConstOperands` owns
@@ -503,9 +523,11 @@ function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction Divi
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("reduceDivisionsInFunc: blockRef from func.blockRefs not in module.blocks")
 		var rebuilt = OpIndexArray.create()
+
 		for opIdx in block.opRefs 'eachRef'
 			appendReducedOp(module, opIdx: opIdx, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detachedDivisors)
 		end 'eachRef'
+
 		block.opRefs = rebuilt
 	end 'eachBlock'
 
@@ -521,13 +543,16 @@ end 'reduceDivisionsInFunc'
 function funcHoldsADivision(module StdModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("funcHoldsADivision: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachRef'
 			let op = try module.ops.get(opIdx) otherwise panic("funcHoldsADivision: opIdx {opIdx} from block.opRefs not in module.ops")
+
 			if opIsIntegerDivision(op) 'found'
 				return true
 			end 'found'
 		end 'eachRef'
 	end 'eachBlock'
+
 	return false
 end 'funcHoldsADivision'
 
@@ -778,6 +803,7 @@ function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, di
 	end 'divisorIsNotAConstant'
 
 	classifyDivision(constMap.constantOf(divisorId), signedness: signedness, isRemainder: isRemainder, magic: magic, out: reduction)
+
 	if not reduction.isReducible() 'keepTheDivide'
 		rebuilt.push(opIdx)
 		return
@@ -975,6 +1001,7 @@ function retireDetachedDivisors(module StdModule, func IrFunction, detached Valu
 	collectFunctionValueUses(module, func: func, referenced: stillRead)
 
 	var doomed = StdValueUseSet.create()
+
 	for valueId in detached 'eachDetached'
 		if not stillRead.contains(valueId) 'unread'
 			doomed.insert(valueId)

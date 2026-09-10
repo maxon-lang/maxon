@@ -75,6 +75,7 @@ export let SymtabEntryShift = 3
 // number in the reader's view that duplicates the writer and cannot be derived from it.
 export function assertSymtabStride()
 	let stride = 1 shl SymtabEntryShift
+
 	if stride != SymbolTableEntryBytes 'strideDrift'
 		panic("assertSymtabStride: a walker strides {stride} bytes per symbol-table entry (shift {SymtabEntryShift}) but `buildSymbolTableBytes` writes {SymbolTableEntryBytes} — the emitter and the walker disagree about the format, and every backtrace would name the wrong function")
 	end 'strideDrift'
@@ -217,10 +218,12 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArra
 	writeDword(table, value: symbols.count())
 
 	var prevOffset = 0 as CodeOffset
+
 	for (iter, sym) in symbols.withIterator() 'entries'
 		if iter.index() > 0 and sym.codeOffset <= prevOffset 'notAscending'
 			panic("buildSymbolTableBytes: '{String.from(sym.name)}' is at .text offset {sym.codeOffset}, which does not exceed its predecessor's {prevOffset} — the symbol table must ascend, because the runtime's lookup takes the LAST matching entry and would otherwise symbolize a frame to the wrong function")
 		end 'notAscending'
+
 		prevOffset = sym.codeOffset
 
 		let entryStart = table.count()

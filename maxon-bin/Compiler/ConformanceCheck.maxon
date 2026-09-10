@@ -69,6 +69,7 @@ export function checkConformance(project Project, module MaxonModule, signatures
 	let functionsByName = try FunctionNameIndex.create(module.functions, project: project) otherwise 'duplicateFunctionName'
 		return
 	end 'duplicateFunctionName'
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -123,6 +124,7 @@ end 'checkGrantedEnumConformance'
 function checkOneGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures, enumName ByteArray)
 	for protocolName in intrinsicConformanceProtocolNames(enumName, discovered: DiscoveredConformer.payloadFreeEnum) 'eachProtocol'
 		let iface = requireBuiltinInterface(protocolName)
+
 		for method in iface.methods 'eachRequirement'
 			if not signatures.enumDeclaresOwnConformanceMethod(enumName, methodName: method.name) 'theCompilerServesIt'
 				continue
@@ -231,6 +233,7 @@ let grantedEnumTypeParamNames = ByteArrayArray.create()
 // against both, and no body is compiled for a slot no call reaches.
 function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, signatures ProgramSignatures)
 	let dispatched = dispatchedRequirementSlots(module, signatures: signatures)
+
 	for (_, iface) in signatures.interfaceMap() 'eachInterface'
 		// An interface with no `uses` names has neither refusal to answer for and no holding to check, so it
 		// pays neither the slot walk below nor a position loop that would iterate zero times anyway.
@@ -239,6 +242,7 @@ function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, si
 		end 'noAssociatedTypes'
 
 		let written = dispatchedAssociatedNamesOf(project.interfaces, dispatched: dispatched, iface: iface)
+
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 			let name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
 			checkOneAssociatedPosition(project, signatures: signatures, written: written, iface: iface, name: name, position: position)
@@ -316,14 +320,17 @@ let sharedEmptyDispatchedAssociatedNames = DispatchedAssociatedNames.create(Asso
 // returns an empty map, and every interface then reads the shared empty answer above.
 function dispatchedRequirementSlots(module MaxonModule, signatures ProgramSignatures) returns DispatchedSlotMap
 	var slots = DispatchedSlotMap.create()
+
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("dispatchedRequirementSlots: blockRef {blockRef} not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				noteDispatchedSlot(try module.ops.get(opIdx) otherwise panic("dispatchedRequirementSlots: opIdx {opIdx} not in module.ops"), slots: slots, signatures: signatures, func: func)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
 	return slots
 end 'dispatchedRequirementSlots'
 
@@ -360,9 +367,11 @@ function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures Prog
 		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		panicAbortValue then break 'op'
+
 		// The error-flag encode dispatches nothing — it is arithmetic on a value already in hand, so it fills no
 		// interface slot.
 		errorFlagEncode then break 'op'
+
 		// No service op dispatches through a witness: a `spawn` calls a static factory by name, a send names
 		// its message by name — both resolved at the parse — and a reply cell calls nothing.
 		serviceSpawn or
@@ -397,11 +406,13 @@ end 'noteOneDispatchedSlot'
 // is why they stay refused.
 function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray, interfaceName ByteArray) returns TypeParamPosition
 	let receiver = witnessDispatchReceiver(args)
+
 	if let instance = try func.valueExistentialInstances.get(receiver) 'declaredAtAnInstantiatedExistential'
 		return signatures.genericInstanceArgCount(instance)
 	end 'declaredAtAnInstantiatedExistential'
 
 	let tag = try func.valueTags.get(receiver) otherwise return 0
+
 	if tag != ValueTypeTag.typeParameter 'notAConstrainedParameter'
 		return 0
 	end 'notAConstrainedParameter'
@@ -477,12 +488,14 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 	var inAnAbiPosition = AssociatedTypeNameSet.create()
 	var inAResult = AssociatedTypeNameSet.create()
 	let requirements = interfaceWitnessSlots(interfaces, iface: iface)
+
 	for methodIndex in 0 upto requirements.count() 'eachRequirement'
 		let claimed = try slots.get(methodIndex) otherwise 'noCallJumpsThroughThisSlot'
 			continue
 		end 'noCallJumpsThroughThisSlot'
 
 		let method = (try requirements.get(methodIndex) otherwise panic("dispatchedAssociatedNamesOf: requirements.get OOB at {methodIndex} below count {requirements.count()} — the loop bounds it by that same list")).method
+
 		if unclaimedAssociatedPosition(iface, name: method.returnTypeName, claimed: claimed) 'anUnclaimedAssociatedResult'
 			inAResult.insert(method.returnTypeName)
 			inAnAbiPosition.insert(method.returnTypeName)
@@ -494,6 +507,7 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 			end 'anUnclaimedAssociatedFormal'
 		end 'eachFormal'
 	end 'eachRequirement'
+
 	return DispatchedAssociatedNames.create(inAnAbiPosition, inAResult: inAResult)
 end 'dispatchedAssociatedNamesOf'
 
@@ -538,6 +552,7 @@ end 'unclaimedAssociatedPosition'
 // `associatedAbiBindingOf` folds, and it runs only for a position some use site actually holds.
 function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, heldAt ByteArray)
 	let declared = declaredConformanceIndex(project)
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -583,6 +598,7 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
 	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
 	let boundConformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+
 	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, discovered: signatures.discoveredConformerOf(boundConformer)) 'widensIntoTheHolding'
 		return
 	end 'widensIntoTheHolding'
@@ -651,6 +667,7 @@ end 'checkAssociatedReturnIsUnmanagedMachineWord'
 // "unmanaged", and the program leaked (exit 101). `declaredNameIsManaged` answers for that rendering now.
 function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray) returns bool
 	let tag = builtinTypeNameTag(binding)
+
 	if tag != ValueTypeTag.named 'aBuiltinTypeName'
 		return tag == ValueTypeTag.integer
 	end 'aBuiltinTypeName'
@@ -687,6 +704,7 @@ export function requirementTakesType(interfaces IrInterfaceMap, iface IrInterfac
 			end 'inAnArgument'
 		end 'eachFormal'
 	end 'eachRequirement'
+
 	return false
 end 'requirementTakesType'
 
@@ -711,6 +729,7 @@ export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 // one question and a second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	let aliasSites = signatures.instantiationSites()
+
 	// ⭐ **A THIRD PROVENANCE: a literal written at FILE SCOPE.** `var m = [b"if": Info.create(…)]` interns a
 	// `Map with (K, V)` from its first pair exactly as a body's literal does, but the constant evaluator is a
 	// throwaway `Parser` whose artifact is never committed — so its sites are recorded on the index instead
@@ -718,6 +737,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	// type implementing NEITHER of `Map`'s constraints was admitted in silence, which is the identical hole
 	// `project.inferredInstantiationSites` was added to close one position over.
 	let constSites = signatures.constInferredInstantiationSites()
+
 	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 and constSites.count() == 0 'noSites'
 		return
 	end 'noSites'
@@ -731,6 +751,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	end 'malformedProject'
 
 	let declared = declaredConformanceIndex(project)
+
 	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
 	// is reported against the declaration the author wrote before the one the compiler inferred.
 	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites)
@@ -775,16 +796,19 @@ export function checkLiteralInitConformance(project Project)
 	end 'malformedProject'
 
 	let declared = declaredConformanceIndex(project)
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.literalInitSites.count() 'eachSite'
 		let site = try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")
+
 		if not typeDeclaresInterface(declared, interfaces: project.interfaces, typeName: site.typeName, interfaceName: site.interfaceName) 'doesNotConform'
 			// The POSITION is read off the borrow and copied into scalars, so the only thing crossing the
 			// mutating call is a fresh inline element read — see the loop header's note.
 			let nameLine = site.nameLine
 			let nameColumn = site.nameColumn
+
 			// The conformance the site requires, taken off the borrow into an OWNED String for the reason the
 			// two positions above are: what crosses the mutating call must not be a read of `project`.
 			let interfaceName = String.from(site.interfaceName)
@@ -797,6 +821,7 @@ end 'checkLiteralInitConformance'
 // (the whole non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
+
 	// ⭐⭐ **AN `interface` BASE IS AN EXISTENTIAL, NOT A CONTAINER, AND ITS ARGUMENTS ARE A DIFFERENT
 	// OBLIGATION.** `Seq with Integer` binds an associated type; `Box with Integer` fills a type parameter with
 	// a `where` clause to satisfy. Both are `Base with Args` and both are recorded as the same instantiation
@@ -819,6 +844,7 @@ end 'checkOneInstantiation'
 // actual 5000 answered 5000 through one and RANGE-PANICKED through the other.
 function checkInterfaceInstantiationBindings(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface)
 	let bound = signatures.genericInstanceArgCount(site.gid)
+
 	for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 		// An instantiation that binds FEWER arguments than the interface declares is `checkGenericInstance`'s
 		// arity report; it claims nothing at this position and is passed over rather than read out of bounds.
@@ -894,6 +920,7 @@ function requireWrittenBindingMatchesConformers(project Project, signatures Prog
 	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the
 	// compiled name against a source string would report a difference in RENDERING as a difference in type.
 	let written = signatures.instanceArgDisplayName(site.gid, position: position as TypeParamPosition)
+
 	if written.equals(binding) 'restatesTheSettledBinding'
 		return
 	end 'restatesTheSettledBinding'
@@ -906,8 +933,10 @@ end 'requireWrittenBindingMatchesConformers'
 // (the whole non-generic-witness corpus) iterates zero times.
 function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray)
 	let constraints = signatures.structWhereConstraints(baseName)
+
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkStructInstantiationConstraints: whereConstraints.get OOB at {i}")
+
 		if instantiationMeetsConstraint(signatures, interfaces: project.interfaces, declared: declared, gid: site.gid, constraint: constraint) 'satisfied'
 			checkConstraintAssociatedBindings(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 			continue
@@ -954,6 +983,7 @@ function checkConstraintAssociatedBindings(project Project, signatures ProgramSi
 	for position in 0 upto constraint.associatedBindings.count() 'eachBoundPosition'
 		let claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindings.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindings.get OOB at {position} below count {constraint.associatedBindings.count()}"))
 		let supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
+
 		if claimed.equals(supplied) 'theArgumentKeepsTheClaim'
 			continue
 		end 'theArgumentKeepsTheClaim'
@@ -991,6 +1021,7 @@ end 'substitutedConstraintBinding'
 // difference in RENDERING as a difference in type, exactly as `requireWrittenBindingMatchesConformers` records.
 function substitutedBindingIn(signatures ProgramSignatures, gid GenericInstanceId, paramNames ByteArrayArray, binding ByteArray) returns ByteArray throws MapError
 	let position = try namePositionIn(paramNames, name: binding)
+
 	if position >= signatures.genericInstanceArgCount(gid) 'boundOutsideThisInstantiation'
 		throw MapError.keyNotFound
 	end 'boundOutsideThisInstantiation'
@@ -1012,11 +1043,13 @@ function suppliedConstraintBinding(signatures ProgramSignatures, conformances Co
 	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 	let binding = try conformerAssociatedBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
 	let conformerParams = signatures.structTypeParamsOf(conformer)
+
 	if conformerParams.isEmpty() 'aNonGenericConformerBindsAConcreteType'
 		return binding
 	end 'aNonGenericConformerBindsAConcreteType'
 
 	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+
 	if maxonTypeTag(typeArg) != ValueTypeTag.genericInstance 'noInstantiationToSubstituteThrough'
 		throw MapError.keyNotFound
 	end 'noInstantiationToSubstituteThrough'
@@ -1057,6 +1090,7 @@ end 'suppliedConstraintBinding'
 // `opaqueParamDischarge` for why acceptance and slot index are one answer and not two.
 export function instantiationMeetsConstraint(signatures ProgramSignatures, interfaces IrInterfaceMap, declared DeclaredConformanceMap, gid GenericInstanceId, constraint WhereConstraint) returns bool
 	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+
 	if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
 		return opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: interfaces, token: typeParamIdOf(typeArg), interfaceName: constraint.interfaceName))
 	end 'opaqueArgument'
@@ -1108,6 +1142,7 @@ export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInt
 	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
 		return true
 	end 'intrinsic'
+
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
 end 'typeConformsTo'
 
@@ -1130,14 +1165,17 @@ end 'ExtensionConstraintOnReceiver'
 export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, gid GenericInstanceId, constraints WhereConstraintArray) returns ExtensionConstraintOnReceiver
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("receiverMeetsExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
+
 		// The CANONICAL conformer name is what the conformance answer and the `__witness_<conformer>.*`
 		// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
 		// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
 		let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+
 		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
 			return ExtensionConstraintOnReceiver.unmet(constraint.interfaceName, argDisplayName: signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex))
 		end 'violates'
 	end 'eachConstraint'
+
 	return ExtensionConstraintOnReceiver.met
 end 'receiverMeetsExtensionConstraints'
 
@@ -1173,6 +1211,7 @@ end 'receiverMeetsExtensionConstraints'
 module union OpaqueConstraintDischarge
 	// The owner's witness slot that already carries this interface for this parameter.
 	slot(index WitnessSlotIndex)
+
 	// The owner declaration promises nothing reaching `interfaceName` — E3017, and never a forward.
 	unsatisfied
 end 'OpaqueConstraintDischarge'
@@ -1183,8 +1222,10 @@ module function opaqueParamDischarge(signatures ProgramSignatures, interfaces Ir
 	// a forwarded slot nobody reserved.
 	let owner = try signatures.typeParamOwnerOf(token) otherwise return OpaqueConstraintDischarge.unsatisfied
 	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
+
 	for i in 0 upto constraints.count() 'eachOwnerConstraint'
 		let promised = try constraints.get(i) otherwise panic("opaqueParamDischarge: whereConstraints.get OOB at {i} for `type {String.from(owner.declaringTypeName)}`, whose own list this iterates")
+
 		if promised.typeParamIndex != owner.position 'aboutAnotherParameter'
 			continue
 		end 'aboutAnotherParameter'
@@ -1226,8 +1267,10 @@ end 'opaqueParamDischarge'
 export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns ByteArrayArray
 	let owner = try signatures.typeParamOwnerOf(token) otherwise return sharedEmptyDeclaredConformances
 	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
+
 	for i in 0 upto constraints.count() 'eachOwnerConstraint'
 		let promised = try constraints.get(i) otherwise panic("constrainedParamAssociatedBindings: whereConstraints.get OOB at {i} for `type {String.from(owner.declaringTypeName)}`, whose own list this iterates")
+
 		if promised.typeParamIndex != owner.position or not promised.interfaceName.equals(interfaceName) 'anotherConstraint'
 			continue
 		end 'anotherConstraint'
@@ -1307,6 +1350,7 @@ export function checkExtensionConstraints(signatures ProgramSignatures, constrai
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
 		let conformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+
 		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
 			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
 		end 'violates'
@@ -1378,14 +1422,18 @@ end 'valueWidensToInterface'
 // declares `implements`. The E3017 check's `Point declares Digest?` lookup, built once per constrained program.
 function buildDeclaredConformanceMap(project Project) returns DeclaredConformanceMap
 	var declared = DeclaredConformanceMap.create()
+
 	for conformance in project.conformances 'eachDecl'
 		var interfaces = InterfaceNameSet.create()
 		copyDeclaredInterfaces(declared, typeName: conformance.typeName, into: interfaces)
+
 		for i in 0 upto conformance.interfaces.count() 'eachIface'
 			interfaces.insert((try conformance.interfaces.get(i) otherwise panic("buildDeclaredConformanceMap: interfaces.get OOB at {i}")).interfaceName)
 		end 'eachIface'
+
 		declared.upsert(conformance.typeName, value: interfaces)
 	end 'eachDecl'
+
 	return declared
 end 'buildDeclaredConformanceMap'
 
@@ -1434,6 +1482,7 @@ export function typeDeclaresInterface(declared DeclaredConformanceMap, interface
 	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
 		return declaredInterfacesReach(interfaces, declaredNames: declaredInterfaces, wanted: interfaceName)
 	end 'hasDecl'
+
 	return false
 end 'typeDeclaresInterface'
 
@@ -1467,6 +1516,7 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 	// A primitive declares no `uses` parameters, which is also what a non-generic type's layout already holds
 	// — so the empty list is not a fallback here, it is the answer.
 	var typeParamNames = ByteArrayArray.create()
+
 	if primitiveTagOfTypeName(conformance.typeName) == ValueTypeTag.unresolved 'aDeclaredConformer'
 		let layout = try project.structTypes.get(conformance.typeName) otherwise panic("checkOneConformance: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
 		typeParamNames = layout.typeParamNames
@@ -1474,6 +1524,7 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
+
 		match lookupInterface(project.interfaces, name: entry.interfaceName) 'resolve'
 			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(entry.interfaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
 			found(iface) then checkOneInterfaceConformance(project, functionsByName: functionsByName, conformance: conformance, entry: entry, iface: iface, typeParamNames: typeParamNames, signatures: signatures)
@@ -1556,6 +1607,7 @@ function checkInterfaceMethods(project Project, functionsByName FunctionNameInde
 
 	var missing = StringArray.create()
 	var wrongSignature = StringArray.create()
+
 	for i in 0 upto collected.count() 'eachMethod'
 		let collectedMethod = try collected.get(i) otherwise panic("checkInterfaceMethods: collected.get OOB at {i}")
 		checkOneMethod(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, rootInterfaceName: entry.interfaceName, typeParamNames: typeParamNames, signatures: signatures, missing: missing, wrongSignature: wrongSignature)
@@ -1655,12 +1707,14 @@ end 'checkInterfaceMethods'
 // straight back.
 function collectInterfaceMethods(project Project, signatures ProgramSignatures, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray) returns CollectedInterfaceMethodArray
 	let slots = interfaceWitnessSlots(project.interfaces, iface: iface)
+
 	if conformanceBindsNothing(conformance) and not anySlotDeclarerHasAnAlias(signatures, slots: slots) 'nothingToSubstituteOrExpand'
 		return slots
 	end 'nothingToSubstituteOrExpand'
 
 	let clauseNames = pairableAssociatedTypeNames(iface.associatedTypeNames, boundTypeNames: entry.withArgs)
 	var substituted = CollectedInterfaceMethodArray.create()
+
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
 		let ownerNames = associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName)
@@ -1683,6 +1737,7 @@ type RequirementSubstitution
 	export let clauseArgs as ByteArrayArray
 	export let declaredNames as ByteArrayArray
 	export let declaredArgs as ByteArrayArray
+
 	// ⚠ The declaring interface's `uses` names UNGATED by `pairableAssociatedTypeNames`, unlike
 	// `declaredNames` above. The alias expansion pairs them against `boundTypeName`'s answers, which is
 	// defined for every name whether or not an argument list could pair with it — where the substitution
@@ -1793,6 +1848,7 @@ end 'pairableAssociatedTypeNames'
 // requirement of every binding conformance to say what four already-built lists say.
 function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
 	var paramTypeNames = ByteArrayArray.create()
+
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
 		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), under: under))
 	end 'eachParam'
@@ -1808,6 +1864,7 @@ end 'substituteAssociatedTypes'
 // question for a different reason (see there).
 function boundTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
 	let bound = boundAssociatedTypeName(name, under: under)
+
 	if not bound.equals(name) 'anAssociatedTypeOfEitherPair'
 		return bound
 	end 'anAssociatedTypeOfEitherPair'
@@ -1848,6 +1905,7 @@ end 'boundAssociatedTypeName'
 // alias.
 function expandedInterfaceAlias(name ByteArray, under RequirementSubstitution) returns ByteArray throws MapError
 	var boundSpellings = ByteArrayArray.create()
+
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
 	end 'eachAssociatedType'
@@ -1893,11 +1951,13 @@ function checkOneMethod(project Project, functionsByName FunctionNameIndex, conf
 
 	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'present'
 		let implSig = conformanceImplSignature(project, name: qualifiedName)
+
 		if not signatureMatches(project, method: method, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(method)})")
 		end 'mismatch' else 'signatureOk'
 			acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: qualifiedName, implFunc: implFunc, typeParamNames: typeParamNames, signatures: signatures)
 		end 'signatureOk'
+
 		return
 	end 'present'
 
@@ -1919,12 +1979,14 @@ end 'checkOneMethod'
 // longer registers, which is the MISSING case and not a mismatch.
 function checkOverloadedMembers(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, members ByteArrayArray, missing StringArray, wrongSignature StringArray)
 	let candidates = overloadCandidates(project, members: members)
+
 	if candidates.count() == 0 'noMemberSurvives'
 		pushMissingRequirement(missing, collectedMethod: collectedMethod, rootInterfaceName: rootInterfaceName)
 		return
 	end 'noMemberSurvives'
 
 	var matched = ByteArrayArray.create()
+
 	for candidate in candidates 'eachCandidate'
 		if signatureMatches(project, method: collectedMethod.method, conformingType: conformance.typeName, implFunc: conformanceImplFunction(functionsByName, name: candidate), implSig: conformanceImplSignature(project, name: candidate), typeParamNames: typeParamNames, signatures: signatures) 'matches'
 			matched.push(candidate)
@@ -1976,10 +2038,12 @@ end 'acceptConformingMember'
 // and nothing the lowering could do with two answers but flip a coin.
 function recordWitnessSlotImpl(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, selected ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	let key = witnessSlotImplKey(conformance.typeName, interfaceName: collectedMethod.sourceInterfaceName, methodName: collectedMethod.method.name)
+
 	if let existing = try project.witnessSlotImpls.get(key) 'alreadySelected'
 		if not existing.equals(selected) 'disagrees'
 			reportConflictingConformance(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, existing: existing, selected: selected, typeParamNames: typeParamNames, signatures: signatures)
 		end 'disagrees'
+
 		return
 	end 'alreadySelected'
 
@@ -2006,6 +2070,7 @@ end 'reportConflictingConformance'
 // still registers.
 function pushMissingRequirement(missing StringArray, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray)
 	let expected = formatInterfaceMethodSignature(collectedMethod.method)
+
 	if collectedMethod.sourceInterfaceName.equals(rootInterfaceName) 'ownMethod'
 		missing.push(expected)
 		return
@@ -2043,6 +2108,7 @@ end 'conformanceImplSignature'
 // do (the others are irrelevant to an ambiguity).
 function overloadMismatchLine(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionNameIndex, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
 	let expected = formatInterfaceMethodSignature(method)
+
 	if matched.count() == 0 'noneMatches'
 		return "no member named '{String.from(method.name)}' matches: {renderMemberSignatures(project, conformance: conformance, method: method, functionsByName: functionsByName, members: candidates, typeParamNames: typeParamNames, signatures: signatures)} (expected {expected})"
 	end 'noneMatches'
@@ -2059,9 +2125,11 @@ end 'overloadMismatchLine'
 // second accumulator here is how two messages listing the same kind of thing come to look different.
 function renderMemberSignatures(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionNameIndex, members ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
 	var rendered = ""
+
 	for member in members 'each'
 		rendered = appendCommaSeparated(rendered, item: formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: conformanceImplFunction(functionsByName, name: member), implSig: conformanceImplSignature(project, name: member), typeParamNames: typeParamNames, signatures: signatures))
 	end 'each'
+
 	return rendered
 end 'renderMemberSignatures'
 
@@ -2216,8 +2284,10 @@ end 'throwsRequirementIsAbstract'
 export enum ThrowsClauseKind
 	// A declared enum or union: the catch decode can discriminate its cases.
 	concreteError
+
 	// An interface: an abstract error channel, declaring no case to decode.
 	abstractInterface
+
 	// Neither — a struct, a ranged alias, a type parameter, a type the compiler does not declare, or a typo.
 	undeclared
 end 'ThrowsClauseKind'
@@ -2231,6 +2301,7 @@ end 'ThrowsClauseKind'
 // `interface`, which records no declaring file (`SemanticCheck.witnessFormalDeclaredType` says the same).
 export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
 	let key = name.toByteArray()
+
 	if signatures.containsEnumFor(key, readerFilePath: readerFilePath) 'namesAConcreteError'
 		return ThrowsClauseKind.concreteError
 	end 'namesAConcreteError'
@@ -2350,11 +2421,13 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 	// signature declare `__self`?) is exactly "is an instance method", so it is also what the parameter
 	// comparison below indexes by — one fact, asked once.
 	let implIsStatic = not implSig.takesReceiver()
+
 	if method.isStatic != implIsStatic 'receiverKindDiffers'
 		return false
 	end 'receiverKindDiffers'
 
 	let selfOffset = 0 if implIsStatic else 1
+
 	if method.paramNames.count() != implFunc.maxonParamTypes.count() - selfOffset 'arityDiffers'
 		return false
 	end 'arityDiffers'
@@ -2377,15 +2450,18 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 		// an `Array` are one record — the spelling picks the member surface, not the layout), and anything
 		// else — a struct, a primitive, a `String` — does not.
 		let requirementTakesAnyBuffer = try method.paramIsBuffer.get(i) otherwise false
+
 		if requirementTakesAnyBuffer 'requirementTakesAnyBuffer'
 			if not signatures.isArrayInstanceAt(maxonTypeTag(implType), nameId: typeNameIdOf(implType)) 'implIsNotABuffer'
 				return false
 			end 'implIsNotABuffer'
+
 			continue
 		end 'requirementTakesAnyBuffer'
 
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: conformingType)
 		let actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+
 		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual) 'oneSpelling'
 			continue
 		end 'oneSpelling'
@@ -2434,10 +2510,12 @@ function formatActualSignature(project Project, methodName ByteArray, conforming
 	let selfOffset = 0 if implIsStatic else 1
 	var paramNames = ByteArrayArray.create()
 	var paramTypes = ByteArrayArray.create()
+
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
 		paramTypes.push(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
 	end 'eachParam'
+
 	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic)
 end 'formatActualSignature'
 
@@ -2455,8 +2533,10 @@ end 'implParamSpelling'
 // type. The message therefore quotes the same spelling `signatureMatches` compared as a brand.
 function implParamDisplay(project Project, implFunc IrFunction, implSig FuncSignature, position ParamCount, conformingType ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns ByteArray
 	let implType = try implFunc.maxonParamTypes.get(position) otherwise panic("implParamDisplay: maxonParamTypes.get OOB at {position}")
+
 	if maxonTypeTag(implType) == ValueTypeTag.genericInstance 'maySpellABrand'
 		let spelled = implParamSpelling(implSig, position: position)
+
 		if not spelled.isEmpty() 'declaredThroughAnAlias'
 			return spelled
 		end 'declaredThroughAnAlias'
@@ -2486,17 +2566,21 @@ function substituteSelf(typeName ByteArray, conformingType ByteArray) returns By
 	if typeName.equals(InterfaceSelfTypeName) 'isSelf'
 		return conformingType
 	end 'isSelf'
+
 	return typeName
 end 'substituteSelf'
 
 // Join `  - item` lines with newlines — the bulleted detail block of an E3016 message.
 function joinBulletedLines(items StringArray) returns String
 	var rendered = ""
+
 	for i in 0 upto items.count() 'each'
 		if i > 0 'separator'
 			rendered = "{rendered}\n"
 		end 'separator'
+
 		rendered = "{rendered}  - {try items.get(i) otherwise panic("joinBulletedLines: items.get OOB at {i}")}"
 	end 'each'
+
 	return rendered
 end 'joinBulletedLines'

@@ -388,7 +388,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:49: Range check failed: value outside typealias 'Codepoint'
+panic at utf16.maxon:50: Range check failed: value outside typealias 'Codepoint'
 Stack trace:
   in utf16LeadSurrogate
   in main
@@ -467,7 +467,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:67: Range check failed: value outside typealias 'Codepoint'
+panic at utf16.maxon:68: Range check failed: value outside typealias 'Codepoint'
 Stack trace:
   in utf16DecodeSurrogates
   in main

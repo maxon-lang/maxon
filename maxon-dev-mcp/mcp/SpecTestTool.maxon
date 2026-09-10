@@ -49,6 +49,7 @@ export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fil
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultSpecTestTimeoutMs) otherwise (err) 'spawn'
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
 	end 'spawn'
+
 	let elapsed = Clock.elapsedMs(timing)
 
 	return buildOutcome(displayCommand, result: result, durationMs: elapsed)
@@ -68,27 +69,37 @@ function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArr
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	let filter = try argsDoc.getString(argsId, key: "filter") otherwise ""
+
 	if not filter.isEmpty() 'haveFilter'
 		argv.push("--filter={filter}")
 	end 'haveFilter'
+
 	let updateRequired = try argsDoc.getBool(argsId, key: "updateRequired") otherwise false
+
 	if updateRequired 'haveUR'
 		argv.push("--update-required")
 	end 'haveUR'
+
 	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+
 	if not log.isEmpty() 'haveLog'
 		argv.push("--log={log}")
 	end 'haveLog'
+
 	// Runs the fragments marked `<!-- network: live -->`, which the default gate excludes because a suite
 	// whose verdict depends on somebody else's uptime is not a claim about the code.
 	let network = try argsDoc.getBool(argsId, key: "network") otherwise false
+
 	if network 'haveNetwork'
 		argv.push("--network")
 	end 'haveNetwork'
+
 	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+
 	if not target.isEmpty() 'haveTarget'
 		argv.push("--target={target}")
 	end 'haveTarget'
+
 	return argv
 end 'buildSpecTestArgv'
 
@@ -104,11 +115,13 @@ end 'buildSpecTestArgv'
 export function displayCommandFor(binary FilePath, argv StringArray) returns String
 	var s = binary.path.clone()
 	let n = argv.count()
+
 	for i in 0 upto n 'each'
 		let a = try argv.get(i) otherwise panic("displayCommandFor: argv.get({i}) OOB (count={n})")
 		s.append(" ")
 		s.append(a)
 	end 'each'
+
 	return s
 end 'displayCommandFor'
 
@@ -136,6 +149,7 @@ end 'SpecSummary'
 function parseSummary(combined String) returns SpecSummary
 	let lines = combined.split("\n")
 	var i = lines.count()
+
 	while i > 0 'scanBackwards'
 		i = i - 1
 		let line = try lines.get(i) otherwise panic("parseSummary: lines.get OOB — i bounded by count")
@@ -157,12 +171,14 @@ function parseSummaryLine(line String) returns SpecSummary throws NotFound
 	let failedMarker = " failed"
 
 	let passed = try parseLeadingInt(line)
+
 	if not passed.rest.startsWith(passedMarker) 'notASummary'
 		throw NotFound.notFound
 	end 'notASummary'
 
 	let afterPassed = try sliceAfter(passed.rest, marker: passedMarker)
 	let failed = try parseLeadingInt(afterPassed)
+
 	if not failed.rest.startsWith(failedMarker) 'notASummary'
 		throw NotFound.notFound
 	end 'notASummary'
@@ -185,20 +201,25 @@ function parseLeadingInt(s String) returns ParsedInt throws NotFound
 	var i = 0
 	var value = 0
 	var anyDigits = false
+
 	while i < n 'scan'
 		let b = try bytes.get(i) otherwise 'gErr'
 			panic("parseLeadingInt: get OOB — i bounded by n")
 		end 'gErr'
+
 		if b < 0x30 or b > 0x39 'notDigit'
 			break
 		end 'notDigit'
+
 		value = value * 10 + (b - 0x30)
 		anyDigits = true
 		i = i + 1
 	end 'scan'
+
 	if not anyDigits 'noDigits'
 		throw NotFound.notFound
 	end 'noDigits'
+
 	let rest = sliceBytes(bytes, from: i, until: n)
 	return ParsedInt.create(value, rest: rest)
 end 'parseLeadingInt'
@@ -224,6 +245,7 @@ function buildOutcome(command String, result CollectedOutput, durationMs Duratio
 	// (e.g. a compile error before the tests ran) or when the math would
 	// underflow.
 	var failed = 0
+
 	if summary.parsed and summary.total >= summary.passed 'okMath'
 		failed = summary.total - summary.passed
 	end 'okMath'

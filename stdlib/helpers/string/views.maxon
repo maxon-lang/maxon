@@ -56,9 +56,11 @@ public type ByteIterator implements Iterator with Byte
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
+
 		let firstByte = try s.byteAt(0) otherwise 'byteErr'
 			panic("ByteIterator.create: string empty after length check — impossible")
 		end 'byteErr'
+
 		return Self{s: s, pos: 0, currentByte: firstByte}
 	end 'create'
 
@@ -68,9 +70,11 @@ public type ByteIterator implements Iterator with Byte
 
 	public function advance() throws IterationError
 		let nextPos = pos + 1
+
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
+
 		pos = nextPos
 		currentByte = try s.byteAt(pos) otherwise 'byteErr'
 			panic("ByteIterator.advance: nextPos just validated as < length — impossible")
@@ -98,11 +102,13 @@ public type CodepointView implements Iterable with (Codepoint, CodepointIterator
 		var count = 0
 		var pos = 0
 		let len = s.byteLength()
+
 		while pos < len 'count_loop'
 			let bytes = utf8ByteLengthAt(s, pos: pos)
 			pos = pos + bytes
 			count = count + 1
 		end 'count_loop'
+
 		return count
 	end 'count'
 end 'CodepointView'
@@ -117,6 +123,7 @@ public type CodepointIterator implements Iterator with Codepoint
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
+
 		let cp = utf8DecodeAt(s, pos: 0)
 		let len = utf8ByteLengthAt(s, pos: 0)
 		return Self{s: s, pos: 0, cp: cp, cpByteLen: len}
@@ -128,9 +135,11 @@ public type CodepointIterator implements Iterator with Codepoint
 
 	public function advance() throws IterationError
 		let nextPos = pos + (cpByteLen as BytePos)
+
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
+
 		pos = nextPos
 		cp = utf8DecodeAt(s, pos: pos)
 		cpByteLen = utf8ByteLengthAt(s, pos: pos)
@@ -162,16 +171,19 @@ public type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
 		var count = 0
 		var pos = 0
 		let len = s.byteLength()
+
 		while pos < len 'count_loop'
 			let cp = utf8DecodeAt(s, pos: pos)
 			let bytes = utf8ByteLengthAt(s, pos: pos)
 			pos = pos + bytes
+
 			if cp < 65536 'bmp'
 				count = count + 1
 			end 'bmp' else 'supplementary'
 				count = count + 2
 			end 'supplementary'
 		end 'count_loop'
+
 		return count
 	end 'count'
 end 'UTF16View'
@@ -187,6 +199,7 @@ public type UTF16Iterator implements Iterator with CodeUnit16
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
+
 		let cp = utf8DecodeAt(s, pos: 0)
 		let len = utf8ByteLengthAt(s, pos: 0)
 		return Self{s: s, bytePos: 0, cp: cp, cpByteLen: len, onTrailSurrogate: false}
@@ -196,9 +209,11 @@ public type UTF16Iterator implements Iterator with CodeUnit16
 		if onTrailSurrogate 'trail'
 			return utf16TrailSurrogate(cp)
 		end 'trail'
+
 		if cp < 65536 'bmp'
 			return cp
 		end 'bmp'
+
 		return utf16LeadSurrogate(cp)
 	end 'current'
 
@@ -207,10 +222,13 @@ public type UTF16Iterator implements Iterator with CodeUnit16
 			onTrailSurrogate = true
 			return
 		end 'emitTrail'
+
 		let nextPos = bytePos + (cpByteLen as BytePos)
+
 		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
+
 		bytePos = nextPos
 		cp = utf8DecodeAt(s, pos: bytePos)
 		cpByteLen = utf8ByteLengthAt(s, pos: bytePos)

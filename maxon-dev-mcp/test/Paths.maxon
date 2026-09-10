@@ -126,6 +126,7 @@ end 'isMaxonCheckout'
 export function locateBinary(repoRoot FilePath) returns FilePath
 	let overrideArg = try CommandLine.getOptionValue(BinaryOverrideOption) otherwise 'noOverride'
 		let path = joinPath(repoRoot, segment: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp{exeSuffix()}")
+
 		if not File.exists(path) 'missing'
 			panic("locateBinary: server binary not found at {path.path}. Build it with `maxon build maxon-dev-mcp/mcp` first.")
 		end 'missing'
@@ -134,6 +135,7 @@ export function locateBinary(repoRoot FilePath) returns FilePath
 	end 'noOverride'
 
 	let overridePath = try FilePath.from(overrideArg) otherwise panic("locateBinary: --{BinaryOverrideOption}='{overrideArg}' is not a valid path")
+
 	if not File.exists(overridePath) 'missingOverride'
 		panic("locateBinary: --{BinaryOverrideOption}='{overridePath.path}' does not exist")
 	end 'missingOverride'
@@ -158,9 +160,11 @@ export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
 	let bytes = path.path.toByteArray()
 	let n = bytes.count()
 	var i = n
+
 	while i > 0 'scan'
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: bytes.get OOB — i bounded by n")
+
 		if b != SlashByte and b != BackslashByte 'notSep'
 			continue
 		end 'notSep'
@@ -191,9 +195,11 @@ export function lastSegment(path String) returns String
 	let bytes = path.toByteArray()
 	let n = bytes.count()
 	var i = n
+
 	while i > 0 'scan'
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
+
 		if b == SlashByte or b == BackslashByte 'sep'
 			return sliceBytesAsString(bytes, from: i + 1, until: n)
 		end 'sep'
@@ -219,6 +225,7 @@ end 'stripSuffix'
 
 function sliceBytesAsString(bytes ByteArray, from BytePos, until BytePos) returns String
 	var out = ByteArray.create()
+
 	for i in from upto until 'copy'
 		let b = try bytes.get(i) otherwise panic("sliceBytesAsString: get OOB — i bounded by until")
 		out.push(b)

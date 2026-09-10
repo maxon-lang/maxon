@@ -63,12 +63,15 @@ module typealias LspBlockDepth = int(0 to u64.max)
 // One closed block of a document.
 module type LspDocumentBlock
 	module let kind as LspBlockKind
+
 	// The name the block is opened AND closed with — a declared name, or a statement label.
 	module let name as ByteArray
+
 	// Where the OPENING occurrence of `name` sits. For a declaration that is the name's identifier; for
 	// a labelled block it is the bytes INSIDE the opening label's quotes, which is what a rename must
 	// replace so that the quotes are left standing.
 	module let nameSpan as LspSpan
+
 	// Where `end '<name>'` spells it, likewise inside the quotes.
 	module let endNameSpan as LspSpan
 	module let startLine as LspLineNumber
@@ -135,12 +138,14 @@ function symbolKindOf(kind LspBlockKind) returns LspSymbolKindCode
 	match kind 'kind'
 		functionBody then return FunctionSymbolKind
 		structBody then return StructSymbolKind
+
 		// A `union` is Maxon's tagged variant and LSP has no kind for one. `Enum` is the closest true
 		// statement — both are a closed set of named cases — and it groups the two together in an
 		// outline, which is where a reader expects to find them.
 		enumBody or
 			unionBody then return EnumSymbolKind
 		interfaceBody then return InterfaceSymbolKind
+
 		// An `extension` is a named grouping of members bolted onto a type it does not declare, which is
 		// what LSP's `Namespace` names.
 		extensionBody then return NamespaceSymbolKind
@@ -234,6 +239,7 @@ module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArr
 			// The label is the token after `end`. A bare `end` closes nothing this walk can name.
 			if tokenLine.lastIndex > tokenLine.firstIndex 'hasLabel'
 				let label = lspTokenAt(tokens, index: tokenLine.firstIndex + 1)
+
 				if label.kind == TokenKind.charLiteral 'labelled'
 					closeMatching(open, closed: closed, label: label)
 				end 'labelled'
@@ -277,6 +283,7 @@ function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, 
 		end 'noBodyToClose'
 
 		let nameToken = declaredNameToken(tokens, keywordIndex: keywordIndex, tokenLine: tokenLine, keyword: keyword.kind)
+
 		if nameToken.kind == TokenKind.eof 'unnamed'
 			return
 		end 'unnamed'
@@ -306,6 +313,7 @@ end 'openContinuationArm'
 // admitted here too and discarded by the label reconciliation in `closeMatching`.
 function openTrailingLabel(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
 	let last = lspTokenAt(tokens, index: tokenLine.lastIndex)
+
 	if last.kind != TokenKind.charLiteral 'noLabel'
 		return
 	end 'noLabel'
@@ -495,6 +503,7 @@ function declaredNameToken(tokens TokenArray, keywordIndex TokenIndex, tokenLine
 
 		if token.kind == TokenKind.identifier 'aWord'
 			found = token
+
 			if keyword != TokenKind.function 'firstWordWins'
 				return found
 			end 'firstWordWins'

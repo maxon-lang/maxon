@@ -10,6 +10,7 @@ let CorpusFixturesLabel = "tests/run/fixtures"
 
 test 'every fixture directory is one the harness names'
 	var unnamed = StringArray.create()
+
 	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
 		if not Directory.isDirectory(entry) 'notAFixture'
 			continue
@@ -24,6 +25,7 @@ test 'every fixture directory is one the harness names'
 	try Expect.isEmpty(listedNames(unnamed), message: "these directories under {CorpusFixturesLabel} are named by nothing in {SharedHelperFileName}, so no case can stage them and they prove nothing. Give each one a constant in the fixture roster, and a case that uses it.")
 
 	var absent = StringArray.create()
+
 	for name in fixtureNames() 'eachNamedFixture'
 		if not Directory.isDirectory(fixtureDir(FixturesDirName).join("{name}")) 'nothingThere'
 			absent.push(name)
@@ -47,8 +49,10 @@ end 'every fixture directory is one the harness names'
 // the second half below asks.
 test 'no ordinary source sits in the corpus, and no live source in the fixtures'
 	var ordinary = StringArray.create()
+
 	for entry in listing(fixtureDir(ProjectDirName)) 'eachEntry'
 		let name = entry.filename()
+
 		if Directory.isDirectory(entry) 'aSubdirectory'
 			continue
 		end 'aSubdirectory'
@@ -61,6 +65,7 @@ test 'no ordinary source sits in the corpus, and no live source in the fixtures'
 	try Expect.isEmpty(listedNames(ordinary), message: "these files under {ProjectDirName} are ORDINARY Maxon sources, which `maxon test` compiles into the project they sit in — failing every case here for a reason having nothing to do with the command under test. Fold each declaration into {SharedHelperFileName} or into a `{TestSourceSuffix}` file; do NOT add a `.maxonignore`, which would hide this corpus from the command that runs it.")
 
 	var live = StringArray.create()
+
 	for entry in listing(fixtureDir(FixturesDirName)) 'eachFixture'
 		if not Directory.isDirectory(entry) 'notAFixture'
 			continue
@@ -80,6 +85,7 @@ end 'no ordinary source sits in the corpus, and no live source in the fixtures'
 // above an `isEmpty` over the very text a reader has to act on.
 function listedNames(names StringArray) returns String
 	var listed = ""
+
 	for name in names 'eachName'
 		listed.append("{LineFeed}  {name}")
 	end 'eachName'

@@ -76,6 +76,7 @@ let Uncolored = RegisterFileSize as RegNum
 export type Allocation
 	export var color as RegNumColumn
 	export var valueCount as ValueId
+
 	// The INVERSE of `color`, for the registers held RIGHT NOW: register number -> the value
 	// occupying it. `colorFunction`'s in-use mask says a register is HELD; only this says by WHOM,
 	// and "by whom" is the whole of the exhaustion diagnostic — without it the panic can only
@@ -108,9 +109,11 @@ export type Allocation
 	// The register NUMBER assigned to `v` (panics if uncolored — a coloring bug).
 	export function regNumOf(v ValueId) returns RegNum
 		let c = try self.color.get(v) otherwise panic("Allocation.regNumOf: value {v} out of range")
+
 		if c == Uncolored 'uncolored'
 			panic("Allocation.regNumOf: value {v} is uncolored — a use was reached before its def was colored (dominance-order violation)")
 		end 'uncolored'
+
 		return c
 	end 'regNumOf'
 
@@ -201,10 +204,13 @@ export type ReuseCopyPlan
 		if seq >= self.present.count() 'pastLastCopy'
 			return ReuseCopyLookup.none
 		end 'pastLastCopy'
+
 		let has = try self.present.get(seq) otherwise panic("ReuseCopyPlan.at: present.get OOB at sequence {seq}")
+
 		if not has 'coalesced'
 			return ReuseCopyLookup.none
 		end 'coalesced'
+
 		let destReg = try self.destRegs.get(seq) otherwise panic("ReuseCopyPlan.at: destRegs.get OOB at sequence {seq}")
 		return ReuseCopyLookup.copy(destReg, srcReg: try self.srcRegs.get(seq) otherwise panic("ReuseCopyPlan.at: srcRegs.get OOB at sequence {seq}"))
 	end 'at'
@@ -264,17 +270,20 @@ module type RegAllocCounters
 	export var hintsMissed as EventCount
 	export var valuesColored as EventCount
 	export var registersUsed as RegMask
+
 	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
 	// them (one per use-block), and constants rematerialized instead of spilled.
 	export var valuesSplit as EventCount
 	export var reloadsInserted as EventCount
 	export var rematerialized as EventCount
+
 	// Of `valuesSplit`, how many were FORCED spills at a fixed-register point (a call / `idiv`)
 	// rather than COLD splits of an idle value - the amended Rule 2's mechanism. These are the
 	// spills permitted INSIDE a loop, so this is the counter to watch: it is the number of
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
+
 	// Values the COLORER could not place, split by one of the two cures. THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure - every value they
 	// relieve sat at a point Hall calls FEASIBLE - so both are counted beside `forcedSpills` rather than
@@ -320,9 +329,11 @@ export type RegAllocStats
 	export var phaseNanos as DurationNanosArray
 	export var phaseCpuTicks as CpuTicksArray
 	export var functionsAllocated as EventCount
+
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
 	export var livenessMarkStepsTotal as EventCount
 	export var livenessMarkStepsMax as EventCount
+
 	// The worst per-FILE pressure seen, and the function it was seen in — one entry per register
 	// class, because the peak of a mixed figure is no file's peak. `maxPressureFunc` names the
 	// function per class for the same reason.
@@ -334,17 +345,20 @@ export type RegAllocStats
 	export var hintsMissed as EventCount
 	export var valuesColored as EventCount
 	export var registersUsed as RegMask
+
 	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
 	// them (one per use-block), and constants rematerialized instead of spilled.
 	export var valuesSplit as EventCount
 	export var reloadsInserted as EventCount
 	export var rematerialized as EventCount
+
 	// Of `valuesSplit`, how many were FORCED spills at a fixed-register point (a call / `idiv`)
 	// rather than COLD splits of an idle value — the amended Rule 2's mechanism. These are the
 	// spills permitted INSIDE a loop, so this is the counter to watch: it is the number of
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
+
 	// Values the COLORER could not place, split by one of the two cures. ⭐⭐ THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure — every value they
 	// relieve sat at a point Hall calls FEASIBLE — so both are counted beside `forcedSpills` rather than
@@ -364,9 +378,11 @@ export type RegAllocStats
 		var phaseCpuTicks = CpuTicksArray.create()
 		phaseCpuTicks.resize(RegAllocPhase.allCases.count())
 		var maxPressureFunc = PressureFuncByClass.create()
+
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
 		end 'eachClass'
+
 		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
@@ -389,6 +405,7 @@ export type RegAllocStats
 
 	export function recordLivenessMarkSteps(steps EventCount)
 		self.livenessMarkStepsTotal = self.livenessMarkStepsTotal + steps
+
 		if steps > self.livenessMarkStepsMax 'newMax'
 			self.livenessMarkStepsMax = steps
 		end 'newMax'
@@ -479,12 +496,15 @@ end 'arm64AllocatablePool'
 // are excluded (see `arm64AllocatablePool`).
 function arm64AllocatableGprMask() returns RegMask
 	var mask = 0 as RegMask
+
 	for reg in 0 upto 16 'callerSavedGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'callerSavedGprs'
+
 	for reg in 19 upto 29 'calleeSavedGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'calleeSavedGprs'
+
 	return mask
 end 'arm64AllocatableGprMask'
 
@@ -569,17 +589,20 @@ function assertX64CallClobbers(pool RegMask)
 
 	assertOneCallClobber(TargetOp.callDirect(ByteArray.create()), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+
 	// P1.5-A1: the register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
 	// (a call destroys the caller-saved set whether its target is a name or a register). Its callee
 	// register (rbx here is just the callee-saved WITNESS the assert checks is NOT clobbered) is an
 	// explicit USE, but the clobber assertion is about `implicitDefs`, which must equal the pool.
 	assertOneCallClobber(TargetOp.callReg(TargetVReg.virtual(0)), name: "callReg", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+
 	// The Linux `syscall` (x64-linux `osExit`/`osWriteStdout`/`osAllocPages` and the entry stub's
 	// `exit_group`) crosses the same barrier: the kernel returns in rax and the `syscall` instruction
 	// clobbers rcx/r11, all inside the caller-saved pool, exactly as `iatCall` does — its
 	// `0xFFFF0FC7` literal must equal the pool, or a value live across it is mis-constrained. The
 	// arm64 twin holds `arm64Syscall` here for the identical reason (`assertArm64CallClobbers`).
 	assertOneCallClobber(TargetOp.x64Syscall(0), name: "x64Syscall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+
 	// The fused witness call's MEMORY-indirect form (P1.7a): a call destroys the caller-saved set
 	// whether its target is a name, a register or a memory operand. It was the one call op carrying
 	// the clobber literal and NOT answering here — while `TargetDialect.callMem`'s own header said it
@@ -631,6 +654,7 @@ end 'assertEncoderScratchMasks'
 function assertX64EncoderScratchMasks()
 	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: x64JumpTableScratchMask(), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.x64MemFill(0), name: "x64MemFill", expected: x64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+
 	// The f64 negate's mask register is ALLOCATABLE (xmm5 is a float argument register), so this is the
 	// fill ladder's case rather than the jump table's: the declaration genuinely reserves it at the op.
 	assertEncoderScratchMask(TargetOp.negF64RegReg(TargetVReg.virtual(0), src: TargetVReg.virtual(0)), name: "negF64RegReg", expected: x64NegF64ScratchMask(), hazard: "the operand, or a value live across the negate, could be colored onto the XMM the sign-mask build clobbers")
@@ -640,6 +664,7 @@ function assertArm64EncoderScratchMasks()
 	let ipPair = regMaskAdd(regMaskAdd(0 as RegMask, regNum: Arm64Ip0Reg), regNum: Arm64Ip1Reg)
 	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.arm64MemFill(0), name: "arm64MemFill", expected: arm64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+
 	// F2: both LL/SC loops keep their observed value in x16 and their store status in x17 — the SAME IP pair
 	// the jump table uses, which is why one `let` serves all three.
 	assertEncoderScratchMask(TargetOp.arm64AtomicCas(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), expectedReg: TargetVReg.virtual(0), replacementReg: TargetVReg.virtual(0)), name: "arm64AtomicCas", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
@@ -650,6 +675,7 @@ end 'assertArm64EncoderScratchMasks'
 // that says only "masks differ" sends the reader to the right line with the wrong question.
 function assertEncoderScratchMask(op TargetOp, name String, expected RegMask, hazard String)
 	let clobber = op.rawValue.implicitDefs
+
 	if clobber != expected 'drift'
 		panic("assertEncoderScratchMasks: {name} implicitDefs {clobber} != the encoder's fixed registers {expected} — TargetDialect.{name}'s inline scratch mask and its encoder drifted apart, so {hazard}")
 	end 'drift'
@@ -666,6 +692,7 @@ let Arm64Ip1Reg = 17 as RegNum
 // line of TargetDialect.
 function assertOneCallClobber(op TargetOp, name String, pool RegMask, calleeWitness RegNum, calleeName String)
 	let clobber = op.rawValue.implicitDefs
+
 	if clobber != pool 'drift'
 		panic("assertCallClobberConsistent: {name} clobber mask {clobber} != caller-saved pool {pool} — TargetDialect.{name}'s implicitDefs and RegisterAllocator's caller-saved mask drifted apart")
 	end 'drift'
@@ -739,6 +766,7 @@ function assertVolatilitySplitsEveryClass(pool RegMask, callerSaved RegMask, fil
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		let classPool = poolOfClass(pool, class: class, file: file)
+
 		if classPool != 0 and (classPool and callerSaved) == 0 'noVolatileInFile'
 			panic("assertVolatilitySplitsEveryClass: {targetToString(target)} offers {regMaskPopcount(classPool)} allocatable {class.name} register(s) and NONE of them is caller-saved — `preferredVolatilityMask` then falls straight through to the whole class pool, so a value that never crosses a call is free to settle in a register the prologue must preserve, and the callee-saved half stops being reserved for the values that have nowhere else to go. A file the pool offers has both halves or the volatility preference is not a preference.")
 		end 'noVolatileInFile'
@@ -757,15 +785,19 @@ end 'assertVolatilitySplitsEveryClass'
 function arm64CallerSavedMask() returns RegMask
 	let fpBase = Arm64FirstVectorRegister
 	var mask = 0 as RegMask
+
 	for reg in 0 upto 16 'callerGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'callerGprs'
+
 	for fpIndex in 0 upto 8 'fpLow'
 		mask = regMaskAdd(mask, regNum: fpBase + fpIndex)
 	end 'fpLow'
+
 	for fpIndex in 16 upto 32 'fpHigh'
 		mask = regMaskAdd(mask, regNum: fpBase + fpIndex)
 	end 'fpHigh'
+
 	return mask
 end 'arm64CallerSavedMask'
 
@@ -888,9 +920,11 @@ end 'calleeSavedMask'
 // (the pool IS the union) yet clobbered by nothing and saved by nobody.
 function assertCalleeSavedListsMatchMasks()
 	var listed = 0 as RegMask
+
 	for reg in calleeSavedOrder 'gprs'
 		listed = listed or regMaskOf(reg)
 	end 'gprs'
+
 	for reg in calleeSavedXmmOrder 'xmms'
 		listed = listed or regMaskOf(reg)
 	end 'xmms'
@@ -902,6 +936,7 @@ function assertCalleeSavedListsMatchMasks()
 	let file = x64RegisterFile()
 	let realRegisters = classRegisterMask(RegClass.gpr, file: file) or classRegisterMask(RegClass.xmm, file: file)
 	let allocatable = realRegisters and not (regMaskOf(X64Register.rsp) or regMaskOf(X64Register.rbp))
+
 	if (callerSavedMask() or calleeSavedMask()) != allocatable 'notAPartition'
 		panic("assertCalleeSavedListsMatchMasks: caller-saved u callee-saved is {callerSavedMask() or calleeSavedMask()} but the x64 file minus the frame (rsp/rbp) is {allocatable} — every register the pool offers must be on exactly one side of the call barrier. One on NEITHER side is allocatable, clobbered by no call and saved by no prologue.")
 	end 'notAPartition'
@@ -926,16 +961,19 @@ export typealias ValueClassColumns = Array with ValueClassColumn
 
 export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)})")
+
 	// ⭐ THE THREE PER-ISA FACTS THE WHOLE ALLOCATOR RUNS ON, SOURCED ONCE HERE AND CARRIED TOGETHER.
 	// Each is a `match` on the target that must happen exactly once per module: asking any of them
 	// per value is a cost, and asking any of them WITHOUT the target is how one of them came to be
 	// x64's on every ISA (see `callerSavedMaskFor`).
 	let pool = allocatablePool(target)
+
 	// The target's register FILE — its GPR/vector boundary and width — carried beside `pool` through
 	// the whole allocator so every per-value class question is asked against the right ISA (16 vs 31).
 	// Sourced once here and stored on each function's `LivenessResult`; the sites that hold `pool` but
 	// not `target` read it back from there (see `poolOfClass`).
 	let file = registerFileFor(target)
+
 	// The CALLER-saved half of that pool — the colorer's volatility preference, and the mask the
 	// call ops' `implicitDefs` are held equal to just below.
 	let callerSaved = callerSavedMaskFor(target)
@@ -950,6 +988,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	assertRegisterFileMatchesEnum()
 	assertCallClobberConsistent(target, callerSaved: callerSaved)
 	assertRegClassCountMatches()
+
 	// AFTER `assertRegClassCountMatches`, which is the fact its per-class loop walks: a drifted class
 	// count would make this report an empty file rather than the miscount that produced it.
 	assertVolatilitySplitsEveryClass(pool, callerSaved: callerSaved, file: file, target: target)
@@ -962,6 +1001,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// row rather than vanishing). A locally-created stats object would be a second,
 	// disconnected accounting of the same wall time.
 	var stats = project.timings.regAlloc
+
 	// ONE per-VARIANT op-facts memo for the WHOLE MODULE. Every fact in it is a property of the DIALECT —
 	// which registers a `callDirect` clobbers, whether a `loadRegSlot` touches a spill slot — so the
 	// natural lifetime is the compile, not the function. Built per function it re-derived the ~30 cases
@@ -1075,10 +1115,12 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 
 	stats.merge(counters)
 	stats.recordLivenessMarkSteps(facts.livenessMarkSteps)
+
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		stats.recordPressure(classRowGet(facts.maxPressure, class: class), class: class, funcName: func.name)
 	end 'eachClass'
+
 	stats.recordLoopDepth(facts.maxLoopDepth)
 	stats.functionsAllocated = stats.functionsAllocated + 1
 
@@ -1168,6 +1210,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// cost dropped every one of them, and the pressure was the pre-repair figure. Loop depth is a
 	// property of the CFG, which splitting cannot change, so it reads the same either side.
 	facts.livenessMarkSteps = liveness.livenessMarkSteps
+
 	// PER CLASS, so the module report can name the file that was tight rather than a mixed figure that
 	// is no file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files
 	// and over its limit in neither; one number cannot say that.
@@ -1175,6 +1218,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 		let class = regClassAt(classOrdinal)
 		classRowSet(facts.maxPressure, class: class, value: liveness.maxPressureOf(class))
 	end 'eachClass'
+
 	facts.maxLoopDepth = liveness.cfg.maxLoopDepth()
 
 	let planProbe = PhaseProbe.beginCounters()
@@ -1194,6 +1238,7 @@ function harvestDebugValueLocations(alloc Allocation, liveness LivenessResult, v
 	end 'nothingNamed'
 
 	into.reserve(valueIds.count())
+
 	for value in valueIds 'eachNamedValue'
 		into.push(debugValueLocationOf(alloc, liveness: liveness, value: value))
 	end 'eachNamedValue'
@@ -1259,11 +1304,13 @@ type StuckValues
 		self.values.push(v)
 		self.freeMasks.push(free)
 		self.occupantStart.push(self.occupants.count())
+
 		for regNum in 0 upto RegisterFileSize 'eachAllowedRegister'
 			if regMaskContains(allowedHeld, regNum: regNum) 'heldByAnOccupant'
 				self.occupants.push(alloc.holderOf(regNum))
 			end 'heldByAnOccupant'
 		end 'eachAllowedRegister'
+
 		self.occupantCount.push(self.occupants.count() - (try self.occupantStart.get(self.occupantStart.count() - 1) otherwise panic("StuckValues.record: occupantStart.get OOB on the entry just pushed")))
 	end 'record'
 
@@ -1337,6 +1384,7 @@ function colorRepairingConfinements(module TargetModule, driver SplitDriver, fun
 		if rounds >= roundBound 'runaway'
 			panic("colorRepairingConfinements: '{String.from(func.name)}' still has {stuck.count()} value(s) the colorer cannot place after {rounds} repair round(s) — the repair potential (see `SplitDriver.repairAtExhaustion`) falls at every repair, so this cannot be reached by correct convergence")
 		end 'runaway'
+
 		rounds = rounds + 1
 
 		// Billed to SPLITTING, because that is what it is: the same mutator, the same slots, the same
@@ -1391,8 +1439,10 @@ end 'colorOnce'
 // makes progress, and the re-colour may well place that value once its neighbours have moved.
 function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunction, stuck StuckValues, counters RegAllocCounters)
 	var repaired = 0 as EventCount
+
 	for k in 0 upto stuck.count() 'eachStuckValue'
 		let v = stuck.valueAt(k)
+
 		if driver.repairAtExhaustion(module, v: v, free: stuck.freeAt(k), counters: counters) 'widened'
 			repaired = repaired + 1
 			continue
@@ -1402,14 +1452,17 @@ function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunct
 		// makes the pick reproducible run to run and it is deliberately not a cost model (see
 		// `repairByEvictingOccupant`). The first one that takes it ends the search.
 		var evicted = false
+
 		for j in 0 upto stuck.occupantCountAt(k) 'eachOccupant'
 			if evicted 'alreadyFreedOne'
 				continue
 			end 'alreadyFreedOne'
+
 			if driver.repairByEvictingOccupant(module, v: v, w: stuck.occupantAt(k, j: j), counters: counters) 'freed'
 				evicted = true
 			end 'freed'
 		end 'eachOccupant'
+
 		if evicted 'freedARegister'
 			repaired = repaired + 1
 		end 'freedARegister'
@@ -1476,6 +1529,7 @@ type ColorHints
 
 	function setFixedIfUnset(v ValueId, regNum RegNum)
 		let cur = try self.fixedHint.get(v) otherwise panic("ColorHints.setFixedIfUnset: OOB")
+
 		if cur == NoFixedHint 'unset'
 			try self.fixedHint.set(v, value: regNum) otherwise panic("ColorHints.setFixedIfUnset: set OOB")
 		end 'unset'
@@ -1485,7 +1539,9 @@ type ColorHints
 		if v == partner 'selfPartner'
 			return
 		end 'selfPartner'
+
 		let cur = try self.copyHint.get(v) otherwise panic("ColorHints.setCopyIfUnset: OOB")
+
 		if cur == self.noPartner 'unset'
 			try self.copyHint.set(v, value: partner) otherwise panic("ColorHints.setCopyIfUnset: set OOB")
 		end 'unset'
@@ -1515,11 +1571,13 @@ end 'ColorHints'
 function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId) returns ColorHints
 	var hints = ColorHints.create(valueCount)
 	var buf = OperandList.create()
+
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: local)
 
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
+
 		for opIdx in ordered 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeHints: opIdx not in module.ops")
 			collectOpHints(op, hints: hints)
@@ -1528,6 +1586,7 @@ function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId
 
 		collectPhiEdgeHints(module, topo: topo, predBlock: block, hints: hints)
 	end 'eachBlock'
+
 	return hints
 end 'computeHints'
 
@@ -1563,6 +1622,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			popReg then break 'hint'
 		storeSlotReg or
 			loadRegSlot then break 'hint'
+
 		// The bit band carries no COPY hint: none of these ops is a move. Their two-address
 		// `dest ⟸ lhs` bias is a REUSE hint, which `collectReuseHints` reads straight off
 		// the operand model — so it covers every one of them without an arm here.
@@ -1601,6 +1661,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			minMaxSdRegReg or
 			movqXmmGpr or
 			negF64RegReg then break 'hint'
+
 		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
 		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
@@ -1657,6 +1718,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel then break 'hint'
+
 		// The P1.5-A1 function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
 		// `leaRegRdata`) and `callReg` is a call (like `callDirect`) — neither is a move, so no two of
 		// its operands want the same register. Its callee-address use rides `collectReuseHints`' scan
@@ -1665,24 +1727,31 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		leaRegFunc or
 			callReg or
 			x64Syscall then break 'hint'
+
 		// The jump tables carry no copy hint: their one operand is a plain use, not a move or a reuse.
 		x64JumpTable or
 			arm64JumpTable then break 'hint'
+
 		// The witness call's base register is a plain use (a call, like `callReg`), no copy hint.
 		callMem then break 'hint'
+
 		// Neither stack-argument op is a MOVE: the outgoing store has a use and no def, the incoming load a
 		// def and no use, so no two of their operands could want the same register. No copy hint.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg then break 'hint'
+
 		// Neither arm64 bit reinterpretation is a move — each one's two operands live in DIFFERENT
 		// register files, so they could not want the same register even in principle. No copy hint.
 		arm64FmovGprFp or
 			arm64FmovFpGpr then break 'hint'
+
 		// A frame address is not a copy — it has no source register to want the same colour as.
 		leaRegSlot then break 'hint'
+
 		// F1b: a fill ladder has no operands at all, so there is no pair of them to hint together.
 		x64MemFill or
 			arm64MemFill then break 'hint'
+
 		// F2: no atomic is a MOVE. `lock xadd`'s reuse-def is not a hint either — a reuse is a CONSTRAINT the
 		// colorer honours through `allocateReuseDef`, and `collectReuseHints` reads it off the operand model;
 		// adding a copy hint here would be the same fact stated twice, in the weaker place.
@@ -1694,24 +1763,30 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer then break 'hint'
+
 		// EC16: none of the scaled-index forms is a MOVE — each computes or accesses an address out of two
 		// independent registers, so there is no pair to coalesce.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl then break 'hint'
+
 		// EC18: the high multiply is not a MOVE — `divideReg`'s answer, one band up, for the same reason.
 		// Its RAX/RDX constraints are IMPLICIT MASKS, which `forbidOperandsFromImplicit` enforces; a hint
 		// is a preference and would be the weaker statement of a fact the masks already make absolutely.
 		imulHighReg then break 'hint'
+
 		// arm64 `fneg` is 3-address like the rest of its band: not a move, nothing to coalesce.
 		arm64Fneg then break 'hint'
+
 		// G3: an ordered access is not a move, so there is nothing to coalesce.
 		arm64LoadAcquire or
 			arm64StoreRelease then break 'hint'
+
 		// EC18: `SMULH` is a 3-address multiply, not a MOVE — nothing to coalesce, and unlike
 		// `imulHighReg` it constrains no physical register at all.
 		arm64Smulh then break 'hint'
+
 		// A coverage counter names no register at all, so there is nothing to hint.
 		covInc then break 'hint'
 	end 'hint'
@@ -1724,6 +1799,7 @@ end 'collectOpHints'
 // without a per-op arm.
 function collectReuseHints(op TargetOp, hints ColorHints, buf OperandList)
 	targetOpOperands(op, buf: buf)
+
 	for o in buf 'eachOperand'
 		if operandIsReuseDef(o) and operandIsVirtual(o) 'reuseDef'
 			let destId = operandValueId(o)
@@ -1767,6 +1843,7 @@ function collectPhiEdgeHints(module TargetModule, topo FuncTopology, predBlock I
 	for edge in predBlock.branchEdges 'eachEdge'
 		let targetBlock = blockAt(module, topo: topo, local: localOfBlockId(topo, blockId: edge.targetBlockId))
 		let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.coloringHints)
+
 		for k in 0 upto view.count 'eachPhi'
 			let phi = view.phiValueIdAt(k)
 			let incoming = view.incomingAt(k)
@@ -1787,6 +1864,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var alloc = Allocation.create(valueCount)
 	let hints = computeHints(module, topo: topo, valueCount: valueCount)
 	var buf = OperandList.create()
+
 	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
 	// working row would otherwise each allocate once per block. `seenBelow` is ONE dense row (not a
 	// matrix); `computeBlockDeaths` returns it to zero in O(live) before the next block.
@@ -1795,11 +1873,13 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var ordered = OpIndexArray.create()
 	var seenBelow = BitWordArray.create()
 	seenBelow.resize(wordsPerRow)
+
 	// The death scan's per-class live tally. It is never READ — the scan wants the row alone — but the
 	// backward step maintains it as it flips bits and its decrements panic on underflow, so it must be
 	// real and truthfully seeded. Allocated HERE and reused across every block, like every other
 	// buffer in this sweep.
 	var deathsLiveByClass = zeroClassRow()
+
 	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
 	// under, and the same numbering the rewrite re-derives from `collectBlockOps`.
 	var blockBaseSeq = 0 as OpSeq
@@ -1810,6 +1890,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		// Seed occupancy from the non-phi live-ins (each already colored in a
 		// dominator), then allocate the block-arg phis defined at entry.
 		var inUse = seedInUse(liveness, local: local, alloc: alloc, liveBuf: liveBuf)
+
 		for arg in block.blockArgs 'eachPhi'
 			inUse = allocateDef(arg.valueId, working: inUse, dyingRegs: 0, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, stuck: stuck)
 		end 'eachPhi'
@@ -1841,16 +1922,19 @@ function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, li
 	liveness.liveInInto(local, out: liveBuf)
 
 	var mask = 0 as RegMask
+
 	for v in liveBuf 'eachLiveIn'
 		if not alloc.isColored(v) 'notColored'
 			panic("seedInUse: value {v} is live-in to block {local} but was never colored — a use dominates its def (structured-layout invariant broken)")
 		end 'notColored'
+
 		// The occupant map is refreshed here, not only at defs: a live-in was coloured in a dominator
 		// and a sibling block may have re-used its register since, so the last writer is not the
 		// current holder (see `Allocation.holderOfReg`).
 		alloc.noteHolder(v, regNum: alloc.regNumOf(v))
 		mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
 	end 'eachLiveIn'
+
 	return mask
 end 'seedInUse'
 
@@ -1872,6 +1956,7 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 	// route — is the same fact written down four times, one of which will be forgotten.
 	let class = liveness.classOf(v)
 	let classPool = poolOfClass(pool, class: class, file: liveness.registerFile)
+
 	// `held` is `working` minus what dies right here — the registers a def may NOT take. It is named
 	// rather than folded into `blocked` because the exhaustion report needs the two apart: `blocked` is
 	// their union, and a union cannot tell them apart. A value confined to the 5 callee-saved registers
@@ -1966,15 +2051,19 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 
 	if hints.hasFixed(v) 'fixed'
 		let fr = hints.fixedOf(v)
+
 		if hintIsTakeable(fr, blocked: blocked, takeable: takeable) 'fixedFree'
 			counters.hintsHonoured = counters.hintsHonoured + 1
 			return fr
 		end 'fixedFree'
 	end 'fixed'
+
 	if hints.hasCopy(v) 'copy'
 		let p = hints.copyOf(v)
+
 		if alloc.isColored(p) 'partnerColored'
 			let cr = alloc.regNumOf(p)
+
 			if hintIsTakeable(cr, blocked: blocked, takeable: takeable) 'copyFree'
 				counters.hintsHonoured = counters.hintsHonoured + 1
 				return cr
@@ -1985,6 +2074,7 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	// The partner is not colored yet, but it is PINNED — take its register now (see
 	// `pinnedPartnerRegister`).
 	let pinned = pinnedPartnerRegister(v, hints: hints, alloc: alloc, liveness: liveness)
+
 	if pinned != NoFixedHint and hintIsTakeable(pinned, blocked: blocked, takeable: takeable) 'pinnedFree'
 		counters.hintsHonoured = counters.hintsHonoured + 1
 		return pinned
@@ -1998,14 +2088,17 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	// partner however it is colored, so fall back to `v`'s OWN constraint and let SSA destruction
 	// emit the copy — which is strictly what would have happened without the group at all.
 	let grouped = pickPreferredRegister(groupBlocked, classPool: classPool, callerSaved: callerSaved)
+
 	if grouped != RegisterFileSize 'gotGrouped'
 		return grouped
 	end 'gotGrouped'
 
 	let reg = pickPreferredRegister(blocked, classPool: classPool, callerSaved: callerSaved)
+
 	if reg == RegisterFileSize 'exhausted'
 		panic("chooseRegister: no register for value {v} (class pool {classPool}, blocked {blocked}) — but `allocateDef` screens `blocked == fullRegisterMask()` before it calls this, and that screen and this failure are the SAME event: every hint path tests `blocked` first (`hintIsTakeable`), the copy-group pick measures a superset of `blocked`, and this fallback is `lowestClearRegister(blocked)`. Reaching here means the screen and the pick have come apart.")
 	end 'exhausted'
+
 	return reg
 end 'chooseRegister'
 
@@ -2061,6 +2154,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	// "unconstrained yet stuck" case cannot arise: `forbidden(v) ∩ classPool == 0` implies `classPool ⊆
 	// held`, which is that same full pool.
 	let free = classPool and not held
+
 	if free == 0 'everyRegisterHeldYetFeasible'
 		panic("reportExhaustion: {situation} — Hall's EXACT verdict is FEASIBLE, yet every register of the class pool is HELD: that is {regMaskPopcount(classPool)} occupants plus {v} on {regMaskPopcount(classPool)} registers, which is pigeonhole and could only have come back OVERFLOW. The two answers contradict each other over the same live set, so the colorer's in-use mask and `Allocation.holderOf` have come apart — a register the mask calls HELD must name a live holder, and the occupant map is refreshed at every block entry (`seedInUse`) and every def for exactly that reason. Occupants:{occupancy}")
 	end 'everyRegisterHeldYetFeasible'
@@ -2072,6 +2166,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	// offers an OCCUPANT to evict, and that is the second cure (`repairStuckValues`): the two together
 	// are why a stuck value is never un-relievable.
 	let allowedHeld = allowedRegistersOf(liveness, valueId: v, pool: classPool)
+
 	if allowedHeld == 0 'allowedNothingYetFeasible'
 		panic("reportExhaustion: {situation} — Hall's EXACT verdict is FEASIBLE, yet {v} is allowed NO register of its own file. A value with an empty allowed set cannot be given one, so the matching could not have saturated and the verdict could only have been OVERFLOW. `allowedRegistersOf` and `hallVerdictAt` read the same mask through the same function, so the two cannot disagree unless `forbiddenOf({v})` changed between them. Occupants:{occupancy}")
 	end 'allowedNothingYetFeasible'
@@ -2122,6 +2217,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	// are real dominance assertions, and weakening them permanently to accommodate a rare path would
 	// blind them on every ordinary function.
 	let provisional = lowestClearRegister(fullRegisterMask() and not free)
+
 	// CHECKED, not argued: `free` is a subset of `classPool`, so the pick is in `v`'s own file — and this
 	// file's convention is that legality is asserted where it is available, discarded pass or not.
 	assertColouredInClass(v, reg: provisional, class: liveness.classOf(v), file: liveness.registerFile)
@@ -2136,11 +2232,13 @@ end 'reportExhaustion'
 // abort. Ascending register order is what makes the listing and the verdict reproducible run to run.
 function valuesHoldingRegisters(mask RegMask, alloc Allocation) returns ValueIdArray
 	var out = ValueIdArray.create()
+
 	for regNum in 0 upto RegisterFileSize 'eachRegister'
 		if regMaskContains(mask, regNum: regNum) 'occupied'
 			out.push(alloc.holderOf(regNum))
 		end 'occupied'
 	end 'eachRegister'
+
 	return out
 end 'valuesHoldingRegisters'
 
@@ -2150,9 +2248,11 @@ end 'valuesHoldingRegisters'
 // pressure, is the fault.
 function describeRegisterOccupants(occupants ValueIdArray, liveness LivenessResult, alloc Allocation, classPool RegMask) returns String
 	var text = ""
+
 	for h in occupants 'eachOccupant'
 		text = "{text}\n    register {alloc.regNumOf(h)} <- value {h}, allowed {allowedRegistersOf(liveness, valueId: h, pool: classPool)}"
 	end 'eachOccupant'
+
 	return text
 end 'describeRegisterOccupants'
 
@@ -2177,17 +2277,21 @@ function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, li
 	end 'noPartner'
 
 	let p = hints.copyOf(v)
+
 	if alloc.isColored(p) 'partnerColored'
 		return NoFixedHint
 	end 'partnerColored'
+
 	if not hints.hasFixed(p) 'partnerNotPinned'
 		return NoFixedHint
 	end 'partnerNotPinned'
 
 	let pr = hints.fixedOf(p)
+
 	if regMaskContains(liveness.forbiddenOf(p), regNum: pr) 'partnerCannotTakeIt'
 		return NoFixedHint
 	end 'partnerCannotTakeIt'
+
 	return pr
 end 'pinnedPartnerRegister'
 
@@ -2221,6 +2325,7 @@ function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Al
 	end 'noPartner'
 
 	let p = hints.copyOf(v)
+
 	if alloc.isColored(p) 'partnerColored'
 		return blocked
 	end 'partnerColored'
@@ -2271,6 +2376,7 @@ function hintIsTakeable(reg RegNum, blocked RegMask, takeable RegMask) returns b
 	if regMaskContains(blocked, regNum: reg) 'notFree'
 		return false
 	end 'notFree'
+
 	return regMaskContains(takeable, regNum: reg)
 end 'hintIsTakeable'
 
@@ -2293,9 +2399,11 @@ end 'hintIsTakeable'
 function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegNum
 	let preferred = preferredVolatilityMask(blocked, classPool: classPool, callerSaved: callerSaved)
 	let pick = lowestClearRegister(blocked or (fullRegisterMask() and not preferred))
+
 	if pick != RegisterFileSize 'gotPreferred'
 		return pick
 	end 'gotPreferred'
+
 	return lowestClearRegister(blocked)
 end 'pickPreferredRegister'
 
@@ -2318,6 +2426,7 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq 
 	let dyingRegs = deaths.dyingRegsAt(pos, alloc: alloc)
 
 	var working = inUse
+
 	for o in buf 'allocDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			if operandIsReuseDef(o) 'reuse'
@@ -2331,9 +2440,11 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq 
 	// in-use after the op: drop the dying operands, keep the LIVE defs (a def that
 	// is dead the instant it is written frees its register too, via `dyingRegs`).
 	var liveDefRegs = 0 as RegMask
+
 	for o in buf 'liveDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd2'
 			let v = operandValueId(o)
+
 			if not deaths.dies(pos, v: v) 'stillLive'
 				liveDefRegs = regMaskAdd(liveDefRegs, regNum: alloc.regNumOf(v))
 			end 'stillLive'
@@ -2364,6 +2475,7 @@ function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeat
 	// op, or the pass that mis-declared them. Asserting the pair here fails where the fact is known.
 	let destClass = liveness.classOf(destId)
 	let inputClass = liveness.classOf(inputId)
+
 	if destClass != inputClass 'reuseClassMismatch'
 		panic("allocateReuseDef: the two-address op's def v{destId} is {destClass.name}-classed but its REUSE input v{inputId} is {inputClass.name}-classed — a reuse def holds its input's value, so the two must share a register file. The copy this would record is a cross-file `mov`, which the encoder rejects far from the cause. Look at whichever pass declared the two classes (the lowering's value-class column, or `growValueSpace`'s inherited class for a split's fresh ids).")
 	end 'reuseClassMismatch'
@@ -2373,6 +2485,7 @@ function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeat
 	// another dying operand's, which the op still reads after the copy), and none at all
 	// when the input outlives.
 	var defDyingRegs = 0 as RegMask
+
 	if inputDies 'inputDiesHere'
 		defDyingRegs = regMaskAdd(defDyingRegs, regNum: inputReg)
 	end 'inputDiesHere'
@@ -2380,6 +2493,7 @@ function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeat
 	let updated = allocateDef(destId, working: working, dyingRegs: defDyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, stuck: stuck)
 
 	let destReg = alloc.regNumOf(destId)
+
 	if destReg != inputReg 'needsCopy'
 		reuseCopies.record(seq, destReg: destReg, srcReg: inputReg)
 		counters.copiesInserted = counters.copiesInserted + 1
@@ -2411,6 +2525,7 @@ type BlockDeaths
 				return true
 			end 'match'
 		end 'each'
+
 		return false
 	end 'dies'
 
@@ -2418,12 +2533,15 @@ type BlockDeaths
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
 	export function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
+
 		for k in 0 upto self.byPos.degree(pos as CsrIndex) 'each'
 			let v = self.byPos.neighbour(pos as CsrIndex, k: k)
+
 			if alloc.isColored(v as ValueId) 'colored'
 				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v as ValueId))
 			end 'colored'
 		end 'each'
+
 		return mask
 	end 'dyingRegsAt'
 end 'BlockDeaths'
@@ -2436,9 +2554,11 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)
+
 	for v in seedBuf 'seed'
 		bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
 	end 'seed'
+
 	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THIS ROW IS NOT A LIVE SET. `seenBelow` means "seen
 	// below this op", and the death scan ADDS to it itself (below) for values that die — so its
 	// population is not the live population and its tally is not a pressure. Nothing reads it: the
@@ -2468,9 +2588,11 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 		for o in buf 'markDeaths'
 			if operandIsVirtual(o) 'virt'
 				let v = operandValueId(o)
+
 				if not bitsetTest(seenBelow, base: 0, bit: v as BitIndex) 'dies'
 					posOf.push(pos)
 					valueOf.push(v)
+
 					// Mark it seen, so the SAME value appearing twice in this op (`sub x, x`) is
 					// recorded as dying ONCE. The row's tally follows the row — see the note above.
 					bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
@@ -2487,9 +2609,11 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// Return the row to zero for the next block, in O(live + phis): what it holds now is this
 	// block's live-in set plus any of its own block-args an op re-added.
 	liveness.liveInInto(local, out: seedBuf)
+
 	for v in seedBuf 'clearLiveIn'
 		bitsetRemove(seenBelow, base: 0, bit: v as BitIndex)
 	end 'clearLiveIn'
+
 	for arg in block.blockArgs 'clearPhis'
 		bitsetRemove(seenBelow, base: 0, bit: arg.valueId as BitIndex)
 	end 'clearPhis'
@@ -2558,11 +2682,13 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		shrRegCl(dest, lhs) then return TargetOp.shrRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		setccReg(dest, cond) then return TargetOp.setccReg(colorVRegWith(dest, alloc: alloc), cond: cond)
+
 		// The data-section band. `label`, `disp` and `width` are not registers and pass through; the
 		// vregs are colored exactly as every other op's are.
 		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(colorVRegWith(dest, alloc: alloc), label: label)
 		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(colorVRegWith(base, alloc: alloc), disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
+
 		// The SSE band. Coloring is CLASS-BLIND by construction: `colorVRegWith` substitutes
 		// whatever register the allocator assigned, and the class column is what guaranteed that
 		// register is an XMM. So these arms are shape-for-shape identical to their GPR twins, and
@@ -2575,30 +2701,37 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+
 		// The MATH INTRINSICS (P1.0d.4-C) — two XMM operands each, colored like the converts. The
 		// rounding MODE is not a register, so it passes through, exactly as an immediate or a cond code
 		// does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
+
 		// The BIT REINTERPRETATION colors both operands like any other def-from-use pair — each from
 		// its OWN value's allocation, which is what puts the dest in a GPR and the source in an XMM
 		// with nothing here having to know that.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+
 		// f64 NEGATE colors its two XMM operands exactly as `absF64RegReg` below does; the REUSE def and
 		// the scratch clobber are the operand model's and the metadata's statements respectively.
 		negF64RegReg(dest, src) then return TargetOp.negF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+
 		// f64 ABS colors its two XMM operands like any other pair. That it is a REUSE def rather than a
 		// plain one is the OPERAND MODEL's statement, already honoured by the time coloring runs, so
 		// nothing here has to know the two will land in one register.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
+
 		// `minsd`/`maxsd` color their three XMM operands like any other binary SSE op. That it is a REUSE def is
 		// the OPERAND MODEL's statement, already honoured by the time coloring runs — and the operand
 		// ORDER is preserved verbatim, which matters here more than for the commutative arms: swapping
 		// `lhs` and `rhs` would change the answer on a NaN.
 		minMaxSdRegReg(dest, lhs, rhs, kind) then return TargetOp.minMaxSdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc), kind: kind)
+
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The SAME `colorVRegWith`-per-operand reconstruction the x64 arms use: the rewrite is NEUTRAL —
@@ -2654,42 +2787,52 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Fabs(dest, src) then return TargetOp.arm64Fabs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
+
 		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both
 		// pass through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.
 		arm64ImportCall or
 			arm64Syscall then return op
+
 		// `fcsel` colors its three FP operands and carries its condition through, exactly as `arm64Frint`
 		// carries its rounding mode. ⚠ `ifTrue`/`ifFalse` are ORDERED — swapping them turns `min` into
 		// `max` — so the reconstruction names each in its own slot.
 		arm64Fcsel(dest, ifTrue, ifFalse, cond) then return TargetOp.arm64Fcsel(colorVRegWith(dest, alloc: alloc), ifTrue: colorVRegWith(ifTrue, alloc: alloc), ifFalse: colorVRegWith(ifFalse, alloc: alloc), cond: cond)
+
 		// --- P1.5-A1 function-value band (x64) ---
 		// `leaRegFunc` colors its GPR dest exactly like `leaRegRdata`/`leaRegGlobal`. `callReg` colors
 		// its callee-address USE exactly like `arm64BranchLinkReg` — NOT a pass-through like
 		// `callDirect`/`iatCall`, which carry no explicit register operand at all.
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(colorVRegWith(dest, alloc: alloc), funcName: funcName)
 		callReg(reg) then return TargetOp.callReg(colorVRegWith(reg, alloc: alloc))
+
 		// The Linux `syscall` names no register operand (its args are pre-moved into rdi..), so it passes
 		// through unchanged, exactly like `arm64Syscall` and x64's `iatCall`.
 		x64Syscall then return op
+
 		// The jump tables color their ONE register operand — the biased index — and carry the block-id
 		// table, default and rdata label through unchanged (the scratch registers are fixed in the encoder,
 		// not colored).
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+
 		// The witness call colors its witness-table base register, exactly as `callReg` colors its callee.
 		callMem(baseReg, disp) then return TargetOp.callMem(colorVRegWith(baseReg, alloc: alloc), disp: disp)
+
 		// The stack-argument pair colors its ONE register operand each; the slot is a frame index, not a register.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(colorVRegWith(dest, alloc: alloc), slot: slot)
+
 		// The arm64 BIT REINTERPRETATIONS — both operands colored from their own values, like `fcvtzs`
 		// and `scvtf`, the converting neighbours each shares its pair of register files with.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
+
 		// F1b: a fill ladder carries NO virtual register to colour — its operands arrived in fixed physical
 		// registers before it and its only field is a constant — so it is returned verbatim.
 		x64MemFill or
 			arm64MemFill then return op
+
 		// F2: every virtual operand of every atomic is coloured from its own value. The CAS's comparand is NOT
 		// among them — x86 pins it to RAX, so it arrives in a `movRegReg` above and rides `implicitUses` here.
 		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
@@ -2700,12 +2843,14 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), expectedReg: colorVRegWith(expectedReg, alloc: alloc), replacementReg: colorVRegWith(replacementReg, alloc: alloc))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), operandReg: colorVRegWith(operandReg, alloc: alloc), opcode: opcode)
 		arm64ThreadPointer(dest, source) then return TargetOp.arm64ThreadPointer(colorVRegWith(dest, alloc: alloc), source: source)
+
 		// EC16 — the scaled-index band. The scale, displacement and width are IMMEDIATES and carry
 		// through untouched; only the register operands are coloured.
 		leaRegBaseIndexScale(dest, base, index, scale) then return TargetOp.leaRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
+
 		// EC18 — one register operand to colour, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(colorVRegWith(src, alloc: alloc))
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
@@ -2723,21 +2868,27 @@ end 'colorTargetOp'
 function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = StringBuilder.create()
 	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
+
 	// Iterated per class, not hand-listed: a hand-written pair of lines silently omits any register
 	// file added later, which is the same way an unmeasured cost hides in the phase table below.
 	msg.append("  pressure:")
+
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		msg.append(" max {class.name}={classRowGet(stats.maxPressure, class: class)} (in '{try stats.maxPressureFunc.get(class.ordinal) otherwise panic("regAllocStatsMessage: no maxPressureFunc entry for the {class.name} file")}');")
 	end 'eachClass'
+
 	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs by widening={stats.repairedByWidening} and by eviction={stats.repairedByEviction}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
+
 	// Iterated, not hand-listed: a hand-written line silently omits any phase added
 	// later, which is how an unmeasured cost hides in the first place.
 	msg.append("  phase ms:")
+
 	for phase in RegAllocPhase.allCases 'eachPhase'
 		msg.append(" {phase.name}={stats.costOf(phase).nanos}")
 	end 'eachPhase'
+
 	return msg.build()
 end 'regAllocStatsMessage'

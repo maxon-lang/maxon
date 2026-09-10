@@ -116,6 +116,7 @@ export function accessWidthFor(t StdType) returns X64AccessWidth
 		i8 or
 			i16 or
 			i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
+
 		// A `u8` access is unambiguous BECAUSE it is unsigned: zero-extension is always correct, so no
 		// signed/unsigned choice is deferred. Wider unsigned types stay deferred.
 		u8 then return X64AccessWidth.byte
@@ -135,6 +136,7 @@ export function memoryDisplacement(offset ByteOffset) returns Imm32
 	if offset > i32.max 'tooFar'
 		panic("memoryDisplacement: byte offset {offset} does not fit the signed Imm32 displacement of a base+disp load/store — an addressing mode reaching that far from its base needs a materialized index register")
 	end 'tooFar'
+
 	return offset as Imm32
 end 'memoryDisplacement'
 
@@ -174,10 +176,13 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		neg or
 			bitNot or
 			logicalNot gives regClassForStdType(operandType)
+
 		// int -> f64: the result lives in an XMM/SIMD register though `operandType` is an integer.
 		siToFp gives RegClass.xmm
+
 		// f64 -> int: the result lives in a GPR though `operandType` is f64.
 		fpToSi gives RegClass.gpr
+
 		// ⚠ The MATH INTRINSICS need their OWN arm even though their result class IS their operand's,
 		// and that is the whole trap of appending past `fpToSi`: `regClassForStdType(operandType)` would
 		// be the right answer, but the arm that computes it stops at `logicalNot` and cannot be extended
@@ -190,11 +195,13 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 			sqrt or
 			abs or
 			fneg gives RegClass.xmm
+
 		// ⚠ The BITCAST is the THIRD shape this table has to answer for, and the only one whose
 		// operand and result differ in FILE without differing in BITS: `bitcastF64ToI64` moves an
 		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
 		// `fpToSi` — reading it as the result would put a 64-bit integer in an XMM register.
 		bitcastF64ToI64 gives RegClass.gpr
+
 		// The INBOUND bitcast is the same claim mirrored, and it is the reason the arm above may not
 		// simply become a range: `operandType` here is the i64 SOURCE, so reading it would put an f64
 		// in a GPR — the exact inverse mistake, from the exact same misreading.
@@ -229,12 +236,14 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 			logicalNot or
 			siToFp or
 			fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
+
 		// ONE arm for the three float ops past the roundings: the reason is identical (each has its own
 		// lowering, which is not a `roundsd`/`frint` mode) and only the instructions differ, so the
 		// message names all three rather than the same sentence being written three times.
 		sqrt or
 			abs or
 			fneg then panic("floatRoundModeFor: `{opcode.name}` has no rounding mode — `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`), `abs` clears the sign bit (a `psllq`/`psrlq` pair on x64, `fabs` on arm64) and `fneg` flips it (`negF64RegReg` on x64, `fneg` on arm64); an isel asking any of them for its rounding has routed it to the wrong op")
+
 		// ONE arm for BOTH bitcasts, and this is the one table where spanning them is right: a
 		// reinterpretation computes no number IN EITHER DIRECTION, so the answer does not depend on
 		// which file the bits are moving to. The arms that DO depend on the direction — the operand
@@ -328,9 +337,11 @@ end 'setValueClass'
 // op that defines a value fails to compile here rather than defaulting a float into a GPR.
 export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule, funcNames FunctionNameIndex) returns ValueClassColumns
 	var columns = ValueClassColumns.create()
+
 	for funcIndex in 0 upto stdModule.funcCount() 'eachFunc'
 		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, funcNames: funcNames))
 	end 'eachFunc'
+
 	return columns
 end 'buildValueClassColumns'
 
@@ -351,9 +362,11 @@ end 'buildValueClassColumns'
 // guarantee for a measured cost.
 export function buildCalleeParamClasses(funcNames FunctionNameIndex) returns CalleeParamClassMap
 	var calleeParamClasses = CalleeParamClassMap.create()
+
 	for func in funcNames.functions 'eachFunc'
 		calleeParamClasses.upsert(func.name, value: floatParamMaskOf(func.paramTypes))
 	end 'eachFunc'
+
 	return calleeParamClasses
 end 'buildCalleeParamClasses'
 
@@ -363,12 +376,15 @@ end 'buildCalleeParamClasses'
 // reason the callee no longer re-walks its parameter types once per parameter.
 export function floatParamMaskOf(paramTypes StdTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
+
 	for i in 0 upto paramTypes.count() 'eachParam'
 		let paramType = try paramTypes.get(i) otherwise panic("floatParamMaskOf: paramTypes.get OOB at {i}")
+
 		if stdTypeIsFloat(paramType) 'float'
 			mask = mask or (1 shl i)
 		end 'float'
 	end 'eachParam'
+
 	return mask
 end 'floatParamMaskOf'
 
@@ -478,11 +494,13 @@ export typealias RegisterArgCapacity = int(1 to 32)
 export function abiFileSlotIndex(mask ArgFloatMask, index ParamCount) returns ParamCount
 	let isFloat = argMaskBit(mask, argIndex: index)
 	var slotIndex = 0 as ParamCount
+
 	for i in 0 upto index 'countPreceding'
 		if argMaskBit(mask, argIndex: i) == isFloat 'sameFile'
 			slotIndex = slotIndex + 1
 		end 'sameFile'
 	end 'countPreceding'
+
 	return slotIndex
 end 'abiFileSlotIndex'
 
@@ -506,19 +524,23 @@ export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacit
 	var floatFileSlots = 0 as ParamCount
 	var stackSlots = 0 as ParamCount
 	let fileCapacity = capacity as ParamCount
+
 	for i in 0 upto index 'eachPreceding'
 		if argMaskBit(mask, argIndex: i) 'floatArg'
 			if floatFileSlots >= fileCapacity 'floatOverflows'
 				stackSlots = stackSlots + 1
 			end 'floatOverflows'
+
 			floatFileSlots = floatFileSlots + 1
 		end 'floatArg' else 'intArg'
 			if fileSlots >= fileCapacity 'intOverflows'
 				stackSlots = stackSlots + 1
 			end 'intOverflows'
+
 			fileSlots = fileSlots + 1
 		end 'intArg'
 	end 'eachPreceding'
+
 	return stackSlots
 end 'abiStackSlotsBefore'
 
@@ -552,6 +574,7 @@ end 'buildFunctionValueClasses'
 // what lets this stay a single forward walk with no propagation.
 function recordBlockArgClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn)
 	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockArgClasses: blockRef {blockRef} not in stdModule.blocks")
+
 	for arg in block.blockArgs 'eachArg'
 		setValueClass(column, valueId: arg.valueId, class: regClassForStdType(arg.argType))
 	end 'eachArg'
@@ -559,6 +582,7 @@ end 'recordBlockArgClasses'
 
 function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, funcNames FunctionNameIndex)
 	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
+
 	for opIdx in block.opRefs 'eachOp'
 		let op = try stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
 		recordOpResultClass(op, column: column, funcNames: funcNames)
@@ -577,11 +601,14 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 	match op 'result'
 		// The op's own type IS the result's.
 		const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+
 		// add/sub/mul/div all produce what they consume.
 		binOp(resultId, _, _, _, operandType) then setValueClass(column, valueId: resultId, class: regClassForStdType(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValueClass(column, valueId: resultId, class: unaryResultClass(opcode, operandType: operandType))
+
 		// ⚠ AN i1, NEVER THE OPERAND TYPE. A float compare's answer is a bool in a GPR.
 		cmp(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The immediate forms are INTEGER by construction — no float op takes an immediate, so
 		// `foldConstOperands` cannot produce a float one. Their `operandType` is read for the
 		// WIDTH (X5) and never for the class, which is why it is `_` here and a GPR outright:
@@ -589,29 +616,37 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// stops being obviously true the day a float immediate exists.
 		binOpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		cmpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The TRAPPING integer division; float division is `binOp(div)` above.
 		div(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		mod(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
 		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
+
 		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
 		// its error-flag second result is an i64, which the column's `gpr` default already covers (P1.4b).
 		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
+
 		// An ADDRESS is an integer, whatever the global holds.
 		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+
 		// A page base is an address, so it is an integer — never float-classed.
 		osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// An `.rdata` address is an integer, never float-classed.
 		rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// A `.text` function address is an integer, exactly like `globalAddr`/`rdataAddr` — never
 		// float-classed (P1.5-A1).
 		funcAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// A call THROUGH a function value classes its result by the `resultType` the op carries (P1.5 #78): a
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
 		// R8/x0. There is no callee NAME to look a return type up against as `call`/`tryCall` do, so the front
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
 		callIndirect(resultId, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+
 		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
 		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
 		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
@@ -620,11 +655,14 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		ret then break 'result'
 		retVoid then break 'result'
 		storeIndirect then break 'result'
+
 		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
 		errorReturn or
 			osExit then break 'result'
+
 		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
 		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// `osPanic` defines no value (P1.9) — it aborts. `osReadClock`/`osSleepMs` (P1.5 mid-body-yield)
 		// define no value either: the clock read writes its results to caller-provided out-param buffers, and
 		// the OS sleep returns nothing. The four result-less P1.5 subprocess ops (`osProcessSpawn`,
@@ -637,19 +675,24 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 			osProcessExitCode or
 			osWaitHandles or
 			osCloseHandle then break 'result'
+
 		// `osFreePages` (P1.5-B1a′) defines no value — it releases a page region and returns nothing (its
 		// `VirtualFree` BOOL is ignored, like `osCloseHandle`'s). It sits past `osWaitHandle` in the union, so
 		// it takes its own break arm rather than joining the range above.
 		osFreePages then break 'result'
+
 		// The jump table defines no value — a terminator has no result class to record.
 		switch then break 'result'
+
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
 		witnessCall(resultId, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+
 		// A THROWING witness call classes its primary result exactly as `witnessCall` does (off the `resultType`
 		// the op carries); its error-flag second result is an i64, which the column's `gpr` default already
 		// covers — the same split `tryCall`'s two results take.
 		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+
 		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
 		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
 		osPipeCreate then break 'result'
@@ -664,16 +707,21 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osProcessSpawnInherit then break 'result'
 		osCancelIo then break 'result'
 		osGetPid(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// P1.5 dogfood slice 1b: osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound then break 'result'
 		osWriteFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The wall-clock read defines no value — `GetSystemTimeAsFileTime` writes its answer to the
 		// caller's out-param word, exactly as `osReadClock` does with its two.
 		osReadWallClock then break 'result'
+
 		// R4.1: the file OPEN defines the `CreateFileA` HANDLE — an integer, so a GPR.
 		osFileOpenRead(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The close defines no value, so there is no result class to record.
 		osFileClose then break 'result'
+
 		// R4.2: the five ops whose Win32 entry point answers in RAX define an integer (a BOOL verdict or a
 		// search HANDLE), so a GPR; the find-close defines nothing, exactly as the file close does.
 		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -686,39 +734,48 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindClose then break 'result'
+
 		// R4.3: all four directory primitives answer in RAX with an integer — a Win32 BOOL, a character
 		// count or a `dwFileAttributes` mask — so all four define a GPR result.
 		osFileFindNext(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCurrentPath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// A3n: a rendered panic defines no value, exactly as `osPanic` defines none.
 		osPanicValue then break 'result'
 		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// W5: both answer in RAX with an integer — a kernel HANDLE and a character count — so both define a
 		// GPR result.
 		osStdHandle(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// W35: both stream writes define the OS's byte COUNT — an integer, so a GPR. `osWriteStdout` used to
 		// sit in the defines-nothing group above; it moved here when it acquired that result.
 		osWriteStdout(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// A promoted record's address is a POINTER, so its result is a GPR — `globalAddr`'s class exactly.
 		stackRecordAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// O3: a HANDLE, a mapped ADDRESS and a tick COUNT are all machine words.
 		osOpenNamedSegment(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osMapNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osTickCountMs(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The attached subprocess's two ANSWERING host primitives: a peeked byte count and an environment
 		// variable's character count are both machine words.
 		osPipePeek(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osEnvRead(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// Its other two answer nothing at all — the `SetHandleInformation`/`TerminateProcess` BOOL is
 		// discarded, exactly as `osCloseHandle`'s is — so there is no result class to record. They take a
 		// `break` arm like every other value-less op in this match; this match is EXHAUSTIVE, so "absent" is
 		// not a state an op can be in. (It said they were absent, two lines above their own arms.)
 		osHandleSetInherit then break 'result'
 		osProcessTerminate then break 'result'
+
 		// The socket family's six ANSWERING primitives: a Winsock startup code, a getaddrinfo status, a raw
 		// SOCKET, a connect status and two byte counts are all machine words. The other two discard their
 		// answer and take a `break` arm like every other value-less op in this exhaustive match.
@@ -730,48 +787,60 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osSocketSend(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSocketRecv(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSocketClose then break 'result'
+
 		// The machine query defines the processor count `GetActiveProcessorCount` answers in EAX — an
 		// integer, so a GPR, exactly as `osGetPid` classes `GetCurrentProcessId`'s DWORD.
 		osCpuCount(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// The thread-CPU read defines NOTHING — `QueryThreadCycleTime` answers through its out-param, so there
 		// is no result to class, exactly as there is none for the wall-clock read.
 		osThreadCpuTicks then break 'result'
+
 		// F1a: the decommit defines no value — it answers only a discarded BOOL — so, like the page release
 		// above, there is no result to class.
 		osDecommitPages then break 'result'
+
 		// F1b: a fill defines no value — it is a store — so there is no result to class.
 		memFill then break 'result'
+
 		// F1c: a reservation's base and a commit's base are addresses, so both are integers — classed exactly as
 		// `osAllocPages`'s page base is, and never float-classed.
 		osCommitPages(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osReservePages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// F2: a CAS's success boolean, an RMW's prior word and a thread's identity token are all INTEGERS —
 		// GPR-classed, never float-classed. An atomic reads and writes a 64-bit machine word by definition;
 		// there is no float atomic at this tier (see `StdOp.atomicRmw` on why there is no width field either).
 		atomicCas(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		atomicRmw(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		currentThreadToken(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// G1: the TLS slot index and the word read back out of the slot are both machine integers, so GPR; the
 		// two writing ops define nothing at all.
 		tlsAlloc(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		tlsSetValue then break 'result'
 		tlsSlotLoad(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSetEvent then break 'result'
+
 		// The priority door defines the class `GetPriorityClass` answers in EAX — an integer, so a GPR,
 		// exactly as `osCpuCount` classes `GetActiveProcessorCount`'s.
 		osEnterBackgroundPriority(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// G3: an ordered access classes exactly as its plain twin does — by the type it reads — and the
 		// ordered store defines nothing, exactly as `storeIndirect` defines nothing.
 		loadAcquire(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
 		storeRelease then break 'result'
+
 		// The terminal question defines the file-type word `GetFileType` answers in EAX — an integer, so a
 		// GPR, exactly as the priority read above classes `GetPriorityClass`'s.
 		osHandleFileType(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+
 		// A created section's HANDLE is a machine integer, so a GPR; the unmap and the unpublish define nothing.
 		osCreateNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint then break 'result'
+
 		// The host call's raw answer is a machine integer, so a GPR.
 		osHostSample(resultId, _, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
@@ -820,9 +889,11 @@ end 'calleeResultClass'
 export enum IndexedMemoryForm
 	// The address stands alone: every matched chain emits its own address op and the access reads it.
 	none
+
 	// x64's SIB byte: `[base + index*scale + disp]` at any of the four scales and any displacement, so
 	// every matched chain folds.
 	anyScaleAndDisplacement
+
 	// ⭐ **AArch64's REGISTER-OFFSET form, `LDR Xt, [Xn, Xm, LSL #k]` — a STRICTLY narrower door, and
 	// the narrowing is the ISA's rather than a conservatism.** Its `S` bit selects a shift of 0 or
 	// exactly log2(the access size) — there is no `LSL #1` under a 64-bit access — and the
@@ -870,12 +941,16 @@ export type ScaledIndexFolds
 	// A `binOpImm(mul, index, 2^k)` result the walk has SEEN. A candidate only — it is promoted into
 	// `retiredScaleDefs` when an address `add` in the same block consumes it.
 	var scaleCandidates as StdValueUseSet
+
 	// … the ones that were consumed. Their multiply is emitted NOWHERE: the address op carries it.
 	var retiredScaleDefs as StdValueUseSet
+
 	// A `binOp(add, base, scaledIndex)` result that IS a `base + index*scale` address.
 	var indexedAddrDefs as StdValueUseSet
+
 	// … of which these are carried by their ONE memory reader, so the address op emits nothing either.
 	var fusedAddrDefs as StdValueUseSet
+
 	// The three halves of the address, and the block the defining op was found in — dense columns over
 	// the function's value space, the representation `FoldConstOperands` gives its reason for (a
 	// ValueId is already a dense function-local index, so a hash map would buy nothing and allocate
@@ -889,8 +964,10 @@ export type ScaledIndexFolds
 	var indexColumn as ValueIdArray
 	var scaleColumn as MemoryIndexScaleArray
 	var defBlockColumn as BlockRefArray
+
 	// Every value the function reads, WITH MULTIPLICITY — condition 1 above.
 	var valueUses as StdValueUseSet
+
 	// ⭐ EC19 — WHICH BLOCK EACH ARITHMETIC RESULT IS DEFINED IN, and the set that says an entry was
 	// written at all (the `growFilled` zero is a real BlockRef, so the column alone can never read as
 	// absent — the rule every other column here states for itself).
@@ -903,6 +980,7 @@ export type ScaledIndexFolds
 	// entry and is REFUSED, which is conservative in the only direction that costs a missed swap.
 	var arithDefBlock as BlockRefArray
 	var arithDefs as StdValueUseSet
+
 	// The two scratch records the walk refills per op. Fields rather than locals for
 	// `StdToX64Conversion.fuseIfDefines`' measured reason: a fresh heap object per op of every function
 	// the backend lowers cost ~3,500 allocations on the SMALLEST scale rung.
@@ -934,6 +1012,7 @@ export type ScaledIndexFolds
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeScaledIndexFolds: blockRef from func.blockRefs not in module.blocks")
+
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("computeScaledIndexFolds: opIdx {opIdx} not in module.ops")
 				self.recordOp(op, blockRef: blockRef, memoryForm: memoryForm)
@@ -995,9 +1074,11 @@ export type ScaledIndexFolds
 		if self.valueUses.containsRepeat(valueId) 'anotherReaderExists'
 			return false
 		end 'anotherReaderExists'
+
 		if not self.arithDefs.contains(valueId) or not self.arithDefs.contains(readerId) 'noRecordedDefBlock'
 			return false
 		end 'noRecordedDefBlock'
+
 		return self.blockOfArithDef(valueId) == self.blockOfArithDef(readerId)
 	end 'valueDiesAtItsOnlyReader'
 
@@ -1008,6 +1089,7 @@ export type ScaledIndexFolds
 		if not self.arithDefs.contains(valueId) 'noEntry'
 			panic("ScaledIndexFolds.blockOfArithDef: value {valueId} defines no arithmetic result — ask through `valueDiesAtItsOnlyReader`, which tests `arithDefs` first; the column holds a `growFilled` zero for every other id, which is a real BlockRef rather than a sentinel")
 		end 'noEntry'
+
 		return try self.arithDefBlock.get(valueId) otherwise panic("ScaledIndexFolds.blockOfArithDef: arithDefBlock.get OOB at {valueId}")
 	end 'blockOfArithDef'
 
@@ -1018,6 +1100,7 @@ export type ScaledIndexFolds
 		if not self.indexedAddrDefs.contains(valueId) 'notAnAddress'
 			panic("ScaledIndexFolds.baseOf: value {valueId} is not a matched scaled-index address — ask `isIndexedAddress` first; a scale candidate has no base, and the column holds a `growFilled` zero for it")
 		end 'notAnAddress'
+
 		return try self.baseColumn.get(valueId) otherwise panic("ScaledIndexFolds.baseOf: baseColumn.get OOB at {valueId}")
 	end 'baseOf'
 
@@ -1096,12 +1179,15 @@ export type ScaledIndexFolds
 		if not self.operands.isBinaryArithImm() 'notImmForm'
 			return false
 		end 'notImmForm'
+
 		if self.operands.opcode != StdBinOpcode.mul 'notMultiply'
 			return false
 		end 'notMultiply'
+
 		if stdTypeIsFloat(self.operands.operandType) 'float'
 			return false
 		end 'float'
+
 		return memoryIndexScaleOfFactor(self.operands.imm, scale: self.scaleMatch)
 	end 'operandsAreAScaleMultiply'
 
@@ -1109,9 +1195,11 @@ export type ScaledIndexFolds
 		if not self.operands.isBinaryArith() 'notRegForm'
 			return false
 		end 'notRegForm'
+
 		if self.operands.opcode != StdBinOpcode.add 'notAdd'
 			return false
 		end 'notAdd'
+
 		return not stdTypeIsFloat(self.operands.operandType)
 	end 'operandsAreAnAddressAdd'
 
@@ -1123,9 +1211,11 @@ export type ScaledIndexFolds
 		let resultId = self.operands.resultId
 		let lhs = self.operands.lhs
 		let rhs = self.operands.rhs
+
 		if self.tryIndexedAddress(resultId, base: lhs, scaled: rhs, blockRef: blockRef) 'rhsIsScaled'
 			return
 		end 'rhsIsScaled'
+
 		// At most ONE operand can match — the first probe returned false — so this answer is the
 		// function's, and there is nothing after it to guard.
 		_ = self.tryIndexedAddress(resultId, base: rhs, scaled: lhs, blockRef: blockRef)
@@ -1139,9 +1229,11 @@ export type ScaledIndexFolds
 		if not self.scaleCandidates.contains(scaled) 'notScaled'
 			return false
 		end 'notScaled'
+
 		if self.blockOf(scaled) != blockRef 'otherBlock'
 			return false
 		end 'otherBlock'
+
 		if self.valueUses.containsRepeat(scaled) 'sharedMultiply'
 			return false
 		end 'sharedMultiply'
@@ -1260,6 +1352,7 @@ export type ScaledIndexFolds
 			osFileOpenWriteExecutable then break 'mem'
 			osEnvBlock or
 				osEnvBlockFree then break 'mem'
+
 			// G3: the ordered pair addresses a STRUCT FIELD off a plain pointer, never a scaled element
 			// address, so there is nothing for the indexed form to absorb. Declining to fuse is always safe:
 			// the address op then emits its own `lea` and the access reads it.
@@ -1280,12 +1373,15 @@ export type ScaledIndexFolds
 		if not self.indexedAddrDefs.contains(addrId) 'notIndexed'
 			return
 		end 'notIndexed'
+
 		if self.blockOf(addrId) != blockRef 'otherBlock'
 			return
 		end 'otherBlock'
+
 		if self.valueUses.containsRepeat(addrId) 'sharedAddress'
 			return
 		end 'sharedAddress'
+
 		if not indexedFormCarries(memoryForm, scale: self.scaleOf(addrId), offset: offset, valueType: valueType) 'noSuchAddressingForm'
 			return
 		end 'noSuchAddressingForm'
@@ -1417,6 +1513,7 @@ function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps 
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
+
 	// The PREDICATE is recorded against the branching BLOCK (see `CmpPredMap`); the FLOAT-NESS
 	// stays against the compare's VALUE, and the asymmetry is exact rather than convenient. "Which
 	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
@@ -1432,9 +1529,11 @@ function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps 
 	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
 	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
 	fused.upsert(blockRef, value: pred)
+
 	if stdTypeIsFloat(operandType) 'float'
 		floatCmps.insert(condId)
 	end 'float'
+
 	if stdTypeIsUnsigned(operandType) 'unsigned'
 		unsignedCmps.insert(condId)
 	end 'unsigned'
@@ -1462,6 +1561,7 @@ end 'fuseIfDefines'
 export type CompareFusionCensus
 	// The blocks whose terminating conditional branch reads a compare's flags → that compare's predicate.
 	var fusedPreds as CmpPredMap
+
 	// ⭐ THE FUSED COMPARES WHOSE OPERANDS ARE FLOATS — `fusedPreds`' second column, written at the
 	// same instant by the same call (`fuseIfDefines`).
 	//
@@ -1480,10 +1580,12 @@ export type CompareFusionCensus
 	// HIT. That is what makes `dropFusion` safe without removing from it (there is no `remove` on a
 	// dense set): dropping the `fusedPreds` entry makes the entry here unreachable.
 	var fusedFloatCmps as StdValueUseSet
+
 	// ⭐ THE FUSED COMPARES WHOSE ORDERING IS UNSIGNED — `fusedPreds`' THIRD column, written at the same
 	// instant by the same call (`fuseIfDefines`), and a dense bool column for `fusedFloatCmps`' measured
 	// reason. A program whose every ordering compare is signed inserts nothing into it.
 	var fusedUnsignedCmps as StdValueUseSet
+
 	// Every value this function reads AS A VALUE — out of a REGISTER, rather than as the flags a
 	// fused branch tests. A compare whose result lands in here needs a `setcc`/`cset` to write its
 	// boolean into a register; one that does not stays in the flags.
@@ -1589,10 +1691,13 @@ export type CompareFusionCensus
 	function computeFusedCmps(module StdModule, func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
+
 			if not block.hasTerminatorOp() 'noTerm'
 				continue
 			end 'noTerm'
+
 			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
+
 			match term 'term'
 				condBranch(condId, _, _) then self.recordFusableCompare(module, block: block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps)
 				const or
@@ -1614,6 +1719,7 @@ export type CompareFusionCensus
 					osAllocPages or
 					osWriteStdout or
 					rdataAddr then break 'term'
+
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
 				tryCall or
@@ -1630,12 +1736,15 @@ export type CompareFusionCensus
 					osCloseHandle or
 					osWaitHandle or
 					osFreePages then break 'term'
+
 				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
 				switch then break 'term'
+
 				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing. The
 				// throwing form is a call for the identical reason.
 				witnessCall then break 'term'
 				witnessTryCall then break 'term'
+
 				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
 				osPipeCreate or
 					osIocpCreate or
@@ -1651,8 +1760,10 @@ export type CompareFusionCensus
 					osGetPid or
 					osPipeCreateOutbound or
 					osWriteFile then break 'term'
+
 				// The wall-clock read is a void body op, never a terminator.
 				osReadWallClock then break 'term'
+
 				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
 				osFileOpenRead or
 					osFileClose or
@@ -1667,15 +1778,20 @@ export type CompareFusionCensus
 					osDirCreate or
 					osDirCurrentPath or
 					osFileAttributes then break 'term'
+
 				// A panic is a body op, never a terminator, under either spelling.
 				osPanicValue then break 'term'
+
 				// A command-line read is a value-producing body op, never a terminator.
 				osCommandLine then break 'term'
+
 				// W5: a handle read and a path fill are value-producing body ops, never terminators.
 				osStdHandle then break 'term'
 				osExecutablePath then break 'term'
+
 				// W35: a stream write is a value-producing body op, never a terminator.
 				osWriteStderr then break 'term'
+
 				// A frame address is a value-producing body op, never a terminator.
 				stackRecordAddr then break 'term'
 				osOpenNamedSegment or
@@ -1695,17 +1811,22 @@ export type CompareFusionCensus
 					osSocketClose or
 					osCpuCount or
 					osThreadCpuTicks then break 'term'
+
 				// F1a: a decommit is a body op, never a terminator — nothing to fuse.
 				osDecommitPages then break 'term'
+
 				// F1b: a byte fill is a body op, never a terminator — nothing to fuse.
 				memFill then break 'term'
+
 				// F1c: a reserve and a commit are body ops, never terminators — nothing to fuse.
 				osCommitPages or
 					osReservePages then break 'term'
+
 				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
 				atomicCas or
 					atomicRmw or
 					currentThreadToken then break 'term'
+
 				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
 				tlsAlloc or
 					tlsSetValue or
@@ -1732,10 +1853,12 @@ export type CompareFusionCensus
 	// the order the flags are overwritten in.
 	function recordFusableCompare(module StdModule, block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		var i = block.opRefs.count()
+
 		while i > 0 'scanBackward'
 			i = i - 1
 			let opIdx = try block.opRefs.get(i) otherwise panic("recordFusableCompare: opRefs.get OOB at {i}")
 			let op = try module.ops.get(opIdx) otherwise panic("recordFusableCompare: opIdx {opIdx} not in stdModule.ops")
+
 			if not op.rawValue.clobbersFlags 'flagsPreserved'
 				continue
 			end 'flagsPreserved'
@@ -1760,6 +1883,7 @@ export type CompareFusionCensus
 
 			match op 'isTheCompare'
 				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+
 				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
 				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
 				// variant. The width is still ASKED of the op's own `operandType` rather than assumed
@@ -1767,6 +1891,7 @@ export type CompareFusionCensus
 				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				default panic("recordFusableCompare: `isCmp: true` on an op this match does not name — StdOpMeta's isCmp and this match have come apart")
 			end 'isTheCompare'
+
 			return
 		end 'scanBackward'
 	end 'recordFusableCompare'
@@ -1783,6 +1908,7 @@ export type CompareFusionCensus
 	// that second one and leave the branch reading a value nothing ever wrote.
 	function computeValuesReadFromRegisters(module StdModule, func IrFunction, fused CmpPredMap) returns StdValueUseSet
 		var readAsValue = StdValueUseSet.create()
+
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeValuesReadFromRegisters: blockRef from func.blockRefs not in stdModule.blocks")
 
@@ -1817,9 +1943,11 @@ export type CompareFusionCensus
 		if not block.hasTerminatorOp() 'noTerm'
 			return
 		end 'noTerm'
+
 		if fused.contains(blockRef) 'flagsOnly'
 			return
 		end 'flagsOnly'
+
 		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("collectTerminatorValueUses: terminatorIndex not in stdModule.ops")
 		collectStdOpUses(term, referenced: readAsValue)
 	end 'collectTerminatorValueUses'

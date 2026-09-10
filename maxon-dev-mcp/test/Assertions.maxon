@@ -36,8 +36,10 @@ export typealias JsonDocArray = Array with JsonDoc
 // response-count assertion downstream fail for a reason that was no longer on screen.
 export function splitJsonLines(s String, site AssertSite) returns JsonDocArray throws TestFailure
 	var out = JsonDocArray.create()
+
 	for line in s.split("\n") 'each'
 		let trimmed = line.trim()
+
 		if trimmed.isEmpty() 'blank'
 			continue
 		end 'blank'
@@ -158,6 +160,7 @@ function walkRecursiveObject(actualDoc JsonDoc, actualId JsonNodeId, assertDoc J
 
 	let assertNode = assertDoc.get(assertId)
 	let keyCount = assertNode.keys.count()
+
 	for i in 0 upto keyCount 'eachKey'
 		let key = try assertNode.keys.get(i) otherwise panic("walkRecursiveObject: keys.get OOB — i bounded by keyCount")
 		let childAssertId = try assertNode.children.get(i) otherwise panic("walkRecursiveObject: children.get OOB — keys and children are parallel")
@@ -199,6 +202,7 @@ end 'walkArrayAssertion'
 // The caller has already made the two counts agree, which is why the actual-side `get` cannot miss.
 function walkChildren(actualDoc JsonDoc, actualNode JsonNode, assertDoc JsonDoc, assertNode JsonNode, path String, site AssertSite) throws TestFailure
 	let n = assertNode.children.count()
+
 	for i in 0 upto n 'each'
 		let assertChild = try assertNode.children.get(i) otherwise panic("walkChildren: assert children.get OOB — i bounded by n")
 		let actualChild = try actualNode.children.get(i) otherwise panic("walkChildren: actual children.get OOB — the counts were checked first")
@@ -299,6 +303,7 @@ end 'assertHasKey'
 function jsonValuesEqual(a JsonDoc, aId JsonNodeId, b JsonDoc, bId JsonNodeId) returns bool
 	let an = a.get(aId)
 	let bn = b.get(bId)
+
 	if an.kind != bn.kind 'kindMismatch'
 		return false
 	end 'kindMismatch'
@@ -315,6 +320,7 @@ end 'jsonValuesEqual'
 
 function jsonArraysEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
 	let n = an.children.count()
+
 	if n != bn.children.count() 'lenMismatch'
 		return false
 	end 'lenMismatch'
@@ -322,6 +328,7 @@ function jsonArraysEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns
 	for i in 0 upto n 'each'
 		let aChild = try an.children.get(i) otherwise panic("jsonArraysEqual: an.children.get OOB — i bounded by n")
 		let bChild = try bn.children.get(i) otherwise panic("jsonArraysEqual: bn.children.get OOB — the counts match")
+
 		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'mismatch'
 			return false
 		end 'mismatch'
@@ -335,6 +342,7 @@ end 'jsonArraysEqual'
 // that emits its keys in a fixed order, and pinning the order is what makes a reordering visible.
 function jsonObjectsEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
 	let n = an.keys.count()
+
 	if n != bn.keys.count() 'lenMismatch'
 		return false
 	end 'lenMismatch'
@@ -342,12 +350,14 @@ function jsonObjectsEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) return
 	for i in 0 upto n 'each'
 		let aKey = try an.keys.get(i) otherwise panic("jsonObjectsEqual: an.keys.get OOB — i bounded by n")
 		let bKey = try bn.keys.get(i) otherwise panic("jsonObjectsEqual: bn.keys.get OOB — the counts match")
+
 		if not aKey.equals(bKey) 'keyMismatch'
 			return false
 		end 'keyMismatch'
 
 		let aChild = try an.children.get(i) otherwise panic("jsonObjectsEqual: an.children.get OOB — keys and children are parallel")
 		let bChild = try bn.children.get(i) otherwise panic("jsonObjectsEqual: bn.children.get OOB — keys and children are parallel")
+
 		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'valMismatch'
 			return false
 		end 'valMismatch'
@@ -366,6 +376,7 @@ end 'subDoc'
 
 function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
 	let node = src.get(srcId)
+
 	match node.kind 'k'
 		jsonNull then return dst.add(JsonNode.nullNode())
 		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
@@ -378,6 +389,7 @@ end 'copyNode'
 
 function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
 	var ids = JsonNodeIdArray.create()
+
 	for childId in node.children 'each'
 		ids.push(copyNode(src, srcId: childId, dst: dst))
 	end 'each'
@@ -389,6 +401,7 @@ function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 	let n = node.keys.count()
+
 	for i in 0 upto n 'each'
 		let key = try node.keys.get(i) otherwise panic("copyObject: keys.get OOB — i bounded by n")
 		let childId = try node.children.get(i) otherwise panic("copyObject: children.get OOB — keys and children are parallel")

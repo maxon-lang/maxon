@@ -108,6 +108,7 @@ export type FunctionNameIndex
 			duplicateAt(laterIndex) then try refuseDuplicateFunctionName(functions, project: project, laterIndex: laterIndex)
 			built(index) then return index
 		end 'build'
+
 		panic("FunctionNameIndex.create: `refuseDuplicateFunctionName` returned instead of throwing — every arm of it either reports and throws or panics, and this constructor has no answer for a duplicate it was told about and asked to ignore")
 	end 'create'
 
@@ -129,15 +130,18 @@ export type FunctionNameIndex
 	// exists to prevent.
 	export static function build(functions IrFunctionArray) returns FunctionNameIndexBuild
 		var byName = FuncIndexByName.create()
+
 		for i in 0 upto functions.count() 'eachFunc'
 			let func = try functions.get(i) otherwise panic("FunctionNameIndex.build: functions.get OOB at {i}, inside a loop bounded by its own count")
 			byName.upsert(func.name, value: i)
+
 			// The height IS `i + 1` after every insert unless one insert collapsed two names into one entry
 			// — one integer compare per function, no second probe. See the header.
 			if byName.count() != i + 1 'duplicateName'
 				return FunctionNameIndexBuild.duplicateAt(i)
 			end 'duplicateName'
 		end 'eachFunc'
+
 		return FunctionNameIndexBuild.built(Self{functions: functions, byName: byName})
 	end 'build'
 
@@ -226,6 +230,7 @@ end 'refuseDuplicateFunctionName'
 function earlierFunctionNamed(functions IrFunctionArray, name ByteArray, before FuncIndex) returns IrFunction
 	for i in 0 upto before 'eachEarlier'
 		let candidate = try functions.get(i) otherwise panic("earlierFunctionNamed: functions.get OOB at {i}, below an index the caller already read")
+
 		if candidate.name == name 'sameName'
 			return candidate
 		end 'sameName'

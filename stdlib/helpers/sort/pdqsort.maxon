@@ -33,25 +33,31 @@ public extension Array
 		let va = try managed.get(a) otherwise panic("medianOf3Index: get OOB at a")
 		let vb = try managed.get(b) otherwise panic("medianOf3Index: get OOB at b")
 		let vc = try managed.get(c) otherwise panic("medianOf3Index: get OOB at c")
+
 		if cmp(va, vb) == Ordering.lessThan 'aLessB'
 			// a < b
 			if cmp(vb, vc) == Ordering.lessThan 'bLessC'
 				return b
 			end 'bLessC'
+
 			// a < b, b >= c
 			if cmp(va, vc) == Ordering.lessThan 'aLessC'
 				return c
 			end 'aLessC'
+
 			return a
 		end 'aLessB'
+
 		// a >= b
 		if cmp(va, vc) == Ordering.lessThan 'aLessC2'
 			return a
 		end 'aLessC2'
+
 		// a >= b, a >= c
 		if cmp(vb, vc) == Ordering.lessThan 'bLessC2'
 			return c
 		end 'bLessC2'
+
 		return b
 	end 'medianOf3Index'
 
@@ -83,9 +89,11 @@ public extension Array
 	// element; partition swaps it into its sorted position.
 	public function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
 		let n = hi - lo
+
 		if n > 128 'large'
 			return self.medianOfMediansIndex(lo, hi: hi, cmp: cmp)
 		end 'large'
+
 		Log.trace("pdq.medianOf3")
 		let mid = lo + n / 2
 		return self.medianOf3Index(lo, b: mid, c: hi - 1, cmp: cmp)
@@ -107,48 +115,62 @@ public extension Array
 	// shape, which keeps the inliner happy.
 	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator) returns (SortIndex, bool)
 		Log.trace("pdq.partition")
+
 		// Move pivot to the front of the slice (unconditional swap).
 		// After this `lo` holds the pivot value for the rest of the pass.
 		self.swap(lo, j: pivotIndex)
+
 		// Pivot value is loop-invariant: read once before the sweep.
 		let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
 		var leftAllStrictlyLess = true
 		var i = lo + 1
 		var j = hi - 1
+
 		while i <= j 'sweep'
 			// Advance i while arr[i] < pivot.
 			let vi = try managed.get(i) otherwise panic("partition: get OOB at i")
 			let cmpI = cmp(vi, pv)
+
 			if cmpI == Ordering.lessThan 'iAdvance'
 				i = i + 1
 				continue
 			end 'iAdvance'
+
 			// Retreat j while arr[j] > pivot.
 			let vj = try managed.get(j) otherwise panic("partition: get OOB at j")
 			let cmpJ = cmp(vj, pv)
+
 			if cmpJ == Ordering.greaterThan 'jRetreat'
 				if j == lo 'underflowJ'
 					break
 				end 'underflowJ'
+
 				j = j - 1
 				continue
 			end 'jRetreat'
+
 			// arr[i] >= pivot and arr[j] <= pivot — swap them.
 			if i > j 'crossed'
 				break
 			end 'crossed'
+
 			self.swap(i, j: j)
+
 			// Element placed at i was the old arr[j]. It was <= pivot;
 			// if it was equal (not strictly less), record that.
 			if cmpJ != Ordering.lessThan 'rightWasEqual'
 				leftAllStrictlyLess = false
 			end 'rightWasEqual'
+
 			i = i + 1
+
 			if j == lo 'underflowJ2'
 				break
 			end 'underflowJ2'
+
 			j = j - 1
 		end 'sweep'
+
 		// `j` now sits at the rightmost position of the < region.
 		// Swap the pivot from lo into its final slot at j.
 		self.swap(lo, j: j)
@@ -160,24 +182,31 @@ public extension Array
 	// Declared before `heapsort` so the parser sees the symbol at point of use.
 	function siftDown(lo SortIndex, start SortIndex, count SortIndex, cmp SortComparator)
 		var root = start
+
 		while true 'sift'
 			var child = 2 * root + 1
+
 			if child >= count 'leaf'
 				return
 			end 'leaf'
+
 			// Pick the larger of the two children.
 			if child + 1 < count 'hasRight'
 				let l = try managed.get(lo + child) otherwise panic("siftDown: get OOB at left child")
 				let r = try managed.get(lo + child + 1) otherwise panic("siftDown: get OOB at right child")
+
 				if cmp(l, r) == Ordering.lessThan 'rightBigger'
 					child = child + 1
 				end 'rightBigger'
 			end 'hasRight'
+
 			let rv = try managed.get(lo + root) otherwise panic("siftDown: get OOB at root")
 			let cv = try managed.get(lo + child) otherwise panic("siftDown: get OOB at chosen child")
+
 			if cmp(rv, cv) != Ordering.lessThan 'heapOk'
 				return
 			end 'heapOk'
+
 			// Raw swap, not get+set: `set`'s overwrite decref would free the
 			// displaced occupant while its borrow is still in flight (see
 			// `Array.swap`).
@@ -191,18 +220,23 @@ public extension Array
 	function heapsort(lo SortIndex, hi SortIndex, cmp SortComparator)
 		Log.trace("pdq.heapsortFallback")
 		let n = hi - lo
+
 		if n <= 1 'trivial'
 			return
 		end 'trivial'
+
 		// Build the max-heap: sift-down from the last non-leaf node.
 		var start = n / 2
+
 		while start > 0 'buildHeap'
 			start = start - 1
 			self.siftDown(lo, start: start, count: n, cmp: cmp)
 		end 'buildHeap'
+
 		// Extract elements one by one: swap root to end, shrink, sift the
 		// new root down.
 		var heapEnd = n
+
 		while heapEnd > 1 'extract'
 			heapEnd = heapEnd - 1
 			self.swap(lo, j: lo + heapEnd)
@@ -225,13 +259,17 @@ public extension Array
 		var curHi = hi
 		var allowance = badAllowance
 		var prevSame = prevPivotSame
+
 		while curHi - curLo > 32 'loop'
 			let n = curHi - curLo
+
 			if allowance == 0 'fallback'
 				self.heapsort(curLo, hi: curHi, cmp: cmp)
 				return
 			end 'fallback'
+
 			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
+
 			// Common-prefix skip: if the new pivot equals the element just
 			// before the slice, the partition would put every element of
 			// the slice on the right of that pivot — i.e. all are == pivot.
@@ -239,8 +277,10 @@ public extension Array
 			if prevSame and curLo > 0 'tryCommonPrefix'
 				let prevAnchor = try managed.get(curLo - 1) otherwise panic("pdqsortRecurse: get OOB at curLo - 1")
 				let pivotVal = try managed.get(pivotIndex) otherwise panic("pdqsortRecurse: get OOB at pivotIndex")
+
 				if cmp(prevAnchor, pivotVal) == Ordering.equalTo 'commonHit'
 					Log.trace("pdq.commonPrefix")
+
 					// Partition into [<pivot] (empty per the anchor invariant)
 					// and [>=pivot]; only need to recurse on the right half.
 					let (p, _) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
@@ -248,16 +288,19 @@ public extension Array
 					continue
 				end 'commonHit'
 			end 'tryCommonPrefix'
+
 			let (pivotPos, leftAllStrictlyLess) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
 			let leftSize = pivotPos - curLo
 			let rightSize = curHi - pivotPos - 1
 			let smaller = leftSize if leftSize < rightSize else rightSize
+
 			// Decrement allowance when partition was highly skewed.
 			if smaller < n / 8 'skewed'
 				if allowance > 0 'decBad'
 					allowance = allowance - 1
 				end 'decBad'
 			end 'skewed'
+
 			// Equal-elements fast path: when partition's left half is all
 			// elements that were NOT strictly less than the pivot, we have
 			// a run of equal elements on the left. Skip recursing on it.
@@ -267,6 +310,7 @@ public extension Array
 				prevSame = true
 				continue
 			end 'equalLeft'
+
 			// Sort the smaller side recursively (bounded stack depth) and
 			// loop on the larger side. The mutable `curHi` lets the loop
 			// shrink the working range on the right just like `curLo`
@@ -278,9 +322,11 @@ public extension Array
 			end 'recurseLeft' else 'recurseRight'
 				self.pdqsortRecurse(pivotPos + 1, hi: curHi, badAllowance: allowance, prevPivotSame: true, cmp: cmp)
 				curHi = pivotPos
+
 				// prevSame for the next iteration's left half is unchanged.
 			end 'recurseRight'
 		end 'loop'
+
 		// Slice fell below the small-sort threshold; finish with the small-sort.
 		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'pdqsortRecurse'
@@ -291,18 +337,22 @@ public extension Array
 	// sort only on bigger inputs.
 	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
+
 		if n <= 32 'small'
 			self.smallSortRange(lo, hi: hi, cmp: cmp)
 			return
 		end 'small'
+
 		// Bad-allowance budget: 2 × ⌊log2(n)⌋. Once exhausted, heapsort
 		// takes over and guarantees O(n log n).
 		var budget = 0 as SortIndex
 		var v = n
+
 		while v > 1 'log2'
 			budget = budget + 1
 			v = v / 2
 		end 'log2'
+
 		budget = budget * 2
 		self.pdqsortRecurse(lo, hi: hi, badAllowance: budget, prevPivotSame: false, cmp: cmp)
 	end 'pdqsortRange'

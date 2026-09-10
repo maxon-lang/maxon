@@ -27,6 +27,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 			return memo.value
 		end 'hit'
 	end 'memoized'
+
 	project.db.tokenMisses = project.db.tokenMisses + 1
 
 	// The process-wide store is asked only on a per-`Project` miss, and the answer is written back
@@ -43,13 +44,16 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
 	let tokens = try tokenize(entry.content) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
+
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and the next attempt must
 		// re-run against corrected source.
 		return TokenArray.create()
 	end 'lexFail'
+
 	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
 
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
+
 	// Published only on the success path: a failed tokenize returned above without caching anywhere,
 	// which keeps the store free of streams whose diagnostic belongs to one compile.
 	shareTokens(project, contentHash: entry.contentHash, tokens: tokens)
@@ -81,6 +85,7 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 			return memo.value
 		end 'hit'
 	end 'memoized'
+
 	project.db.activeTokenMisses = project.db.activeTokenMisses + 1
 
 	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe: the
@@ -94,12 +99,14 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	// Asked below `queryTokens`, not above it: a shared hit that skipped it would leave this project's
 	// `tokenCache` empty, so the next re-query of an unchanged file would miss.
 	let targetKey = targetKeyOf(project.target)
+
 	if let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, targetKey: targetKey) 'sharedHit'
 		project.db.activeTokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
 		return shared
 	end 'sharedHit'
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
+
 	// The failure is memoized too, which is what makes the diagnostic appear once: this query has two
 	// callers per file with no error gate between them, so anything not cached here would be computed
 	// — and reported — twice. Caching is sound because the key is the file's content hash, so the
@@ -108,12 +115,14 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	recordPhase(project, phase: CompilePhase.directives, probe: probe)
 
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(filtered.value, keyHash: entry.contentHash))
+
 	// The process-wide store takes the successes only, where the line above takes the failures too:
 	// the empty stream a directive fault produces is paired with a diagnostic on THIS compile's
 	// `project.diagnostics`, and a later compile that merely shares the bytes would have neither.
 	if filtered.filtered 'theFilterSucceeded'
 		shareActiveTokens(entry.contentHash, targetKey: targetKey, activeTokens: filtered.value)
 	end 'theFilterSucceeded'
+
 	return filtered.value
 end 'queryActiveTokens'
 
@@ -134,6 +143,7 @@ function activeTokensOrReported(project Project, path FilePath, tokens TokenArra
 		reportDirectiveError(project, path: path, error: directiveErr)
 		return FilteredTokens.create(TokenArray.create(), filtered: false)
 	end 'directiveFail'
+
 	return FilteredTokens.create(active, filtered: true)
 end 'activeTokensOrReported'
 
@@ -159,6 +169,7 @@ end 'activeTokensOrReported'
 function applyDefines(project Project, signatures ProgramSignatures)
 	signatures.defines = project.defines
 	let problems = signatures.resolveDefines()
+
 	if problems.count() == 0 'allBound'
 		return
 	end 'allBound'
@@ -175,9 +186,11 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		project.db.signatureHits = project.db.signatureHits + 1
 		return project.db.signatureCache.value
 	end 'hit'
+
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = ProgramSignatures.create(project.target.os)
+
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
 	signatures.rootIsUnderStdlibDirectory = rootIsUnderStdlibDirectory(project, cwd: Directory.currentPath())
@@ -192,11 +205,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// being hidden. See `StdlibLoader`'s header for the filesystem-order rule this keeps.
 	var userPaths = MaxonSourcePathArray.create()
 	var stdlibPaths = MaxonSourcePathArray.create()
+
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibSource'
 			stdlibPaths.push(path)
 			continue
 		end 'stdlibSource'
+
 		userPaths.push(path)
 	end 'eachFile'
 
@@ -243,29 +258,35 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// position, by the real parse when it reaches that line. That keeps this memo cacheable — a query
 	// that reported would have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+
 	// Before `evaluateInitializers`: a top-level constant's initializer can cast to a stdlib-only type
 	// (`stdlib/Builtins.maxon`'s `__FloatSignBit`), so the evaluator must already know which kind of
 	// declaration a name is before it runs.
 	signatures.settleCrossKindContests()
+
 	// First of the whole-program instance steps, because the three below all read a generic instance
 	// and this decides which instance a file means: a name declared over two different ranges by two
 	// files is two element types, so its instances are split here, once, with every declaration in and
 	// no file yet parsed. See `settleRangeScopedInstances`.
 	signatures.settleRangeScopedInstances()
+
 	// The same question one layer up, for the alias registry a cross-file reference resolves through.
 	// Strictly after the range settle above: a `Bytes` whose `Byte` two files declare differently is
 	// two instances only once the element has been split, so reversing the two would make every such
 	// pair look like agreement.
 	signatures.settleGenericAliasContest()
+
 	// Here because this is the first line at which every declaration is folded and every field's
 	// declared type has been resolved (`resolveRecordedGenericAliasTypes`, inside the call above): a
 	// field's slot count depends on its declared type, so a layout read before that resolution could
 	// state an offset it will not keep. See `checkFusedWrapperRecordLayouts` for why it panics rather
 	// than reporting.
 	signatures.checkFusedWrapperRecordLayouts()
+
 	// Here for the same "the whole program is known now" reason, and before `deriveInstanceNames`,
 	// which names every instance. Doing this per file instead re-walks tables that are still growing.
 	signatures.internLiteralContainerInstances()
+
 	// Only now can a swept `named` be told from a declared `type`: the sweep resolves `returns Self`
 	// (and `returns <its own type's name>`) to a `structRef` from the tokens alone, but a foreign name
 	// must stay bare because `structTypes` is still filling while it reads. Before
@@ -273,6 +294,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// factory's declared return type into the declaration's outcome and a re-tag after this line
 	// cannot reach the copy.
 	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
+
 	// ⚠ The initializer DFS has no depth bound: a deep enough forward-reference chain exhausts the
 	// stack and the compiler dies with SIGSEGV and no diagnostic. Depth is what matters, not the number
 	// of constants, and a cycle that long faults before `recordCycle` can raise E2012. Closing it needs
@@ -282,32 +304,38 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// the fold is what would otherwise read the initializer this replaces.
 	applyDefines(project, signatures: signatures)
 	signatures.evaluateInitializers()
+
 	// Every declared `interface`'s requirements, for the same "the whole program is known now" reason.
 	// Before `deriveInstanceNames`: reading a requirement's parameter types can intern a generic
 	// instance no other declaration named, and an instance interned after the warming walk would have
 	// its two name memos derived lazily by the parse, which must only ever read them.
 	try foldInterfaceDeclarations(project, signatures: signatures)
+
 	// Only now can an `implements` clause be read to its end: whether a comma opens a second argument
 	// or a second interface is the named interface's `uses` arity, which the line above is what
 	// establishes — so the per-file sweep stopped at the first unparenthesized `with`. Strictly
 	// between these two lines: after the interface fold because that is the arity, before the
 	// extension fold because `conformsTo` is the relation that pass expands over.
 	try foldConformanceClauses(project, signatures: signatures)
+
 	// Every `extension <Interface>`'s methods, onto every conformer — strictly after the two lines
 	// above, which is what makes an extension's signatures render types exactly as the real parse
 	// will, and what puts every conformer into the relation this walks.
 	try foldExtensionDeclarations(project, signatures: signatures)
+
 	// Only now can a swept `named` be told from an interface: the line above fills the interface
 	// registry, so a type the sweep recorded before it — a struct field, a declared return type —
 	// spells an interface annotation as a bare `named`, while the real parse mints `interfaceRef`.
 	// Left unnormalized this would be a wrong SIZE, not just a wrong name: an existential field
 	// occupies two slots and a `named` one.
 	signatures.normalizeSweptInterfaceTypes()
+
 	// Strictly after the two lines above: the interface fold fills the registry this reads a `with`
 	// argument against, and the normalization settles the one spelling an argument arrives in. Before
 	// the parse, because the parse types a dispatch whose result is a held associated type as an
 	// existential, and no later pass can retype a value.
 	signatures.settleAssociatedTypeHoldings()
+
 	// Only now can a swept `named` be told from a bare generic name: `var cell as Cell` inside `type
 	// Holder uses T` means `Cell with Holder.T`, and left bare the field is classified as the base
 	// `Cell` — which owns nothing, because its one field is the opaque `T` — stranding whatever the
@@ -316,11 +344,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// interns the scoped instance and an instance minted after the warming walk derives its name memos
 	// lazily.
 	signatures.normalizeSweptScopedGenericFields()
+
 	// Which methods carry the hidden layout-descriptor parameter — after the extension fold, which
 	// puts an extension's methods onto their conformers, and before `deriveInstanceNames`, because the
 	// scan's opaque-array seed interns a generic alias instance and an instance minted after the
 	// warming walk derives its name memos lazily, by the parse, which must only ever read them.
 	try foldDescriptorNeeds(project, signatures: signatures)
+
 	// Every instantiation's compiled and canonical names, for the same "the whole program is known
 	// now" reason: the parse reads both, and each memo behind them is a write, which a per-file
 	// fan-out must never make.
@@ -345,6 +375,7 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	let tokens = try queryActiveTokens(project, path: path)
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+
 	// Derived here, once, before the file's declarations are folded, so every later reader (this
 	// sweep's own `module`-tier questions, the real parse, the constant evaluator) reads an index
 	// rather than re-deriving a string from a path. ⚠ The anchor is chosen by where the file lives,
@@ -378,6 +409,7 @@ function producerMaskFor(project Project, signatures ProgramSignatures, path Fil
 
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
 	let targetKey = targetKeyOf(project.target)
+
 	if let shared = try sharedProducerMaskOf(project, contentHash: contentHash, targetKey: targetKey) 'sharedHit'
 		return shared
 	end 'sharedHit'
@@ -428,6 +460,7 @@ function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirec
 	end 'thestdlibsOwnCone'
 
 	let root = project.rootPath.resolve(cwd)
+
 	if Directory.isDirectory(root) 'projectBuild'
 		return root
 	end 'projectBuild'
@@ -471,8 +504,10 @@ end 'discoverWholeProgramTokenFacts'
 function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
 	for path in paths 'eachFile'
 		let tokens = try queryActiveTokens(project, path: path)
+
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
+
 			if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
 				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i, path: path)
 			end 'aSpawnMayStartHere'
@@ -482,6 +517,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 			end 'notATypeKeyword'
 
 			let nameTok = try tokens.get(i + 1) otherwise break
+
 			if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
 				continue
 			end 'malformedDeclaration'
@@ -518,21 +554,25 @@ end 'noteWholeProgramTokenFactsIn'
 // grammar can reach.
 function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index TokenIndex, path FilePath)
 	let typeTok = try tokens.get(index + 1) otherwise return
+
 	if not tokenCanBeAName(typeTok) 'notATypeName'
 		return
 	end 'notATypeName'
 
 	let dotTok = try tokens.get(index + 2) otherwise return
+
 	if dotTok.kind != TokenKind.dot 'notQualified'
 		return
 	end 'notQualified'
 
 	let memberTok = try tokens.get(index + 3) otherwise return
+
 	if not tokenCanBeAName(memberTok) 'notAMemberName'
 		return
 	end 'notAMemberName'
 
 	let openTok = try tokens.get(index + 4) otherwise return
+
 	if openTok.kind != TokenKind.leftParen 'notACall'
 		return
 	end 'notACall'
@@ -556,8 +596,10 @@ function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart Toke
 	var atAConformanceHead = false
 	var pastImplements = false
 	var parenDepth = 0
+
 	for i in headerStart upto tokens.count() 'eachHeaderToken'
 		let tok = try tokens.get(i) otherwise panic("headerDeclaresTheArrayLiteralMarker: tokens.get OOB at {i} below count {tokens.count()}")
+
 		if not tokenKindBelongsInATypeHeader(tok.kind) 'theHeaderEnds'
 			return false
 		end 'theHeaderEnds'
@@ -620,15 +662,19 @@ end 'tokenKindBelongsInATypeHeader'
 // `stdlib/` in.
 function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	var declaredNames = ByteArrayArray.create()
+
 	for path in stdlibPaths 'eachStdlibFile'
 		let tokens = try queryActiveTokens(project, path: path)
+
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("contestStdlibDeclarationsAgainstUserNames: tokens.get OOB at {i} below count {tokens.count()}")
+
 			if not declaresANominalTypeName(tok.kind) 'notADeclarationKeyword'
 				continue
 			end 'notADeclarationKeyword'
 
 			let nameTok = try tokens.get(i + 1) otherwise break
+
 			if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
 				continue
 			end 'malformedDeclaration'
@@ -638,6 +684,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 	end 'eachStdlibFile'
 
 	signatures.noteStdlibDeclaredTypeNames(declaredNames)
+
 	for name in declaredNames 'eachDeclaredName'
 		signatures.contestStdlibTypeName(name)
 	end 'eachDeclaredName'
@@ -666,8 +713,10 @@ end 'declaresANominalTypeName'
 function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	for path in stdlibPaths 'eachStdlibFile'
 		let tokens = try queryActiveTokens(project, path: path)
+
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("refuseContestedNamesUsedAsMembers: tokens.get OOB at {i} below count {tokens.count()}")
+
 			if tok.kind != TokenKind.identifier 'notAName'
 				continue
 			end 'notAName'
@@ -689,6 +738,7 @@ end 'refuseContestedNamesUsedAsMembers'
 function tokenIsAMemberSpelling(tokens TokenArray, index TokenIndex) returns bool
 	if index > 0 'hasPredecessor'
 		let previous = try tokens.get(index - 1) otherwise panic("tokenIsAMemberSpelling: tokens.get OOB at {index - 1}")
+
 		if previous.kind == TokenKind.dot 'memberAccess'
 			return true
 		end 'memberAccess'
@@ -725,12 +775,14 @@ end 'tokenIsAMemberSpelling'
 function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.interfaceDeclSites
 	var i = 0 as ElementIndex
+
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
+
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
@@ -767,12 +819,14 @@ end 'foldExtensionDeclarations'
 function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
 	let sites = signatures.extensionDeclSites
 	var i = 0 as ElementIndex
+
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
+
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
@@ -782,6 +836,7 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 			end 'thePrePass' else 'theFold'
 				reader.foldExtensionDeclarationInto(signatures, site: site)
 			end 'theFold'
+
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
@@ -822,12 +877,14 @@ end 'siteFileReader'
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.conformanceClauseSites
 	var i = 0 as ElementIndex
+
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")).path
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
+
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
@@ -862,6 +919,7 @@ end 'foldConformanceClauses'
 // the answer: the fixpoint is solved over the union, and the union is a set.
 function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.descriptorScanSites
+
 	if sites.count() == 0 'noGenericTypeInThisProgram'
 		return
 	end 'noGenericTypeInThisProgram'
@@ -871,6 +929,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// rather than per site so the solve sees one graph.
 	var methodNames = ByteArrayArray.create()
 	var directSeeds = DescriptorNeedMap.create()
+
 	// The count column is a second seed AND a second edge set, not a share of the descriptor's: the
 	// two columns may err in OPPOSITE directions, so they cannot tolerate the same graph. See
 	// `ProgramSignatures.fixedElementCountNeeds` for why they are two slots and not one.
@@ -879,14 +938,17 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	var countCallees = SelfCalleesMap.create()
 
 	var i = 0 as ElementIndex
+
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")).path
+
 		// `buildsBodies: false` — this scan settles a CALLING CONVENTION and emits nothing, which is the
 		// one axis on which it differs from the three folds above. See `siteFileReader`.
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
+
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
@@ -923,6 +985,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 			return memo.value
 		end 'hit'
 	end 'memoized'
+
 	project.db.parseMisses = project.db.parseMisses + 1
 
 	let tokens = try queryActiveTokens(project, path: path)
@@ -940,6 +1003,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 		project.libraryBlame = blameOutsideTheLibrary(project, blame: parser.libraryBlame)
 		reportParseError(project, path: path, error: parseErr)
 		project.libraryBlame = LibraryBlame.unblamed
+
 		// A failed parse is never cached. What IS returned carries only the type names the file had
 		// declared before it stopped — see `Parser.abortedParseArtifact` for why that one registry
 		// crosses an abort and the rest cannot.
@@ -950,6 +1014,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// very `keyHash` value that failed to validate above, not a second computation of it, so the stamp
 	// and the check cannot disagree about what a parse depends on.
 	let hadErrors = project.diagnostics.count() > errorCountBefore
+
 	if not hadErrors 'cacheOk'
 		artifact.module.assertAllBlocksTerminated()
 		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
@@ -964,6 +1029,7 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 		project.db.allModuleHits = project.db.allModuleHits + 1
 		return project.db.allModuleCache.value
 	end 'hit'
+
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
 
 	// The merge is a fixpoint, because a stdlib body is built only if something reaches it: round 0
@@ -978,6 +1044,7 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	// cheap because every parse it asks for is a memo hit except the files whose demand actually
 	// moved.
 	var merged = try foldEveryFileIntoAModule(project)
+
 	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
 		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
 		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
@@ -1008,6 +1075,7 @@ function foldEveryFileIntoAModule(project Project) returns MaxonModule throws Co
 	resetMergeTargets(project)
 
 	var merged = MaxonModule.create()
+
 	// Index loop, not `for … in`: the element is a BORROW of `project`, and the call below is recorded
 	// as writing that same storage. See `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
@@ -1044,18 +1112,22 @@ end 'checkValueMergeSignatures'
 // is REJECTED rather than silently accepted.
 function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 	let firstName = try check.armNames.get(0) otherwise panic("checkOneValueMergeSignature: a recorded function-value merge has no arms")
+
 	if not armFnTypeResolvable(project, name: firstName) 'firstUnverifiable'
 		reportUnverifiableFnMerge(project, check: check)
 		return
 	end 'firstUnverifiable'
+
 	let firstDisplay = armFnTypeDisplay(project, name: firstName)
 
 	for i in 1 upto check.armNames.count() 'eachArm'
 		let otherName = try check.armNames.get(i) otherwise panic("checkOneValueMergeSignature: armNames.get OOB at {i}")
+
 		if not armFnTypeResolvable(project, name: otherName) 'otherUnverifiable'
 			reportUnverifiableFnMerge(project, check: check)
 			return
 		end 'otherUnverifiable'
+
 		// A FUNCTION TYPEALIAS IS ITS OWN TYPE, so two BRANDS of one shape do not merge. Asked ahead of the
 		// display comparison, which is a SHAPE question and calls `Handler` and `Callback` equal; the sentence
 		// names the two aliases, because the shapes it would otherwise print are identical.
@@ -1065,6 +1137,7 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 		end 'twoBrandsOfOneShape'
 
 		let otherDisplay = armFnTypeDisplay(project, name: otherName)
+
 		if not firstDisplay.equals(otherDisplay) 'mismatch'
 			// The construct→E2028/E3005 noun is decided by the ONE shared mapping
 			// (`valueMergeMismatchError`), the same the parse-time give-type mismatch (#80) uses — so a
@@ -1342,6 +1415,7 @@ end 'buildsBodiesFor'
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
+
 	// `commitOverloadSets` ACCUMULATES members across files, so a set carried over a warm rebuild
 	// would keep a member the edited sources no longer declare.
 	project.overloadSets = OverloadSetMap.create()
@@ -1349,38 +1423,48 @@ function resetMergeTargets(project Project)
 	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 	project.pendingTransformArities = PendingTransformArityArray.create()
 	project.pendingDiscardedResults = PendingDiscardedResultArray.create()
+
 	// The two deferred name-diagnostic lists and the collision set they are suppressed by are all
 	// PUSH/INSERT targets of the merge, so a warm rebuild that re-merged the same files would double
 	// every entry.
 	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create()
 	project.hiddenTypeNameDiagnostics = DeferredNameDiagnosticArray.create()
+
 	// The binding-hygiene list (E3012/E3077) is a push target of the same merge, and doubles the same
 	// way.
 	project.bindingHygieneDiagnostics = DiagnosticArray.create()
 	project.collidedTypeNames = CollidedTypeNameSet.create()
+
 	// `conformances` is a PUSH array: a warm rebuild that re-merges the same files would double it
 	// without this reset. `interfaces` is an upsert map, reset with it for consistency.
 	project.conformances = ConformanceDeclArray.create()
+
 	// The index derived from it, reset in lockstep — see `Project.declaredConformances`.
 	project.declaredConformances = DeclaredConformanceMap.create()
 	project.declaredConformanceIndexBuilt = false
+
 	// The `<Type> from "…"` construction sites, a PUSH array for `conformances`' reason.
 	project.literalInitSites = LiteralInitSiteArray.create()
+
 	// The literal-inferred instantiation sites, a PUSH array for the same reason.
 	project.inferredInstantiationSites = GenericInstantiationSiteArray.create()
 	project.interfaces = IrInterfaceMap.create()
+
 	// The accepted-member filing is derived from those two and is FIRST-WINS, not an upsert, because
 	// two routes to one slot must agree. Carried across a re-merge, a previous fold's selection would
 	// beat the new one.
 	project.witnessSlotImpls = WitnessSlotImplMap.create()
+
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
+
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
 	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()
+
 	// ⛔ `project.typeNames` is deliberately NOT reset, the one registry here that must not be. Every
 	// other line in this function drops a table the coming fold rebuilds from the artifacts, but
 	// `mergeArtifact` has already rewritten the artifacts' `named(id)`s to index THIS table in place,
@@ -1394,6 +1478,7 @@ function resetMergeTargets(project Project)
 	// Must reset with the others: `mergeArtifact` appends spans to this table and asserts its count
 	// tracks the merged module's op count, which is rebuilt from empty on every miss.
 	project.opRanges = SourceRangeTable.create()
+
 	// The coverage fold's two targets, reset together for `opRanges`' reason: a round of the body-demand
 	// fixpoint re-folds every file, so both would double and every base would name another file's block.
 	project.covPoints = CovPointTable.create()
@@ -1422,6 +1507,7 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
 		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
+
 		// The sentence carries the cure: `specs/string-interpolation.md`'s `error.unescaped-brace` pins
 		// it verbatim, so changing this wording fails that suite.
 		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal — use '\\\{' for a literal brace", line: line, column: column, filePath: path)
@@ -1487,63 +1573,77 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// byte-for-byte by `variables.md`'s type-annotation-rejection tests.
 		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected)} but got '{got}'", line: line, column: column, filePath: path)
 		expectedExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
+
 		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
 		// not CONSTANT. Pinned byte-for-byte by `lexer-edge-cases.md`.
 		expectedConstantExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
+
 		// A shorthand field default whose raw tokens name no type — one more E2004 family than the
 		// registry's `doc` enumerates, a stale count there rather than a wrong code here. Pinned
 		// byte-for-byte by `field-defaults.missing-type-annotation-errors`.
 		uninferrableFieldDefault(line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.", line: line, column: column, filePath: path)
+
 		// E2060, pinned byte-for-byte by `source-location-defaults`' three refusal cases. The cure it
 		// names is the feature's only legal spelling, which is why it names both keywords whichever one
 		// was written.
 		callerLocationOutsideDefault(name, line, column) then reportPositioned(project, code: ErrorCode.parserCallerLocationOutsideDefault, message: "'{name}' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.", line: line, column: column, filePath: path)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+
 		// The literal is quoted VERBATIM — separators and radix prefix intact — because the source's own
 		// spelling is what the reader has to find, and the decoded value does not exist. The span is
 		// `I64MinBound`/`I64MaxBound`, the very constants `parseInt` enforces, so the limit the message
 		// names cannot drift from the limit that fired.
 		integerOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {I64MaxBound})", line: line, column: column, filePath: path)
+
 		// The same code as its integer twin — a literal outside its type's range is one meaning — with a
 		// message naming the right type and limit. `1e400`'s limit is `f64.max`, which no i64 span
 		// describes, so the float wording names the TYPE and stops there rather than spelling out a
 		// bound.
 		floatLiteralOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{literal}' is outside the range of float", line: line, column: column, filePath: path)
+
 		// The third variant on the overflow code: a width past `PadWidth` is a number outside the range
 		// of its type, and the type is neither `int` nor `float` but `stdlib`'s own field width, so the
 		// message names ITS limit.
 		formatFieldOverflow(spec, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "A width or precision in format specifier '{spec}' is larger than {MaxFormatFieldWidth}", line: line, column: column, filePath: path)
+
 		// E2068 — not an overflow. The message says what is wrong with the TEXT, because there is no
 		// value to talk about a range of.
 		malformedNumericLiteral(literal, line, column) then reportPositioned(project, code: ErrorCode.parserMalformedNumericLiteral, message: "Numeric literal '{literal}' is not a number", line: line, column: column, filePath: path)
+
 		// A type mismatch, not a missing feature. Reads "requires integer operands" rather than "does not
 		// support floats" because that is the permanent shape of the rule: `mod` and the bit operators
 		// have no float meaning to add later.
 		nonIntegralOperands(op, operand, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires integer operands, but this one is {operand}", line: line, column: column, filePath: path)
+
 		// E3009, the SAME code the explicit `5.0 as int` gets, because it is the same fact:
 		// `SemanticCheck.checkArgTypes` emits this exact code and message for a call argument, so the
 		// four coercion sites speak with one voice.
 		implicitNarrowing(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: implicitNarrowingMessage(sourceType, targetType: targetType), line: line, column: column, filePath: path)
 		builtinArity(name, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{name}' takes exactly {expected} argument, but {got} were given", line: line, column: column, filePath: path)
 		builtinOperandType(name, required, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{name}' requires a {required}, but its argument is {got}", line: line, column: column, filePath: path)
+
 		// The SIGNATURE-checked builtins (the `__Managed*` family) report through the sentence used for
 		// an ordinary call argument, not the operand wording above, because their arguments ARE a
 		// signature check. Pinned by `builtin-type-checking`.
 		builtinArgumentType(paramName, expected, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
 		unsupported(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+
 		// The SAME sentence and code, deliberately: `tupleElementRejected` exists so the declaration
 		// sweep can tell a whole-program element refusal from a malformed return type; it says nothing
 		// new to the reader, so it may not read any differently.
 		tupleElementRejected(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+
 		// The one 9xxx the parser raises. Positioned at the USE, because that is where the compile stops;
 		// the DECLARATION is named in the sentence, because that is what has to be read.
 		droppedSignature(name, declaredIn, declLine, declColumn, line, column) then reportPositioned(project, code: ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
+
 		// E3008 / E3088 by tier, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
 		// a top-level initializer's call and a hidden static member.
 		symbolNotVisible(kind, symbol, tier, line, column) then reportHiddenSymbol(project, kind: kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
+
 		// The wording rhymes with the FIELD refusal one tier down, because the author's mistake is the
 		// same one about a different roster.
 		unknownStaticMember(typeName, member, line, column) then reportPositioned(project, code: ErrorCode.unknownStaticMember, message: "type '{typeName}' has no static member named '{member}'", line: line, column: column, filePath: path)
@@ -1554,24 +1654,29 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment", line: line, column: column, filePath: path)
 		promiseCannotBeBorrowed(door, cure, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
 		promiseAlreadyConsumed(door, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
+
 		// `subject` rather than a hardcoded name: a field-chain spelling has no single source name to
 		// blame. Pinned by `specs/var-should-be-let.md`.
 		varFromImmutable(subject, binding, line, column) then reportPositioned(project, code: ErrorCode.semanticVarFromImmutable, message: "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()", line: line, column: column, filePath: path)
+
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
 		controlOutsideLoop(keyword, targets, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
 		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
 		unknownLoopLabel(keyword, targets, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
 		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
 		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
+
 		// The THIRD label verdict, and the one neither sentence above can carry: both promise that SOME
 		// argument position takes a 'name:' label, which is false for a callee that has no declaration
 		// and therefore no parameters to name.
 		builtinArgNamed(line, column) then reportPositioned(project, code: ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
+
 		// The three codes AND messages are the ones a DIRECT call's slotting failure gets, because it is
 		// the same rule met at a witness dispatch.
 		witnessArgCountMismatch(callee, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(callee, expected: expected, got: got), line: line, column: column, filePath: path)
 		witnessUnknownArgLabel(callee, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(callee, label: label), line: line, column: column, filePath: path)
 		witnessDuplicateArg(callee, paramName, line, column) then reportPositioned(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(callee, paramName: paramName), line: line, column: column, filePath: path)
+
 		// Both name the DECLARING interface of every requirement they mention, which is the interface the
 		// author has to edit.
 		ambiguousWitnessDispatch(method, provider, argCount, first, second, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousWitnessDispatch, message: "'{method}' taking {argCount} argument(s) is provided by both {first} and {second} through {provider} — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints", line: line, column: column, filePath: path)
@@ -1586,6 +1691,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		enumAccessorComparison(member, op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumAccessorComparison, message: "cannot compare an enum's '.{member}' with '{op}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant", line: line, column: column, filePath: path)
 		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
 		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)
+
 		// Pinned byte-for-byte by the shift-count specs, in both suites. Names what is still LEGAL as
 		// well as what is not: a count of `{ShiftCountBits}` or more is a perfectly good way to say
 		// "shift every bit out".
@@ -1598,16 +1704,19 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		nonBoolCondition(keyword, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
 		assignTypeMismatch(place, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}' to {place}, which holds '{expected}'", line: line, column: column, filePath: path)
 		typeMismatchExpectedGot(expected, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: 'expected {expected}, got {got}'", line: line, column: column, filePath: path)
+
 		// `specs/tuple-assign.md`'s wording verbatim — it says "bindings" of what this compiler calls
 		// targets, and the spec is the language definition here.
 		tupleAssignArityMismatch(elements, targets, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Tuple has {elements} elements but destructuring has {targets} bindings", line: line, column: column, filePath: path)
 		returnTypeMismatch(got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
 		functionValueIntoNonFunction(noun, name, heldType, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type 'function' to {noun} '{name}', which holds '{heldType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
 		functionValueReturned(returnType, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return 'function' from function declared to return '{returnType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
+
 		// E3009, the SAME code the explicit lossy `5.0 as int` gets — one fact (a cast that is not a
 		// legal conversion), one code.
 		invalidCast(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType}", line: line, column: column, filePath: path)
 		castTargetIsAContainer(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.castTargetIsAContainer, message: "Cannot cast to '{targetType}': a container's elements have a storage layout of their own, so '{sourceType}' cannot be retagged as one — build the container with the element type you need, or convert it element by element", line: line, column: column, filePath: path)
+
 		// E3011 and `unknownTypeMessage` — the SAME code and wording `TypeResolution` gives an undeclared
 		// type met at a parameter, a return type or a field, because it is ONE FACT met wherever a type
 		// name can be written. Only the ANCHOR differs: the declaration sites record no span for a type
@@ -1619,12 +1728,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		ternaryValueTypeMismatch(trueType, falseType, line, column) then reportPositioned(project, code: ErrorCode.matchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueType}' but false branch is '{falseType}'", line: line, column: column, filePath: path)
 		ternaryNonBoolCondition(got, line, column) then reportPositioned(project, code: ErrorCode.matchTypeMismatch, message: "ternary expression requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
 		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
+
 		// The message is built at the decode site (`Parser.invalidDigitEscapeError`) because the LITERAL
 		// FORM is known there and not here. `specs/unicode-escape.md` compares stderr byte-for-byte.
 		invalidDigitEscape(message, line, column) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: line, column: column, filePath: path)
 		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
 		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
 		duplicateTopLevelDeclaration(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
+
 		// The three top-level-constant arms are pinned byte-for-byte by `specs/top-level-let.md`,
 		// and both suites compare this stderr exactly.
 		circularConstants(names, line, column) then reportPositioned(project, code: ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
@@ -1632,55 +1743,68 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		nonConstantInitializer(name, leftover, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
 		undefinedConstant(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
 		constantDivisionByZero(op, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
+
 		// E3103 for a BODY divide whose divisor the compiler holds as 0. Pinned byte-for-byte; both
 		// suites compare this stderr exactly.
 		divisionByProvableZero(op, line, column) then reportPositioned(project, code: ErrorCode.semanticDivisionByZero, message: "division by zero: the divisor of '{op}' is always 0", line: line, column: column, filePath: path)
+
 		// E3005 for a top-level `let` cast whose literal is outside its ranged alias — the same code, the
 		// same words and the same anchor a body cast gets from `InsertRangeChecks`; only the tier that
 		// noticed differs.
 		constantCastOutOfRange(value, aliasName, low, high, isFloat, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+
 		// E3005 for a `b"…"` byte the element's declared range does not admit — the same code and range
 		// fact as the arm above, with the OFFSET its subject needs.
 		byteStringByteOutOfRange(value, offset, aliasName, low, high, isFloat, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: byteStringByteOutOfRangeMessage(value, offset: offset, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+
 		// E3117 for a RAW-BYTE fill of an element that cannot hold every byte — the same range fact as
 		// the two arms above asked PER TYPE rather than per value, so it takes its own code: E3005 says a
 		// value does not fit, and here there is no value to say it about.
 		rawByteFillNarrowElement(member, aliasName, low, high, isFloat, line, column) then reportPositioned(project, code: ErrorCode.rawByteFillNarrowElement, message: rawByteFillNarrowElementMessage(member, aliasName: aliasName, low: low, high: high, isFloat: isFloat), line: line, column: column, filePath: path)
+
 		// E3118 for a RAW-BYTE WRITE into a slot its element does not fill — the arm above's question
 		// asked of the SLOT rather than of a byte, which is the same question only where a slot IS a
 		// byte.
 		rawByteWriteSlotDomain(member, elementDisplay, slotBytes, line, column) then reportPositioned(project, code: ErrorCode.rawByteWriteSlotDomain, message: rawByteWriteSlotDomainMessage(member, elementDisplay: elementDisplay, slotBytes: slotBytes), line: line, column: column, filePath: path)
+
 		// The struct arms. Each carries the code its meaning is registered under in
 		// `docs/error-codes.txt` — never a number spelled here. ⚠ Pinned byte-for-byte by
 		// `specs/struct-construction-restriction.md`, in every suite that reads that file.
 		constructorRestricted(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticConstructorRestriction, message: "type '{typeName}' can only be constructed from within its own methods; use a static factory method instead", line: line, column: column, filePath: path)
 		builtinTypeConstruction(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: line, column: column, filePath: path)
 		unknownField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "type '{typeName}' has no field named '{fieldName}'", line: line, column: column, filePath: path)
+
 		// The conditional-extension refusal (see the union arm for why it is not the E3004 above it). The
 		// sentence names the CONDITION and then the one binding that fails it, in that order, because
 		// that is the order the author has to read them in to decide what to change.
 		conditionalExtensionWithheld(typeName, methodName, clause, unmetInterfaceName, bindingName, line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: conditionalExtensionWithheldMessage(typeName, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName), line: line, column: column, filePath: path)
 		fieldNotInitialized(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticFieldNotInitialized, message: "field '{fieldName}' of '{typeName}' is not initialized by this literal, and it has no default value", line: line, column: column, filePath: path)
+
 		// The SAME code as `unknownField`, and deliberately: a literal whose field list does not
 		// correspond one-to-one with the type's is one defect, seen from its two sides.
 		duplicateFieldInitializer(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "field '{fieldName}' of '{typeName}' is initialized twice by this literal", line: line, column: column, filePath: path)
+
 		// The SAME code as `assignToImmutable` — one rule, two sides. Pinned byte-for-byte by
 		// `structs.md` and `challenge-struct-field-assign.md`, in both suites.
 		assignToImmutableField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
+
 		// The instance-method arms. Pinned byte-for-byte by `export-var-fields.md` for both, and the two
 		// suites run the same spec file.
 		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
 		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
+
 		// Pinned byte-for-byte by the `maxoncstderr` goldens in `match-statements.md`/`match-simple.md`
 		// and `function-declaration.md`. Its raisers are listed on the union arm and deliberately not
 		// here — a copy of that list here would go stale silently as it grows.
 		strayToken(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
+
 		// The FILE-SCOPE shape of the same code, pinned byte-for-byte by `lexer-edge-cases.md`'s
 		// `maxoncstderr` goldens. Why it is a second variant rather than another raiser on `strayToken`
 		// is argued on the union arm.
 		expectedDeclaration(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
 		expectedNewlineAfterBlockLabel(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
+
 		// The FOURTH shape of E2001. See `ParseError.bareTryInAClosure` for why a closure earns a
 		// different sentence from the one a declared function earns for the same situation, and why the
 		// difference is the REMEDY rather than the rule.
@@ -1689,22 +1813,27 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		testOutsideTestFile(fileName, testFileName, line, column) then reportPositioned(project, code: ErrorCode.parserTestOutsideTestFile, message: "a 'test' declaration is only allowed in a file whose name ends in '.test.maxon'; rename '{fileName}' to '{testFileName}', or move this declaration into one", line: line, column: column, filePath: path)
 		testEmptyName(line, column) then reportPositioned(project, code: ErrorCode.parserTestEmptyName, message: "a 'test' declaration's name cannot be empty", line: line, column: column, filePath: path)
 		duplicateTestName(first, second, symbol, line, column) then reportPositioned(project, code: ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
+
 		// The THIRD shape of E2001. Pinned byte-for-byte by
 		// `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` golden. Why it is a variant
 		// of its own rather than another raiser on `strayToken` is argued on the union arm.
 		selfOutsideInstanceMethod(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
+
 		// The `@heap` annotation's three refusals — all E2001. The first two are pinned byte-for-byte;
 		// the third states the compiler's own rule, and the union arms carry the reason for each.
 		unknownAnnotation(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{got}' (expected '@heap')", line: line, column: column, filePath: path)
 		heapAnnotationWithoutBinding(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: line, column: column, filePath: path)
 		heapAnnotationOnNonRecord(name, tag, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)
+
 		// The SAME code as `strayToken` above — E2001 is "the parser met a token that cannot appear at
 		// this point in the grammar", and a second `module` after an `export` is exactly that. Pinned
 		// byte-for-byte by `module-keyword/error.module-and-export-conflict`.
 		visibilityModifiersCombined(earlier, later, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "{visibilityModifierSpelling(earlier)} and {visibilityModifierSpelling(later)} cannot be combined", line: line, column: column, filePath: path)
 		hiddenTypeName(typeName, line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "Unknown type '{typeName}' in field access chain", line: line, column: column, filePath: path)
+
 		// Pinned byte-for-byte by `typealias-collision/error.exported-typealias-collision`.
 		ambiguousTypeAlias(name, candidates, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{name}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}", line: line, column: column, filePath: path)
+
 		// The scalar-match arms. Each carries the code its meaning is registered under in
 		// `docs/error-codes.txt`, and each message is pinned byte-for-byte by the `maxoncstderr` goldens
 		// in `match-statements.md`/`match-simple.md`.
@@ -1716,6 +1845,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		matchMissingBlockId(line, column) then reportPositioned(project, code: ErrorCode.matchMissingBlockId, message: "missing block identifier", line: line, column: column, filePath: path)
 		matchMismatchedBlockId(expected, got, line, column) then reportPositioned(project, code: ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
 		matchBlockStatement(keyword, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
+
 		// The enum/union arms. For an ENUM every message is pinned byte-for-byte by
 		// `maxoncstderr` goldens. For a UNION the messages that name the construct print the DECLARED
 		// keyword via `kindWord`: E3034 (unknown-case) is conditional and so matches; E2026/E2046 print
@@ -1724,12 +1854,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		enumDuplicateRawValue(rawValue, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
 		enumRawValueTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		enumUnknownCase(kindWord, caseName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "unknown {kindWord} case: '{caseName}'", line: line, column: column, filePath: path)
+
 		// E3034 again, and deliberately a SECOND sentence rather than a second caller of the one above: a
 		// `fromName` argument is not a case reference, and `/specs/constants.md`'s
 		// `error.fromName-invalid-case` pins these words. See the arm's declaration for why `kindWord` is
 		// the compiler's and not the references'.
 		enumNoCaseNamed(kindWord, caseName, typeName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "no {kindWord} case named '{caseName}': '{typeName}'", line: line, column: column, filePath: path)
 		enumFromNamePayloadArity(caseName, expected, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "wrong argument count: 'case '{caseName}' requires {expected} associated value(s)'", line: line, column: column, filePath: path)
+
 		// E4006, and NOT the E3034 above it: refused in these exact words rather than as an unknown case.
 		// Its sibling `fromRawValue` is disposed differently; see `Parser.parseEnumLiteral`.
 		allCasesOnUnion(line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "allCases is not available on unions", line: line, column: column, filePath: path)
@@ -1737,6 +1869,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		matchDiscardedBindings(caseName, discardList, line, column) then reportPositioned(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path)
 		matchDefaultEnumMustThrow(kindWord, typeName, line, column) then reportPositioned(project, code: ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
 		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
+
 		// The synthesized error union's five, plus E3084. `/specs/try-block.md` pins four of them as
 		// `maxoncstderr` goldens, so this text IS the contract.
 		errorUnionMatchNotExhaustive(missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on error union is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
@@ -1752,33 +1885,41 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		matchEnumCaseRange(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchEnumCaseRange, message: "'{pattern}' is not a match pattern: name each case in an 'or'-chain, one per line", line: line, column: column, filePath: path)
 		matchOrChainNeedsOwnLine(line, column) then reportPositioned(project, code: ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path)
 		matchSingleValueRange(pattern, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path)
+
 		// Pinned byte-for-byte by `enum-match-only.md` `maxoncstderr` goldens.
 		unionNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
+
 		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
 		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
 		existentialNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
 		stringNotOrderable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot order String values using '{op}': a String is a byte record with no ordering, so its only comparisons are '==' and '!='", line: line, column: column, filePath: path)
+
 		// ⚠ The E3068 sentence is pinned byte-for-byte only in its NON-NEGATED form —
 		// `reference-identity.md`'s `primitive-error` `maxoncstderr` golden pins `'is'` for `a is b`. For
 		// `a is not b` this interpolates the operator and says `'is not'`, naming what was written; that
 		// is deliberate, not an oversight, and only the non-negated form is gated.
 		refIdentityOnPrimitive(op, line, column) then reportPositioned(project, code: ErrorCode.refIdentityOnPrimitive, message: "'{op}' requires reference types (structs), not primitive values", line: line, column: column, filePath: path)
 		refIdentityTypeMismatch(op, left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{op}' requires both operands to be the same type, got '{left}' and '{right}'", line: line, column: column, filePath: path)
+
 		// Pinned byte-for-byte by `reserved-double-underscore.md` `maxoncstderr` goldens.
 		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
+
 		// The reservation's SECOND arm — same code, a different name set and a different reason. Pinned
 		// byte-for-byte by `reserved-self.md`'s `maxoncstderr` golden.
 		reservedReceiverName(line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
+
 		// Not every name here is synthesized by the compiler — `Ordering` and `IterationError` are read
 		// from `stdlib/Interfaces.maxon`. What is true of all of them is that the name has ONE meaning
 		// this compile did not get from the file being refused.
 		declarationTakesCompilerOwnedTypeName(name, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one", line: line, column: column, filePath: path)
+
 		// E3058/E3059/E2049 render the parser's error-handling diagnostics (the `ParseError` variants are
 		// declared in `Parser.maxon`; this is their render half). Pinned by the
 		// `error-handling.md`/`match-statements.md` `maxoncstderr` goldens.
 		otherwiseWithoutTry(line, column) then reportPositioned(project, code: ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
 		errorTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		tryBlockFormInMatchArm(isOtherwiseForm, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
+
 		// The two block-form `try` refusals. The first sentence is pinned byte-for-byte by
 		// `try-block.md`'s `maxoncstderr` golden.
 		tryBlockNoThrows(label, line, column) then reportPositioned(project, code: ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
@@ -1786,13 +1927,16 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		tryOnNonThrowing(callee, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
 		ifTryDiscardsResult(callee, line, column) then reportPositioned(project, code: ErrorCode.ifTryDiscardsResult, message: "'if try' discards the result of '{callee}': only a call that returns nothing may be tested bare — bind the result with 'if let'", line: line, column: column, filePath: path)
 		redundantContainsGet(message, line, column) then reportPositioned(project, code: ErrorCode.redundantContainsGet, message: message, line: line, column: column, filePath: path)
+
 		// The BUILTIN half of E3055 — one code, a second message: The compiler holds only the emitted runtime
 		// symbol (`__managed_count`), which is reserved namespace the user never wrote, so it names the
 		// class instead of the builtin.
 		tryOnNonThrowingBuiltin(line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this builtin call cannot fail", line: line, column: column, filePath: path)
+
 		// Names the OPERATOR and the reason the divide is total, because the divisor's range is the thing
 		// the author would have to change to make it fallible, and there is nothing here to catch.
 		tryOnTotalDivision(operator, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: this `{operator}` cannot fail — its divisor is already proven non-zero, so there is no divide-by-zero error to catch", line: line, column: column, filePath: path)
+
 		// A plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type differs
 		// from the enclosing function's (E3059). E3057 shares SemanticCheck's throwing-call-needs-try
 		// code; E3059 shares the `errorTypeMismatch` code with its own full-sentence message.
@@ -1802,6 +1946,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		byteStringCodepointRange(message) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
 		propagateTypeMismatch(propagated, enclosing, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
 		thrownValueNotAnErrorEnum(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "throw requires an error enum value", line: line, column: column, filePath: path)
+
 		// E3004, the SAME code `SemanticCheck.validateCall` gives an undeclared ordinary function,
 		// because it is the same fact — the call names something that does not exist. It shares the code
 		// and not the wording: the message must say WHY no declaration could ever supply this one, since
@@ -1814,39 +1959,48 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
 		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: unknownReservedCalleeMessage(callee, reason: reason), line: line, column: column, filePath: path)
+
 		// Omits the `growFilled`/`truncate` suggestions: The compiler synthesizes neither method, so naming them
 		// would send the reader to something that is not there.
 		arrayResizeManagedElement(elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
+
 		// ⭐ It names the REPLACEMENT, not just the refusal, because there is an exact one: the array
 		// surface's own `set` covers `[0, length)` and owns what it stores. See `E3109`'s registry entry.
 		bufferSetManagedElement(elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticBufferSetManagedElement, message: "'managed.set' cannot store an element of '{elementType}': it is bounded by the CAPACITY, so it writes slots no length has published, and nothing owns a managed element staged there until 'setLength' publishes it. Use the array's own 'set(index, value:)', which is bounded by the length", line: line, column: column, filePath: path)
+
 		// ⚠ It names NO replacement, and the omission is the message: byte access to a pointer is not a
 		// thing a correct program wants, so there is nothing to redirect the reader to. Contrast the arm
 		// above, which has an exact one. Same predicate, different reason — see
 		// `requireBufferBytesAreNotAPointer`.
 		bufferByteAccessManagedElement(member, elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticBufferByteAccessManagedElement, message: "'managed.{member}' cannot address the bytes of an element of '{elementType}': a managed element is stored as a POINTER, so those bytes are a heap ADDRESS, not data — reading them discloses one and writing them corrupts it. Raw byte access is for a buffer of trivial elements", line: line, column: column, filePath: path)
+
 		// E3082 sits in the SEMANTIC band because that is where the registry homes it; The compiler raises it in
 		// the parser only because `parseBlockBody` is the one place that knows a nested block consumed no
 		// statements.
 		emptyBlock(label, line, column) then reportPositioned(project, code: ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
+
 		// Pinned as `maxoncstderr` goldens by `specs/return-statement.md` and `specs/break.md`, for
 		// `return`, `break` and `continue` alike — the keyword is interpolated rather than the sentence
 		// written three times. Raised from the parser for `emptyBlock`'s reason: the statement-list loop
 		// is the one place that knows a terminator was not the last statement of its block.
 		unreachableCode(terminator, line, column) then reportPositioned(project, code: ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path)
+
 		// E3067's two messages, pinned by `self-assignment.md`. ONE code, TWO sentences: the mistake is
 		// one — a statement that computes nothing — but what the author has to change differs, so a
 		// single sentence could only describe one of them. One door each:
 		// `Parser.rejectDegenerateAssignment` and `Parser.parseAssignment`'s `_` arm.
 		selfAssignmentHasNoEffect(place, line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
 		discardExpectsACall(line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
+
 		// A SECURITY guard, since the label is a file name. The message names the table the intrinsic
 		// DOES read, because the pairing is the fact the author got wrong. See
 		// `Parser.parseUcdTableLoad`.
 		ucdTableLabelUnknown(intrinsic, table, label, line, column) then reportPositioned(project, code: ErrorCode.ucdTableLabelUnknown, message: "'{intrinsic}' reads the compiler-owned table '{table}'; the label '{label}' names no table it can read", line: line, column: column, filePath: path)
+
 		// An intrinsic WITH parameter names, given a label naming none of them — the same code and words
 		// the direct-call and witness-dispatch doors give the identical mistake.
 		builtinUnknownArgLabel(intrinsic, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(intrinsic, label: label), line: line, column: column, filePath: path)
+
 		// The DECLARATION-SITE typealias arms. Pinned byte-for-byte by `ranged-typealias.md` and
 		// `export-keyword.md`, in both suites.
 		bareSizedTypeAlias(typeName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{typeName}' is not allowed. Use explicit range syntax, e.g. 'int({typeName}.min to {typeName}.max)'", line: line, column: column, filePath: path)
@@ -1855,11 +2009,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		barePrimitiveCastTarget(spelling, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)
 		mismatchedRangeBoundTypes(low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
 		unrepresentableIntegerRange(low, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
+
 		// Worded beside its narrowing twin rather than inline here, so the two E3005s that quote one
 		// alias's bounds share the range renderer and the name strip.
 		otherwiseOutsideRangedReturn(value, aliasName, low, high, rawBitWidth, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
 		hiddenCastTargetType(line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
 		uninferrableClosureParam(paramName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
+
 		// The SENTENCE arrives rendered — see the three arms' own note in `ParseError`. These mapper
 		// lines carry the CODE and nothing else, which is what keeps the words beside the rule that chose
 		// them.
@@ -1880,6 +2036,7 @@ function tryBlockFormMessage(isOtherwiseForm bool) returns String
 	if isOtherwiseForm 'otherwiseForm'
 		return "block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic(\"...\")', 'otherwise ignore', or 'otherwise return/throw/...' instead"
 	end 'otherwiseForm'
+
 	return "block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead"
 end 'tryBlockFormMessage'
 
@@ -1890,5 +2047,6 @@ function tryBlockMissingOtherwiseMessage(missingBinding bool) returns String
 	if missingBinding 'noBinding'
 		return "block-form 'try ... end' requires its handler to bind the caught error: write \"otherwise (e) 'label' ... end 'label'\" — the handler dispatches on that binding with 'match e'"
 	end 'noBinding'
+
 	return "try block requires 'otherwise ...' clause"
 end 'tryBlockMissingOtherwiseMessage'

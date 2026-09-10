@@ -168,6 +168,7 @@ test 'every fixture case is invoked by name'
 	let source = try File.readText(readableFile("{ProjectDirName}/{SharedHelperFileName}")) otherwise panic("fmt-fixtures.test: the gate could not run — this file could not read its own source at {ProjectDirName}/{SharedHelperFileName}. Paths here are relative to the CHECKOUT ROOT; run from there.")
 
 	var uninvoked = StringArray.create()
+
 	for caseName in fixtureCaseNames() 'eachCase'
 		if not source.contains("checkFixture(\"{caseName}\")") 'neverInvoked'
 			uninvoked.push(caseName)
@@ -272,6 +273,7 @@ type FixtureCase
 	function normalized(text String) returns String
 		let folded = text.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
 		let anonymized = folded.replace(self.tree, with: StagingTreeToken)
+
 		if anonymized.isEmpty() or anonymized.endsWith(LineFeed) 'alreadyNormalized'
 			return anonymized
 		end 'alreadyNormalized'
@@ -285,6 +287,7 @@ type FixtureCase
 	// the missing file would have said, which is what a reader needs in order to mint it.
 	function pinned(fileName String, holds String) returns String
 		let path = self.dir.join("{fileName}")
+
 		if not File.exists(path) 'noPin'
 			panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case has no {fileName}, so nothing says {holds}. Mint it with `python tests/fmt/generate-expectations.py {self.name}`; a case directory with no expectation proves nothing, and reads exactly like one that passed.")
 		end 'noPin'
@@ -310,6 +313,7 @@ type FixtureCase
 		var extras = StringArray.create()
 
 		let path = self.dir.join("{ExtraArgvFileName}")
+
 		if not File.exists(path) 'takesNoArguments'
 			return extras
 		end 'takesNoArguments'
@@ -318,6 +322,7 @@ type FixtureCase
 
 		for line in text.split(LineFeed) 'eachLine'
 			let argument = line.trim()
+
 			if argument.isEmpty() 'blankLine'
 				continue
 			end 'blankLine'
@@ -337,6 +342,7 @@ type FixtureCase
 	function spawn() returns CollectedOutput
 		var arguments = StringArray.create()
 		arguments.push(TestedCommandName)
+
 		for extra in argv() 'eachExtra'
 			arguments.push(extra)
 		end 'eachExtra'
@@ -414,6 +420,7 @@ type FixtureCase
 			expectedPaths.insert(relative)
 
 			let stagedFile = joinRelative(self.staged, relative: relative)
+
 			if not File.exists(stagedFile) 'notWritten'
 				missing.push(relative)
 				continue
@@ -421,12 +428,14 @@ type FixtureCase
 
 			let want = fileBody(joinRelative(expectedTree, relative: storedRelative))
 			let got = fileBody(stagedFile)
+
 			if want != got 'differentBytes'
 				different.push(relative)
 			end 'differentBytes'
 		end 'eachExpected'
 
 		var unexpected = StringArray.create()
+
 		for relative in relativeFilePathsUnder(self.staged, prefix: "") 'eachStaged'
 			if not expectedPaths.contains(relative) 'notInTheOracle'
 				unexpected.push(relative)
@@ -490,6 +499,7 @@ end 'summaryLine'
 function totalFilesSeen(stdout String, caseName String) returns FileTally
 	let summary = lastNonBlankLine(stdout)
 	let words = summary.split(SummaryWordSeparator)
+
 	if words.count() != SummaryWordCount 'wrongWordCount'
 		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's {ExpectedStdoutFileName} ends with '{summary}', which is not a `fmt` summary line. Every successful run ends with one, and the second run's expectation is derived from its two counts.")
 	end 'wrongWordCount'
@@ -497,6 +507,7 @@ function totalFilesSeen(stdout String, caseName String) returns FileTally
 	let changed = countWordAt(words, index: ChangedCountWordIndex, summary: summary, caseName: caseName)
 	let unchanged = countWordAt(words, index: UnchangedCountWordIndex, summary: summary, caseName: caseName)
 	let rebuilt = summaryLine(changed, unchanged: unchanged)
+
 	if rebuilt != summary 'wrongShape'
 		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line reads '{summary}' where this file's grammar builds '{rebuilt}'. The two must agree: one grammar parses the first run and predicts the second.")
 	end 'wrongShape'
@@ -514,8 +525,10 @@ end 'countWordAt'
 // then a newline, so the trailing empty piece of the split is not the line anybody means.
 function lastNonBlankLine(text String) returns String
 	var last = ""
+
 	for line in text.split(LineFeed) 'eachLine'
 		let candidate = line.trim()
+
 		if not candidate.isEmpty() 'saysSomething'
 			last = candidate
 		end 'saysSomething'
@@ -532,6 +545,7 @@ end 'lastNonBlankLine'
 function copyStagedTree(stored FilePath, into FilePath)
 	for entry in listing(stored) 'eachEntry'
 		let target = into.join("{storedToReal(entry.filename())}")
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			if not Directory.create(target) 'couldNotCreate'
 				panic("fmt-fixtures.test: the gate could not run — could not create the staging directory {target.toString()}.")
@@ -551,6 +565,7 @@ end 'copyStagedTree'
 // carrying neither marker is already what it will be called.
 function storedToReal(stored String) returns String
 	var real = stored
+
 	if real.endsWith(StoredFixtureSuffix) 'inertSource'
 		let suffixStart = try real.findLast(StoredFixtureSuffix) otherwise panic("fmt-fixtures.test: the gate could not run — '{real}' ends with {StoredFixtureSuffix} and yet does not contain it.")
 		real = real.slice(real.startIndex(), endIndex: suffixStart)
@@ -568,8 +583,10 @@ end 'storedToReal'
 function storedPathToReal(stored String) returns String
 	var real = ""
 	var atFirstComponent = true
+
 	for component in stored.split(PortablePathSeparator) 'eachComponent'
 		let mapped = storedToReal(component)
+
 		if atFirstComponent 'firstComponent'
 			real = mapped
 			atFirstComponent = false
@@ -636,10 +653,12 @@ function relativeFilePathsUnder(root FilePath, prefix String) returns StringArra
 	for entry in listing(root) 'eachEntry'
 		let name = entry.filename()
 		let relative = name if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{name}"
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			for nested in relativeFilePathsUnder(entry, prefix: relative) 'eachNested'
 				found.push(nested)
 			end 'eachNested'
+
 			continue
 		end 'aDirectory'
 
@@ -652,6 +671,7 @@ end 'relativeFilePathsUnder'
 // A relative path built by `relativeFilePathsUnder`, resolved against the root it came from.
 function joinRelative(root FilePath, relative String) returns FilePath
 	var path = root
+
 	for component in relative.split(PortablePathSeparator) 'eachComponent'
 		path = path.join("{component}")
 	end 'eachComponent'
@@ -674,6 +694,7 @@ end 'fileBody'
 // each site repeating it is how the sentence explaining it comes to exist in only some of them.
 function readableDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not Directory.isDirectory(path) 'notThere'
 		panic("fmt-fixtures.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
@@ -685,6 +706,7 @@ end 'readableDir'
 // tree is handed to a child process as its working directory.
 function writableDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not Directory.create(path) 'couldNotCreate'
 		panic("fmt-fixtures.test: the gate could not run — could not create '{spelled}'. It is where a case's runnable copy is built; nothing can be staged without it.")
 	end 'couldNotCreate'
@@ -716,6 +738,7 @@ end 'fixtureCaseNames'
 // anywhere else finds nothing and must say so rather than reporting an empty corpus as agreement.
 function readableFile(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not File.exists(path) 'notThere'
 		panic("fmt-fixtures.test: the gate could not run — there is no file at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
 	end 'notThere'
@@ -731,6 +754,7 @@ function liveSourcesUnder(root FilePath) returns StringArray
 
 	for entry in listing(root) 'eachEntry'
 		let name = entry.filename()
+
 		if Directory.isDirectory(entry) 'aDirectory'
 			if name == ProjectProductsDirName 'buildProducts'
 				continue
@@ -739,6 +763,7 @@ function liveSourcesUnder(root FilePath) returns StringArray
 			for nested in liveSourcesUnder(entry) 'eachNested'
 				live.push(nested)
 			end 'eachNested'
+
 			continue
 		end 'aDirectory'
 
@@ -754,6 +779,7 @@ end 'liveSourcesUnder'
 // assertions above an `isEmpty` on the very text a reader has to act on.
 function listedLines(paths StringArray) returns String
 	var listed = ""
+
 	for path in paths 'eachPath'
 		listed.append("{LineFeed}  {path}")
 	end 'eachPath'
@@ -1217,6 +1243,7 @@ function stageEveryCensusSource() returns CensusSourceArray
 	purgeFilesIn(stagingRoot)
 
 	var staged = CensusSourceArray.create()
+
 	for origin in censusRosterPaths() 'eachOrigin'
 		let body = fileBody(censusSourcePath(origin))
 		let target = stagingRoot.join("{stagedCensusNameFor(origin)}")
@@ -1239,8 +1266,10 @@ function censusRosterPaths() returns StringArray
 	let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {CensusSourceListFileName}. Every path in this file is relative to the CHECKOUT ROOT (see the header); a run started anywhere else finds nothing.")
 
 	var paths = StringArray.create()
+
 	for line in text.split(LineFeed) 'eachLine'
 		let entry = line.trim()
+
 		if entry.isEmpty() or entry.startsWith(CensusNotePrefix) 'aNote'
 			continue
 		end 'aNote'
@@ -1256,6 +1285,7 @@ end 'censusRosterPaths'
 // formats less every time the tree moves, and says nothing.
 function censusSourcePath(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+
 	if not File.exists(path) 'notThere'
 		panic("fmt-fixtures.test: the gate could not run — {CensusSourceListFileName} names '{spelled}', and there is no file there. Point the roster at the file's new home, with the note saying why it is on the list.")
 	end 'notThere'
@@ -1288,6 +1318,7 @@ end 'spawnFmtOverCensusTree'
 // ⛔ It PANICS rather than failing an assertion, for that reason.
 function spawnCompiler(arguments StringArray, workingDirectory FilePath, what String) returns CollectedOutput
 	let binary = testedCompilerPath()
+
 	if not File.exists(binary) 'noBinary'
 		panic("fmt-fixtures.test: the gate could not run — there is no compiler at {binary.toString()}, which {what} needs. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'

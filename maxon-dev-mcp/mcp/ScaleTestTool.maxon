@@ -78,6 +78,7 @@ export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 	let displayCommand = displayCommandFor(binary, argv: argv)
 
 	let timing = Clock.nowMs()
+
 	// `workingDirectory: repoRoot` is load-bearing, not tidiness. The runner resolves the corpus, the
 	// trend log, and the rung paths it hands the compiler ALL relative to the working directory — and
 	// the rung paths in particular must stay relative, because an absolute path is a String the
@@ -87,6 +88,7 @@ export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot Fi
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultScaleTestTimeoutMs) otherwise (err) 'spawn'
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "scale-test: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
 	end 'spawn'
+
 	let elapsed = Clock.elapsedMs(timing)
 
 	return buildScaleOutcome(displayCommand, result: result, durationMs: elapsed, resultPath: resultPath)
@@ -102,6 +104,7 @@ function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FileP
 	argv.push("--result-json={resultPath.path}")
 
 	let rungs = try argsDoc.getInt(argsId, key: "rungs") otherwise 0
+
 	if rungs > 0 'haveRungs'
 		argv.push("--rungs={rungs}")
 	end 'haveRungs'
@@ -111,21 +114,25 @@ function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FileP
 	// the runner's — two copies of one rule, which is the bug this repo keeps paying for. A caller who
 	// asks for something impossible gets the runner's own refusal and a non-zero exitCode.
 	let repeat = try argsDoc.getInt(argsId, key: "repeat") otherwise 0
+
 	if repeat > 0 'haveRepeat'
 		argv.push("--repeat={repeat}")
 	end 'haveRepeat'
 
 	let note = try argsDoc.getString(argsId, key: "note") otherwise ""
+
 	if not note.isEmpty() 'haveNote'
 		argv.push("--note={note}")
 	end 'haveNote'
 
 	let emitCorpus = try argsDoc.getString(argsId, key: "emitCorpus") otherwise ""
+
 	if not emitCorpus.isEmpty() 'haveEmitCorpus'
 		argv.push("--emit-corpus={emitCorpus}")
 	end 'haveEmitCorpus'
 
 	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+
 	if not log.isEmpty() 'haveLog'
 		argv.push("--log={log}")
 	end 'haveLog'

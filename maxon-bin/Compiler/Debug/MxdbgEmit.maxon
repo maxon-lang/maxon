@@ -28,6 +28,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	codeResult.targetModule.spans.requireParallelTo(codeResult.targetModule.ops.count(), what: "at the sidecar")
 
 	var writer = MxdbgWriter.create()
+
 	// ⭐ **A COVERAGE POINT'S FILE IS REGISTERED BEFORE THE TABLE IS WALKED.** A point OUTLIVES its function
 	// — a report must still say "these lines have no code" about a function nothing called — so a file whose
 	// every function was pruned still owes its name to the file table the walk below writes. Empty, and so
@@ -48,16 +49,19 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	let functionsByName = mxdbgFunctionIndex(codeResult.targetModule)
 	var types = MxdbgTypeTable.create()
 	types.closeDeclaredTypes(project)
+
 	for fn in codeResult.debugFunctions 'eachFunctionsTypes'
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
 			found(func) then closeLocalTypes(project, types: types, func: func)
 		end 'itsIr'
 	end 'eachFunctionsTypes'
+
 	types.writeInto(writer)
 
 	for fn in codeResult.debugFunctions 'eachFunction'
 		writer.addFunction(String.from(fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
+
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
 			found(func) then writeFunctionLocals(project, writer: writer, types: types, module: codeResult.targetModule, func: func, range: fn)
@@ -74,6 +78,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	// statement in the whole program, and that iterator allocates a `(Source, Element)` pair per step — a
 	// heap record per row of the line table, for an index an integer already carries.
 	var rowIndex = 0 as ElementIndex
+
 	for row in codeResult.debugLineRows 'eachRow'
 		writer.addLine(row.codeOffset as MxdbgCodeOffset, fileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(row.spanId)), line: project.debugSpanTable.lineOf(row.spanId) as MxdbgIndex, column: project.debugSpanTable.columnOf(row.spanId) as MxdbgIndex, flags: lineRowFlags(countedRows, at: rowIndex))
 		rowIndex = rowIndex + 1
@@ -119,6 +124,7 @@ let NoCoverageCodeOffset = 0 as MxdbgCodeOffset
 // describes the same point at a second address — and a record can carry one.
 function emittedCoveragePointOffsets(codeResult CodeResult) returns CovPointOffsetMap
 	var offsets = CovPointOffsetMap.create()
+
 	for point in codeResult.covPointOffsets 'eachEmittedPoint'
 		if not offsets.contains(point.pointId) 'itsFirstCopy'
 			offsets.upsert(point.pointId, value: point.codeOffset as MxdbgCodeOffset)
@@ -140,6 +146,7 @@ end 'emittedCoveragePointOffsets'
 function coverageCountedRows(codeResult CodeResult, emitted CovPointOffsetMap) returns BoolArray
 	var counted = BoolArray.create()
 	counted.refill(codeResult.debugLineRows.count(), value: false)
+
 	for (_, codeOffset) in emitted 'eachEmittedPoint'
 		markRowAtOrPast(codeResult.debugLineRows, counted: counted, codeOffset: codeOffset)
 	end 'eachEmittedPoint'
@@ -153,9 +160,11 @@ end 'coverageCountedRows'
 function markRowAtOrPast(rows DebugLineRowArray, counted BoolArray, codeOffset MxdbgCodeOffset)
 	var low = 0 as ElementIndex
 	var high = rows.count()
+
 	while low < high 'narrow'
 		let mid = low + (high - low) / 2
 		let row = try rows.get(mid) otherwise panic("debug info: debugLineRows.get OOB at {mid} inside the search bound {high}")
+
 		if (row.codeOffset as MxdbgCodeOffset) < codeOffset 'beforeThePoint'
 			low = mid + 1
 		end 'beforeThePoint' else 'atOrPastThePoint'
@@ -185,9 +194,11 @@ function writeCoveragePoints(project Project, writer MxdbgWriter, emitted CovPoi
 
 	let fileIds = sidecarFileIdsByPath(project)
 	var id = 0 as CovPointId
+
 	for point in project.covPoints.points 'eachPoint'
 		var codeOffset = NoCoverageCodeOffset
 		var flags = (point.flags as MxdbgIndex) or MxdbgCovFlagEliminated
+
 		if let at = try emitted.get(id) 'itsCodeSurvived'
 			codeOffset = at
 			flags = point.flags as MxdbgIndex
@@ -208,6 +219,7 @@ end 'coveragePointFileId'
 // path rather than a span id, so this is the only route from one to the other.
 function sidecarFileIdsByPath(project Project) returns SidecarFileIdMap
 	var byPath = SidecarFileIdMap.create()
+
 	for fileId in MxdbgFirstSourceFileId upto project.debugSpanTable.fileCount() 'eachFile'
 		byPath.upsert(project.debugSpanTable.filePath(fileId as DebugFileId), value: sidecarFileIdOf(fileId as DebugFileId))
 	end 'eachFile'
@@ -245,6 +257,7 @@ function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTyp
 	records.reserve(func.debugLocals.count())
 
 	var at = 0 as ElementIndex
+
 	for local in func.debugLocals 'eachBinding'
 		let placement = mxdbgAgreedPlacement(project, module: module, func: func, frameSize: range.frameSize, local: local, first: at)
 		at = at + local.valueIds.count()
@@ -306,9 +319,11 @@ function mxdbgAgreedPlacement(project Project, module TargetModule, func IrFunct
 	var number = 0 as DebugValueNumber
 	let past = first + local.valueIds.count()
 	var at = first
+
 	while at < past 'eachValue'
 		let location = mxdbgLocationAt(func, at: at)
 		at = at + 1
+
 		if location.kind == DebugValueNowhere 'notInTheCode'
 			continue
 		end 'notInTheCode'
@@ -378,6 +393,7 @@ end 'panicNoFrameOnWasm'
 // nowhere else.
 function mxdbgFunctionIndex(module TargetModule) returns MxdbgFunctionIndexMap
 	var index = MxdbgFunctionIndexMap.create()
+
 	for i in 0 upto module.funcCount() 'eachFunction'
 		let func = try module.functions.get(i) otherwise panic("mxdbgFunctionIndex: functions.get OOB at {i} below the module's {module.funcCount()}")
 		index.upsert(func.name, value: i as FuncIndex)

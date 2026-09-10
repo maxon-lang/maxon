@@ -40,13 +40,16 @@ export union TypeCycleTarget
 	// for. ⚠ **AN INTERFACE IS NOT ONE OF THEM: it holds a type inside itself through its conformers**, and it
 	// is `existential` below.
 	nothing
+
 	// A declared `type` / `enum` / `union`, BY NAME. The name is resolved against the declaration registries
 	// by the caller rather than here, so a name no declaration holds simply contributes no edge — which is
 	// what keeps a `named` that turned out to be a ranged alias from inventing one.
 	aggregate(name ByteArray)
+
 	// A generic INSTANCE — `Array with Folder`, whether the author wrote it inline or reached it through a
 	// `typealias`.
 	container(id GenericInstanceId)
+
 	// An INTERFACE, BY NAME — the type of `var back as Backref`. WHAT such a field holds is decided
 	// whole-program by the conformance registry and never by the reference itself, which is why this arm
 	// carries only the name and the conformers are read where the graph is built.
@@ -59,6 +62,7 @@ end 'TypeCycleTarget'
 // registry over.
 export function typeCycleTargetOf(t MaxonType, typeNames TypeNameInterner) returns TypeCycleTarget
 	let tag = maxonTypeTag(t)
+
 	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namesAnAggregate'
 		let name = try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("typeCycleTargetOf: a `named`/`structRef` type's id is not in the interner it was read against — a declared type's field types are remapped into `project.typeNames` at merge")
 		return TypeCycleTarget.aggregate(name)
@@ -106,13 +110,16 @@ type TypeCycleGraph
 	// Aggregate name ⇒ its node. The container node for instance `gid` is `aggregateCount() + gid`, so the
 	// two spaces are disjoint by construction and neither needs a kind bit.
 	var nodeOfAggregate as TypeCycleNodeMap
+
 	// Node ⇒ its name, for the aggregate half. The container half's display name is derived at render time
 	// (`ProgramSignatures.instanceDisplayName`), because it is the author's `typealias` spelling and there is
 	// no reason to materialize one per instance for a program that compiles.
 	var aggregateNames as ByteArrayArray
+
 	// How many generic instances the program interned — the container half's width, held here so the
 	// adjacency and the node numbering cannot come to disagree about how wide the space is.
 	var instanceCount as GenericInstanceId
+
 	// Interface name ⇒ its node, plus the reverse column — for the interfaces some declared reference NAMES.
 	// ⭐ **MINTED ON MENTION, AND NUMBERED ABOVE BOTH OTHER HALVES SO THE SPACE MAY GROW WHILE THE EDGES ARE
 	// BEING BUILT**: an aggregate's node is fixed by the pass before any edge exists, and a container's is a
@@ -121,13 +128,16 @@ type TypeCycleGraph
 	// zero.
 	var nodeOfInterface as TypeCycleNodeMap
 	var interfaceNames as ByteArrayArray
+
 	// The edges, as the parallel (owner, held) columns `buildCsr` consumes.
 	var edgeOwners as CsrColumn
 	var edgeHeld as CsrColumn
+
 	// The union CASE an edge leaves through, EMPTY unless it does — `link` in `link.next: Link`. A struct
 	// field and a container element both leave one empty; see `edgeLabel`, where the three shapes are one
 	// formula.
 	var edgeCaseNames as ByteArrayArray
+
 	// The FIELD or PAYLOAD an edge leaves through, EMPTY for a container element — a container owns its
 	// elements in its BUFFER and there is no declared member to name, which is exactly why the spec's path
 	// reads `FolderArray → Folder` with no `:` in it.
@@ -213,6 +223,7 @@ type TypeCycleGraph
 	// legal combinations are stated on the columns themselves.
 	function addEdge(owner CsrIndex, target TypeCycleTarget, caseName ByteArray, memberName ByteArray)
 		let held = self.nodeOfTarget(target)
+
 		if held == NoTypeCycleNode 'referencesNothingThisGraphHolds'
 			return
 		end 'referencesNothingThisGraphHolds'
@@ -232,6 +243,7 @@ type TypeCycleGraph
 	// because a missed edge is a leak and a spare one to a node that holds nothing costs a sink.
 	function recordConformerEdge(interfaceName ByteArray, conformer CsrIndex)
 		let owner = try self.nodeOfInterface.get(interfaceName) otherwise NoTypeCycleNode
+
 		if owner == NoTypeCycleNode 'namedByNoReference'
 			return
 		end 'namedByNoReference'
@@ -276,10 +288,13 @@ type TypeCycleGraph
 	function renderCyclePath(signatures ProgramSignatures, cycle CsrColumn) returns String
 		let start = try cycle.get(0) otherwise panic("TypeCycleGraph.renderCyclePath: the blamed node lies on a cycle, so `shortestCycleThrough` returned a non-empty path for it")
 		var path = String.from(self.displayNameOfNode(signatures, node: start))
+
 		for index in 0 upto cycle.count() 'eachStep'
 			let owner = try cycle.get(index) otherwise panic("TypeCycleGraph.renderCyclePath: cycle.get OOB at {index} below count {cycle.count()}")
+
 			// The LAST step closes the loop back onto the node the path started at.
 			var held = start
+
 			if index + 1 < cycle.count() 'notTheClosingStep'
 				held = try cycle.get(index + 1) otherwise panic("TypeCycleGraph.renderCyclePath: cycle.get OOB at {index} + 1 below count {cycle.count()}")
 			end 'notTheClosingStep'
@@ -318,6 +333,7 @@ type TypeCycleGraph
 		for index in 0 upto self.edgeOwners.count() 'eachEdge'
 			let ownerAt = try self.edgeOwners.get(index) otherwise panic("TypeCycleGraph.edgeIndexBetween: edgeOwners.get OOB at {index} below count {self.edgeOwners.count()}")
 			let heldAt = try self.edgeHeld.get(index) otherwise panic("TypeCycleGraph.edgeIndexBetween: edgeHeld.get OOB at {index} below count {self.edgeHeld.count()}")
+
 			if ownerAt == owner and heldAt == held 'theStepThePathTook'
 				return index
 			end 'theStepThePathTook'
@@ -394,8 +410,10 @@ end 'TypeCycleBlame'
 function blameForTypeCycles(project Project, graph TypeCycleGraph) returns TypeCycleBlame
 	let onCycle = nodesOnACycle(graph.adjacency())
 	var blame = TypeCycleBlame.none
+
 	for node in 0 upto graph.aggregateCount() 'eachAggregate'
 		let lies = try onCycle.get(node) otherwise panic("blameForTypeCycles: node {node} is outside the {onCycle.count()}-node answer the graph was built over")
+
 		if not lies 'liesOnNoCycle'
 			continue
 		end 'liesOnNoCycle'
@@ -435,6 +453,7 @@ end 'reportTypeCycle'
 // path resolution affordable here: on every program that compiles it runs zero times.
 function userDeclarationOf(project Project, name ByteArray) returns TypeNameDecl throws MapError
 	let decl = try project.typeNameDecls.declarationOf(name)
+
 	if decl.claim.declFilePath.equals(CompilerOwnedDeclFilePath) or isStdlibSourceFile(project, path: decl.claim.declFilePath) 'noUserFileWroteIt'
 		throw MapError.keyNotFound
 	end 'noUserFileWroteIt'
@@ -447,6 +466,7 @@ end 'userDeclarationOf'
 function typeDeclEarlier(decl TypeNameDecl, other TypeNameDecl) returns bool
 	let path = decl.claim.declFilePath.toString()
 	let otherPath = other.claim.declFilePath.toString()
+
 	if not path.equals(otherPath) 'differentFiles'
 		return stringBytesPrecede(path, later: otherPath)
 	end 'differentFiles'
@@ -464,15 +484,18 @@ end 'typeDeclEarlier'
 // interface those three named.
 function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) returns TypeCycleGraph
 	var graph = TypeCycleGraph.create(signatures.genericInstanceCount())
+
 	for (name, _) in project.structTypes 'eachStructName'
 		graph.declareAggregate(name)
 	end 'eachStructName'
+
 	for (name, _) in project.enumTypes 'eachEnumName'
 		graph.declareAggregate(name)
 	end 'eachEnumName'
 
 	for (name, layout) in project.structTypes 'eachStruct'
 		let owner = graph.nodeOfDeclaredAggregate(name)
+
 		for index in 0 upto layout.fieldTypes.count() 'eachField'
 			let fieldType = try layout.fieldTypes.get(index) otherwise panic("buildTypeReferenceGraph: fieldTypes.get OOB at {index} below count {layout.fieldTypes.count()}")
 			let fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
@@ -482,9 +505,11 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 
 	for (name, layout) in project.enumTypes 'eachEnum'
 		let owner = graph.nodeOfDeclaredAggregate(name)
+
 		for index in 0 upto layout.casePayloads.count() 'eachCase'
 			let caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
 			let payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
+
 			for payload in payloads 'eachPayload'
 				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), caseName: caseName, memberName: payload.name)
 			end 'eachPayload'
@@ -499,6 +524,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		// owner computed here and a held node computed in `nodeOfTarget` are the SAME formula, and two
 		// spellings of it would let an edge point at a node nothing in the graph agrees is the same one.
 		let owner = graph.containerNode(id)
+
 		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'
 			graph.addEdge(owner, target: signatures.instanceArgCycleTarget(id, position: position), caseName: EmptySourceText, memberName: EmptySourceText)
 		end 'eachArgument'
@@ -538,9 +564,11 @@ function addConformerEdges(project Project, signatures ProgramSignatures, graph 
 	for (name, _) in project.structTypes 'eachStruct'
 		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
 	end 'eachStruct'
+
 	for (name, _) in project.enumTypes 'eachEnum'
 		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
 	end 'eachEnum'
+
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		addInstanceConformerEdges(project, signatures: signatures, graph: graph, id: id)
 	end 'eachInstance'
@@ -563,6 +591,7 @@ end 'addConformerEdges'
 // which supplies the instance's node against that name.
 function addConformerEdgesOf(project Project, signatures ProgramSignatures, graph TypeCycleGraph, name ByteArray, conformer CsrIndex)
 	var reached = InterfaceNameSet.create()
+
 	if let declaredNames = try declaredConformanceIndex(project).get(name) 'declaresAConformance'
 		collectDeclaredInterfaceClosure(project.interfaces, declaredNames: declaredNames, into: reached)
 	end 'declaresAConformance'
@@ -587,9 +616,11 @@ end 'addConformerEdgesOf'
 // here would be the copy that grants an edge the widening door refuses — or withholds one it allows.
 function addInstanceConformerEdges(project Project, signatures ProgramSignatures, graph TypeCycleGraph, id GenericInstanceId)
 	let conformer = graph.containerNode(id)
+
 	match signatures.instanceConformerReduction(id) 'reduction'
 		arrayBuiltin then addConformerEdgesOf(project, signatures: signatures, graph: graph, name: signatures.arrayRecordDeclaredName(), conformer: conformer)
 		declaredBase(baseName) then addConformerEdgesOf(project, signatures: signatures, graph: graph, name: baseName, conformer: conformer)
+
 		// A mangled instance name is claimed by no `implements` and no intrinsic row — the property that makes
 		// a non-conforming array fail E3017 — so nothing may widen from it and it owes no edge.
 		unreduced then break 'reduction'

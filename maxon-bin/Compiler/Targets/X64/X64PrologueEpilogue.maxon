@@ -141,6 +141,7 @@ typealias X64RegisterArray = Array with X64Register
 // Insert prologue/epilogue ops for every function in the module.
 export function insertPrologueEpilogue(module TargetModule, target Target)
 	logDebug(LogCategory.codegen, message: function() gives "Prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -168,16 +169,19 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 	// The SAME `computeFrameBytes` the GT stack guard reaches through `computeGuardFrameBytes` — one formula, two
 	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
 	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
+
 	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
 	let xmmBaseSlot = func.stackSize / SpillSlotBytes
 
 	var isFirstBlock = true
+
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
 			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
 		end 'entry'
+
 		isFirstBlock = false
 
 		if blockEndsWithReturn(module, block: block) 'returnBlock'
@@ -223,9 +227,11 @@ end 'computeGuardFrameBytes'
 // this function's caller.
 function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
 	let xmmSaveBytes = (xmmSaveCount as StackSize) * XmmSaveSlotBytes
+
 	if not makesCall 'leaf'
 		return alignUpStack(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
 	end 'leaf'
+
 	let base = func.stackSize + xmmSaveBytes + func.outgoingArgSize + ShadowSpaceBytes
 	let targetMod = frameAlignTarget(pushCount + FramePointerPushCount)
 	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
@@ -248,6 +254,7 @@ export function spillSlotBaseDisp(module TargetModule, func IrFunction) returns 
 	if functionMakesCall(module, func: func) 'caller'
 		return ShadowSpaceBytes + func.outgoingArgSize
 	end 'caller'
+
 	return 0
 end 'spillSlotBaseDisp'
 
@@ -258,6 +265,7 @@ function frameAlignTarget(pushCount RegCount) returns StackSize
 	if pushCount mod 2 == 0 'even'
 		return 8
 	end 'even'
+
 	return 0
 end 'frameAlignTarget'
 
@@ -276,15 +284,19 @@ end 'roundUpToMod'
 // function's ops are walked once however many register files the ABI preserves.
 function colouredPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
 	var mask = 0 as RegMask
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("colouredPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			mask = mask or opPhysicalRegs(try module.ops.get(opIdx) otherwise panic("colouredPhysicalRegs: opIdx {opIdx} not in module.ops"))
 		end 'eachOp'
+
 		if block.hasTerminatorOp() 'hasTerm'
 			mask = mask or opPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("colouredPhysicalRegs: terminator not in module.ops"))
 		end 'hasTerm'
 	end 'eachBlock'
+
 	return mask
 end 'colouredPhysicalRegs'
 
@@ -293,11 +305,13 @@ end 'colouredPhysicalRegs'
 // each such register must be preserved — a GPR by push/pop, an XMM by a frame slot.
 function usedRegsFrom(order X64RegisterArray, coloured RegMask) returns X64RegisterArray
 	var used = X64RegisterArray.create()
+
 	for reg in order 'eachCallee'
 		if regMaskContains(coloured, regNum: reg.rawValue) 'isUsed'
 			used.push(reg)
 		end 'isUsed'
 	end 'eachCallee'
+
 	return used
 end 'usedRegsFrom'
 
@@ -344,6 +358,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		shlRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
 		sarRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
 		shrRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+
 		// RCX is NOT reported here. This function answers "which registers did the COLORING
 		// use?", so the prologue knows which callee-saved ones to preserve — and RCX is
 		// caller-saved, so it needs no preservation regardless. The shift's use of CL is an
@@ -352,6 +367,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		sarRegCl(d, l) gives physRegBit(d) or physRegBit(l)
 		shrRegCl(d, l) gives physRegBit(d) or physRegBit(l)
 		setccReg(d, _) gives physRegBit(d)
+
 		// ⚠ The data-section band MUST be counted here, and this is the arm where a miss is a real
 		// miscompile rather than a missed optimization: this mask is what decides which CALLEE-SAVED
 		// registers the prologue pushes. A global's address, or the value loaded out of one, can be
@@ -360,6 +376,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		leaRegGlobal(d, _) gives physRegBit(d)
 		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
 		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
+
 		// ⚠ The SSE band MUST be counted, and since Wave 2 this is a REAL-MISCOMPILE arm exactly like
 		// the data-section one above: xmm6-15 are callee-saved, so a float coloured into one and missing
 		// from this mask is never saved by the prologue and the function silently clobbers its CALLER's
@@ -374,33 +391,40 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		movsdRegRip(d, _) gives physRegBit(d)
 		cvtsi2sdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		cvttsd2siRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+
 		// The MATH INTRINSICS — reported like every other SSE op, for the reason the band comment
 		// above gives.
 		sqrtsdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		roundsdRegReg(d, s, _) gives physRegBit(d) or physRegBit(s)
 		absF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
+
 		// The sign-bit FLIP — its two XMM operands are counted like `absF64RegReg`'s. Its scratch xmm5
 		// (the op's `implicitDefs`) is caller-saved under both ABIs and never pushed, so it contributes
 		// nothing here, exactly as the jump table's r10/r11 do not.
 		negF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
+
 		// The BIT REINTERPRETATION. Its GPR DEST can be colored into a callee-saved register
 		// (rbx/r12–r15), so a miss here is the real-miscompile trap `leaRegRdata` documents below,
 		// not a missed optimization: the prologue would never save that register and the function
 		// would silently clobber its CALLER's.
 		movqGprXmm(d, s) gives physRegBit(d) or physRegBit(s)
+
 		// Its INVERSE. Here it is the SOURCE that is the GPR (and the dest an XMM), so the callee-saved
 		// register at risk is a different one — but both operands are counted either way, which is why
 		// the direction changes nothing about this arm and everything about why it must exist.
 		movqXmmGpr(d, s) gives physRegBit(d) or physRegBit(s)
+
 		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
 		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
 		leaRegRdata(d, _) gives physRegBit(d)
+
 		// `minsd`/`maxsd` — both operands are XMMs, and xmm6–xmm15 are CALLEE-SAVED under the Windows x64 ABI,
 		// so this is the same real-miscompile trap the two arms above name rather than a missed
 		// optimization. `rhs` is counted as well as `dest`/`lhs`: it is a genuine second source
 		// register, unlike `absF64RegReg`'s ignored `src`, which coloring has already merged into
 		// `dest`.
 		minMaxSdRegReg(d, l, r, _) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+
 		// arm64 does not run the x64 prologue pass (its frame is `Arm64PrologueEpilogue`, wave 1), so
 		// no arm64 op reaches here — an empty mask is unreachable AND correct (none of these arms names
 		// a register the x64 prologue counts). `gives` cannot host a `panic`; the band-append
@@ -457,6 +481,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel gives 0
+
 		// ⚠ The P1.5-A1 function-value band MUST be counted, and this is another arm where a miss is a
 		// real miscompile, not a missed optimization: BOTH name a GPR the coloring can place in a
 		// callee-saved register (rbx/r12-r15) — `leaRegFunc`'s dest and `callReg`'s callee-address use —
@@ -464,34 +489,42 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// silently clobbers its CALLER's. The same trap the `leaRegGlobal`/`leaRegRdata` arms document.
 		leaRegFunc(d, _) gives physRegBit(d)
 		callReg(r) gives physRegBit(r)
+
 		// The Linux `syscall` names no explicit register operand (its number is an immediate, its args
 		// are separate `mov`s, and rax/rcx/r11 are caller-saved and never pushed) — 0, like `callDirect`/
 		// `iatCall` above.
 		x64Syscall gives 0
+
 		// The x64 jump table's biased index USE can be colored into a callee-saved register, so it MUST be
 		// counted (the same real-miscompile trap `callReg` documents). The scratch r10/r11 (its implicitDefs)
 		// are caller-saved and never pushed, so they contribute nothing. `arm64JumpTable` never runs the x64
 		// prologue pass, so 0 (its own prologue counts it) — but the arm keeps the match exhaustive.
 		x64JumpTable(indexReg, _, _, _) gives physRegBit(indexReg)
 		arm64JumpTable gives 0
+
 		// The witness call's base-register USE can be colored into a callee-saved register, so it MUST be
 		// counted — the same trap `callReg` documents.
 		callMem(baseReg, _) gives physRegBit(baseReg)
+
 		// arm64-only ops (its own prologue pass counts them); they never reach an x64 program, and an empty
 		// mask is both unreachable and correct. `gives` cannot host a `panic`.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives 0
+
 		// The arm64 bit reinterpretations — arm64-only, so 0 for the reason the arm above gives.
 		arm64FmovGprFp or
 			arm64FmovFpGpr gives 0
+
 		// ⚠ Its GPR dest can be coloured into a callee-saved register (rbx/r12-r15), so a miss here is the
 		// real-miscompile trap `leaRegGlobal`/`leaRegRdata` document: the prologue would never save that
 		// register and the function would silently clobber its CALLER's.
 		leaRegSlot(d, _) gives physRegBit(d)
+
 		// F1b: a fill ladder names no virtual register, and its four fixed ones (rax/rcx/rdx/rdi) are all
 		// CALLER-saved, so the prologue owes them nothing — an empty mask is the right answer, not a gap.
 		x64MemFill or
 			arm64MemFill gives 0
+
 		// F2: every x64 atomic operand is an ORDINARY coloured register that CAN land in a callee-saved one, so
 		// each must be counted — the same real-miscompile trap `leaRegSlot` documents one line up. The CAS's
 		// implicit RAX is deliberately absent: rax is caller-saved, so the prologue owes it nothing.
@@ -500,11 +533,13 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		x64LockAdd(a, s) gives physRegBit(a) or physRegBit(s)
 		x64TebSelfPointer(d) gives physRegBit(d)
 		x64GsLoadRegBase(d, b) gives physRegBit(d) or physRegBit(b)
+
 		// arm64-only ops, 0 for the reason the arm64 arms above give. Their x16/x17 scratch is outside every
 		// allocatable pool and callee-saved of nothing, so there is nothing to count there either.
 		arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives 0
+
 		// ⚠ EC16's scaled-index band MUST be counted, and this is a REAL-MISCOMPILE arm for the reason the
 		// `loadRegBaseDisp`/`storeBaseDispReg` arms above give: every operand here is an ordinary coloured
 		// register that can land in rbx/r12-r15, and a register missing from this mask is one the prologue
@@ -512,19 +547,25 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		leaRegBaseIndexScale(d, b, i, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
 		loadRegBaseIndexScale(d, b, i, _, _, _) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
 		storeBaseIndexScaleReg(b, i, _, _, s, _) gives physRegBit(b) or physRegBit(i) or physRegBit(s)
+
 		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64AddLsl gives 0
+
 		// ⚠ EC18 — `divideReg`'s arm, and it counts the SAME ONE operand for the same reason: RAX and RDX
 		// are caller-saved and are not part of this scan (which is about callee-saved registers the
 		// coloring used), while `src` is an ordinary coloured register that can land in rbx/r12-r15.
 		imulHighReg(src) gives physRegBit(src)
+
 		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64Fneg gives 0
+
 		// G3: arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64LoadAcquire or
 			arm64StoreRelease gives 0
+
 		// EC18's arm64 high multiply: arm64-only, 0 for the same reason.
 		arm64Smulh gives 0
+
 		// A coverage counter names no register on either lane: `lock inc [rip+d32]` on x64, and arm64's
 		// reserved x16/x17 pair plus a stack-borrowed word it gives straight back.
 		covInc gives 0
@@ -561,13 +602,16 @@ function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X6
 		let reg = try usedXmm.get(slotIndex) otherwise panic("insertPrologueAtEntry: usedXmm.get OOB")
 		prependOp(module, block: block, op: TargetOp.storeSlotReg(xmmBaseSlot + slotIndex, srcReg: x64PhysReg(reg)))
 	end 'eachXmmSaveRev'
+
 	if frameBytes > 0 'reserve'
 		prependOp(module, block: block, op: TargetOp.prologue(frameBytes))
 	end 'reserve'
+
 	for ri in 0 upto usedCallee.count() 'eachPushRev'
 		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("insertPrologueAtEntry: usedCallee.get OOB")
 		prependOp(module, block: block, op: TargetOp.pushReg(reg))
 	end 'eachPushRev'
+
 	prependOp(module, block: block, op: framePointerSetupOp())
 	prependOp(module, block: block, op: TargetOp.pushReg(X64Register.rbp))
 end 'insertPrologueAtEntry'
@@ -592,13 +636,16 @@ function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCall
 		let reg = try usedXmm.get(xi) otherwise panic("appendEpilogueBeforeReturn: usedXmm.get OOB")
 		module.appendOp(block, op: TargetOp.loadRegSlot(x64PhysReg(reg), slot: xmmBaseSlot + xi))
 	end 'eachXmmRestore'
+
 	if frameBytes > 0 'release'
 		module.appendOp(block, op: TargetOp.epilogue(frameBytes))
 	end 'release'
+
 	for ri in 0 upto usedCallee.count() 'eachPopRev'
 		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("appendEpilogueBeforeReturn: usedCallee.get OOB")
 		module.appendOp(block, op: TargetOp.popReg(reg))
 	end 'eachPopRev'
+
 	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
 end 'appendEpilogueBeforeReturn'
 
@@ -616,6 +663,7 @@ end 'framePointerSetupOp'
 function prependOp(module TargetModule, block IrBlock, op TargetOp)
 	let opIdx = module.ops.count()
 	module.ops.push(op)
+
 	// Frame setup is the ABI's, not the author's — it precedes the function's first statement.
 	module.spans.pushNone(opIdx)
 	insertOpRef(block, at: 0, opIdx: opIdx)
@@ -654,6 +702,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 	if not block.hasTerminatorOp() 'noTerm'
 		return false
 	end 'noTerm'
+
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithReturn: terminator not in module.ops")
 	return match op 'check'
 		prologue or
@@ -715,6 +764,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 			minMaxSdRegReg or
 			movqXmmGpr or
 			negF64RegReg gives false
+
 		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
 		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
 		arm64Ret or
@@ -769,26 +819,34 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 			arm64ImportCall or
 			arm64Syscall or
 			arm64Fcsel gives false
+
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are body ops, never a `ret`.
 		leaRegFunc or
 			callReg or
 			x64Syscall gives false
+
 		// The jump tables are branch terminators, not a `ret`.
 		x64JumpTable or
 			arm64JumpTable gives false
+
 		// The witness call is a body op, never a `ret`.
 		callMem gives false
+
 		// Both stack-argument ops are body ops, never a `ret`.
 		arm64StoreOutgoingArg or
 			arm64LoadIncomingArg gives false
+
 		// Both arm64 bit reinterpretations are body ops, never a `ret`.
 		arm64FmovGprFp or
 			arm64FmovFpGpr gives false
+
 		// A frame address is a body op, never a `ret`.
 		leaRegSlot gives false
+
 		// F1b: a fill ladder is a body op, never a `ret` — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives false
+
 		// F2: every atomic is a body op, never a `ret`.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -798,20 +856,26 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 			arm64AtomicCas or
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
+
 		// EC16: every scaled-index form is a body op, never a `ret`.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
+
 		// EC18: the high multiply is a body op, never a `ret`.
 		imulHighReg gives false
+
 		// arm64 `fneg` is a body op, never a `ret`.
 		arm64Fneg gives false
+
 		// G3: an ordered access is a body op, never a `ret`.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
+
 		// EC18: the arm64 high multiply is a body op, never a `ret`.
 		arm64Smulh gives false
+
 		// A coverage counter is a body op, never a `ret`.
 		covInc gives false
 	end 'check'

@@ -83,6 +83,7 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = functionAt(module, index: i)
+
 		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
 		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
 		// that deliberately skips the function.
@@ -121,6 +122,7 @@ function promoteInFunction(project Project, module MaxonModule, func IrFunction,
 
 	let provenance = ArgProvenance.of(module, func: func)
 	var minter = PromotedValueMinter.over(func)
+
 	for blockRef in func.blockRefs 'eachBlock'
 		promoteInBlock(project, module: module, block: try module.blocks.get(blockRef) otherwise panic("promoteInFunction: blockRef from func.blockRefs not in module.blocks"), func: func, funcIndex: funcIndex, provenance: provenance, minter: minter, mutationSummary: mutationSummary)
 	end 'eachBlock'
@@ -131,12 +133,14 @@ end 'promoteInFunction'
 function callsAWritingCallee(module MaxonModule, func IrFunction, mutationSummary ParamMutationSummary) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("callsAWritingCallee: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			if opCallsAWritingCallee(try module.ops.get(opIdx) otherwise panic("callsAWritingCallee: opIdx {opIdx} not in module.ops"), mutationSummary: mutationSummary) 'found'
 				return true
 			end 'found'
 		end 'eachOp'
 	end 'eachBlock'
+
 	return false
 end 'callsAWritingCallee'
 
@@ -174,8 +178,10 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 		witnessDispatch or
 			witnessTryDispatch gives false
 		panicAbortValue gives false
+
 		// The error-flag encode calls nothing, so it writes through no parameter.
 		errorFlagEncode gives false
+
 		// ⭐ **A SEND'S ARGUMENTS ARE ALREADY WRITABLE BY THE TIME THIS PASS COULD ACT, AND THAT IS WHY BOTH
 		// ANSWER `false`.** This pass exists to give an IMMORTAL `.rdata` record to a callee that writes its
 		// parameter; a message's arguments went into the request box through `Parser.moveIntoGreenThread`,
@@ -195,8 +201,10 @@ end 'opCallsAWritingCallee'
 enum WritableRecordPromotion
 	// Neither an immortal record nor a merge, so the callee already has a record it may write.
 	none
+
 	// A `stringLiteral` result: the provenance is a COMPILE-TIME fact, so the copy is emitted directly.
 	copyImmortalRecord
+
 	// A merge phi: the provenance differs BY EDGE, so it is decided at run time off the record itself.
 	retainMergedRecord
 end 'WritableRecordPromotion'
@@ -224,6 +232,7 @@ type ArgProvenance
 	// String's promotion at its declaration and a `returns String` hand-off all ALLOCATE, and everything
 	// else is a borrow of something that did.
 	var isImmortal as BoolArray
+
 	// A merge phi of BYTE-RECORD type — the value whose provenance is not a compile-time fact at all,
 	// because its edges may disagree. The TAG is part of the test: a merge of two `int`s owns no record and
 	// a merge of two arrays cannot be immortal (every array record is `__mm_alloc`'d), so neither needs a
@@ -238,10 +247,12 @@ type ArgProvenance
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ArgProvenance.of: blockRef from func.blockRefs not in module.blocks")
 			provenance.notePhis(block, func: func)
+
 			for opIdx in block.opRefs 'eachOp'
 				provenance.noteOp(try module.ops.get(opIdx) otherwise panic("ArgProvenance.of: opIdx {opIdx} not in module.ops"), func: func)
 			end 'eachOp'
 		end 'eachBlock'
+
 		return provenance
 	end 'of'
 
@@ -297,9 +308,11 @@ type ArgProvenance
 			witnessDispatch or
 				witnessTryDispatch then break 'op'
 			panicAbortValue then break 'op'
+
 			// The error-flag encode takes no ARGUMENT position — its operand is an enum value the parser already
 			// materialized, never a literal this pass could promote.
 			errorFlagEncode then break 'op'
+
 			// No service op DEFINES a byte record: a spawn's result is a mailbox pointer, a reply cell's is a
 			// GT struct pointer, and a send defines nothing at all.
 			serviceSpawn or
@@ -340,6 +353,7 @@ end 'ArgProvenance'
 function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex FuncIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
 	var newRefs = OpIndexArray.create()
 	var promotedAny = false
+
 	for opIdx in block.opRefs 'eachOp'
 		promotedAny = promoteCallAt(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs) or promotedAny
 	end 'eachOp'
@@ -356,6 +370,7 @@ end 'promoteInBlock'
 // Same arm list, same band discipline and same `asyncCall` exclusion as the gate above.
 function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
+
 	match op 'op'
 		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		literal or
@@ -385,8 +400,10 @@ function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func 
 		witnessDispatch or
 			witnessTryDispatch then break 'op'
 		panicAbortValue then break 'op'
+
 		// Same: no argument position, so no promotion decision to record for it.
 		errorFlagEncode then break 'op'
+
 		// See `opCallsAWritingCallee`: a message's arguments are owned records by the time they reach the
 		// request box, so there is no immortal one here to promote.
 		serviceSpawn or
@@ -412,6 +429,7 @@ end 'promoteCallAt'
 // reason this door reads the op back for itself at the one line that needs it.
 function promoteArgsOf(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let mask = mutationSummary.maskOf(callee)
+
 	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
 	// anything at all.
 	if mask == NoParamPositions or not project.funcSignatures.contains(callee) 'noWrittenPositionToFill'
@@ -420,6 +438,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx OpIndex, func 
 	end 'noWrittenPositionToFill'
 
 	let sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
+
 	// Asked before anything is built, because a call to a writing callee is common and a literal or a merge
 	// AT one of its written positions is not: without it every such call would claim four arrays to discover
 	// it had nothing to put in them.
@@ -432,9 +451,11 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx OpIndex, func 
 	var promoted = ValueIdArray.create()
 	var sources = ValueIdArray.create()
 	var callees = ByteArrayArray.create()
+
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")
 		let promotion = promotionAtWrittenPosition(sig, mask: mask, argIndex: i, argId: argId, argLabels: argLabels, provenance: provenance)
+
 		if promotion == WritableRecordPromotion.none 'keepArgument'
 			promotedArgs.push(argId)
 			continue
@@ -484,6 +505,7 @@ function anyArgNeedsAWritableRecord(sig FuncSignature, mask ParamPositionMask, a
 			return true
 		end 'needsOne'
 	end 'eachArg'
+
 	return false
 end 'anyArgNeedsAWritableRecord'
 
@@ -497,11 +519,13 @@ end 'anyArgNeedsAWritableRecord'
 // a second slotting.
 function promotionAtWrittenPosition(sig FuncSignature, mask ParamPositionMask, argIndex ParamCount, argId ValueId, argLabels ByteArrayArray, provenance ArgProvenance) returns WritableRecordPromotion
 	let promotion = provenance.promotionFor(argId)
+
 	if promotion == WritableRecordPromotion.none 'alreadyWritable'
 		return promotion
 	end 'alreadyWritable'
 
 	let pos = argSlotPosition(sig.paramNames, argIndex: argIndex, label: try argLabels.get(argIndex) otherwise panic("promotionAtWrittenPosition: argLabels.get OOB at {argIndex} — a call's argument columns are parallel by construction"))
+
 	if pos >= sig.paramCount() or not maskHasParam(mask, param: pos) 'notAWrittenPosition'
 		return WritableRecordPromotion.none
 	end 'notAWrittenPosition'

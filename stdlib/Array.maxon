@@ -109,9 +109,11 @@ function grownCapacity(current ReportedCapacity, required ElementIndex) returns 
 	// Ease from 2× toward 1.25×. One pass covers a `push` (which asks for a single element more than it
 	// has); the loop repeats only when `required` lands between one eased step and a full double.
 	var capacity = current
+
 	while capacity < (required as ReportedCapacity) 'ease'
 		capacity = capacity + (capacity + 3 * GrowthThreshold) / 4
 	end 'ease'
+
 	return capacity
 end 'grownCapacity'
 
@@ -119,11 +121,13 @@ function atLeastMinimum(capacity ElementIndex) returns ElementIndex
 	if capacity < MinimumCapacity 'raise'
 		return MinimumCapacity
 	end 'raise'
+
 	return capacity
 end 'atLeastMinimum'
 
 public type Array uses Element implements BuiltinArrayLiteral, Iterable with (Element, ArrayIter), Cloneable
 	typealias ElementMemory = __ManagedMemory with Element
+
 	public var managed as ElementMemory  // Compiler-managed opaque array storage
 
 	// =========================================================================
@@ -150,9 +154,11 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// Create an array by collecting all elements from an iterable
 	public static function from (source ElementIterable) returns Self
 		var result = Self{}
+
 		for item in source 'collect'
 			result.push(item)
 		end 'collect'
+
 		return result
 	end 'from'
 
@@ -166,6 +172,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
 			panic("Array.clone: slice OOB — 0..len is always valid")
 		end 'sliceErr'
+
 		return Self{managed: newManaged}
 	end 'clone'
 
@@ -196,9 +203,11 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// because `ElementIndex` starts at 0: `len - 1` on an empty array is not an index at all.
 	public function last() returns Element throws ArrayError
 		let len = managed.length()
+
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
+
 		return try get(len - 1)
 	end 'last'
 
@@ -227,6 +236,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		if isOutsideLiveRange(index) 'outsideLiveRange'
 			return ArrayError.indexOutOfBounds
 		end 'outsideLiveRange'
+
 		return ArrayError.emptySlot
 	end 'accessFailure'
 
@@ -291,6 +301,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// Ensure capacity for at least requiredLen elements, growing if needed
 	function ensureCapacity(requiredLen ElementIndex)
 		let cap = managed.capacity()
+
 		if requiredLen > cap 'grow'
 			try managed.grow(grownCapacity(cap, required: requiredLen)) otherwise 'growErr'
 				panic("Array.ensureCapacity: grow failed — grownCapacity never returns below the current capacity")
@@ -305,6 +316,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		try managed.set(len, value) otherwise 'setErr'
 			panic("Array.push: set OOB — capacity just ensured for len+1")
 		end 'setErr'
+
 		try managed.setLength(len + 1) otherwise 'lenErr'
 			panic("Array.push: setLength OOB — just ensured capacity for len+1")
 		end 'lenErr'
@@ -332,6 +344,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		// than the builtin's raw byte memcpy).
 		let sourceLen = source.length()
 		ensureCapacity(managed.length() + sourceLen)
+
 		for i in 0 upto sourceLen 'copy'
 			let value = try source.get(i) otherwise panic("Array.appendMemory: get({i}) OOB — i < source.length")
 			push(value)
@@ -341,9 +354,11 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// Remove and return last element, throws if empty
 	public function pop() returns Element throws ArrayError
 		let len = managed.length()
+
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
+
 		return try managed.remove(len - 1) otherwise throw ArrayError.indexOutOfBounds
 	end 'pop'
 
@@ -358,6 +373,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		// alias now stops at `i64.max`, so the door refuses a negative outright — foldable ⇒ E3005, laundered
 		// ⇒ a `Range check failed` panic — and `insert(-1)` is a REFUSAL rather than an append-to-front.
 		var index = at
+
 		if index > len 'clampHigh'
 			index = len
 		end 'clampHigh'
@@ -373,6 +389,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		try managed.set(index, value) otherwise 'setErr'
 			panic("Array.insert: set OOB — index clamped to [0, len] and capacity ensured")
 		end 'setErr'
+
 		try managed.setLength(len + 1) otherwise 'lenErr'
 			panic("Array.insert: setLength OOB — capacity ensured for len+1")
 		end 'lenErr'
@@ -395,6 +412,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// Reserve space by ensuring array has at least minCapacity slots
 	public function reserve(minCapacity ElementIndex)
 		let cap = managed.capacity()
+
 		if minCapacity > cap 'grow'
 			try managed.grow(minCapacity) otherwise 'growErr'
 				panic("Array.reserve: grow failed — minCapacity > cap guaranteed")
@@ -481,6 +499,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// worth it to keep ONE extension operation rather than two.
 	public function growFilled(newLength ElementIndex, value Element)
 		let existing = managed.length()
+
 		if newLength <= existing 'nothingAdded'
 			return
 		end 'nothingAdded'
@@ -560,6 +579,7 @@ end 'Array'
 public type ArrayIterator uses Element implements BidirectionalIterator with Element
 	typealias ElementMemory = __ManagedMemory with Element
 	typealias RawCursor = __ManagedMemoryCursor with Element
+
 	var raw as RawCursor
 
 	public static function create(source ElementMemory) returns Self throws IterationError
@@ -610,6 +630,7 @@ public extension Array where Element is Equatable
 				return true
 			end 'found'
 		end 'scan'
+
 		return false
 	end 'contains'
 
@@ -623,22 +644,27 @@ public extension Array where Element is Equatable
 
 		for i in 0 to (selfLen - elemLen) 'scan'
 			var matched = true
+
 			for j in 0 upto elemLen 'cmp'
 				let a = try get(i + j) otherwise 'a'
 					break
 				end 'a'
+
 				let b = try sequence.get(j) otherwise 'b'
 					break
 				end 'b'
+
 				if a != b 'ne'
 					matched = false
 					break
 				end 'ne'
 			end 'cmp'
+
 			if matched 'found'
 				return true
 			end 'found'
 		end 'scan'
+
 		return false
 	end 'contains'
 end 'Array'
@@ -708,27 +734,34 @@ public extension Array implements Hashable, Equatable where Element is Hashable 
 	public function hash() returns HashValue
 		let byteLen = managed.length() * managed.elementSize()
 		var h = 5381
+
 		for i in 0 upto byteLen 'hash_loop'
 			let b = try managed.byteAt(i) otherwise panic("Array.hash: byteAt OOB — i < byteLen invariant")
 			h = h * 33 + b
 		end 'hash_loop'
+
 		return h and 0xFFFFFFFF
 	end 'hash'
 
 	public function equals(other Self) returns bool
 		let selfLen = managed.length()
 		let otherLen = other.managed.length()
+
 		if selfLen != otherLen 'len'
 			return false
 		end 'len'
+
 		let byteLen = selfLen * managed.elementSize()
+
 		for i in 0 upto byteLen 'cmp'
 			let ab = try managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
 			let bb = try other.managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
+
 			if ab != bb 'ne'
 				return false
 			end 'ne'
 		end 'cmp'
+
 		return true
 	end 'equals'
 end 'Array'

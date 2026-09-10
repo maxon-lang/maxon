@@ -26,7 +26,6 @@
 //
 // The gate and every conjunct of its reason are `ProfileModel`'s.
 #if os(Windows) and arch(x64)
-
 	// A machine word this tool passes through: an address, a handle, a cycle count or a FILETIME. Signed and
 	// full width, so a stray all-ones register arrives as −1 and is refused by an ordinary comparison rather
 	// than trapping a range check on its way in.
@@ -208,6 +207,7 @@
 		end 'notAnImage'
 
 		let peOffset = imageReadU32(image, at: ProfilePeSignatureOffsetField) as ByteOffset
+
 		if not imageRangeFits(image, start: peOffset, count: ProfileCoffHeaderBytes as BytePos) or imageReadU32(image, at: peOffset) != ProfilePeMagic 'notPe'
 			return profileNotAPeImage(binary)
 		end 'notPe'
@@ -223,6 +223,7 @@
 
 		for index in 0 upto sectionCount 'eachSection'
 			let header = firstSection + (index * ProfileSectionHeaderBytes) as ByteOffset
+
 			if not imageRangeFits(image, start: header, count: ProfileSectionHeaderBytes as BytePos) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
 				continue
 			end 'notTheCode'
@@ -231,6 +232,7 @@
 			let rawSize = imageReadU32(image, at: header + ProfileSectionRawSizeOffset) as BytePos
 			let rawPointer = imageReadU32(image, at: header + ProfileSectionRawPointerOffset) as ByteOffset
 			let stored = virtualSize as BytePos if (virtualSize as BytePos) < rawSize else rawSize
+
 			if not imageRangeFits(image, start: rawPointer, count: stored) 'runsPastTheEnd'
 				return ProfilePlacementRead.refused("{reportPathDisplay(binary)} claims a {ProfileTextSectionName} section that runs past the end of the file")
 			end 'runsPastTheEnd'
@@ -256,9 +258,11 @@
 	// fails, and the walk is taken the moment the child exists.
 	function snapshotProfileModules(pid ProfileWord, entryPtr ProfileWord) returns ProfileModuleMap
 		var attempt = 0
+
 		while attempt < ProfileSnapshotAttempts 'retry'
 			attempt = attempt + 1
 			let snapshot = __Builtins.profileModuleSnapshot(pid)
+
 			if snapshot == ProfileInvalidHandle or snapshot == 0 'notYet'
 				sleep(ProfileSnapshotRetryMs)
 				continue
@@ -285,6 +289,7 @@
 		// The record's size is what the API refuses a walk without, and this is the side that reserved it.
 		__Builtins.profileWriteWord(entryPtr, ProfileModuleEntrySizeOffset, ProfileModuleEntryBytes)
 		var more = __Builtins.profileModuleFirst(snapshot, entryPtr)
+
 		while more != 0 'eachModule'
 			let base = __Builtins.profileReadWord(entryPtr, ProfileModuleEntryBaseOffset)
 			starts.push(base)
@@ -301,11 +306,14 @@
 	function profileModuleName(entryPtr ProfileWord) returns String
 		var name = ""
 		var offset = ProfileModuleEntryNameOffset
+
 		while offset < ProfileModuleEntryBytes 'eachWord'
 			let packed = __Builtins.profileReadWord(entryPtr, offset)
 			var unit = 0
+
 			while unit < ProfileUtf16UnitsPerWord 'eachUnit'
 				let code = (packed shr (unit * ProfileUtf16UnitBits)) and ProfileUtf16UnitMask
+
 				if code == 0 'endOfName'
 					return name
 				end 'endOfName'
@@ -313,6 +321,7 @@
 				name.append(profileModuleNameCharacter(code))
 				unit = unit + 1
 			end 'eachUnit'
+
 			offset = offset + ProfileWordBytes
 		end 'eachWord'
 
@@ -422,18 +431,21 @@
 		let lastFrameLinkOffset = windowBytes - ProfileFrameLinkBytes
 		var fp = framePointer
 		var walked = 1 as ProfileFrameCount
+
 		while walked < ProfileMaxWalkFrames 'eachFrame'
 			if fp < stackPointer 'belowTheWindow'
 				return false
 			end 'belowTheWindow'
 
 			let offset = fp - stackPointer
+
 			if offset > lastFrameLinkOffset 'pastTheWindow'
 				return false
 			end 'pastTheWindow'
 
 			let savedFp = __Builtins.profileReadWord(windowPtr, offset)
 			let returnAddress = __Builtins.profileReadWord(windowPtr, offset + ProfileWordBytes)
+
 			if returnAddress == 0 or not profileAddressInText(image, address: returnAddress) 'endOfOurCode'
 				return false
 			end 'endOfOurCode'
@@ -503,8 +515,10 @@
 			// something else this session owns.
 			var cursor = 0 as ProfileWord
 			var spare = 0 as ProfileWord
+
 			while true 'eachThread'
 				let handle = __Builtins.profileNextThread(self.process, cursor)
+
 				if handle == 0 'endOfTheList'
 					break
 				end 'endOfTheList'
@@ -517,6 +531,7 @@
 				cursor = handle
 				let id = __Builtins.profileThreadId(handle)
 				seen.push(id)
+
 				if profileWordArrayContains(self.threadIds, wanted: id) 'alreadyTracked'
 					spare = handle
 					continue
@@ -524,6 +539,7 @@
 
 				self.threadHandles.push(handle)
 				self.threadIds.push(id)
+
 				// ⭐ Seeded the instant it is discovered: a baseline left at zero would read as having RUN on
 				// the very next tick, which is the wrong answer for a worker parked since it started.
 				self.threadCycles.push(__Builtins.profileThreadCycles(handle))
@@ -538,8 +554,10 @@
 
 		function dropDepartedThreads(seen ProfileWordArray)
 			var index = self.threadIds.count()
+
 			while index > 0 'eachTracked'
 				index = index - 1
+
 				if profileWordArrayContains(seen, wanted: try self.threadIds.get(index) otherwise 0) 'stillThere'
 					continue
 				end 'stillThere'
@@ -557,12 +575,14 @@
 		// ⭐⭐ ONE TICK: every known thread that has actually CONSUMED CPU since the last one.
 		export function sampleOnce(accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray)
 			var index = self.threadHandles.count()
+
 			while index > 0 'eachThread'
 				index = index - 1
 				let handle = try self.threadHandles.get(index) otherwise 0
 				let cycles = __Builtins.profileThreadCycles(handle)
 				let ran = cycles != (try self.threadCycles.get(index) otherwise cycles)
 				try self.threadCycles.set(index, value: cycles) otherwise ignore
+
 				if not ran 'idle'
 					continue
 				end 'idle'
@@ -587,11 +607,13 @@
 		// One captured stack. FALSE means the thread is gone and should be dropped.
 		function sampleThread(handle ProfileWord, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns bool
 			let windowBytes = __Builtins.profileSample(self.process, handle, self.contextPtr(), self.regionPtr(), self.window, ProfileStackWindowBytes)
+
 			if windowBytes == ProfileSampleThreadGone 'exited'
 				return false
 			end 'exited'
 
 			let allocationBase = __Builtins.profileReadWord(self.regionPtr(), ProfileRegionAllocationBaseOffset) as ProfileStackBase
+
 			if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
 				frames.clear()
 				frames.push(ProfileUnreadableStackFrame)
@@ -625,6 +647,7 @@
 			for handle in self.threadHandles 'eachThread'
 				__Builtins.profileClose(handle)
 			end 'eachThread'
+
 			self.threadHandles.clear()
 			self.threadIds.clear()
 			self.threadCycles.clear()
@@ -663,6 +686,7 @@
 		// ⭐ A PINNED image is arithmetic on its own header; a RELOCATABLE one has to be asked where it
 		// landed, and refusing beats symbolizing every sample to a function that is wrong by the slide.
 		let mapped = modules.mainModuleBase()
+
 		if placement.relocatable and mapped == 0 'slidByAnUnknownAmount'
 			return ProfileImageLoad.refused("this binary sets DYNAMIC_BASE, so where its code was mapped is not what its header says, and the module list could not be read to find out. Every sample would be attributed to the wrong function.")
 		end 'slidByAnUnknownAmount'

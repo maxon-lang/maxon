@@ -24,7 +24,6 @@
 // their own file on every other lane — E3094 at the self-compile, which is the only gate that runs
 // `checkUnusedExports` at all.
 #if os(Windows) and arch(x64)
-
 	// How many samples something was given, and how many ticks the loop took.
 	module typealias ProfileTally = int(0 to i64.max)
 
@@ -244,6 +243,7 @@
 			// The LEAF is what decides whether this sample was symbolized: it is the code that was actually
 			// executing, and the only frame the profile attributes SELF time to.
 			let leaf = try frames.get(0) otherwise ProfileUnreadableStackFrame
+
 			if profileFrameIsSynthetic(leaf) 'couldNotName'
 				self.unsymbolized = self.unsymbolized + 1
 			end 'couldNotName'
@@ -253,6 +253,7 @@
 			// Counted once per STACK: a recursive function appears many times in one chain, and adding it
 			// each time would report a function as sampled more often than the profiler sampled at all.
 			var seen = ProfileTallyMap.create()
+
 			for frame in frames 'eachFrame'
 				if not seen.contains(frame) 'firstSighting'
 					seen.upsert(frame, value: 1)
@@ -263,6 +264,7 @@
 			// The tree, as one key per PREFIX. Walked root-first, which is the reverse of the walk's order.
 			var path = ""
 			var remaining = frames.count()
+
 			while remaining > 0 'eachPrefix'
 				remaining = remaining - 1
 				let frame = try frames.get(remaining) otherwise panic("ProfileAccumulator.accept: index {remaining} came from this very list of {frames.count()} frames")
@@ -292,9 +294,11 @@
 	// several of them `[unnamed .text]` and distinguish nothing.
 	function profileOutermostNamedFrame(frames ProfileStringArray) returns String
 		var remaining = frames.count()
+
 		while remaining > 0 'fromTheRoot'
 			remaining = remaining - 1
 			let frame = try frames.get(remaining) otherwise panic("profileOutermostNamedFrame: index {remaining} came from this very list of {frames.count()} frames")
+
 			if not profileFrameIsSynthetic(frame) 'named'
 				return frame
 			end 'named'
@@ -313,6 +317,7 @@
 
 	function rankedProfileFunctions(selfByName ProfileTallyMap, totals ProfileTallyMap) returns ProfileFunctionArray
 		var rows = ProfileFunctionArray.create()
+
 		for (name, total) in totals 'eachNamedFrame'
 			rows.push(ProfileFunctionRow.create(name, selfSamples: try selfByName.get(name) otherwise 0, totalSamples: total))
 		end 'eachNamedFrame'
@@ -332,6 +337,7 @@
 
 	function rankedProfileStacks(stackTotal ProfileTallyMap) returns ProfileStackArray
 		var rows = ProfileStackArray.create()
+
 		for (key, samples) in stackTotal 'eachStack'
 			rows.push(ProfileStackRow.create(profileKeyTail(key), samples: samples))
 		end 'eachStack'
@@ -345,6 +351,7 @@
 	// contiguous run of nodes after it at a greater depth (see this file's header).
 	function rankedProfileNodes(pathTotal ProfileTallyMap, leaves ProfileTallyMap) returns ProfileNodeArray
 		var paths = ProfileStringArray.create()
+
 		for (path, _) in pathTotal 'eachPath'
 			paths.push(path)
 		end 'eachPath'
@@ -352,6 +359,7 @@
 		paths.sort(function(left String, right String) gives compareBytesOrdinally(left.toByteArray(), right: right.toByteArray()))
 
 		var nodes = ProfileNodeArray.create()
+
 		for path in paths 'eachNode'
 			let segments = path.split(ProfilePathSeparator)
 			nodes.push(ProfileNode.create(path, name: profileKeyTail(path), depth: (segments.count() - 1) as ProfileDepth, samples: try pathTotal.get(path) otherwise 0, selfSamples: try leaves.get(path) otherwise 0))
@@ -423,6 +431,7 @@
 		var out = "{ProfileLineFeed}{ProfileSectionRule} hot functions (self time) {ProfileSectionRule}{ProfileLineFeed}"
 
 		var hidden = 0 as ProfileTally
+
 		for row in report.functions 'eachFunction'
 			if profileClearsFloor(row.selfSamples, report: report) 'worthListing'
 				out.append(profileRowText(row.selfSamples, total: report.samples, depth: 0, name: row.name))
@@ -456,6 +465,7 @@
 	// takes its whole subtree with it, because a child listed under a parent nobody printed is an orphan row.
 	function renderProfileTreeRange(report ProfileReport, first ElementIndex, last ElementIndex, depth ProfileDepth) returns ProfileTreeRender
 		var children = ElementIndexArray.create()
+
 		for candidate in first upto last 'eachNode'
 			if profileNodeDepth(report, slot: candidate as ElementIndex) == depth 'aChild'
 				children.push(candidate as ElementIndex)
@@ -466,8 +476,10 @@
 
 		var out = ""
 		var hidden = 0 as ProfileTally
+
 		for slot in children 'eachChild'
 			let subtreeEnd = profileSubtreeEnd(report, slot: slot, last: last)
+
 			if not profileClearsFloor(profileNodeSamples(report, slot: slot), report: report) 'summarized'
 				hidden = hidden + (subtreeEnd - slot) as ProfileTally
 				continue
@@ -485,6 +497,7 @@
 	// Where a node's subtree ends: the first later node no deeper than it, or the end of the enclosing range.
 	function profileSubtreeEnd(report ProfileReport, slot ElementIndex, last ElementIndex) returns ElementIndex
 		let depth = profileNodeDepth(report, slot: slot)
+
 		for candidate in slot + 1 upto last 'eachLater'
 			if profileNodeDepth(report, slot: candidate as ElementIndex) <= depth 'aSibling'
 				return candidate as ElementIndex
@@ -513,6 +526,7 @@
 		out.append("  one row per stack that ran — an OS thread's or a green thread's — named by its outermost frame{ProfileLineFeed}")
 
 		var hidden = 0 as ProfileTally
+
 		for row in report.stacks 'eachStack'
 			if profileClearsFloor(row.samples, report: report) 'worthListing'
 				out.append(profileRowText(row.samples, total: report.samples, depth: 0, name: row.rootFunction))
@@ -526,6 +540,7 @@
 
 	function profileRowText(samples ProfileTally, total ProfileTally, depth ProfileDepth, name String) returns String
 		var indent = ""
+
 		for _ in 0 upto depth 'eachLevel'
 			indent.append(ProfileTreeIndentUnit)
 		end 'eachLevel'
@@ -571,6 +586,7 @@
 	// output.
 	module function renderProfileFolded(report ProfileReport) returns String
 		var lines = ProfileStringArray.create()
+
 		for node in report.nodes 'eachNode'
 			if node.selfSamples > 0 'aPathSamplesLandedIn'
 				lines.push("{node.path.replace(ProfilePathSeparator, with: ProfileFoldedSeparator)}{ProfileFoldedCountSeparator}{node.selfSamples}")
@@ -580,6 +596,7 @@
 		lines.sort(function(left String, right String) gives compareBytesOrdinally(left.toByteArray(), right: right.toByteArray()))
 
 		var out = ""
+
 		for line in lines 'eachLine'
 			out.append("{line}{ProfileLineFeed}")
 		end 'eachLine'
@@ -610,18 +627,21 @@
 		end 'tooFew'
 
 		out.append("\"functions\":[")
+
 		for (iter, row) in report.functions.withIterator() 'eachFunction'
 			out.append(profileJsonComma(iter.index()))
 			out.append("\{\"name\":{profileJsonText(row.name)},\"selfSamples\":{row.selfSamples},\"totalSamples\":{row.totalSamples}\}")
 		end 'eachFunction'
 
 		out.append("],\"tree\":[")
+
 		for (iter, node) in report.nodes.withIterator() 'eachNode'
 			out.append(profileJsonComma(iter.index()))
 			out.append("\{\"path\":{profileJsonText(node.path.replace(ProfilePathSeparator, with: ProfileFoldedSeparator))},\"function\":{profileJsonText(node.name)},\"samples\":{node.samples},\"selfSamples\":{node.selfSamples}\}")
 		end 'eachNode'
 
 		out.append("],\"stacks\":[")
+
 		for (iter, row) in report.stacks.withIterator() 'eachStack'
 			out.append(profileJsonComma(iter.index()))
 			out.append("\{\"root\":{profileJsonText(row.rootFunction)},\"samples\":{row.samples}\}")

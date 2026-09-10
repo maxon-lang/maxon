@@ -39,6 +39,7 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot F
 	buildArgv.push("build")
 	buildArgv.push(mainFile.projectDir.path)
 	let buildResult = runBuild(buildBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
+
 	if not buildResult.succeeded() 'buildFailed'
 		let outcome = buildOutcomeBuildOnly(buildResult)
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
@@ -46,6 +47,7 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot F
 	end 'buildFailed'
 
 	let producedExe = expectedExePath(mainFile.mainFile)
+
 	if not File.exists(producedExe) 'noExe'
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "run_program: build reported success but expected binary `{producedExe.path}` does not exist")
@@ -67,6 +69,7 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot F
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return outcome
 	end 'runErr'
+
 	let runElapsed = Clock.elapsedMs(runTiming)
 
 	let outcome = buildOutcomeFull(buildResult, runResult: runResult, runDurationMs: runElapsed)

@@ -108,6 +108,7 @@ end 'requireSummaryCountsArms'
 // drives the false edge on purpose, so a report that mints the arm and never increments it is caught too.
 function requireImplicitElseCounted(rows StringArray, staged FilePath, report String) throws TestFailure
 	let line = anchoredLineNumber(staged, anchor: ImplicitElseAnchor)
+
 	match branchRowAt(rows, line: line) 'listed'
 		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes an `if` with no `else`. A branch that is not reported is one whose untaken arm cannot be found by reading the report at all. The report reads:{LineFeed}{report}")
 		found(row) then try requireIfArms(row, line: line)
@@ -145,6 +146,7 @@ end 'requireImplicitArm'
 // is exactly 0 — not blank, and not absent.
 function requireDispatchArmsCounted(rows StringArray, staged FilePath, report String) throws TestFailure
 	let line = anchoredLineNumber(staged, anchor: DispatchAnchor)
+
 	match branchRowAt(rows, line: line) 'listed'
 		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes a three-way `match`. `match` is Maxon's primary dispatch construct: a report that does not mint arms for it reports a program made of `match`es as having no branches at all. The report reads:{LineFeed}{report}")
 		found(row) then try requireMatchArms(row, line: line, staged: staged)
@@ -162,6 +164,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 	end 'eachArm'
 
 	let takenLine = anchoredLineNumber(staged, anchor: TakenArmAnchor)
+
 	match armAtLine(arms, line: takenLine) 'taken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {takenLine}, which the staged fixture anchors as the case its run reaches. Each case arm names its OWN line, so a reader can see which case was missed. Its row reads: {row}")
 		found(arm) then try Expect.greaterThan(armCount(arm) as AssertedInt, than: 0, message: "the case arm at line {takenLine} is reported as never taken, over a fixture that dispatches to it. Its row reads: {row}")
@@ -170,6 +173,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 	// ⭐ THE HEADLINE. A zero here is the whole point; blank, absent, or folded into the taken tally are
 	// three different ways of reporting an untested arm as though nothing were missing.
 	let untakenLine = anchoredLineNumber(staged, anchor: UntakenArmAnchor)
+
 	match armAtLine(arms, line: untakenLine) 'untaken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {untakenLine}, which the staged fixture anchors as the case NOTHING reaches. An arm roster built from the arms that ran cannot contain the one that did not, which is the only arm anyone needed the report for. Its row reads: {row}")
 		found(arm) then try Expect.equal(armCount(arm) as AssertedInt, expected: 0, message: "the case arm at line {untakenLine} is reported as taken {armCount(arm)} times, over a fixture that never dispatches to it. Its row reads: {row}")
@@ -181,6 +185,7 @@ end 'requireMatchArms'
 // would make the comparison above assert nothing.
 function declaredMatchArmCount(staged FilePath) returns CoverageTally
 	var declared = 0
+
 	for line in stagedSourceLines(staged) 'eachLine'
 		if line.contains(MatchArmKeyword) 'anArm'
 			declared = declared + 1
@@ -203,8 +208,10 @@ end 'declaredMatchArmCount'
 function branchSectionRows(report String) returns StringArray
 	var rows = StringArray.create()
 	var inSection = false
+
 	for rawLine in outputLines(report) 'eachLine'
 		let line = rawLine.trim()
+
 		if line == BranchesSectionHeading 'opensTheSection'
 			inSection = true
 			continue
@@ -236,6 +243,7 @@ end 'branchRowAt'
 function branchRowLine(row String) returns FixtureLineNumber
 	let position = try whitespaceTokens(row).get(PositionColumn) otherwise ""
 	let pieces = position.split(PositionSeparator)
+
 	if pieces.count() < PositionPieces 'notAPosition'
 		return 0
 	end 'notAPosition'
@@ -249,6 +257,7 @@ end 'branchRowLine'
 function armsOf(row String) returns StringArray
 	var arms = StringArray.create()
 	var column = 0
+
 	for token in whitespaceTokens(row) 'eachToken'
 		if column >= FirstArmColumn 'anArm'
 			arms.push(token)

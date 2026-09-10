@@ -23,6 +23,7 @@ export enum X64OsCallKind
 	// An IAT-indirect import call (`call [rip + disp32]` through an Import Address Table slot the PE
 	// writer binds — `iatCall`). Windows's only route.
 	importCall
+
 	// A raw Linux supervisor call (`mov eax, number; syscall`, the number named per-primitive). Linux's.
 	syscall
 end 'X64OsCallKind'
@@ -59,6 +60,7 @@ end 'x64OsCallKind'
 export enum X64ThreadPointerSegment
 	// Windows: GS is the TIB.
 	gs
+
 	// Linux: FS is the SysV thread pointer, which on this lane is the scheduler's own slot block
 	// (`mrt_host_tls_alloc` maps it and `arch_prctl` publishes it — nothing else on a static image reads FS).
 	fs
@@ -2475,6 +2477,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	asm.placeLabel(testSignal)
 	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: takeSignal)
+
 	// A ZERO timeout is a POLL: the caller wants the state, not a wait. Answer the seeded `WAIT_TIMEOUT`
 	// without entering the kernel at all.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
@@ -2483,6 +2486,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: WaitInfinite)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: waitTimed)
+
 	// Unbounded: sleep while the word is still unsignalled, then re-test. That IS the `while (!signalled)`
 	// loop the primitive requires — a futex return is advisory, and re-testing is the only sound response.
 	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: false)
@@ -2724,6 +2728,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	x64LinuxEmitPanicConstant(asm, bytes: X64LinuxTlsPublishFailedMessage)
 
 	asm.placeLabel(published)
+
 	// ⭐ RAISE THE PROCESS-WIDE FLAG the errno access reads (`x64LinuxEmitStoreErrno` carries why a per-thread
 	// test is unaffordable there and why a process-wide one is sound). It is raised AFTER FS is published, so
 	// no reader can be sent to a block that does not exist yet.
@@ -2972,6 +2977,7 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus))
+
 	// `options = blocking ? 0 : WNOHANG`.
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: blockingWait)
@@ -3333,6 +3339,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), srcReg: X64Register.rax)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+
 	// ⛔ **ONLY A POSITIVE COUNT MEANS THE CHILD SPOKE.** 0 is the EOF a successful `execve` produces through
 	// the close-on-exec pipe; a NEGATIVE is the read's own failure (`EINTR`), and treating either as a verdict
 	// would publish `SlotStatusWord` — which the child never wrote — as the spawn's errno.
@@ -3784,6 +3791,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxThreadCreateChunk())
 		chunks.push(buildX64LinuxTlsAllocChunk())
 		chunks.push(buildX64LinuxTlsSetChunk())
+
 		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
 		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs

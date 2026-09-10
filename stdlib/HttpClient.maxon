@@ -41,6 +41,7 @@ public type HttpHeaders
 		let val = try headers.get(key.toLower()) otherwise 'notFound'
 			throw HttpError.invalidResponse
 		end 'notFound'
+
 		return val
 	end 'get'
 
@@ -63,6 +64,7 @@ public type HttpRequest
 		let parsed = try URL.parse(url) otherwise 'badUrl'
 			throw HttpError.invalidUrl
 		end 'badUrl'
+
 		return HttpRequest{
 			httpMethod: method,
 			requestUrl: parsed,
@@ -155,13 +157,13 @@ end 'HttpResponse'
 /// Stateless HTTP/1.1 client. All methods are static.
 /// HTTP only (no TLS). Uses Connection: close for simple response reading.
 public type HttpClient
-
 	/// Send an HTTP request and return the response.
 	public static function send(request HttpRequest) returns HttpResponse throws HttpError
 		let url = request.url()
 		let host = try url.host() otherwise 'noHost'
 			throw HttpError.invalidUrl
 		end 'noHost'
+
 		let port = try url.port() otherwise 80
 
 		// Build the raw HTTP request
@@ -198,6 +200,7 @@ public type HttpClient
 		// gigabyte.
 		var responseData = StringBuilder.create()
 		var receiving = true
+
 		while receiving 'recvLoop'
 			let chunk = try client.recv(4096) otherwise (e) 'recvErr'
 				if e == NetworkError.connectionClosed 'serverFinished'

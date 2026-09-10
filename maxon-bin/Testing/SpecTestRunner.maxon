@@ -597,6 +597,7 @@ let ShBackslash = "\\"
 export union TestOutcome
 	pass
 	fail(reason String)
+
 	// ⭐⭐ **NOT RUN HERE — AND THAT IS A FACT ABOUT THE TARGET, NOT AN ASSERTION ABOUT THE PROGRAM.**
 	// The compiler refused the case's own construct on this target (E3104), so there is nothing to
 	// assert: no binary was linked and none could be. It is neither a pass (nothing was proved) nor a
@@ -604,6 +605,7 @@ export union TestOutcome
 	// `refusals` is the compiler's own E3104 text, carried so the census can name the CONSTRUCT rather
 	// than only the count — see `targetRefusalIn` for why this may never be silent.
 	skipped(refusals String)
+
 	// ⭐⭐ **COMPILED HERE, CANNOT BE EXECUTED HERE** — the case built a perfectly good binary for a
 	// target whose instruction set or loader this machine has no runner for (a Mach-O on Windows). The
 	// COMPILE half of the case was checked in full and its emitted code was compared against the
@@ -665,15 +667,19 @@ export union GoldenDrift
 	// This case pins no golden: its verdict was a failure or a target skip, or the target emits no
 	// Target IR at all (wasm32 — see `emitsTargetIr`).
 	notPinned
+
 	// COMPARED against the committed golden, and equal. The only arm that is evidence of anything.
 	matched
+
 	// The committed golden differs from what the compiler just emitted. `detail` is the rendered
 	// difference and the golden's path — carried, not printed here, because the PARENT prints it in
 	// plan order (see `SpecWorkerPool`'s header on why a worker never reports).
 	drifted(detail String)
+
 	// There was no committed golden and this run WROTE one — a new case, or a regeneration under
 	// `--update-required`. NO PRIOR RECORD EXISTED, so nothing was checked.
 	minted
+
 	// There was no committed golden and this run was NOT ALLOWED to write one, because the verdict
 	// that would have validated it never happened here (`notRunHere`). See `recordFragmentAndCleanup`.
 	unrecorded
@@ -756,9 +762,11 @@ end 'ProcessCapture'
 enum CompileVerdict
 	// The build ran to completion and wrote its executable.
 	built
+
 	// The build REPORTED DIAGNOSTICS and stopped — `CompileError.compileError`, the arm the command
 	// line exits 1 for. The ONLY state a target refusal may be read off (see `targetRefusalIn`).
 	reportedDiagnostics
+
 	// The build never got as far as a diagnostic: a path it was pointed at could not be read, the
 	// inputs share no root, or `stdlib/` could not be located. Those five `CompileError` arms carry
 	// NO `Diagnostic` at all — `Main.reportCompileError` prints a sentence of its own for each — so
@@ -778,6 +786,7 @@ end 'CompileVerdict'
 // compile that said nothing legitimately returns.
 type CompileAnswer
 	export let verdict as CompileVerdict
+
 	// Byte for byte what `maxon build` would have written to stderr, taken at the ONE sink every
 	// compiler-facing line goes through (`Diagnostics.emitDiagnosticLine`) — NOT re-rendered from
 	// `project.diagnostics`, which would be a second spelling of the text the corpus's ```maxoncstderr
@@ -1078,10 +1087,12 @@ export function runOneSpec(specDir FilePath, specName String, filter String, upd
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
 	let specFile = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
+
 	// The worker takes only the SELECTED half: the census of what was left out is the PARENT's to
 	// report, and it is built from the parent's own walk over every spec (`buildPlans`). A worker
 	// printing it would print one spec's worth of it, once per spec, onto a stream that is a wire.
 	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected
+
 	if tests.count() == 0 'selectsNothing'
 		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
 		// such a spec — its parent built the same list from the same function — so this is not the
@@ -1091,6 +1102,7 @@ export function runOneSpec(specDir FilePath, specName String, filter String, upd
 	end 'selectsNothing'
 
 	let tempDir = specTempDirFor(specDir, specName: specName)
+
 	if not Directory.create(tempDir) 'noTempDir'
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
@@ -1112,6 +1124,7 @@ export function runOneSpec(specDir FilePath, specName String, filter String, upd
 	// for. The pool's `prepareSharedDirs` keys the shared root off the same effective target.
 	let exeExtension = executableExtension(effectiveTarget)
 	let fragmentDir = fragmentsRootDir(specDir, target: effectiveTarget).join(specName)
+
 	// mkdir -p, but ONLY for a target that has goldens. `recordFragmentAndCleanup` skips the fragment gate
 	// entirely when the target emits no Target IR, so creating the tree under wasm32-wasi would
 	// leave a directory per spec that nothing will ever write a `.test` into — empty scaffolding for
@@ -1127,6 +1140,7 @@ export function runOneSpec(specDir FilePath, specName String, filter String, upd
 	var reminted = TraceRemintArray.create()
 
 	var prepared = PreparedTestArray.create()
+
 	for test in tests 'eachCompile'
 		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
 	end 'eachCompile'
@@ -1165,6 +1179,7 @@ end 'runOneSpec'
 union ExclusionReason
 	// `<!-- network: live -->` and no `--network` — see `networkModeAllows`.
 	liveNetwork
+
 	// A trace-capture case on a lane whose binaries this harness does not spawn itself — see
 	// `targetCanCaptureTrace`.
 	traceInstrument
@@ -1173,6 +1188,7 @@ end 'ExclusionReason'
 export type ExcludedCase
 	export let specName as String
 	export let testName as String
+
 	// Which gate passed this case over. Carried per CASE rather than split into one array per reason,
 	// because every stage between here and the trailer — `SpecSelection`, `SuitePlan`, `PoolRun` — would
 	// otherwise need a second field, and a stage taught about one and not the other loses cases silently.
@@ -1195,6 +1211,7 @@ export typealias ExcludedCaseArray = Array with ExcludedCase
 // duplication `selectedTests`'s own header is about, one level in.
 export type SpecSelection
 	export let selected as SpecTestArray
+
 	// EMPTY on most runs. It is the literal count of cases this run passed over and owes a sentence about
 	// — see `ExclusionReason` — never a sentinel: `reportExclusions` is silent at zero for each kind
 	// separately, exactly as the other trailers are.
@@ -1418,6 +1435,7 @@ union TargetRefusal
 	// The compiler said something OTHER than "this target has no implementation for that": an ordinary
 	// diagnostic, a panic, a crash, or nothing at all. Whatever the verdict was, it stands.
 	notRefused
+
 	// EVERY diagnostic the compiler printed is an E3104 — a construct the chosen target cannot provide.
 	// `diagnostics` is that text verbatim, because it is the only thing that names the CONSTRUCT.
 	refused(diagnostics String)
@@ -1499,6 +1517,7 @@ function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 
 	for line in compile.diagnostics.split(LineSeparator) 'eachLine'
 		let trimmed = line.trim()
+
 		if trimmed.isEmpty() 'blank'
 			continue
 		end 'blank'
@@ -1766,6 +1785,7 @@ export function reportExclusions(excluded ExcludedCaseArray, effectiveTarget Tar
 		// No per-case detail: the label IS the entry. `resultNoteEntry` renders it so these trailers sit
 		// at the same depth as the ones beside them rather than at one this function chose for itself.
 		let entry = resultNoteEntry(excludedCase.specName, testName: excludedCase.testName, detail: "")
+
 		match excludedCase.reason 'why'
 			liveNetwork then network.push(entry)
 			traceInstrument then trace.push(entry)
@@ -1823,8 +1843,10 @@ end 'unrunnableReasonFor'
 // exists because four files had each written this loop and nothing would have made them agree.
 function indentedRefusals(text String) returns String
 	var lines = StringArray.create()
+
 	for line in text.split(LineSeparator) 'eachLine'
 		let trimmed = line.trim()
+
 		if trimmed.isEmpty() 'blank'
 			continue
 		end 'blank'
@@ -1966,11 +1988,13 @@ end 'fragmentsRootDir'
 export function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
 	let entries = try Directory.list(specDir) otherwise throw CompileError.directoryNotFound(specDir)
 	var specs = FilePathArray.create()
+
 	for entry in entries 'eachEntry'
 		if entry.fileExtension() == SpecFileExtension 'isSpec'
 			specs.push(entry)
 		end 'isSpec'
 	end 'eachEntry'
+
 	return specs
 end 'specFilePaths'
 
@@ -1986,6 +2010,7 @@ end 'specFilePaths'
 type FragmentPathMapping
 	export let compiledPath as String
 	export let lineOffset as LineIndex
+
 	// The whole token a match is replaced by — `<dir>/<fragment>` — built ONCE at staging rather than
 	// re-joined at each of `rewriteDiagnosticLine`'s five replacement sites, which would be five places
 	// free to disagree about whether the directory rides.
@@ -2005,15 +2030,18 @@ end 'FragmentPathMapping'
 // separators the same way and for the same reason.
 function sourceDirPrefixOf(fileName String) returns String
 	let segments = fileName.replace(WindowsPathSeparator, with: PathSeparator).split(PathSeparator)
+
 	if segments.count() < 2 'topLevel'
 		return ""
 	end 'topLevel'
 
 	var prefix = ""
+
 	for i in 0 upto segments.count() - 1 'eachDirectory'
 		let segment = try segments.get(i) otherwise panic("sourceDirPrefixOf: segments.get({i}) failed on a {segments.count()}-part split")
 		prefix = "{prefix}{segment}{PathSeparator}"
 	end 'eachDirectory'
+
 	return prefix
 end 'sourceDirPrefixOf'
 
@@ -2044,8 +2072,10 @@ type StagedTest
 	// root at `<testDir>` for every shape, and costs nothing: staging wrote exactly the declared
 	// files, and `Compiler.loadSourceFiles` registers a path it has already seen zero more times.
 	export let buildTargets as MaxonSourcePathArray
+
 	// Every path the compiler may name, with the offset that maps it onto the fragment.
 	export let paths as FragmentPathMappingArray
+
 	// ⭐⭐ **WHICH `stdlib/` THIS TEST COMPILES AGAINST — ONE FIELD DOING BOTH OF ITS JOBS.** It is
 	// handed to `Compiler.compileToProduct` as `stdlibDirOverride`, AND it is the root
 	// `normalizeCompilerOutput` rewrites out of a diagnostic raised inside the library — which is why
@@ -2064,6 +2094,7 @@ type StagedTest
 	// silently compile against the checkout's `stdlib/` and the case would report on a program that
 	// was never staged.
 	export let stdlibDir as String
+
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
@@ -2155,6 +2186,7 @@ typealias PreparedTestArray = Array with PreparedTest
 // program.
 function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
+
 	// The driver appends the platform extension to the `outputOverride` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
 	// that exact path to spawn it for the exit-code check.
@@ -2376,6 +2408,7 @@ function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observatio
 	end 'notATraceCase'
 
 	let family = traceCaptureFamilyOf(test.traceCapture)
+
 	match observation 'observed'
 		completed(capture) then reminted.push(TraceRemint.create(test.name, family: family, trace: normalizeTrace(capture.stdout, family: family)))
 		notRequired then break 'observed'
@@ -2396,6 +2429,7 @@ function spliceTraceGoldens(specPath FilePath, reminted TraceRemintArray)
 	end 'unreadable'
 
 	var lines = StringArray.create()
+
 	for line in original.split(LineSeparator) 'eachLine'
 		lines.push(line)
 	end 'eachLine'
@@ -2423,14 +2457,17 @@ function spliceOneTraceGolden(lines StringArray, remint TraceRemint, specPath Fi
 	let slice = traceSliceOf(lines, testName: remint.testName, fence: fence, specPath: specPath)
 
 	var out = StringArray.create()
+
 	for i in 0 upto slice.blockStart 'beforeBlock'
 		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
 	end 'beforeBlock'
 
 	out.push(fence)
+
 	for traceLine in remint.trace.split(LineSeparator) 'eachTraceLine'
 		out.push(traceLine)
 	end 'eachTraceLine'
+
 	out.push(FenceDelimiter)
 
 	for i in slice.blockEnd upto lines.count() 'afterBlock'
@@ -2457,6 +2494,7 @@ function traceSliceOf(lines StringArray, testName String, fence String, specPath
 
 	var lastContent = markerLine + 1
 	var i = markerLine + 1
+
 	while i < lines.count() 'scan'
 		let line = try lines.get(i) otherwise panic("traceSliceOf: index {i} past {lines.count()} lines")
 
@@ -2483,13 +2521,17 @@ end 'traceSliceOf'
 // The line index one PAST the fence that closes the block opened at `openIndex`.
 function fenceCloseAfter(lines StringArray, openIndex LineIndex) returns LineIndex
 	var i = openIndex + 1
+
 	while i < lines.count() 'scan'
 		let line = try lines.get(i) otherwise panic("fenceCloseAfter: index {i} past {lines.count()} lines")
+
 		if line.trim() == FenceDelimiter 'closed'
 			return i + 1
 		end 'closed'
+
 		i = i + 1
 	end 'scan'
+
 	return i
 end 'fenceCloseAfter'
 
@@ -2507,6 +2549,7 @@ function traceMarkerLineOf(lines StringArray, testName String, specPath FilePath
 			return iter.index()
 		end 'found'
 	end 'eachLine'
+
 	panic("SpecTestRunner: re-minting the capture golden for '{testName}' but {specPath.toString()} carries no `{TestMarker} {testName} -->` marker — the case was parsed out of this file moments ago, so the marker's spelling and this one have drifted")
 end 'traceMarkerLineOf'
 
@@ -2546,6 +2589,7 @@ function normalizeTrace(text String, family TraceFamily) returns String
 
 	for rawLine in text.split(LineSeparator) 'eachLine'
 		let payload = tracePayloadOf(rawLine)
+
 		if not payload.startsWith(prefix) 'notAnEvent'
 			continue
 		end 'notAnEvent'
@@ -2616,11 +2660,13 @@ end 'withoutLogIdentity'
 // survive intact. No decoded mm event does, but the rule costs one line and removes the question.
 function tracePayloadOf(rawLine String) returns String
 	let line = rawLine.trim()
+
 	if not line.startsWith(MonitorLinePrefix) 'noTimestamp'
 		return line
 	end 'noTimestamp'
 
 	let parts = line.split(MonitorTimestampEnd)
+
 	if parts.count() < 2 'unterminatedPrefix'
 		return line
 	end 'unterminatedPrefix'
@@ -2671,10 +2717,12 @@ end 'denseIdFor'
 // second copy is how the two would come to disagree about whether the separator goes back in.
 function joinFrom(parts StringArray, first ElementIndex, separator String) returns String
 	var out = ""
+
 	for i in first upto parts.count() 'each'
 		let part = try parts.get(i) otherwise panic("joinFrom: {parts.count()} parts but index {i} is missing")
 		out = part if i == first else "{out}{separator}{part}"
 	end 'each'
+
 	return out
 end 'joinFrom'
 
@@ -2744,12 +2792,15 @@ end 'linesWithoutMonitorPrefix'
 // Every line of `text` that does not begin with `prefix`, rejoined. The one filter both stream splits use.
 function linesWithoutPrefix(text String, prefix String) returns String
 	var kept = StringArray.create()
+
 	for line in text.split(LineSeparator) 'eachLine'
 		if line.trim().startsWith(prefix) 'monitorsOwn'
 			continue
 		end 'monitorsOwn'
+
 		kept.push(line)
 	end 'eachLine'
+
 	return joinFrom(kept, first: 0, separator: LineSeparator)
 end 'linesWithoutPrefix'
 
@@ -2769,6 +2820,7 @@ function compareTrace(expected String, actual String, family TraceFamily, monito
 	if expected == actual 'matches'
 		return TestOutcome.pass
 	end 'matches'
+
 	return TestOutcome.fail(withMonitorStderrText("{traceFenceOf(family)} mismatch:\nExpected:\n{expected}\nActual:\n{actual}", monitorStderr: monitorStderr))
 end 'compareTrace'
 
@@ -2794,9 +2846,11 @@ end 'withMonitorStderr'
 
 function withMonitorStderrText(message String, monitorStderr String) returns String
 	let trailer = monitorStderr.trim()
+
 	if trailer.isEmpty() 'nothingToAdd'
 		return message
 	end 'nothingToAdd'
+
 	return "{message}\nMonitor stderr:\n{trailer}"
 end 'withMonitorStderrText'
 
@@ -2823,11 +2877,13 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 	// refuses a case that declares one without a `// --- file:` section, because an overlay says what
 	// the compile's STDLIB is and never what it compiles.
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
+
 	if not writeFragment(fragmentPath, test: test) 'writeFailed'
 		return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
 	end 'writeFailed'
 
 	var paths = FragmentPathMappingArray.create()
+
 	// The compiled file IS the fragment (`fragmentSource` wrote the golden's own bytes), so its
 	// line numbers need no translation.
 	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset, sourceDirPrefix: ""))
@@ -2863,13 +2919,16 @@ end 'stageTest'
 function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
 	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
+
 	if not Directory.create(testDir) 'noTestDir'
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
+
 	purgeFilesIn(testDir)
 
 	var paths = FragmentPathMappingArray.create()
 	var written = FilePathArray.create()
+
 	// Separate from `written` on purpose: an overlay appends its own files to that list below, and a
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
 	// from BOTH: it is every file the case declared, before `compilationUnitsAmong` decides which of
@@ -2885,6 +2944,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 		let parent = try path.parent() otherwise 'noParent'
 			return StagingResult.failed("could not derive a directory for '{file.name}'")
 		end 'noParent'
+
 		if not Directory.create(parent) 'noSubdir'
 			return StagingResult.failed("could not create directory {parent.toString()}")
 		end 'noSubdir'
@@ -2908,10 +2968,12 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	// `stdlibDirOverride` and read by `normalizeCompilerOutput` as the root to rewrite out of a
 	// diagnostic, and both take the spelling rather than the path.
 	var stdlibDir = checkoutStdlib.toString()
+
 	if test.stdlibOverlays.count() > 0 'hasStdlibOverlay'
 		let overlayStdlib = try stageStdlibOverlay(tempDir, test: test, sourceStdlib: checkoutStdlib, paths: paths, written: written) otherwise (e) 'overlayFailed'
 			return StagingResult.failed(overlayErrorText(e))
 		end 'overlayFailed'
+
 		stdlibDir = overlayStdlib.toString()
 	end 'hasStdlibOverlay'
 
@@ -2954,6 +3016,7 @@ function compilationUnitsAmong(staged MaxonSourcePathArray) returns MaxonSourceP
 
 	for path in staged 'eachStaged'
 		let dir = try path.parent() otherwise panic("SpecTestRunner.compilationUnitsAmong: {path.toString()} has no parent directory, though `stageSourceFiles` created one to write it into")
+
 		if not isIgnoredDirectory(dir) 'inTheProgram'
 			targets.push(path)
 		end 'inTheProgram'
@@ -3025,9 +3088,11 @@ end 'overlayErrorText'
 // to one question.
 function stageStdlibOverlay(tempDir FilePath, test SpecTest, sourceStdlib FilePath, paths FragmentPathMappingArray, written FilePathArray) returns FilePath throws OverlayError
 	let overlayRoot = tempDir.join("{test.name}{StdlibOverlayDirSuffix}")
+
 	if not Directory.create(overlayRoot) 'noRoot'
 		throw OverlayError.refused("could not create stdlib-overlay directory {overlayRoot.toString()}")
 	end 'noRoot'
+
 	purgeFilesIn(overlayRoot)
 
 	// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
@@ -3070,6 +3135,7 @@ function copyStdlibSources(from FilePath, into FilePath, written FilePathArray) 
 
 		let destination = into.join(relative)
 		let parent = try destination.parent() otherwise throw OverlayError.refused("could not derive a directory for {destination.toString()}")
+
 		if not Directory.create(parent) 'noSubdir'
 			throw OverlayError.refused("could not create directory {parent.toString()}")
 		end 'noSubdir'
@@ -3104,14 +3170,17 @@ function applyOverlaySections(test SpecTest, stagedStdlib FilePath, sourceStdlib
 		// Compared in the corpus's own forward-slash spelling for `sourceDirPrefixOf`'s reason: which
 		// separator a spec wrote is not a claim about the host that runs it.
 		let key = overlay.name.replace(WindowsPathSeparator, with: PathSeparator)
+
 		if overlaid.contains(key) 'namedTwice'
 			throw OverlayError.refused("two '{StdlibOverlayMarker}' sections both name '{overlay.name}'. The second would be written above the first, so neither section's line numbers would be the ones its expectation was written against — merge them into one section")
 		end 'namedTwice'
+
 		overlaid.insert(key)
 
 		let relative = try FilePath.from(key) otherwise throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a valid relative path")
 
 		let destination = stagedStdlib.join(relative)
+
 		if not File.exists(destination) 'namesNoModule'
 			throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a file the compiler loads from {sourceStdlib.toString()} — an overlay over a file nothing reads would change nothing and the case would pass having tested nothing")
 		end 'namesNoModule'
@@ -3138,6 +3207,7 @@ typealias OverlaidNameSet = Set with String
 // the last thing this tree needs two of.
 export function purgeFilesIn(dir FilePath)
 	let entries = try Directory.list(dir) otherwise return
+
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
 			purgeFilesIn(entry)
@@ -3161,6 +3231,7 @@ function isSafeRelativeName(name String) returns bool
 	end 'noName'
 
 	let normalized = name.replace(WindowsPathSeparator, with: PathSeparator)
+
 	if normalized.startsWith(PathSeparator) or normalized.contains(DriveLetterSeparator) 'rooted'
 		return false
 	end 'rooted'
@@ -3182,14 +3253,18 @@ end 'isSafeRelativeName'
 union FragmentCheck
 	// Compared against a committed golden, and equal.
 	compared
+
 	// The committed golden and the fresh output differ. REFERENCE DRIFT: reported, never failed.
 	drifted(detail String)
+
 	// There was no committed golden (or `--update-required` asked for a fresh one) and this run wrote
 	// it. NOTHING WAS COMPARED.
 	minted
+
 	// There was no committed golden and this verdict may not write one — see `recordFragmentAndCleanup`
 	// for the rule. Nothing was compared and nothing was written.
 	unrecorded
+
 	// The file could not be written. An IO failure of the harness, not a verdict about codegen.
 	notWritten(reason String)
 end 'FragmentCheck'
@@ -3282,6 +3357,7 @@ function writeFragmentFile(outPath FilePath, content String, what String, mayMin
 	try File.writeText(outPath, content: content) otherwise 'writeFailed'
 		return FragmentCheck.notWritten("could not write {what} golden fragment {outPath.toString()}")
 	end 'writeFailed'
+
 	return FragmentCheck.minted
 end 'writeFragmentFile'
 
@@ -3296,6 +3372,7 @@ function firstDifference(committed String, actual String) returns String
 	for i in 0 upto shared 'eachLine'
 		let o = try oldLines.get(i) otherwise panic("firstDifference: oldLines.get OOB at {i}")
 		let n = try newLines.get(i) otherwise panic("firstDifference: newLines.get OOB at {i}")
+
 		if o != n 'diverged'
 			return "    line {i + 1}:\n      golden: {o}\n      actual: {n}"
 		end 'diverged'
@@ -3413,6 +3490,7 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	end 'unexpectedSuccess'
 
 	let actual = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir).trim()
+
 	// The EXPECTED side needs no renumbering: an expectation — ported or authored — already names
 	// the MERGED fragment's lines, because that is the file a reader has in front of them. Only its
 	// PATH is rewritten, which is one mapping with no offset. It goes through the SAME library rewrite
@@ -3420,6 +3498,7 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	// and an expectation naming a host's absolute checkout is a mistake worth normalizing INTO agreement
 	// rather than one worth passing through so it can fail somewhere else.
 	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibDir).trim()
+
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
@@ -3466,6 +3545,7 @@ union ExternalRunner
 	wasmtime
 	orbstack
 	wsl
+
 	// ⭐⭐ **THERE IS NO PROGRAM ON THIS MACHINE THAT CAN RUN THAT BINARY — AND THAT IS AN ANSWER, NOT AN
 	// ABORT.** Every arm below used to be a `panic`, which answered the question this table is asked
 	// ("which program spawns a Mach-O here?" — none) correctly, and was then used to answer a DIFFERENT
@@ -3532,6 +3612,7 @@ function windowsLinuxRunner(target Target, host Target) returns ExternalRunner
 	if target.cpu != host.cpu 'foreignCpu'
 		return ExternalRunner.unspawnable("no runner for a {targetToString(target)} binary on a {targetToString(host)} host — WSL runs only the host CPU's Linux binaries (no in-box cross-CPU emulation), so only a matching host can execute these cases")
 	end 'foreignCpu'
+
 	return ExternalRunner.wsl
 end 'windowsLinuxRunner'
 
@@ -3567,17 +3648,20 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
+
 		// ⛔ NOT A GAP — the OrbStack lane does not execute one program per command either. It delegates
 		// the whole SUITE to a compiler running inside the machine, so no test binary is ever spawned
 		// from this host for it. Reaching here means a lane `runStrategyFor` had claimed to delegate was
 		// routed to a per-test spawn.
 		orbstack panic("SpecTestRunner: the {targetToString(effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
+
 		// ⛔ NOT A GAP — the WSL lane does not execute one program per command, so there is no per-test
 		// command to build for it. It runs a whole spec's programs from one generated script inside a
 		// single entry (`runWslBatch`), and `runStrategyFor` is the ONE table that decides which lane
 		// does which. This arm is what makes the two disagreeing a panic instead of a silent second
 		// answer: reaching it means a lane was routed here that `runStrategyFor` had claimed to batch.
 		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runWslBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
+
 		// ⛔ NOT A GAP EITHER, and the same disagreement said the other way round: nothing on this host
 		// can spawn such a binary, so `runStrategyFor` routes the whole lane to `unrunnableHere` and no
 		// execution is ever attempted. Reaching here means a run WAS attempted for a target the table
@@ -3633,6 +3717,7 @@ function buildWasmRunCommand(modulePath FilePath) returns RunCommand
 	argv.push(WasmtimeRunSubcommand)
 	argv.push(WasmtimeSettingFlag)
 	argv.push(WasmtimeExitWithCodeSetting)
+
 	// The module path MUST come after every `-S`: anything after it is forwarded to the guest as argv.
 	argv.push(modulePath.toString())
 
@@ -3649,9 +3734,11 @@ end 'buildWasmRunCommand'
 // why the shared locator's empty-FilePath not-found result is turned into a panic right here).
 function findWasmtimePath() returns FilePath
 	let found = findFileUpward(hostWasmToolCandidates(WasmtimeDirName))
+
 	if found.isEmpty() 'notFound'
 		panic("SpecTestRunner: wasmtime not found under {VendorDirName}/{WasmtimeDirName}/ (searched up from the cwd to the filesystem root) — the wasm run path needs the vendored binary")
 	end 'notFound'
+
 	return found
 end 'findWasmtimePath'
 
@@ -3888,6 +3975,7 @@ export union RunObservation
 	notRequired
 	completed(capture ProcessCapture)
 	failed(reason String)
+
 	// ⭐ THE EXECUTION WAS REQUIRED AND THIS MACHINE CANNOT PERFORM IT — see `ExternalRunner.unspawnable`.
 	// Distinct from `failed`, which says a launch was ATTEMPTED and did not work: that is a defect in
 	// something (the binary, the runner, the OS) and must stay a FAIL. This one is a machine limit known
@@ -3928,6 +4016,7 @@ export union RunStrategy
 	individually
 	wslBatch
 	noneHere
+
 	// DECLARED LAST so `individually to noneHere` stays a contiguous range for the callers that ask
 	// only whether a lane is delegated.
 	inGuest
@@ -3966,24 +4055,28 @@ end 'executeRuns'
 // verdict was settled at its compile is not waiting on anything and must not be reported as unrun.
 function unperformedRuns(prepared PreparedTestArray) returns RunObservationArray
 	var observations = RunObservationArray.create()
+
 	for step in prepared 'eachStep'
 		observations.push(match step 'phase'
 			finished gives RunObservation.notRequired
 			awaiting gives RunObservation.notRunnableHere
 		end 'phase')
 	end 'eachStep'
+
 	return observations
 end 'unperformedRuns'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
 function spawnEachRun(prepared PreparedTestArray, specName String, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
 	var observations = RunObservationArray.create()
+
 	for step in prepared 'eachStep'
 		observations.push(match step 'phase'
 			finished gives RunObservation.notRequired
 			awaiting(pending) gives spawnOneRun(pending, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 		end 'phase')
 	end 'eachStep'
+
 	return observations
 end 'spawnEachRun'
 
@@ -4004,6 +4097,7 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
 	// IDENTICAL either way.
 	let runCommand = buildRunCommand(pending.compiled.exePath, effectiveTarget: effectiveTarget, programArgs: pending.compiled.test.programArgs, traceCapture: pending.compiled.test.traceCapture)
+
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
@@ -4105,6 +4199,7 @@ function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePa
 	let launch = launchBatch(prepared, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
 
 	var observations = RunObservationArray.create()
+
 	for step in prepared 'eachStep'
 		observations.push(match step 'phase'
 			finished gives RunObservation.notRequired
@@ -4130,12 +4225,14 @@ end 'runWslBatch'
 // exists copies nothing and needs nothing synthesized.
 function pendingRunCount(prepared PreparedTestArray) returns TestTally
 	var pending = 0 as TestTally
+
 	for step in prepared 'eachStep'
 		match step 'phase'
 			finished then continue
 			awaiting then pending = pending + 1
 		end 'phase'
 	end 'eachStep'
+
 	return pending
 end 'pendingRunCount'
 
@@ -4143,6 +4240,7 @@ end 'pendingRunCount'
 // carried to every test the batch was to have run.
 function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
 	let executions = pendingRunCount(prepared)
+
 	if executions == 0 'nothingToRun'
 		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a 137 ms
 		// entry to prove it. Every observation this launch is read for is `notRequired` anyway.
@@ -4271,6 +4369,7 @@ function batchCaptureFor(key String, batchDir FilePath, batch ProcessCapture) re
 	end 'noStatus'
 
 	let recorded = status.trim()
+
 	if recorded == BatchTimedOutToken 'timedOut'
 		return RunObservation.failed("the program did not finish within {SpecSpawnTimeoutSeconds}s and was killed inside the batch")
 	end 'timedOut'
@@ -4342,6 +4441,7 @@ function batchScript(prepared PreparedTestArray, tempDir FilePath) returns Strin
 	out.append("\t{BatchKeyShellName}=$2\n")
 	out.append("\t{BatchStdinShellName}=$3\n")
 	out.append("\tshift 3\n")
+
 	// ⭐ THE CASE'S OWN PROCESSOR COUNT, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND NOWHERE ELSE. The
 	// function body is a SUBSHELL (see this function's header), so the export dies with the execution and
 	// the next test in the batch starts from the batch's own environment however this one ended.
@@ -4442,6 +4542,7 @@ function batchCallLine(compiled CompiledTest) returns String
 		unset gives ""
 		pinned(count) gives "{count}"
 	end 'procs'))
+
 	line.append(" ")
 	line.append(shQuoted(batchKeyFor(compiled)))
 	line.append(" ")
@@ -4579,6 +4680,7 @@ function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecS
 	// verdict this function never mints (`skipped`, which only `outcomeOrTargetSkip` can produce and only
 	// from a FAILED compile) needs no arm at any of them.
 	let sectionOutcome = checkRequiredSections(sectionPins, exePath: exePath, effectiveTarget: effectiveTarget)
+
 	if not sectionOutcome.isPass() 'sectionDisagreed'
 		return PreRunVerdict.settled(sectionOutcome)
 	end 'sectionDisagreed'
@@ -4587,6 +4689,7 @@ function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecS
 	// before the program is worth running: a case whose debug info cannot be walked is not a case whose
 	// exit code is interesting.
 	let sidecarOutcome = checkDebugInfoSidecar(debugInfo, exePath: exePath, effectiveTarget: effectiveTarget)
+
 	if not sidecarOutcome.isPass() 'sidecarDisagreed'
 		return PreRunVerdict.settled(sidecarOutcome)
 	end 'sidecarDisagreed'
@@ -4638,11 +4741,13 @@ function sidecarStructureOutcome(reader MxdbgReader) returns TestOutcome
 	end 'noTypes'
 
 	let referenceOutcome = sidecarTypeReferenceOutcome(reader)
+
 	if not referenceOutcome.isPass() 'danglingTypeId'
 		return referenceOutcome
 	end 'danglingTypeId'
 
 	let windowOutcome = sidecarTypeWindowOutcome(reader)
+
 	if not windowOutcome.isPass() 'fieldWindowEscapes'
 		return windowOutcome
 	end 'fieldWindowEscapes'
@@ -4655,6 +4760,7 @@ end 'sidecarStructureOutcome'
 function sidecarTypeReferenceOutcome(reader MxdbgReader) returns TestOutcome
 	for i in 0 upto reader.fieldCount() 'eachField'
 		let field = reader.fieldRecord(i as MxdbgIndex)
+
 		if field.typeId >= reader.typeCount() 'pastTheTypeTable'
 			return TestOutcome.fail("field record {i} ('{field.name}') names type {field.typeId}, past the sidecar's {reader.typeCount()} types")
 		end 'pastTheTypeTable'
@@ -4662,6 +4768,7 @@ function sidecarTypeReferenceOutcome(reader MxdbgReader) returns TestOutcome
 
 	for i in 0 upto reader.localCount() 'eachLocal'
 		let local = reader.localRecord(i as MxdbgIndex)
+
 		if local.typeId >= reader.typeCount() 'pastTheTypeTable'
 			return TestOutcome.fail("local record {i} ('{local.name}') names type {local.typeId}, past the sidecar's {reader.typeCount()} types")
 		end 'pastTheTypeTable'
@@ -4676,6 +4783,7 @@ end 'sidecarTypeReferenceOutcome'
 function sidecarTypeWindowOutcome(reader MxdbgReader) returns TestOutcome
 	for i in 0 upto reader.typeCount() 'eachType'
 		let entry = reader.typeRecord(i as MxdbgIndex)
+
 		if entry.fieldFirst > reader.fieldCount() or entry.fieldCount > reader.fieldCount() - entry.fieldFirst 'windowEscapes'
 			return TestOutcome.fail("type {i} ('{entry.name}') claims {entry.fieldCount} field(s) from {entry.fieldFirst} of a field table holding {reader.fieldCount()}")
 		end 'windowEscapes'
@@ -4690,8 +4798,10 @@ end 'sidecarTypeWindowOutcome'
 // plausible dump rather than as a defect.
 function sidecarLocalWindowOutcome(reader MxdbgReader) returns TestOutcome
 	var nextLocal = 0 as MxdbgIndex
+
 	for i in 0 upto reader.functionCount() 'eachFunction'
 		let fn = reader.functionRecord(i as MxdbgIndex)
+
 		if fn.localFirst != nextLocal 'notContiguous'
 			return TestOutcome.fail("function {i} ('{fn.name}') opens its local window at {fn.localFirst}, where the functions before it end at {nextLocal}. The windows are appended in function order, so a gap loses records and an overlap hands two functions the same ones")
 		end 'notContiguous'
@@ -4735,6 +4845,7 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// difference is real: a program that prints nothing is a claim a spec can make by omission, while a
 	// program that exits 0 is not.
 	let exitOutcome = checkRunExitCode(expected, actual: run.exitCode)
+
 	if not exitOutcome.isPass() 'exitDisagreed'
 		return withMonitorStderr(exitOutcome, traceCapture: traceCapture, monitorStderr: run.stderr)
 	end 'exitDisagreed'
@@ -4746,6 +4857,7 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// reads as "a program that allocated nothing". So the exit code comes
 	// first, and every mm-trace verdict carries the monitor's stderr with it.
 	let traceOutcome = checkTraceCapture(traceCapture, monitorStdout: run.stdout, monitorStderr: run.stderr)
+
 	if not traceOutcome.isPass() 'traceDisagreed'
 		return traceOutcome
 	end 'traceDisagreed'
@@ -4753,6 +4865,7 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// Both streams are checked against the ONE execution. stdout first (it is what a `print` test
 	// exists to pin); on a pass, stderr is checked and its outcome returned.
 	let stdoutOutcome = checkCapturedStdout(stdout, actual: childStdoutOf(run.stdout, traceCapture: traceCapture), traceCapture: traceCapture)
+
 	if not stdoutOutcome.isPass() 'stdoutDisagreed'
 		return stdoutOutcome
 	end 'stdoutDisagreed'
@@ -4780,6 +4893,7 @@ end 'runAssertions'
 function checkRequiredSections(sectionPins SpecSectionPinArray, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	for pin in sectionPins 'eachPin'
 		let outcome = compareLinkedSection(pin, exePath: exePath, effectiveTarget: effectiveTarget)
+
 		if not outcome.isPass() 'pinDisagreed'
 			return outcome
 		end 'pinDisagreed'
@@ -4848,6 +4962,7 @@ function compareSectionPrefix(expected ByteArray, actual ByteArray, sectionName 
 	for i in 0 upto expected.count() 'eachByte'
 		let e = try expected.get(i) otherwise panic("compareSectionPrefix: expected.get OOB at {i} despite the upto bound")
 		let a = try actual.get(i) otherwise panic("compareSectionPrefix: actual.get OOB at {i} — the length was checked above")
+
 		if e != a 'differs'
 			return TestOutcome.fail("{sectionName} mismatch at byte {i}: expected 0x{hexByte(e as MachineWord)}, got 0x{hexByte(a as MachineWord)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 		end 'differs'
@@ -4866,6 +4981,7 @@ end 'compareSectionPrefix'
 // deliberately not an "anywhere" containment — that would let a re-ordered image pass unnoticed.
 function locateSectionPayloads(payloads ByteArrayArray, actual ByteArray, sectionName String) returns TestOutcome
 	var searchFrom = 0 as ByteOffset
+
 	for (iter, payload) in payloads.withIterator() 'eachPayload'
 		match findByteRun(actual, needle: payload, from: searchFrom) 'located'
 			found(offset) then searchFrom = offset + payload.count()
@@ -4915,13 +5031,17 @@ function normalizeAsyncTraceStderr(text String, asyncTrace bool) returns String
 	end 'notATraceCase'
 
 	var out = TextJoiner.create(LineSeparator)
+
 	for line in text.split(LineSeparator) 'eachLine'
 		let stripped = stripWorkerMarkerFromLine(line)
+
 		if isAsyncWorkerLine(stripped) 'timingDependent'
 			continue
 		end 'timingDependent'
+
 		out.push(stripped)
 	end 'eachLine'
+
 	return out.build()
 end 'normalizeAsyncTraceStderr'
 
@@ -4974,6 +5094,7 @@ function exitCodeOutcome(expected ExitCodeValue, actual ExitCodeValue) returns T
 	if actual != expected 'exitMismatch'
 		return TestOutcome.fail("exit code mismatch: expected {expected}, got {actual}")
 	end 'exitMismatch'
+
 	return TestOutcome.pass
 end 'exitCodeOutcome'
 
@@ -4997,6 +5118,7 @@ function checkStreamSilent(actual String, streamName String) returns TestOutcome
 	if actual.isEmpty() 'silent'
 		return TestOutcome.pass
 	end 'silent'
+
 	return TestOutcome.fail("unexpected {streamName} output:\n{actual}")
 end 'checkStreamSilent'
 
@@ -5006,6 +5128,7 @@ function checkStreamMatches(expected String, actual String, streamName String) r
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
+
 	return TestOutcome.fail("{streamName} mismatch\n    expected: {expected}\n    actual:   {actual}")
 end 'checkStreamMatches'
 
@@ -5024,9 +5147,11 @@ function stripFaultRipSuffix(text String) returns String
 	end 'noFault'
 
 	var out = TextJoiner.create(LineSeparator)
+
 	for line in text.split(LineSeparator) 'eachLine'
 		out.push(stripFaultRipFromLine(line))
 	end 'eachLine'
+
 	return out.build()
 end 'stripFaultRipSuffix'
 
@@ -5092,6 +5217,7 @@ function wasmPanicReport(run ProcessCapture) returns ProcessCapture
 	let frames = wasmtimeBacktraceFrames(run.stderr.slice(markerIdx, endIndex: run.stderr.endIndex()))
 
 	let innermost = try frames.get(WasmPanicRuntimeFrame) otherwise return run
+
 	if innermost != String.from(PanicName) 'notAMaxonPanic'
 		return run
 	end 'notAMaxonPanic'
@@ -5124,6 +5250,7 @@ function wasmPanicReport(run ProcessCapture) returns ProcessCapture
 	// if a later wasmtime reports more, this keeps the two lanes agreeing without anyone noticing it had
 	// to be re-decided.
 	var lastFrame = frames.count()
+
 	if lastFrame > MaxBacktraceFrames + WasmFirstProgramFrame 'capped'
 		lastFrame = MaxBacktraceFrames + WasmFirstProgramFrame
 	end 'capped'
@@ -5154,6 +5281,7 @@ function wasmtimeBacktraceFrames(backtraceRegion String) returns StringArray
 		let name = try wasmtimeFrameName(line) otherwise 'notAFrameLine'
 			continue
 		end 'notAFrameLine'
+
 		frames.push(name)
 	end 'eachLine'
 
@@ -5194,6 +5322,7 @@ end 'writeFragment'
 // about where a temp file lived, so neither side of it should decide a test.
 function normalizeCompilerOutput(text String, paths FragmentPathMappingArray, stdlibRoot String) returns String
 	var out = text
+
 	for mapping in paths 'eachPath'
 		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset, token: mapping.replacementToken)
 	end 'eachPath'
@@ -5225,10 +5354,12 @@ function rewriteStdlibPaths(text String, stdlibRoot String) returns String
 
 	let pieces = text.split(stdlibRoot)
 	var out = try pieces.get(0) otherwise panic("rewriteStdlibPaths: pieces.get(0) failed on a {pieces.count()}-part split of a text that contains '{stdlibRoot}'")
+
 	for i in 1 upto pieces.count() 'eachOccurrence'
 		let tail = try pieces.get(i) otherwise panic("rewriteStdlibPaths: pieces.get({i}) failed on a {pieces.count()}-part split")
 		out = "{out}{StdlibDirName}{portableLibraryTail(tail)}"
 	end 'eachOccurrence'
+
 	return out
 end 'rewriteStdlibPaths'
 
@@ -5257,6 +5388,7 @@ end 'portableLibraryTail'
 // `<fragment>` already and passes through untouched.
 function referencePathMapping(specName String, testName String) returns FragmentPathMappingArray
 	var paths = FragmentPathMappingArray.create()
+
 	// No directory prefix: an expectation ported from `/specs` carries its own (`dir_b/<fragment>`) in
 	// the corpus text, ahead of the fragment path this replaces, and passes through untouched.
 	paths.push(FragmentPathMapping.create(referenceFragmentPath(specName, testName: testName), lineOffset: NoLineOffset, sourceDirPrefix: ""))
@@ -5279,8 +5411,10 @@ function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, 
 	// of it around for a reader to copy.
 	var out = ""
 	var first = true
+
 	for line in text.split(LineSeparator) 'eachLine'
 		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token)
+
 		if first 'firstLine'
 			out = rewritten
 			first = false
@@ -5288,6 +5422,7 @@ function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, 
 			out = "{out}{LineSeparator}{rewritten}"
 		end 'moreLines'
 	end 'eachLine'
+
 	return out
 end 'rewriteDiagnosticPaths'
 
@@ -5304,20 +5439,24 @@ function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex, t
 	end 'noPath'
 
 	let halves = line.split(path)
+
 	if halves.count() != PathSplitHalves 'notNamedExactlyOnce'
 		return line.replace(path, with: token)
 	end 'notNamedExactlyOnce'
 
 	let prefix = try halves.get(0) otherwise panic("rewriteDiagnosticLine: halves.get(0) failed on a {halves.count()}-part split")
+
 	// `:<line>:<col>:<message>` ⇒ ["", line, col, message…]
 	let tail = try halves.get(1) otherwise panic("rewriteDiagnosticLine: halves.get(1) failed on a {halves.count()}-part split")
 
 	let fields = tail.split(PositionSeparator)
+
 	if fields.count() < MinPositionFields 'notPositioned'
 		return line.replace(path, with: token)
 	end 'notPositioned'
 
 	let beforePosition = try fields.get(0) otherwise panic("rewriteDiagnosticLine: fields.get(0) failed on a {fields.count()}-field split")
+
 	if not beforePosition.isEmpty() 'pathNotFollowedByPosition'
 		return line.replace(path, with: token)
 	end 'pathNotFollowedByPosition'
@@ -5330,6 +5469,7 @@ function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex, t
 	// so everything from the message field on is re-joined with the separator it was split on rather
 	// than taken as one field and truncated.
 	var message = ""
+
 	for i in MessageFieldStart upto fields.count() 'rejoinMessage'
 		let field = try fields.get(i) otherwise panic("rewriteDiagnosticLine: fields.get({i}) failed on a {fields.count()}-field split")
 		message = "{message}{PositionSeparator}{field}"
@@ -5365,6 +5505,7 @@ function cleanup(staged StagedTest, exePath FilePath)
 	for path in staged.writtenFiles 'eachSource'
 		try File.delete(path) otherwise ignore
 	end 'eachSource'
+
 	discardDebugInfoSidecar(exePath)
 	try File.delete(exePath) otherwise ignore
 end 'cleanup'

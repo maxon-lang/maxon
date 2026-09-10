@@ -64,6 +64,7 @@ type FileReader
 		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise 'notFound'
 			throw FileReadError.notFound
 		end 'notFound'
+
 		return FileReader{file: result}
 	end 'open'
 
@@ -72,16 +73,20 @@ type FileReader
 		let size = try file.size() otherwise 'sizeErr'
 			throw FileReadError.notFound
 		end 'sizeErr'
+
 		var managed = try __ManagedMemory.create(size + extraBytes, 1) otherwise 'createErr'
 			panic("File.readAll: create — size+extraBytes >= 0 guaranteed")
 		end 'createErr'
+
 		let bytesRead = try file.read(managed, size) otherwise 'readErr'
 			throw FileReadError.notFound
 		end 'readErr'
+
 		file.close()
 		try managed.setLength(bytesRead) otherwise 'lenErr'
 			panic("File.readAll: setLength — bytesRead from file.read, always <= size allocated")
 		end 'lenErr'
+
 		return managed
 	end 'readAll'
 end 'FileReader'
@@ -96,6 +101,7 @@ type FileWriter
 			executable gives try __ManagedFile.openWriteExecutable(path) otherwise throw FileWriteError.failed
 			normal gives try __ManagedFile.openWrite(path) otherwise throw FileWriteError.failed
 		end 'perm'
+
 		return FileWriter{file: fileHandle}
 	end 'open'
 
@@ -106,29 +112,33 @@ type FileWriter
 			file.close()
 			throw FileWriteError.failed
 		end 'err'
+
 		file.close()
 	end 'writeAll'
 end 'FileWriter'
 
 /// Static file operations.
 public type File
-
 	/// Read text file content as a UTF-8 string
 	public static function readText(path FilePath) returns String throws FileReadError
 		var reader = try FileReader.open(path.path)
 		var managed = try reader.readAll(1)
 		let len = managed.length()
+
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
 		// length boundary, so temporarily extend length to allow setByte at that index
 		try managed.setLength(len + 1) otherwise 'lenErr1'
 			panic("File.readText: setLength(len+1) — extraBytes=1 guarantees capacity")
 		end 'lenErr1'
+
 		try managed.setByte(len, 0) otherwise 'setErr'
 			panic("File.readText: setByte at null terminator — length just extended to len+1")
 		end 'setErr'
+
 		try managed.setLength(len) otherwise 'lenErr2'
 			panic("File.readText: setLength(len) — restoring original length always valid")
 		end 'lenErr2'
+
 		return String.init(managed)
 	end 'readText'
 
@@ -179,6 +189,7 @@ public type File
 		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise 'notFound'
 			throw FileInfoError.notFound
 		end 'notFound'
+
 		let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
 		let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
 		let ctime = __ManagedFile.statField(statResult, 2) as Timestamp

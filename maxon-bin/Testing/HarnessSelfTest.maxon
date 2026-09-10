@@ -193,6 +193,7 @@ export function requireHarnessRefusalsFire(harnessExe FilePath, specDir FilePath
 	// (`LadderIndex` reports its three directions in one message for the same reason.)
 	var checked = 0 as FixtureTally
 	var broken = StringArray.create()
+
 	for caseDir in cases 'eachCase'
 		if not Directory.isDirectory(caseDir) 'notACase'
 			continue
@@ -202,6 +203,7 @@ export function requireHarnessRefusalsFire(harnessExe FilePath, specDir FilePath
 			fired then break 'verdict'
 			didNotFire(reason) then broken.push(reason)
 		end 'verdict'
+
 		checked = checked + 1
 	end 'eachCase'
 
@@ -244,6 +246,7 @@ typealias FixtureTally = int(0 to u64.max)
 // of "am I a fixture" is precisely the drift this function's own warning below is about.
 export function isHarnessFixtureSubRun(specDir FilePath) returns bool
 	let roots = harnessCorpusRoots()
+
 	for root in roots 'eachRoot'
 		if isFixtureCaseDir(specDir, root: root) 'underThisRoot'
 			return true
@@ -297,6 +300,7 @@ end 'harnessCorpusRoots'
 // the slash ran the fixture). A path that is nothing BUT separators has no case name and is not one.
 function isFixtureCaseDir(specDir FilePath, root FilePath) returns bool
 	var caseDir = specDir
+
 	while caseDir.filename().isEmpty() 'trailingSeparator'
 		caseDir = try caseDir.parent() otherwise return false
 	end 'trailingSeparator'
@@ -404,6 +408,7 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	var broken = StringArray.create()
 
 	let byDefault = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
+
 	if byDefault.contains(ranVerdict) 'defaultRanIt'
 		broken.push("a DEFAULT run of the fixture RAN '{label}', which is marked `{NetworkMarker} {NetworkLiveValue} -->`. Every suite in this tree would then be a coin toss on a third party's uptime.\n")
 	end 'defaultRanIt'
@@ -417,6 +422,7 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	end 'defaultGaveNoReason'
 
 	let withNetwork = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: true, proves: proves))
+
 	if not withNetwork.contains(ranVerdict) 'flagDidNotIncludeIt'
 		broken.push("a `{NetworkFlag}` run did NOT run '{label}'. The flag no longer reaches selection, so every `{NetworkMarker} {NetworkLiveValue} -->` case is unreachable by any command line — shelved in all but name. It said:\n{withNetwork}\n")
 	end 'flagDidNotIncludeIt'
@@ -446,6 +452,7 @@ end 'requireNetworkGateHolds'
 function gateFixtureDir(caseDirName String, proves String) returns FilePath
 	let root = try FilePath.from(GatesRelativeDir) otherwise panic("HarnessSelfTest: '{GatesRelativeDir}' is not a valid path")
 	let caseDir = root.join("{caseDirName}")
+
 	if not Directory.isDirectory(caseDir) 'noFixture'
 		panic("HarnessSelfTest: a gate fixture is missing — there is no {GatesRelativeDir}/{caseDirName}, so nothing proves {proves}. Run the suite from the repo root.")
 	end 'noFixture'
@@ -477,6 +484,7 @@ export function requireReferenceMarkerShapesParse(harnessExe FilePath, specDir F
 	end 'thisIsAFixtureSubRun'
 
 	var broken = StringArray.create()
+
 	for shape in referenceMarkerShapes() 'eachShape'
 		let caseDir = gateFixtureDir(shape.caseDir, proves: shape.proves)
 		let said = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: shape.proves))
@@ -486,6 +494,7 @@ export function requireReferenceMarkerShapesParse(harnessExe FilePath, specDir F
 		// PREFIX of the real line, which is what `contains` needs; the fixture's stdout is deliberately
 		// wrong so the case FAILS and mints no golden, and the failure is not the point.
 		let ranVerdict = verdictLine(TestOutcome.fail(""), label: "{shape.specName}/{shape.testName}")
+
 		if not said.contains(ranVerdict) 'didNotRunIt'
 			broken.push("the fixture at {shape.caseDir} did NOT run '{shape.specName}/{shape.testName}'. It proves {shape.proves}, and the compiler has stopped agreeing with the reference about what a marker line is — in this direction the case is simply GONE, which reads exactly like a case nobody wrote. It said:\n{said}\n")
 		end 'didNotRunIt'
@@ -533,6 +542,7 @@ end 'referenceMarkerShapes'
 // that tells a reader what stopped being checked.
 function runGateFixture(harnessExe FilePath, caseDir FilePath, includeNetwork bool, proves String) returns ProcessCapture
 	var argv = fixtureArgv(caseDir)
+
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
 	end 'wantsLiveNetwork'
@@ -591,6 +601,7 @@ export function requireOrphanedGoldensAreReported(harnessExe FilePath, specDir F
 	// rendered sentence, deliberately: what must hold is that NO reason may be attached to this file, and
 	// naming one reason here would leave the gate satisfied by the census producing a different one.
 	let pinnableEntryPath = "{OrphanGateLane}/{OrphanGateSpecName}/{OrphanGatePinnableCase}{FragmentExtension}"
+
 	if withOrphans.contains(pinnableEntryPath) 'namedAGoldenItsLaneCompares'
 		broken.push("the census NAMED '{pinnableEntryPath}', a golden for a case this fixture declares and this lane can select. Then it does not distinguish an orphan from a reference that is fine, and on the real corpus it names every golden in the tree — a report that fires on everything is switched off inside a week, which is the failure this whole census exists to survive. It said:\n{withOrphans}\n")
 	end 'namedAGoldenItsLaneCompares'
@@ -706,6 +717,7 @@ export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir Fi
 
 	var corruptedGoldens = GateGoldenBackupArray.create()
 	var driftedCases = 0 as TestTally
+
 	for caseName in driftedGateCases() 'eachDrifted'
 		let path = goldenOf(minted, caseName: caseName)
 		corruptedGoldens.push(GateGoldenBackup.create(path, caseName: caseName, emitted: readGateGolden(path)))
@@ -738,6 +750,7 @@ export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir Fi
 		// `requireNetworkGateHolds`' argument. An empty `detail` makes the entry a PREFIX of the real one,
 		// which is what `contains` needs.
 		let driftedEntry = resultNoteEntry(DriftGateSpecName, testName: backup.caseName, detail: "")
+
 		if not onStderr.contains(driftedEntry) 'didNotNameTheCase'
 			broken.push("the trailer did NOT name '{backup.caseName}', whose golden was corrupted. Expected it to contain:\n{driftedEntry}and the run said:\n{said}\n")
 		end 'didNotNameTheCase'
@@ -749,6 +762,7 @@ export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir Fi
 		// ⚖ THE RULING, ASSERTED: reported, never judged. A drifted golden may not move a verdict, and this
 		// is the half that would be quietly lost the first time somebody decided drift ought to be red.
 		let passVerdict = verdictLine(TestOutcome.pass, label: testLabel(DriftGateSpecName, testName: backup.caseName))
+
 		if not onStdout.contains(passVerdict) 'driftMovedTheVerdict'
 			broken.push("'{backup.caseName}' is no longer reported as PASSING. A golden is REFERENCE, NOT A GATE: the program did exactly what its spec says, and only the committed reference disagreed. Expected '{passVerdict}', and the run said:\n{said}\n")
 		end 'driftMovedTheVerdict'
@@ -764,6 +778,7 @@ export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir Fi
 	// ⭐ THE COUNT, and it is asserted at TWO because one cannot be told from "noticed" — see
 	// `DriftGateSecondDriftedCase`.
 	let summary = goldenDriftSummary(driftedCases)
+
 	if not onStdout.contains(summary) 'summaryStayedSilent'
 		broken.push("the run's SUMMARY, on STDOUT, says nothing about the {driftedCases} drifted goldens. The trailer is on stderr and the verdict a reader reads is on stdout, so drift that is only in the trailer is drift a reader looking at `N passed, M failed` never learns about. Expected '{summary}', and the run said:\n{said}\n")
 	end 'summaryStayedSilent'
@@ -774,6 +789,7 @@ export function requireDriftedGoldensAreReported(harnessExe FilePath, specDir Fi
 
 	// ⛔ THE OVER-REPORTING CONTROL — see `DriftGateIntactCase`.
 	let intactEntry = resultNoteEntry(DriftGateSpecName, testName: DriftGateIntactCase, detail: "")
+
 	if onStderr.contains(intactEntry) 'namedAGoldenThatMatched'
 		broken.push("the trailer NAMED '{DriftGateIntactCase}', whose golden was compared and MATCHED. Then it reports every RESULT once ANY result has drifted rather than the results that drifted, and on the real corpus it names every pinned case in the run — a report that fires on everything is switched off inside a week. It said:\n{said}\n")
 	end 'namedAGoldenThatMatched'
@@ -826,6 +842,7 @@ typealias GateGoldenBackupArray = Array with GateGoldenBackup
 function gateGoldensIn(caseDir FilePath) returns FilePathArray
 	var found = FilePathArray.create()
 	let fragmentsRoot = caseDir.join("{FragmentsSubdir}")
+
 	if not Directory.exists(fragmentsRoot) 'nothingMintedYet'
 		return found
 	end 'nothingMintedYet'
@@ -860,6 +877,7 @@ end 'gateGoldensIn'
 // It is a control only because the caller CLEARED first: see this gate's header for what a survivor costs.
 function mintedGoldensIn(caseDir FilePath) returns FilePathArray
 	let found = gateGoldensIn(caseDir)
+
 	if found.count() != DriftGateGoldenCount 'wrongCount'
 		panic("HarnessSelfTest: the drifted-golden gate's fixture minted {found.count()} golden(s), not {DriftGateGoldenCount}. Its cases must PASS and pin emitted code, because a case that fails never reaches the golden step at all — with none to corrupt, this gate would report that drift goes unreported whatever the reporter does.")
 	end 'wrongCount'
@@ -903,9 +921,11 @@ function expectedRefusalIn(caseDir FilePath, caseName String) returns String
 	for line in text.split("\n") 'eachLine'
 		if carriesMarker(line, marker: ExpectRefusalMarker) 'isTheMarker'
 			let expected = markerValue(line)
+
 			if expected.isEmpty() 'noValue'
 				panic("HarnessSelfTest: the '{caseName}' fixture's '{ExpectRefusalMarker}' marker names no text. It must carry the part of the refusal's message that identifies it — and NOT the `<file>:<line>` a panic prints in front of it, which moves on every edit above it.")
 			end 'noValue'
+
 			return expected
 		end 'isTheMarker'
 	end 'eachLine'
@@ -920,6 +940,7 @@ function fixtureSpecIn(caseDir FilePath, caseName String) returns FilePath
 	let entries = try Directory.list(caseDir) otherwise panic("HarnessSelfTest: could not list the '{caseName}' fixture directory")
 
 	var specs = FilePathArray.create()
+
 	for entry in entries 'eachEntry'
 		if entry.fileExtension() == FixtureSpecExtension 'isSpec'
 			specs.push(entry)

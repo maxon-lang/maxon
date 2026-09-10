@@ -90,10 +90,12 @@ export union CheckedDivisionKind
 	// `a / b` — the QUOTIENT. Integer (`StdOp.div`) or float (`binOp(div)`), decided by the operand type at
 	// lowering, which is why one name serves both: the desugar is about FALLIBILITY, not about width.
 	quotient
+
 	// `a mod b` — the REMAINDER, over a divisor that might be ZERO. Integer only; float `mod` does not
 	// exist in the language. Its expansion carries the `-1` guard as well, unconditionally — see
 	// `lowerDivisionExpansion`.
 	remainder
+
 	// `a mod b` — the REMAINDER over a divisor PROVEN non-zero but possibly `-1` (A1x). TOTAL: guarded
 	// against `idiv`'s overflow `#DE` and nothing else, so it has no error flag and no `throws` clause.
 	//
@@ -344,6 +346,7 @@ export function verifyDivisionByZeroOrdinals(project Project)
 	// which is exactly the shape `error-codes check` exists to refuse for codes. Integrated by hand.
 	var divisionErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinDivisionByZeroErrorEnum(), installer: b"lowerDivisionExpansion")
 	divisionErrors.claim(DivisionByZeroCaseName, ordinal: DivisionByZeroOrdinal)
+
 	// ONE case, and the totality arm is still owed a call for the same reason the claim was (W135): the day a
 	// second case is added to the layout, this is what refuses it rather than exempting it by omission. Over a
 	// `synthesized` layout that refusal is a PANIC — only this compiler's own source can add the case.

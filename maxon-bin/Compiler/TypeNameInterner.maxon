@@ -25,6 +25,7 @@ export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
 // against), never user input.
 export union TypeNameInternerError implements Error
 	unknownId(id TypeNameId)
+
 	// `idOf` was asked for a name this interner never saw — an ANSWER ("no type of that name has been
 	// interned"), not a bug, unlike `unknownId`.
 	unknownName(name ByteArray)
@@ -34,6 +35,7 @@ export type TypeNameInterner
 	// id -> name (index is the TypeNameId). The names are zero-copy slices of the
 	// source the parser interned them from, never copies.
 	var names as ByteArrayArray
+
 	// name -> id, for O(1) interning of an already-seen name.
 	var ids as TypeNameIdMap
 
@@ -53,6 +55,7 @@ export type TypeNameInterner
 		if let existing = try ids.get(name) 'seen'
 			return existing
 		end 'seen'
+
 		let id = names.count()
 		names.push(name)
 		ids.upsert(name, value: id)
@@ -87,14 +90,17 @@ export type TypeNameInterner
 	export function foldInto(source TypeNameInterner) returns TypeNameRemap
 		var mapping = TypeNameIdArray.create()
 		var identity = true
+
 		for srcId in 0 upto source.names.count() 'each'
 			let name = try source.names.get(srcId) otherwise panic("foldInto: source.names.get OOB at {srcId}")
 			let dstId = self.intern(name)
 			mapping.push(dstId)
+
 			if dstId != srcId 'moved'
 				identity = false
 			end 'moved'
 		end 'each'
+
 		return TypeNameRemap.create(mapping, isIdentity: identity)
 	end 'foldInto'
 end 'TypeNameInterner'
@@ -127,17 +133,21 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 		exitCode gives t
 		named(id) gives MaxonType.named(remap.apply(id))
 		unresolved gives t
+
 		// A struct reference carries a name id for the same reason `named` does — it is the key
 		// `StructLayoutMap` is read by — so it moves through a merge for the same reason and by the
 		// same rule. Missing it would leave a `Point` reference in a second file indexing the
 		// project interner at whatever name happened to take that id first.
 		structRef(id) gives MaxonType.structRef(remap.apply(id))
+
 		// A `String` builtin carries no name id, so a merge's id remap has nothing to rewrite — like a
 		// primitive, it passes through unchanged.
 		string gives t
+
 		// A function value carries a name id (its governing function/alias name) for the same reason
 		// `named`/`structRef` do, so it moves through a merge by the same rule — remap the id.
 		function(id) gives MaxonType.function(remap.apply(id))
+
 		// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param TOKEN and a
 		// `GenericInstanceId` keyed on the whole-program registry, NOT a per-file interner id — so a
 		// merge's id remap has nothing to rewrite: they pass through unchanged, like a primitive.
@@ -151,9 +161,11 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 		// the real parse alike. Both spellings are interner-independent; only the second is injective.
 		typeParameter gives t
 		genericInstance gives t
+
 		// A Character carries no interner id (its identity is the tag), so a merge's remap has nothing
 		// to rewrite — it passes through unchanged, exactly as `string` does.
 		character gives t
+
 		// An existential carries the interned INTERFACE name — a per-file interner id exactly as `named`'s
 		// is — so a merge's id remap must rewrite it, or the dispatch would resolve its method slot against
 		// whatever name the pre-merge id folded to.
@@ -170,9 +182,11 @@ end 'remapMaxonType'
 // LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
 export function remapMaxonTypes(types MaxonTypeArray, remap TypeNameRemap) returns MaxonTypeArray
 	var remapped = MaxonTypeArray.create()
+
 	for t in types 'each'
 		remapped.push(remapMaxonType(t, remap: remap))
 	end 'each'
+
 	return remapped
 end 'remapMaxonTypes'
 
@@ -192,6 +206,7 @@ export function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap Type
 	if tag == ValueTypeTag.void 'void'
 		return nameId
 	end 'void'
+
 	return typeNameIdOf(remapMaxonType(maxonTypeOfTag(tag, nameId: nameId), remap: remap))
 end 'remapValueNameId'
 
@@ -238,12 +253,16 @@ end 'remapStructLayoutFieldTypes'
 // the two cannot disagree about what a payload's declared type means.
 export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeNameRemap)
 	var remappedCases = PayloadFieldArrayArray.create()
+
 	for casePayloads in layout.casePayloads 'eachCase'
 		var remappedFields = PayloadFieldArray.create()
+
 		for field in casePayloads 'eachField'
 			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand))
 		end 'eachField'
+
 		remappedCases.push(remappedFields)
 	end 'eachCase'
+
 	layout.casePayloads = remappedCases
 end 'remapEnumLayoutPayloadTypes'

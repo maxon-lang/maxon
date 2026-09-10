@@ -1242,6 +1242,7 @@ export type GtTraceTags
 		if not self.tracesIoOperations() 'untracedBuild'
 			return GtTraceTag.absent()
 		end 'untracedBuild'
+
 		return try self.ioOperations.get(operation.ordinal) otherwise panic("GtTraceTags.ioTag: no registered tag at ordinal {operation.ordinal} for '{operation.name}' — registerIoOperationTags walks GtIoOperation.allCases, so a gap here means the array was built somewhere else")
 	end 'ioTag'
 
@@ -1271,13 +1272,17 @@ end 'registerGtTraceTag'
 // that collision impossible instead of leaving it to every future operation's author to notice.
 function registerIoOperationTags(globalData GlobalDataTable) returns GtTraceTagArray
 	var tags = GtTraceTagArray.create()
+
 	for operation in GtIoOperation.allCases 'eachOperation'
 		let text = ioOperationSuffixText(operation)
+
 		if text.count() == 0 'emptySuffix'
 			panic("registerIoOperationTags: '{operation.name}' registers an EMPTY suffix text — a zero length is `GtTraceTag.absent()`'s no-suffix signal, so a registered empty suffix is a tag that reads as absent")
 		end 'emptySuffix'
+
 		tags.push(registerGtTraceTag(globalData, text: text))
 	end 'eachOperation'
+
 	return tags
 end 'registerIoOperationTags'
 
@@ -1832,6 +1837,7 @@ end 'runtimeThrowsClause'
 // distinct instead of a sentinel.
 export union RuntimeCalleeSourceMethod
 	found(method ByteArray)
+
 	// ⚠⚠ **TWO SOURCE SPELLINGS, ONE CALLEE — AND THAT IS THE SAME DEFECT D12 EXISTS TO REMOVE, one level
 	// in.** `__mf_open_write` is what BOTH `__ManagedFile.openWrite` and `__ManagedFile.openWriteExecutable`
 	// emit (one parser arm, one runtime entry — a Unix 0755 bit is the whole difference and the compiler's file IO
@@ -2018,14 +2024,17 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtInitDoneLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+
 	// P1.5 mid-body-yield: the timer store's count + heap base, and the clock out-param scratch words.
 	pushRuntimeGlobal(out, label: GtTimerCountLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerSeqLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep)
+
 	// P1.5 subprocess store: the parked-child count + the two parallel-array bases.
 	pushRuntimeGlobal(out, label: GtProcCountLabel, sharing: MultiMSharing.underSchedLock)
+
 	// The BASES are written once by `__gt_init` and never again — the store is FIXED-capacity, so nothing
 	// republishes or frees them and any M may load them without the lock. Only the COUNT and the SLOTS move,
 	// and both move under it.
@@ -2038,9 +2047,11 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtProcHandlesBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	pushRuntimeGlobal(out, label: GtProcGtsBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	pushRuntimeGlobal(out, label: GtProcWaitSnapshotLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+
 	// The claim word itself: every mutation is an `atomicCas` (take) or the releasing store made by the M that
 	// took it, so no second M can be between the two.
 	pushRuntimeGlobal(out, label: GtProcPollerLabel, sharing: MultiMSharing.atomicStep)
+
 	// P1.5-B2 #88: the green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It is
 	// the ONE `.data` word this family still owns for memory bookkeeping: S3 retired the GT-struct free-list
 	// head and the five subprocess scratch slots beside it, because a runtime with a free path needs no
@@ -2092,6 +2103,7 @@ end 'ioRuntimeGlobals'
 export enum IoCompletionShape
 	// Windows: a completion port, a wake event and a drain thread.
 	completionPort
+
 	// POSIX and WASI: a read completes in its caller.
 	inlineCompletion
 end 'IoCompletionShape'
@@ -2122,17 +2134,21 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// argument instead, a park site added later that did not pass it along would emit a call with the WRONG
 	// ARGUMENT COUNT rather than a compile error — the same reasoning `IrModule.debugStream` records.
 	module.asyncTraceTags = tags
+
 	if asyncTrace 'traceEmitter'
 		buildGtTraceEmit(module, tags: tags)
 	end 'traceEmitter'
+
 	// ⭐ The P/M half (G1) — the processor structure, the TLS door, the worker M and the wake. It rides
 	// `usesGt` exactly as everything else here does: there is no program that wants green threads without a
 	// processor to run them on. FIRST in the list because `__gt_init` calls `__sched_init_procs` before it
 	// does anything else, so the dependency order and the install order read the same way.
 	installSchedRuntime(module, target: target)
+
 	// The substrate a COMPLETION PORT needs, as opposed to the reader itself — see `IoCompletionShape`.
 	let usesCompletionPort = usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort
 	buildGtInit(module, usesCompletionPort: usesCompletionPort)
+
 	// ⭐ BOTH spawn doors, from one body (SV1). The green one is installed unconditionally beside the
 	// coroutine one for `buildGtCoroEnqueue`'s stated reason: whether a program can REACH it is
 	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis
@@ -2142,6 +2158,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtReady(module)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
+
 	// The coroutine queue's four doors, beside the global FIFO's two they are modelled on (EC10). ⚠ They are
 	// installed unconditionally, exactly as the pair above is: whether a program can REACH one is
 	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis
@@ -2154,6 +2171,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtTimerAdd(module, rawFree: rawFree)
 	buildGtTimerEarliest(module)
 	buildGtTimerCheck(module)
+
 	// The THREE drive loops, from one body — an await's *"until this thread completes"*, a select's *"until
 	// ANY of these has"* and the teardown's *"until nobody owns a green thread"*. See `buildGtDriveLoop`.
 	// The select's exit test is installed first because the loop calls it.
@@ -2165,30 +2183,36 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
 	buildGtPromiseDrop(module, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
+
 	// The three halves of the teardown rendezvous, beside the drop and the two await drivers that step it.
 	// `__gt_reclaim` last, because it is what the other two call. See `GtOffTeardown` for the protocol.
 	buildGtRunnerDone(module)
 	buildGtOwnerDone(module)
 	buildGtReclaim(module, rawFree: rawFree)
+
 	// The non-blocking PEEK, beside the two blocking drivers it exists as the alternative to. See
 	// `buildGtIsComplete` for why it is unconditional where `__proc_pid` is bit-gated.
 	buildGtIsComplete(module)
+
 	// The reply cell's two doors (SV2), beside the rendezvous they step and the drop that renounces them.
 	// Unconditional for `buildGtCoroEnqueue`'s stated reason: whether a program can REACH one is
 	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis.
 	buildGtCellAlloc(module)
 	buildGtCellComplete(module)
 	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
+
 	// The deferred park's registrar, beside the store door it dispatches to (W218).
 	buildGtRegisterPark(module)
 	buildGtProcAddLocked(module)
 	buildGtProcCount(module)
 	buildGtProcCheck(module)
+
 	// After the two checkers it polls (`__gt_timer_check` / `__gt_proc_check`), so the install order reads in
 	// dependency order like the rest of this list.
 	buildGtResched(module)
 	buildGtIoPark(module)
 	buildGtProcessRun(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
+
 	// The shell wrapper `__gt_process_run` and the one-shot read probe take a command LINE through, on a lane
 	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
 	installSubpShellCommandBuilder(module, target: target)
@@ -2270,6 +2294,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	// GT0 relied on (`stackBase == 0`, `waiter == 0`, `status == ready`) is still the slab's.
 	let schedInitResult = ids.mint()
 	module.appendOp(doInit, op: StdOp.call(schedInitResult, callee: SchedInitProcsName, args: ValueIdArray.create()))
+
 	// The timer store's heap region: one `__slab_alloc` of TimerHeapBytes (slab-zeroed, so count starts at 0
 	// entries), its base published to `__gt_timer_heap_base`. Done once here rather than lazily in
 	// `__gt_timer_add` so the add path stays a straight append with no allocation check.
@@ -2280,6 +2305,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let heapBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(heapBaseAddr, offset: 0, valueId: heapBase, valueType: StdType.i64))
+
 	// The store's CAPACITY is a runtime word, not the compile-time constant, because `__gt_timer_add` GROWS the
 	// store when it fills (see its header). `TimerHeapCapacity` is only the SEED.
 	let capSeedConst = ids.mint()
@@ -2287,6 +2313,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let capAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(capAddr, label: GtTimerCapacityLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: capSeedConst, valueType: StdType.i64))
+
 	// The process store's two parallel arrays (handles + waiting GTs), each `__slab_alloc`'d once (slab-zeroed,
 	// so the count starts at 0) with its base published — parallel to the timer heap above.
 	let procRegionSizeConst = ids.mint()
@@ -2301,6 +2328,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let procGtsBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(procGtsBaseAddr, label: GtProcGtsBaseLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(procGtsBaseAddr, offset: 0, valueId: procGtsBase, valueType: StdType.i64))
+
 	// And the poller's private snapshot of the handle array — same capacity, allocated on the same road, so a
 	// change to `ProcStoreBytes` cannot move one without the other. See `GtProcWaitSnapshotLabel`.
 	let procSnapshotBase = ids.mint()
@@ -2308,6 +2336,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let procSnapshotBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(procSnapshotBaseAddr, label: GtProcWaitSnapshotLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(procSnapshotBaseAddr, offset: 0, valueId: procSnapshotBase, valueType: StdType.i64))
+
 	// ⚠ **THE 64 KB SYSCALL STACK IS NO LONGER ALLOCATED HERE (G1), NOR PER P (W213-C1).** It used to be ONE
 	// global region whose top was published to a `.data` word, and the invariant that made that safe was the
 	// prose *"single-M runs one thing at a time"* — which multi-M falsifies by definition, as silent
@@ -2322,6 +2351,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
 	module.appendOp(doInit, op: StdOp.storeIndirect(initDoneAddr, offset: 0, valueId: oneConst, valueType: StdType.i64))
+
 	// P1.5 slice 1a-ii: seed the IOCP substrate (port + completion thread + event + run-queue lock) HERE, at the
 	// first scheduler init — BEFORE any `__gt_spawn`/`__gt_enqueue` can take the run-queue lock, and before any read
 	// completes on the thread. A void call mints an unread result id.
@@ -2329,6 +2359,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 		let ioInitResult = ids.mint()
 		module.appendOp(doInit, op: StdOp.call(ioInitResult, callee: IoInitName, args: ValueIdArray.create()))
 	end 'ioInit'
+
 	module.setTerminator(doInit, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -2429,6 +2460,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 		coroutine gives emitLoadField(module, block: initBlock, record: emitLoadCurrentGt(module, block: initBlock, ids: ids), offset: GtOffOwner, ids: ids)
 		greenThread gives gt
 	end 'ownerOf'
+
 	emitStoreField(module, block: initBlock, record: gt, offset: GtOffOwner, value: owner)
 
 	// ⭐ COMMIT A FRESH GtStackSize STACK (P1.5-B1a′). The STACK is variable-sized (the relocating morestack grows
@@ -2445,6 +2477,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+
 	// gt.stackGuard = stackBase + margin — the low-water mark the guarded function's prologue compares its
 	// projected stack pointer against (P1.5-B1a′). Below it, the prologue calls `__gt_morestack` to grow +
 	// relocate first.
@@ -2577,6 +2610,7 @@ end 'buildGtReady'
 export union GtQueueEnds
 	// The GLOBAL run queue — its head and tail are two `.data` words. ⚠ Unreached until `spawn`.
 	globalLabels
+
 	// A green thread's own coroutine queue — its head and tail are two fields of the struct `owner`
 	// addresses. `owner` must be minted in a block that dominates every block the emitter writes into.
 	ownerFields(owner ValueId)
@@ -2819,6 +2853,7 @@ function buildGtCoroEnqueue(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"empty")
 
 	emitParams(module, block: entry, count: 1)
+
 	// ⭐ A coroutine becoming runnable is PROGRESS, and this is the door the IOCP completion thread
 	// reaches directly — the one publish that does not come through `__sched_publish*` (A1).
 	emitSchedNoteProgress(module, block: entry, ids: ids)
@@ -2939,11 +2974,13 @@ function buildGtNowNs(module StdModule)
 
 	let billion = ids.mint()
 	module.appendOp(entry, op: StdOp.const(billion, value: NanosPerSecond, valueType: StdType.i64))
+
 	// wholeSecs = ticks / freq ; wholeNs = wholeSecs * 1e9.
 	let wholeSecs = ids.mint()
 	module.appendOp(entry, op: StdOp.div(wholeSecs, lhs: ticks, rhs: freq, signedness: IntegerSignedness.signed))
 	let wholeNs = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(wholeNs, lhs: wholeSecs, rhs: billion, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+
 	// fracNs = ((ticks mod freq) * 1e9) / freq — the sub-second remainder, exact and overflow-free.
 	let rem = ids.mint()
 	module.appendOp(entry, op: StdOp.mod(rem, lhs: ticks, rhs: freq, signedness: IntegerSignedness.signed))
@@ -3219,6 +3256,7 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	var copied = emitForwardCopy(module, func: func, cur: grow, dest: newBase, src: oldBase, byteCount: liveBytes, ids: ids)
 	module.appendOp(copied, op: StdOp.storeIndirect(growBaseAddr, offset: 0, valueId: newBase, valueType: StdType.i64))
 	module.appendOp(copied, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: newCapacity, valueType: StdType.i64))
+
 	// The republished base is what every reader consults, so the old region is unreachable the instant the
 	// store above lands — and on the FIRST grow `oldBase` is a real `__gt_init` region, never null, because the
 	// store is allocated eagerly there rather than lazily here.
@@ -3226,17 +3264,20 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
 	let heapBase = emitLoadGlobalWord(module, block: doAdd, label: GtTimerHeapBaseLabel, ids: ids)
+
 	// Stamp the arm sequence and bump the dispenser. Under the lock like every other word of the store, so two
 	// Ms arming at once cannot take the same number — which is exactly what the tie rule needs of it.
 	let seq = emitLoadGlobalWord(module, block: doAdd, label: GtTimerSeqLabel, ids: ids)
 	let oneConst = emitConst(module, block: doAdd, value: 1, ids: ids)
 	let nextSeq = emitBin(module, block: doAdd, a: seq, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreGlobalWord(module, block: doAdd, label: GtTimerSeqLabel, value: nextSeq, ids: ids)
+
 	// heap[count] = {deadline, gt, seq}; count++.
 	let entryAddr = emitTimerEntryAddr(module, block: doAdd, ids: ids, heapBase: heapBase, index: count)
 	emitTimerEntryStore(module, block: doAdd, addr: entryAddr, entry: TimerEntry.create(deadline, gt: gt, seq: seq))
 	let newCount = emitBin(module, block: doAdd, a: count, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+
 	// The appended entry is the only one out of place, so sifting it up restores the whole heap.
 	emitTimerSiftUp(module, func: func, ids: ids, startBlock: doAdd, heapBase: heapBase, startIndex: count, cont: doneBlock)
 
@@ -3734,9 +3775,11 @@ enum DriveExit
 	// `__gt_drive_until(targetGt, targetStatus)` — an AWAIT, a top-level `sleep`, a `runProcess` or a
 	// yielding read: run until ONE named thread reaches one named status.
 	statusEquals
+
 	// `__gt_await_any(record)` — a SELECT: run until ANY element of the argument array has completed, and
 	// answer WHICH. See `GtAwaitAnyName`; the test itself is `__gt_any_completed`.
 	anyCompleted
+
 	// `__gt_drain_exit()` — the TEARDOWN: run until `__gt_live_count` reaches zero, i.e. until every green
 	// thread anybody still owns has finished. It takes no argument because the question names nobody.
 	liveCountZero
@@ -3827,6 +3870,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		anyCompleted gives oneI64Param()
 		liveCountZero gives StdTypeArray.create()
 	end 'paramTypesOf'
+
 	let paramCount = paramTypes.count()
 
 	// ⭐ **WHAT EACH DRIVE ANSWERS WHEN IT STOPS.** Only the SELECT has something to say: the INDEX its exit
@@ -3838,6 +3882,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		statusEquals or
 			liveCountZero gives StdReturnType.void
 	end 'returnTypeOf'
+
 	var func = IrFunction.createFromStd(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
@@ -3862,6 +3907,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: paramCount)
+
 	// ⚠ **PARAMETER 0 IS NAMED TWICE BECAUSE THE THREE EXITS ASK DIFFERENT QUESTIONS OF IT** — a GT pointer
 	// for `statusEquals`, an `Array with Promise …` record for `anyCompleted` — and each name is read only by
 	// its own arm below. (`liveCountZero` takes no parameters at all and reads neither.)
@@ -3877,6 +3923,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⚠ The guard is `stdReturnTypeIsVoid` and not a fourth `match exit`: the signature is where "does this
 	// drive answer anything?" was already decided, and asking the enum again is where the two could disagree.
 	var doneIndex = 0 as ValueId
+
 	if not stdReturnTypeIsVoid(returnType) 'doneCarriesTheAnswer'
 		doneIndex = ids.mint()
 		doneBlock.blockArgs.push(IrBlockArg.create(doneIndex, argType: StdType.i64))
@@ -3898,6 +3945,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		statusEquals or
 			liveCountZero then break 'initBeforeTheFirstSchedulerRead'
 	end 'initBeforeTheFirstSchedulerRead'
+
 	// The M this driver runs on, read ONCE in `entry` — which dominates every block below, so the run and
 	// park arms address it through the same pointer rather than re-reading TLS at each of them.
 	//
@@ -3908,6 +3956,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// stable for the life of the OS thread.
 	let driverMachine = emitLoadCurrentM(module, block: entry, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: driverMachine, offset: MOffCurrentGt, ids: ids)
+
 	// ⭐⭐ **THE GREEN THREAD WHOSE COROUTINES THIS DRIVER MAY RUN (EC10)** — read here for the same reason
 	// `selfGt` is: `entry` dominates every block. `selfGt` is a driver in a CHAIN (GT0 for a top-level await, a
 	// coroutine for a nested one) and every link of that chain has the SAME owner, so the queue this loop
@@ -3980,6 +4029,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.appendOp(netpoll, op: StdOp.call(earliest, callee: GtTimerEarliestName, args: ValueIdArray.create()))
 	let noProcs = ids.mint()
 	module.appendOp(netpoll, op: StdOp.cmp(noProcs, lhs: pc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+
 	// ⭐ P1.5 slice 1a-ii: when the module reads pipes, the pc==0 arm first checks whether an OVERLAPPED read is
 	// in flight (`__io_pending > 0`) and, if so, BLOCKS ON `__io_done_event` (bounded by the earliest timer, else
 	// INFINITE) instead of on the timer alone — the completion thread wakes it. `pc >= 1` (a parked child) keeps
@@ -3987,6 +4037,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// never co-schedule here (that combined wait set is a later slice). Without `usesIocp` the arm is byte-identical
 	// to the pre-slice form (straight to `timerOnly`).
 	var pcZeroTargetId = timerOnly.id
+
 	if usesCompletionPort 'ioNetpoll'
 		var checkIo = module.addBlock(func, label: b"checkio")
 		var ioPending = module.addBlock(func, label: b"iopending")
@@ -4027,6 +4078,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		module.appendOp(ioBounded, op: StdOp.call(ioTimerCheckResult, callee: GtTimerCheckName, args: argsOf(ioNowAfter)))
 		module.setTerminator(ioBounded, op: StdOp.branch(loopHdr.id))
 	end 'ioNetpoll'
+
 	module.setTerminator(netpoll, op: StdOp.condBranch(noProcs, thenBlockId: pcZeroTargetId, elseBlockId: haveProcs.id))
 
 	// timerOnly (pc == 0): no timer → nothing this driver can wait ON, so consult the other Ms before bailing;
@@ -4090,9 +4142,11 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	let procCount = ids.mint()
 	module.appendOp(lookQueues, op: StdOp.call(procCount, callee: GtProcCountName, args: ValueIdArray.create()))
 	lookHit = emitOrIfNonZero(module, block: lookQueues, hit: lookHit, word: procCount, zero: zeroConst, ids: ids)
+
 	if usesCompletionPort 'aReadInFlightIsAWakeupSource'
 		lookHit = emitOrIfNonZero(module, block: lookQueues, hit: lookHit, word: emitLoadGlobalWord(module, block: lookQueues, label: IoPendingLabel, ids: ids), zero: zeroConst, ids: ids)
 	end 'aReadInFlightIsAWakeupSource'
+
 	let lookMissed = emitCmp(module, block: lookQueues, a: lookHit, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(lookQueues, op: StdOp.condBranch(lookMissed, thenBlockId: census.id, elseBlockId: lookFound.id))
 
@@ -4114,11 +4168,13 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// abort does not care, and pays the same two ops rather than a second spelling of the road.
 	emitSchedClearQuiescent(module, block: nothingLeft, m: driverMachine, ids: ids)
 	emitSchedLockLeave(module, block: nothingLeft, ids: ids)
+
 	match exit 'nothingLeftMeans'
 		statusEquals or
 			anyCompleted then emitRuntimeAbort(module, func: func, block: nothingLeft, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 		liveCountZero then module.setTerminator(nothingLeft, op: StdOp.branch(doneBlock.id))
 	end 'nothingLeftMeans'
+
 	// ⭐⭐⭐ **THE DRIVER'S TWO BLIND WAITS, AS ONE INTERRUPTIBLE PARK (W219).** `awaitOtherM` and `sleepwait`
 	// are the two arms where this driver has nothing to run and nothing to WAIT ON — no parked child, no read
 	// in flight, only a party on another M that may answer its promise. Both used to be a plain `osSleepMs`,
@@ -4351,6 +4407,7 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// which shifted every later id by two and made the byte-identical claim below false by construction.
 	var awaitedTraceId = 0 as ValueId
 	var alreadyDone = 0 as ValueId
+
 	if asyncTrace 'readAwaitTraceState'
 		awaitedTraceId = ids.mint()
 		alreadyDone = ids.mint()
@@ -4371,10 +4428,12 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// points a program took rather than collapsing them (`specs/async-tcp.md`'s cases pin the second
 	// spelling against `async-await.md`'s first).
 	let awaitTag = tags.tryAwaitTag if throwing else tags.awaitTag
+
 	// ⚠ **FROM HERE `cur` IS THE ONLY NAME FOR THE ENTRY BLOCK, AND `entry` IS SPENT.** Both bindings are
 	// mutable and mutability is what decides move-vs-alias, so this bind MOVES — naming `entry` again below
 	// is use-after-move (E3102), not a second reference to a block the module also holds.
 	var cur = entry
+
 	if asyncTrace 'emitAwaitTrace'
 		var immediateBlock = module.addBlock(func, label: b"awaitimm")
 		var yieldedBlock = module.addBlock(func, label: b"awaityield")
@@ -4395,6 +4454,7 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// garbage R10 never reaches a reader.
 	let result = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(result, addrId: promise, offset: GtOffResult, valueType: StdType.i64))
+
 	// ⭐⭐ **RELEASE THE THREAD'S ARGUMENTS — WITH THE RESULT CONSUMED (A2).** The `+1` on the awaited value
 	// has just been loaded above and is handed to the awaiting frame, which enrols it and drops it once
 	// (`Parser.emitAwaitOp`); releasing it here as well is a DOUBLE FREE, and `consumedByAwaiter` is what says
@@ -4403,6 +4463,7 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 	// of those), so the reference the spawn took on the thread's behalf is still outstanding and is given back
 	// exactly here. See `Runtime/AsyncReleaser.maxon` for the other call site and for what skipping it costs.
 	var exit = emitGtReleaserCall(module, func: func, ids: ids, startBlock: cur, gt: promise, resultDisposition: AsyncResultDisposition.consumedByAwaiter)
+
 	// ⭐ P1.5-B1c #87 — GIVE UP the awaited promise HERE, in the awaiter, NOT at completion. The struct holds
 	// `result`/`threw` until this await reads them, so it is dead only AFTER an await — and an await is the
 	// one point that proves the promise is finished with. Reclaiming at COMPLETION (in `__gt_drive_until`) was
@@ -4653,6 +4714,7 @@ function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueM
 	let waiter = emitLoadField(module, block: block, record: gt, offset: GtOffWaiter, ids: ids)
 	let noDriver = emitConst(module, block: block, value: 0, ids: ids)
 	let neverRan = emitCmp(module, block: block, a: waiter, b: noDriver, pred: StdCmpPred.eq, ids: ids)
+
 	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise AND is the logical one.
 	return emitBin(module, block: block, a: renounced, b: neverRan, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitGtIsDropped'
@@ -4949,6 +5011,7 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			osEnvBlockFree or
 			loadAcquire or
 			storeRelease then break 'k'
+
 		// The terminal question defines a file-type word, never the `completed` constant and never a load
 		// of the status word.
 		osHandleFileType then break 'k'
@@ -5080,6 +5143,7 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			osEnvBlockFree or
 			loadAcquire or
 			storeRelease then break 'k'
+
 		// The terminal question is neither a compare nor a store, so it can be neither the observation nor
 		// the publication this pass refuses an unordered form of.
 		osHandleFileType then break 'k'
@@ -5095,6 +5159,7 @@ function requireOrderedPublication(func IrFunction, offset ByteOffset, valueId V
 	if offset != GtOffStatus 'notTheStatusWord'
 		return
 	end 'notTheStatusWord'
+
 	if not completedConsts.contains(valueId) 'notTheCompletedConstant'
 		return
 	end 'notTheCompletedConstant'
@@ -5113,6 +5178,7 @@ end 'requireOrderedPublication'
 function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
 	let lhsIsPlainRead = plainStatusLoads.contains(lhs) and completedConsts.contains(rhs)
 	let rhsIsPlainRead = plainStatusLoads.contains(rhs) and completedConsts.contains(lhs)
+
 	if not (lhsIsPlainRead or rhsIsPlainRead) 'notTheCompletedTest'
 		return
 	end 'notTheCompletedTest'
@@ -5221,6 +5287,7 @@ function buildGtCellComplete(module StdModule)
 
 	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: result)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: threw)
+
 	// ⭐ The RELEASE that makes the two stores above visible to the awaiting M — see
 	// `emitGtPublishCompleted`, which is also why the store ORDER here still matters.
 	emitGtPublishCompleted(module, block: entry, gt: cell, ids: ids)
@@ -5567,6 +5634,7 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	// ioPendingDec: __io_pending-- ; → the drop's chosen exit. Runs for owned and shared alike.
 	let dropPendingDebit = emitConst(module, block: ioPendingDec, value: OneFewer, ids: ids)
 	_ = emitGlobalAccumulate(module, block: ioPendingDec, label: IoPendingLabel, delta: dropPendingDebit, multiM: true, ids: ids)
+
 	// ⭐ **AND THE ABANDONED READ'S BUFFER GOES BACK.** `__gt_io_read` published it to `gt.ioScratch` before
 	// issuing the read and will never return to free it — this is the only site that can. It runs AFTER the
 	// drain handshake above, which is what proves the completion thread has finished writing into it. A
@@ -5643,6 +5711,7 @@ function buildGtRunnerDone(module StdModule)
 	let stackBase = emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids)
 	let stackZero = emitConst(module, block: entry, value: 0, ids: ids)
 	let noStack = emitCmp(module, block: entry, a: stackBase, b: stackZero, pred: StdCmpPred.eq, ids: ids)
+
 	// ⚠ Read HERE, in the block that dominates everything, because the teardown arrival below may hand the
 	// struct to `__gt_reclaim` — see the wake at `runnerdone` for what it is for and why the pointer is safe
 	// to carry past the reclaim.
@@ -5846,6 +5915,7 @@ function emitGtProcStoreRemove(module StdModule, func IrFunction, ids ValueMinte
 	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let lastOff = ids.mint()
 	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+
 	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down (Finding 3).
 	emitProcSwapDown(module, block: removeAt, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: curOff)
 	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
@@ -6189,6 +6259,7 @@ function buildGtProcAddLocked(module StdModule)
 	module.appendOp(doAdd, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
 	let entryOff = ids.mint()
 	module.appendOp(doAdd, op: StdOp.binOp(entryOff, lhs: count, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+
 	// procHandles[count] = handle.
 	let handlesBaseAddr = ids.mint()
 	module.appendOp(doAdd, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
@@ -6197,6 +6268,7 @@ function buildGtProcAddLocked(module StdModule)
 	let handleSlot = ids.mint()
 	module.appendOp(doAdd, op: StdOp.binOp(handleSlot, lhs: handlesBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(doAdd, op: StdOp.storeIndirect(handleSlot, offset: 0, valueId: handle, valueType: StdType.i64))
+
 	// procGts[count] = gt.
 	let gtsBaseAddr = ids.mint()
 	module.appendOp(doAdd, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
@@ -6205,17 +6277,20 @@ function buildGtProcAddLocked(module StdModule)
 	let gtSlot = ids.mint()
 	module.appendOp(doAdd, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(doAdd, op: StdOp.storeIndirect(gtSlot, offset: 0, valueId: gt, valueType: StdType.i64))
+
 	// count++.
 	let oneConst = ids.mint()
 	module.appendOp(doAdd, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
 	let newCount = ids.mint()
 	module.appendOp(doAdd, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+
 	// gt.status = waiting ; gt.io_handle = handle.
 	let waitingConst = ids.mint()
 	module.appendOp(doAdd, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
 	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
 	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
+
 	// The child was parked — report no error so the caller yields and later reaps.
 	let addedOk = ids.mint()
 	module.appendOp(doAdd, op: StdOp.const(addedOk, value: NoErrorFlag, valueType: StdType.i64))
@@ -6274,6 +6349,7 @@ export function emitGtRunOne(module StdModule, run IrBlock, handOff IrBlock, g V
 	let switchResult = ids.mint()
 	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: twoArgs(selfGt, second: g)))
 	emitStoreField(module, block: run, record: m, offset: MOffCurrentGt, value: selfGt)
+
 	// ⚠ ACQUIRE, THOUGH THIS ONE READ IS SAME-THREAD: the trampoline wrote `completed` on THIS M, just
 	// before the switch that landed here, so program order already covers it. It comes through the ordered
 	// door anyway because the alternative is a carve-out — "this reader of `completed` is plain because of
@@ -6281,6 +6357,7 @@ export function emitGtRunOne(module StdModule, run IrBlock, handOff IrBlock, g V
 	// has just performed a context switch.
 	let gStatus = emitGtLoadPublishedStatus(module, block: run, gt: g, ids: ids)
 	let gCompleted = emitGtStatusEquals(module, block: run, status: gStatus, want: GtStatusCompleted, ids: ids)
+
 	// ⭐ GIVE UP ONLY A COMPLETED g. A merely-parked (waiting) g keeps its stack — it will resume on it.
 	module.setTerminator(run, op: StdOp.condBranch(gCompleted, thenBlockId: handOff.id, elseBlockId: continuation.id))
 
@@ -6311,9 +6388,11 @@ end 'emitGtRunOne'
 // build never reaches this function at all.
 function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 	var paramTypes = StdTypeArray.create()
+
 	for _ in 0 upto GtTraceEmitArity 'eachParam'
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
+
 	var func = IrFunction.createFromStd(GtTraceEmitName, returnType: StdReturnType.void, paramCount: GtTraceEmitArity as ParamCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(GtTraceEmitArity as ParamCount)
 
@@ -6376,11 +6455,13 @@ function emitGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTra
 
 	let suffixAddr = ids.mint()
 	let suffixLen = ids.mint()
+
 	if suffix.length == 0 'noSuffix'
 		module.appendOp(block, op: StdOp.const(suffixAddr, value: 0, valueType: StdType.i64))
 	end 'noSuffix' else 'haveSuffix'
 		module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: suffix.label))
 	end 'haveSuffix'
+
 	module.appendOp(block, op: StdOp.const(suffixLen, value: suffix.length, valueType: StdType.i64))
 	emitGtTraceLineOfSuffix(module, block: block, tag: tag, gtId: gtId, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 end 'emitGtTraceLine'
@@ -6449,17 +6530,21 @@ function buildGtIoPark(module StdModule)
 	// untraced one takes nothing and is byte-identical to the park built before the suffix existed.
 	var paramCount = 0 as ParamCount
 	var paramTypes = StdTypeArray.create()
+
 	if traced 'suffixParams'
 		paramCount = IoParkSuffixArity
 		paramTypes = twoI64Params()
 	end 'suffixParams'
+
 	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
+
 	if traced 'readSuffixParams'
 		emitParams(module, block: entry, count: paramCount)
 	end 'readSuffixParams'
+
 	let suffixAddr = 0 as ValueId
 	let suffixLen = 1 as ValueId
 
@@ -6471,6 +6556,7 @@ function buildGtIoPark(module StdModule)
 	// The trace pair BRACKETS the park: the yield line is emitted on the way down, the resume line after the
 	// scheduler has switched back into us. Both read the id afresh — see `emitCurrentGtTraceId`.
 	let traceIdBefore = emitCurrentGtTraceId(module, block: entry, ids: ids)
+
 	if traced 'yieldLine'
 		emitGtTraceLineOfSuffix(module, block: entry, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'yieldLine'
@@ -6480,9 +6566,11 @@ function buildGtIoPark(module StdModule)
 	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: now, ids: ids)
 
 	let traceIdAfter = emitCurrentGtTraceId(module, block: resumed, ids: ids)
+
 	if traced 'resumeLine'
 		emitGtTraceLineOfSuffix(module, block: resumed, tag: tags.ioResume, gtId: traceIdAfter, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'resumeLine'
+
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -6547,6 +6635,7 @@ export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperat
 	// here.
 	let tags = module.asyncTraceTags
 	var args = ValueIdArray.create()
+
 	if tags.tracesIoOperations() 'tracedBuild'
 		let tag = tags.ioTag(operation)
 		let suffixAddr = ids.mint()
@@ -6590,6 +6679,7 @@ function buildGtResched(module StdModule)
 	let reschedMachine = emitLoadCurrentM(module, block: entry, ids: ids)
 	let reschedProc = emitLoadField(module, block: entry, record: reschedMachine, offset: MOffCurrentP, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: reschedMachine, offset: MOffCurrentGt, ids: ids)
+
 	// The green thread whose coroutine queue is in play — `__gt_drive_until`'s `owner`, read for the same
 	// reason and in the block that dominates every arm below. For a green thread it is SELF, which is what
 	// makes the two arms below read two different queues from one load.
@@ -6843,6 +6933,7 @@ function buildGtProcCheck(module StdModule)
 	module.appendOp(afterFire, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let curOff = ids.mint()
 	module.appendOp(afterFire, op: StdOp.binOp(curOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+
 	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down (Finding 3).
 	emitProcSwapDown(module, block: afterFire, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: curOff)
 	module.setTerminator(afterFire, op: StdOp.branch(loopHdr.id))
@@ -6942,6 +7033,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// and 0 `dwCreationFlags` asks for no special creation — the exact two values this op's isel used to hard-zero
 	// before `stdlib/Subprocess.maxon`'s `Configuration` gave a caller something to say there.
 	let spawnDefaultsConst = emitConst(module, block: afterCopy, value: 0, ids: ids)
+
 	// MAC8: `cmBuf` is a whole COMMAND LINE the caller wrote, so on a lane whose primitive takes a vector it
 	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which emits nothing at
 	// all under the command-line shape.
@@ -6951,6 +7043,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+
 	// ⚠ **BOTH HANDLES COME OUT BEFORE THE RECORD GOES BACK, AND THAT IS WHY THE RELEASE IS HERE RATHER THAN
 	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command line and written the
 	// PROCESS_INFORMATION, so all three regions are dead at this point on EVERY path below — the throw, the
@@ -6985,6 +7078,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// ⚠ It asks `__gt_proc_count` rather than a reserve entry point of its own, because a reserve would be
 	// exactly that call plus this compare — and the count is already a function for the netpoll.
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
+
 	// selfGt = this M's current GT, read here because `reap` needs it once we are running again.
 	let selfGt = emitLoadCurrentGt(module, block: spawnOk, ids: ids)
 	let parkedCount = ids.mint()
@@ -7053,6 +7147,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
 	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(codePtr)))
 	module.appendOp(reapExit, op: StdOp.osCloseHandle(reapHandle))
+
 	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
 	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
 	let reapNoError = ids.mint()
@@ -7092,12 +7187,14 @@ function buildIoInit(module StdModule)
 	let iocpAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(iocpAddr, offset: 0, valueId: iocp, valueType: StdType.i64))
+
 	// __io_done_event = CreateEventA(NULL, FALSE=auto-reset, FALSE, NULL).
 	let event = ids.mint()
 	module.appendOp(doInit, op: StdOp.osEventCreate(event))
 	let eventAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(eventAddr, label: IoDoneEventLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(eventAddr, offset: 0, valueId: event, valueType: StdType.i64))
+
 	// ⚠ **THE RUN-QUEUE LOCK IS NO LONGER ALLOCATED HERE (G1).** `__sched_init_procs` owns it, because it now
 	// guards the queue against every worker M rather than only against this file's completion thread — and
 	// `__gt_init` calls that before it calls this, so the lock exists before the thread below can take it.
@@ -7106,11 +7203,13 @@ function buildIoInit(module StdModule)
 	let entryPtr = ids.mint()
 	module.appendOp(doInit, op: StdOp.funcAddr(entryPtr, funcName: IoCompletionLoopName))
 	let threadHandle = ids.mint()
+
 	// The completion loop reads every word it needs from `.data`, so it is passed NOTHING — the one caller of
 	// `osThreadCreate` that wants a null `lpParameter`, where a worker M is told its P through exactly this
 	// operand. See the op for why the null is a constant HERE rather than baked into the lowering.
 	let noThreadArg = emitConst(module, block: doInit, value: 0, ids: ids)
 	module.appendOp(doInit, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: noThreadArg))
+
 	// __io_init_done = 1.
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
@@ -7208,6 +7307,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	module.appendOp(hexBody, op: StdOp.const(alphaThreshold, value: HexAlphaThreshold, valueType: StdType.i64))
 	let isDigit = ids.mint()
 	module.appendOp(hexBody, op: StdOp.cmp(isDigit, lhs: nibble, rhs: alphaThreshold, pred: StdCmpPred.lt, operandType: StdType.i64))
+
 	// `i` (hexHdr's loop-carried block arg) DOMINATES hexBody/digitArm/letterArm/storeArm, so it is read directly
 	// there — only `ch` (defined in one of the two arms) is a merge that needs a storeArm block arg.
 	module.setTerminator(hexBody, op: StdOp.condBranch(isDigit, thenBlockId: digitArm.id, elseBlockId: letterArm.id))
@@ -7308,6 +7408,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	let saInheritConst = ids.mint()
 	module.appendOp(afterName, op: StdOp.const(saInheritConst, value: SecurityAttributesInheritable as ParsedInt, valueType: StdType.i64))
 	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
+
 	// A 16-byte region: readPtr slot @0, writePtr slot @8 — the two out-params for osPipeCreate.
 	let slotsSizeConst = ids.mint()
 	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: 16, valueType: StdType.i64))
@@ -7326,6 +7427,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(afterName, op: StdOp.loadIndirect(readEnd, addrId: readPtr, offset: 0, valueType: StdType.i64))
 	let writeEnd = ids.mint()
 	module.appendOp(afterName, op: StdOp.loadIndirect(writeEnd, addrId: writePtr, offset: 0, valueType: StdType.i64))
+
 	// The pipe exists and both ends are in registers, so the three regions that described it are dead: the
 	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
 	// out-param block has been emptied. `writePtr` is an interior pointer INTO `readPtr`'s block and so is not
@@ -7333,6 +7435,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(namePtr)))
 	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(saPtr)))
 	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(readPtr)))
+
 	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
 	let cmdlinePtr = ids.mint()
@@ -7371,8 +7474,10 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(afterCopy, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize as ParsedInt, valueType: StdType.i64))
 	let procInfoPtr = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+
 	// The one-shot read probe configures neither cwd nor creation flags — see `__gt_process_run`'s twin note.
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
+
 	// MAC8: the probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
 	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: probeSpawnDefaults))
@@ -7380,6 +7485,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+
 	// CreateProcessA has read the command line and the STARTUPINFOA and written the PROCESS_INFORMATION, so
 	// all three are dead on BOTH arms below — released once, before the branch, exactly as
 	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
@@ -7403,6 +7509,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
+
 	// The ONE region that outlives this function's straight-line code: the read buffer the completion thread
 	// writes into while we are parked, with `ReadFile`'s byte-count out-slot in its first word. Its pointer is
 	// published to `gt.ioScratch` BEFORE the read is issued, so a promise dropped mid-read has something to
@@ -7422,6 +7529,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(spawnOk, op: StdOp.binOp(bytesOutPtr, lhs: scratch, rhs: emitConst(module, block: spawnOk, value: IoReadBytesOutOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let selfGt = emitLoadCurrentGt(module, block: spawnOk, ids: ids)
 	module.appendOp(spawnOk, op: StdOp.storeIndirect(selfGt, offset: GtOffIoScratch, valueId: scratch, valueType: StdType.i64))
+
 	// The yielding overlapped read — the shared `__gt_subp_yield_read`, which owns the cross-thread park/resume
 	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
 	// count, 0 at a clean end of stream and `SubpReadFailedCount` on a failed read. The streaming API allocs its
@@ -7430,6 +7538,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	let rawRead = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(rawRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr, fifth: ownsPipeConst)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
+
 	// The read is over — the completion thread is done with the buffer, so the slot is cleared FIRST and then
 	// released. Clearing first is what stops a later drop of this same (recycled) GT from freeing a region the
 	// allocator has already handed to somebody else.
@@ -7628,9 +7737,11 @@ end 'isSubprocessRuntimeCallee'
 // (`usesStreaming`). Just the table pointer; the table itself and every buffer are `__slab_alloc`'d lazily.
 export function subpRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
+
 	// The table POINTER is created once, under `__sched_lock`, and never republished or freed — so every later
 	// read of it is a read of a sealed word, and the per-SLOT claim is the CAS in `buildSubpSpawnCore`.
 	pushRuntimeGlobal(out, label: SubpTableLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+
 	// ⚠ **THE ONE SLOT WHOSE *USEFULNESS* DEGRADES UNDER MULTI-M WHERE ITS SAFETY DOES NOT, AND THAT
 	// DISTINCTION IS THE WHOLE OF WHY IT IS CLASSIFIED RATHER THAN FIXED.** It is one aligned machine word
 	// written whole and read whole, so nothing tears and every value a reader can observe is a real Win32
@@ -7855,6 +7966,7 @@ function buildSubpYieldRead(module StdModule)
 	// drain has published the park. Written before the switch, it is simply in place when that becomes true.
 	let parkPendingCredit = emitConst(module, block: park, value: OneMore, ids: ids)
 	_ = emitGlobalAccumulate(module, block: park, label: IoPendingLabel, delta: parkPendingCredit, multiM: true, ids: ids)
+
 	// Tag pipe ownership into io_handle's spare low bit (1 = one-shot/owned, 0 = streaming/table) — the drop
 	// cancel arm masks it off and branches its CloseHandle on it. Kernel HANDLEs are 4-aligned, so bit 0 is free;
 	// this avoids a dedicated GT field (and the +8-byte struct growth it would cost every async program).
@@ -8074,6 +8186,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let initResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
 	let negOne = emitConst(module, block: entry, value: -1, ids: ids)
+
 	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK (G2), AND ONLY THE CREATION DOES.** Test-then-
 	// allocate-then-store is a read-modify-write: two Ms both observing the null word would both
 	// `__slab_alloc` a 64-slot region and one of the two would be lost, along with every handle a caller had
@@ -8187,6 +8300,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitSubpRecordLastError(module, block: spawnFail, ids: ids)
 	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, handle: slotIdx)
 	emitSubpCloseSlotHandles(module, block: spawnFail, ids: ids, slot: slotF, childScratch: childScratch)
+
 	// ⭐ **AND GIVE THE CLAIM BACK.** The scan's CAS took this slot before any of the stdio setup ran, so this
 	// — the only way out of this function that produced no handle — is what returns it. Without it the table
 	// would lose one of its sixty-four slots per failed spawn.
@@ -8199,6 +8313,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let hThread = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoHThreadOffset, ids: ids)
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	emitSubpCloseOwnedChildEnds(module, block: spawnOk, ids: ids, childScratch: childScratch)
+
 	// ⚠ **AN i64 LOAD AND A MASK, NOT A `u32` LOAD.** `dwProcessId` is a DWORD with `dwThreadId` packed
 	// immediately after it, and the compiler's memory-access forms stop at a byte for unsigned types
 	// (`StdLoweringShared.accessWidthFor` panics on `u32`), so the eight-byte read takes BOTH DWORDs and the
@@ -8210,6 +8325,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
 	let zeroB = emitConst(module, block: spawnOk, value: 0, ids: ids)
+
 	// Both streams start `open`. Written from the declaration rather than left to the slab's zero, because a
 	// SLOT IS REUSED: the previous occupant's latched state would otherwise still be sitting here.
 	let openState = emitConst(module, block: spawnOk, value: streamState.tagOfCase(SubprocessStreamOpenCaseName), ids: ids)
@@ -8225,6 +8341,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
 	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpSlotWriteCap)
 	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as ParsedInt)
+
 	// ⭐ Bump the generation so any reader still parked on the PREVIOUS occupant of this slot sees a mismatch
 	// on resume and writes nothing back (see `SubpSlotGeneration`). This is the point the slot becomes a live
 	// HANDLE — the SLOT itself was taken at the scan, by the CAS on `inUse`, which is also why nothing stores
@@ -8234,6 +8351,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let oneGen = emitConst(module, block: afterBytesOut, value: 1, ids: ids)
 	let genNext = emitBin(module, block: afterBytesOut, a: genPrev, b: oneGen, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, value: genNext)
+
 	// ⭐ A DETACHED spawn answers the child's PID and hands the slot straight back. The slot is claimed first and
 	// released here rather than skipped, because releasing is what CLOSES the process handle and the three pipe
 	// ends — a detached child the parent still holds a handle to is a leaked kernel object per spawn, and the
@@ -8308,11 +8426,13 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 	let path = ids.mint()
 	openArm.blockArgs.push(IrBlockArg.create(path, argType: StdType.i64))
 	let opened = ids.mint()
+
 	if forWrite 'writeEnd'
 		module.appendOp(openArm, op: StdOp.osFileOpenWrite(opened, pathPtrId: path))
 	end 'writeEnd' else 'readEnd'
 		module.appendOp(openArm, op: StdOp.osFileOpenRead(opened, pathPtrId: path))
 	end 'readEnd'
+
 	// ⚠⚠ **THE OPEN IS CHECKED, AND IT WAS NOT — WHICH MADE A FAILED OPEN A SILENT SUCCESS.** `CreateFileA`
 	// answers `INVALID_HANDLE_VALUE` (-1), and -1 in a STARTUPINFO under `bInheritHandles=TRUE` does not stop
 	// `CreateProcessA`: MEASURED before this test existed, `InputSource.file("Z:/no/such/dir/nope.txt")`
@@ -8360,6 +8480,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let data = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinData, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, handle: slotIdx)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+
 	// A non-pipe stdin leaves ALL THREE of these 0, which is what makes the drain loop's "is there a write
 	// end?", "is there a payload?" and "may I push it yet?" plain word tests rather than kind tests repeated
 	// one pass later.
@@ -8438,6 +8559,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let streamBaseConst = emitConst(module, block: cur, value: streamBase as ParsedInt, ids: ids)
 	let stream = emitBin(module, block: cur, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+
 	// A stream with no pipe leaves its read end 0, which is what the drain loop reads as "nothing to collect".
 	emitStoreField(module, block: cur, record: stream, offset: SubpStreamReadEnd, value: zero)
 	let collectConst = emitConst(module, block: cur, value: SubpOutCollect, ids: ids)
@@ -8532,6 +8654,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	let zeroT = emitConst(module, block: afterCopy, value: 0, ids: ids)
 	let nulAddr = emitBin(module, block: afterCopy, a: cmBuf, b: cmdLen, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroT, valueType: StdType.u8))
+
 	// The line the caller wrote becomes `/bin/sh -c <line>` on a lane whose primitive takes a vector, and
 	// stays exactly itself under the command-line shape — the same one call `__gt_process_run` makes.
 	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
@@ -8664,6 +8787,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	let bufLenD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
 	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+
 	// ownsPipe = 0: the read pipe is TABLE-owned, so a promise dropped mid-read must NOT close it — the cancel
 	// arm cancels+drains, leaves it open for the next read on this handle, and `subpRelease` closes it.
 	let sharedPipeConst = emitConst(module, block: doRead, value: 0, ids: ids)
@@ -8708,6 +8832,7 @@ end 'emitSubpTopUpStream'
 enum LineReadWait
 	// Refill and PARK until a line arrives or the stream ends.
 	untilALineArrives
+
 	// Refill only from bytes the pipe already holds, and answer "" rather than wait.
 	onlyWhatIsBuffered
 end 'LineReadWait'
@@ -8847,12 +8972,14 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	// readMore: coarse per-line cap (a newline-less stream cannot grow unbounded) → treat as a line; else grow-check.
 	let bufLenM = emitLoadField(module, block: readMore, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let overCap = emitCmp(module, block: readMore, a: bufLenM, b: maxLineBytes, pred: StdCmpPred.ge, ids: ids)
+
 	// The BLOCK ID rather than the block: binding a block here would MOVE `growCheck`, which the top-up
 	// below still needs.
 	let refillEntry = match wait 'wait'
 		untilALineArrives gives growCheck.id
 		onlyWhatIsBuffered gives emitSubpPeekBeforeRefill(module, func: func, ids: ids, readEnd: readEnd, bytesOutPtr: bytesOutPtr, refill: growCheck).id
 	end 'wait'
+
 	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: refillEntry))
 
 	// The top-up — grow, park on the read, and either latch why the stream stopped or publish the new
@@ -9216,6 +9343,7 @@ function installSubpRuntime(module StdModule, target Target, streamState EnumLay
 	buildSubpReadLine(module, name: SubpTryReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
 	buildSubpReadLine(module, name: SubpTryReadErrLineName, streamBase: SubpStderrBase, streamState: streamState, wait: LineReadWait.onlyWhatIsBuffered)
 	buildSubpReadExact(module, streamState: streamState)
+
 	// The two per-stream state queries, beside the readers whose empty answer they are the discriminator for.
 	buildSubpStreamStateQuery(module, name: SubpOutStateName, streamBase: SubpStdoutBase, streamState: streamState)
 	buildSubpStreamStateQuery(module, name: SubpErrStateName, streamBase: SubpStderrBase, streamState: streamState)
@@ -9223,6 +9351,7 @@ function installSubpRuntime(module StdModule, target Target, streamState EnumLay
 	buildSubpCloseStdin(module)
 	buildSubpWait(module)
 	buildSubpRelease(module)
+
 	// The ATTACHED half rides the same table, the same spawn core and the same release — see
 	// `SubprocessRuntime`'s header for why it is one substrate and not two.
 	installSubprocessRuntime(module, target: target)

@@ -62,10 +62,12 @@ end 'TrackedDeclKind'
 // the answer depend on which reader was visited last.
 type TrackedDecl
 	export var kind as TrackedDeclKind
+
 	// The key a reference is matched against — a function's compiled name, a type's name, or a binding's
 	// name. NOT the display spelling: `displayName` is what the message prints.
 	export var key as ByteArray
 	export var displayName as String
+
 	// The word the message calls this declaration: "function", "type", "typealias", "constant", "variable".
 	// The spec expectations quote it verbatim, so the spelling is pinned.
 	export var noun as String
@@ -149,11 +151,13 @@ type TrackedDecls
 	export var functionIndex as TrackedDeclIndexMap
 	export var typeIndex as TrackedDeclIndexMap
 	export var bindingIndex as TrackedDeclIndexMap
+
 	// Which files are the library's — the one fact `noteRead` needs about a reader that neither the
 	// reader's path nor the declaration carries. It rides here rather than as a fourth reader parameter
 	// threaded through every `note*` because it is a property of the PROGRAM and not of any one credit.
 	// Read by `noteRead` alone, which states the rule it serves.
 	export let libraryFiles as LibrarySourcePathSet
+
 	// The fourth index, and the only one keyed by something other than a source name — see
 	// `GlobalLabelIndexMap`. It rides here for `libraryFiles`' reason: it is a property of the PROGRAM
 	// rather than of any one credit, and threading it through every `note*` would say otherwise.
@@ -166,6 +170,7 @@ type TrackedDecls
 	export function add(decl TrackedDecl)
 		let at = self.entries.count()
 		self.entries.push(decl)
+
 		match decl.kind 'kind'
 			trackedFunction then self.indexUnder(self.functionIndex, key: decl.key, at: at)
 			trackedType then self.indexUnder(self.typeIndex, key: decl.key, at: at)
@@ -180,6 +185,7 @@ type TrackedDecls
 	// E3070. Built fresh, the borrow ends at the `if`.
 	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at TrackedDeclIndex)
 		var claimants = TrackedDeclIndexArray.create()
+
 		if let existing = try index.get(key) 'alreadyClaimed'
 			claimants.append(existing)
 		end 'alreadyClaimed'
@@ -197,6 +203,7 @@ end 'TrackedDecls'
 
 module function checkUnusedExports(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
 	let sources = try splitSourcePaths(project)
+
 	if sources.userFiles.count() < MinimumUserFilesToAudit 'tooFewFilesToHaveAnOutside'
 		return
 	end 'tooFewFilesToHaveAnOutside'
@@ -220,11 +227,13 @@ end 'checkUnusedExports'
 function splitSourcePaths(project Project) returns SourcePathSplit throws CompileError
 	var paths = FilePathArray.create()
 	var libraryFiles = LibrarySourcePathSet.create()
+
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
 			libraryFiles.insert(path.toString())
 			continue
 		end 'stdlibFile'
+
 		paths.push(path)
 	end 'eachFile'
 
@@ -239,8 +248,10 @@ end 'splitSourcePaths'
 // claimants a map happened to keep.
 function indexGlobalLabels(signatures ProgramSignatures) returns GlobalLabelIndexMap
 	var labels = GlobalLabelIndexMap.create()
+
 	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
 		let decl = signatures.declAt(i)
+
 		// An immutable binding is INLINED at its use and has no slot to take the address of, so it has no
 		// label at all — see `TopLevelDecl.dataLabel`.
 		if not decl.hasStorage or labels.contains(decl.dataLabel) 'noSlotOrAlreadyClaimed'
@@ -334,6 +345,7 @@ end 'namesAMethodOnATrackedType'
 function seedTypes(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
+
 		for decl in artifact.typeNameDecls 'eachTypeName'
 			seedOneTypeName(signatures, decl: decl, tracked: tracked)
 		end 'eachTypeName'
@@ -346,6 +358,7 @@ function seedOneTypeName(signatures ProgramSignatures, decl TypeNameDecl, tracke
 	end 'compilerOwned'
 
 	let visibility = declaredTypeVisibility(signatures, decl: decl)
+
 	if not tierIsAudited(visibility) 'narrowEnoughAlready'
 		return
 	end 'narrowEnoughAlready'
@@ -408,6 +421,7 @@ end 'typeDeclNoun'
 function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
 	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
 		let decl = signatures.declAt(i)
+
 		if not tierIsAudited(decl.visibility) 'narrowEnoughAlready'
 			continue
 		end 'narrowEnoughAlready'
@@ -433,6 +447,7 @@ end 'seedBindings'
 function collectReferences(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner)
 	for func in module.functions 'eachFunc'
 		let readerFilePath = func.sourceFilePath
+
 		if readerFilePath.toString().isEmpty() 'synthesizedReaderNamesNothingAnAuthorWrote'
 			continue
 		end 'synthesizedReaderNamesNothingAnAuthorWrote'
@@ -489,6 +504,7 @@ function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, track
 		value(t) gives t
 		void gives MaxonType.unresolved
 	end 'ret'
+
 	noteDeclaredType(signatures, tracked: tracked, type: returned, typeNames: moduleTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 
 	noteThrowsType(func, signatures: signatures, tracked: tracked, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
@@ -516,6 +532,7 @@ end 'noteSignatureTypes'
 function noteBodyReferences(module MaxonModule, func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, readerFilePath FilePath, readerModuleDirectory String)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("checkUnusedExports: blockRef from func.blockRefs not in module.blocks")
+
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("checkUnusedExports: opRef {opIdx} not in module.ops")
 			noteOpReferences(signatures, tracked: tracked, op: op, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
@@ -651,6 +668,7 @@ end 'noteCrossFileConstantReads'
 
 function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+
 	if let claimants = try tracked.functionIndex.get(name) 'tracked'
 		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'tracked'
@@ -686,6 +704,7 @@ function noteTypeNameTransitively(signatures ProgramSignatures, tracked TrackedD
 	if visited.contains(name) 'alreadyWalked'
 		return
 	end 'alreadyWalked'
+
 	visited.insert(name)
 
 	if let claimants = try tracked.typeIndex.get(name) 'tracked'
@@ -701,6 +720,7 @@ end 'noteTypeNameTransitively'
 function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	match signatures.structFor(name, readerFilePath: readerFilePath) 'lookup'
 		undeclared then return
+
 		// A layout the SIGNATURE INDEX built, so its field-type ids are the index's own — see
 		// `noteSignatureTypes` for what resolving them anywhere else costs.
 		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, typeNames: signatures.indexTypeNames(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
@@ -727,6 +747,7 @@ function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls
 	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
 	// than per field: it is a handle to the index's table, and this is the innermost loop of the walk.
 	let payloadTypeNames = signatures.indexTypeNames()
+
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
 			noteComponentType(signatures, tracked: tracked, type: field.declaredType, typeNames: payloadTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
@@ -764,6 +785,7 @@ function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, t
 		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 		genericInstance(id) then noteInstanceArgs(signatures, tracked: tracked, id: id, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
+
 		// A type PARAMETER's id is a digest, not a name, and the parameter itself names no declaration.
 		typeParameter then return
 		boolean or
@@ -782,6 +804,7 @@ end 'noteComponentType'
 // message is #56's third instance. So this hop RE-STATES the interner rather than forwarding its caller's.
 function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
 	let argTypeNames = signatures.indexTypeNames()
+
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
 		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'eachArg'
@@ -798,6 +821,7 @@ end 'noteComponentTypeName'
 
 function noteBindingName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+
 	if let claimants = try tracked.bindingIndex.get(name) 'tracked'
 		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'tracked'
@@ -824,10 +848,12 @@ end 'noteGlobalLabel'
 // to `moduleDirectoryContains`, whose own answer includes it.
 function noteRead(tracked TrackedDecls, index TrackedDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
 	var decl = tracked.at(index)
+
 	// Both spellings are taken ONCE and reused by the two tests below — the same-file test already needed
 	// both, and this runs at every credit the walk makes.
 	let readerPath = readerFilePath.toString()
 	let declPath = decl.declFilePath.toString()
+
 	if declPath.equals(readerPath) 'itsOwnFile'
 		return
 	end 'itsOwnFile'
@@ -855,6 +881,7 @@ function noteRead(tracked TrackedDecls, index TrackedDeclIndex, readerFilePath F
 	decl.sawOutsideFile = true
 
 	let strictlyNested = moduleDirectoryContains(decl.declModuleDirectory, inner: readerModuleDirectory) and not decl.declModuleDirectory.equals(readerModuleDirectory)
+
 	if not strictlyNested 'outsideTheSubtree'
 		decl.sawOutsideModule = true
 	end 'outsideTheSubtree'
@@ -966,6 +993,7 @@ end 'noteEveryClaimant'
 function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index TopLevelDeclIndex, readerFilePath FilePath, readerModuleDirectory String)
 	match signatures.globalSlotType(index) 'slot'
 		notFound then return
+
 		// `globalSlotType` ADOPTS the slot's type into the index's own interner — that is the whole reason
 		// it exists as its own door rather than taking a table — so the walk is told exactly that.
 		found(_, valueType, _, _) then noteDeclaredType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
