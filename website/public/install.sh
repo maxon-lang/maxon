@@ -62,8 +62,9 @@ main() {
 	mkdir -p "$tmp/unpacked"
 	tar -xzf "$tmp/$asset" -C "$tmp/unpacked"
 	unpacked="$tmp/unpacked/maxon-$version-$target"
-	[ -x "$unpacked/maxon" ] && [ -d "$unpacked/stdlib" ] \
-		|| fail "$asset does not hold maxon and stdlib/ in maxon-$version-$target/"
+	if [ ! -x "$unpacked/maxon" ] || [ ! -d "$unpacked/stdlib" ]; then
+		fail "$asset does not hold maxon and stdlib/ in maxon-$version-$target/"
+	fi
 
 	# Unpacked next to its destination and swapped in with two renames, so a failure leaves either the
 	# old install or the new one, never half of each.
