@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a release of the compiler — a release branch, the hand-written changelog entry, the website's release material, then the tag that publishes everything. Runs scripts/release-preflight.sh before the one irreversible step. Use when asked to cut, tag, ship or publish a release, or to rehearse one on a release branch. Invoke as `/release <X.Y.Z>`.
+description: Cut a release of the compiler — a release branch, the hand-written changelog entry, the website's release material, then the tag that publishes everything. Use when asked to cut, tag, ship or publish a release, or to rehearse one on a release branch. Invoke as `/release <X.Y.Z>`.
 ---
 
 # Cut a release
@@ -10,16 +10,21 @@ whole picture — the bootstrap chain, the double self-compile, the platform got
 its signing, the package managers, the verification afterwards. This file is the ORDER of operations
 and the checks, and it links out for every "why".
 
-⛔ **THE TAG IS THE IRREVERSIBLE STEP.** Everything before it is rehearsable and everything after it
-is public: `release.yml` fans out over four architectures, and a refusal twenty minutes in leaves a
-tag naming a release that never shipped. `scripts/release-preflight.sh` asks every question the
-pipeline will ask, while the answer is still cheap.
+⛔ **THE TAG IS THE STEP THAT PUBLISHES.** Everything before it is rehearsable. `release.yml`'s
+`guard` refuses a tag with no changelog entry or an unbumped extension before any runner starts, and
+every commit on the way here was already tested — so the protection is rehearsing, not re-checking.
 
 ## 0 · Rehearse first, unless the user says otherwise
 
-A `release/X.Y.Z` branch builds and natively suite-tests all four targets and **publishes nothing**.
-That is the whole point of it: a compiler built on that branch already reports `X.Y.Z`, so everything
-downstream can be exercised at the real version with no public tag riding on it.
+A `release/X.Y.Z` branch lets the whole pipeline run at the real version with no tag at all:
+`guard` recognises the ref and sets `publish=no`, so all four targets build and natively suite-test
+and **nothing is published**.
+
+⚠ **PUSHING THE BRANCH DOES NOT START IT.** `release.yml` triggers on `v*` tags and
+`workflow_dispatch` only, so a rehearsal is dispatched by hand:
+```bash
+gh workflow run release.yml --ref release/X.Y.Z
+```
 
 ⚠ **Say plainly which gates have never fired in anger.** As of v0.1.0, the `publish` job has never
 run at all — v0.1.0 was published by hand — and `guard`'s changelog and extension checks, and the
@@ -59,13 +64,7 @@ Three files under `website/` — the announcement post, the changelog page, and 
 the download links are built from. It **commits nothing**; the files are committed with everything
 else this branch carries.
 
-## 4 · Preflight, then tag
-
-```bash
-scripts/release-preflight.sh X.Y.Z
-```
-
-Every FAIL is a reason not to tag. Fix them and run it again.
+## 4 · Tag
 
 ```bash
 git add -A && git commit -m 'changelog: X.Y.Z'
@@ -101,8 +100,6 @@ branch until it happens.
 
 ## What this skill may not do
 
-- **Never tag while any preflight check FAILS.** The user may override, and then it is their call
-  stated in their words, not an inference from "it is probably fine".
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
   are set with `gh secret set`, which prompts and hides the input.
 - **Never sign the MSI by hand or work around a signing failure.** The signature is read back off the

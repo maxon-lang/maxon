@@ -322,9 +322,7 @@ which is why the tap needs its own.
 
 A release happens on a **release branch**, and the tag is what turns it into one.
 
-⭐ **`scripts/release-preflight.sh <X.Y.Z>` asks every question the pipeline will ask**, before the
-one irreversible step. Run it before the tag in step 4. `/release` is the agent-facing form of this
-same procedure and links back here for every "why".
+`/release` is the agent-facing form of this procedure and links back here for every "why".
 
 ### 1. Cut the branch
 
@@ -335,8 +333,11 @@ git checkout -b release/0.1.1
 ⭐ **The branch is what makes preparation possible.** A release usually takes more than one commit to
 get right — the changelog entry, a last documentation fix, a version-sensitive correction — and a
 compiler built on `release/X.Y.Z` already reports `X.Y.Z`, so everything can be rehearsed at the real
-version before anything is public. `release.yml` builds and suite-tests every push to such a branch
-and **publishes nothing**.
+version before anything is public. On such a branch `release.yml` builds and suite-tests all four
+targets and **publishes nothing**.
+
+⚠ **Pushing the branch does not start it** — `release.yml` triggers on `v*` tags and
+`workflow_dispatch` only. Rehearse with `gh workflow run release.yml --ref release/X.Y.Z`.
 
 ### 2. Write the changelog entry
 
