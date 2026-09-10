@@ -388,27 +388,104 @@ end 'main'
 0
 ```
 
-<!-- test: subprocess-not-found -->
+<!-- test: subprocess-run-bare-name-found-on-path -->
 <!-- unsupported-targets: wasm32-wasi -->
+⭐⭐ **A BARE NAME IS FOUND THROUGH `PATH` ON EVERY LANE.** Every other case here spawns a POSIX tool by
+absolute path (`/bin/echo`), so a Windows-only resolver went unnoticed: on Linux it read the whole
+`:`-separated `PATH` as one directory, missed, and handed a bare name to `execve`, which never searches
+`PATH`. MEASURED before the fix: `Executable.name("git")` failed to spawn on x64-linux and arm64-linux
+while succeeding on Windows and macOS — and the release pipeline, which reads its version out of `git`,
+built compilers that called themselves `dev`.
 ```maxon
 function main() returns ExitCode
-	// `definitely-not-a-real-binary-xyzzy` isn't on PATH and isn't a file.
-	// The runtime's PATH resolver returns NULL, the stdlib falls through to
-	// the bare name, and CreateProcessW fails with "file not found". The
-	// stdlib surfaces that as `spawnFailed`.
-	let exe = Executable.name("definitely-not-a-real-binary-xyzzy")
+	#if os(Windows)
+	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
-	var sawSpawnFailed = false
-	try Subprocess.run(exe, arguments: argv) otherwise (e) 'handler'
+	argv.push("/c")
+	argv.push("exit")
+	argv.push("7")
+	#else
+	let exe = Executable.name("sh")
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 7")
+	#endif
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
+	return result.exitCode() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: subprocess-bare-name-is-never-found-in-the-working-directory -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+⛔ **A BARE NAME MUST NOT RESOLVE AGAINST THE WORKING DIRECTORY ON POSIX.** The resolver tried the name
+"exactly as given" first — correct on Windows, where the current directory is part of the search, and a
+hole on POSIX, where it lets a file in the working directory shadow the real tool. MEASURED with the
+v0.1.0 release on x64-linux: an executable `./maxon-cwd-shadow-probe` that exits 99 was RUN when spawned by
+its bare name, and this case answered 1. POSIX does not search the working directory for a name with no `/`,
+so the name is not found.
+
+Windows is excluded because searching the working directory IS that platform's behaviour.
+```maxon
+function main() returns ExitCode
+	let probe = try FilePath.from("maxon-cwd-shadow-probe") otherwise return 2
+	try File.writeText(probe, content: "#!/bin/sh\nexit 99\n", mode: FilePermission.executable) otherwise return 3
+
+	var refused = false
+	try Subprocess.run(Executable.name("maxon-cwd-shadow-probe"), arguments: StringArray.create()) otherwise (e) 'handler'
 		match e 'kind'
-			spawnFailed then sawSpawnFailed = true
-			executableNotFound then sawSpawnFailed = false
-			timeout then sawSpawnFailed = false
-			ioFailed then sawSpawnFailed = false
-			inputTooLarge then sawSpawnFailed = false
+			executableNotFound then refused = true
+			spawnFailed or
+				timeout or
+				ioFailed or
+				inputTooLarge then refused = false
 		end 'kind'
 	end 'handler'
-	if sawSpawnFailed 'check'
+	try File.delete(probe) otherwise return 4
+
+	if refused 'refused'
+		return 0
+	end 'refused'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-not-found -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐ **A MISSING BINARY IS `executableNotFound` ON POSIX AND `spawnFailed` ON WINDOWS.** POSIX's spawn searches
+nothing, so a bare name the `PATH` walk misses is known not to exist before any spawn. Windows cannot know
+that from the walk — `CreateProcessA` searches further — and learns it only from the OS error code, which
+the stdlib cannot read while the seed predates `__Builtins.subprocessLastErrorCode`.
+```maxon
+function main() returns ExitCode
+	let exe = Executable.name("definitely-not-a-real-binary-xyzzy")
+	var argv = StringArray.create()
+	var sawNotFound = false
+	try Subprocess.run(exe, arguments: argv) otherwise (e) 'handler'
+		#if os(Windows)
+		match e 'kind'
+			spawnFailed then sawNotFound = true
+			executableNotFound or
+				timeout or
+				ioFailed or
+				inputTooLarge then sawNotFound = false
+		end 'kind'
+		#else
+		match e 'kind'
+			executableNotFound then sawNotFound = true
+			spawnFailed or
+				timeout or
+				ioFailed or
+				inputTooLarge then sawNotFound = false
+		end 'kind'
+		#endif
+	end 'handler'
+	if sawNotFound 'check'
 		return 0
 	end 'check'
 	return 1

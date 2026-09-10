@@ -84,6 +84,7 @@ export let SubpResultDurationName = b"__gt_subp_result_duration"
 export let SubpResultReleaseName = b"__gt_subp_result_release"
 export let SubpResolvePathName = b"__gt_subp_resolve_path"
 export let SubpLastErrorName = b"__gt_subp_last_error"
+export let SubpLastErrorCodeName = b"__gt_subp_last_error_code"
 
 // ⭐ **THE ENVIRONMENT READER, AND ITS `__gt_subp_` PREFIX IS THE WHOLE OF ITS TARGET GATE.** It is not a
 // spawn, but it exists for one: `stdlib/Subprocess.maxon` walks it to assemble the block an
@@ -282,12 +283,18 @@ let RpCand = 80 as ByteOffset  // the candidate path buffer, reused across every
 let RpCandLen = 88 as ByteOffset
 let RpBytes = 96 as ParsedInt
 
-// The environment variables the PATH walk reads, the separator between their members, and the separator
-// between a directory and a file name.
+// The environment variables the PATH walk reads, and each platform's separator between their members and
+// between a directory and a file name. `PathSearchShape` chooses the pair.
 let PathVarName = b"PATH"
 let PathExtVarName = b"PATHEXT"
-let PathSeparatorByte = 59 as ParsedInt  // ';'
-let DirSeparatorByte = 92 as ParsedInt  // '\'
+let WindowsPathListSeparatorByte = 59 as ParsedInt  // ';'
+let WindowsDirSeparatorByte = 92 as ParsedInt  // '\'
+let PosixPathListSeparatorByte = 58 as ParsedInt  // ':'
+let PosixDirSeparatorByte = 47 as ParsedInt  // '/'
+
+// POSIX has no `PATHEXT`, so its extension list is empty: only the synthetic "no extension" member is tried,
+// which is the name exactly as given.
+let PosixNoExtensions = b""
 
 // ⚠ **THE FALLBACK `PATHEXT`, USED ONLY WHEN THE VARIABLE IS UNSET.** Windows always sets it, so this is the
 // arm nothing normally takes; it is here because "the environment always has it" is exactly the kind of
@@ -427,6 +434,52 @@ function spawnEnvironmentShape(target Target) returns SpawnEnvironmentShape
 			wasi gives SpawnEnvironmentShape.pointerVector
 	end 'os'
 end 'spawnEnvironmentShape'
+
+// ⭐⭐ **HOW A BARE NAME IS FOUND ON THIS PLATFORM's `PATH` — the fourth fork in this family.** The Linux
+// spawn is raw `execve`, which takes a path and searches nothing, so the search `posix_spawnp` would do
+// happens here or not at all; the spawn's own header says as much. The two platforms differ in four ways
+// and every one of them is an ABI fact:
+//
+//   * `PATH` separates its directories with `;` on Windows and `:` on POSIX;
+//   * a directory joins its file with `\` on Windows and `/` on POSIX;
+//   * Windows retries each candidate with every extension of `PATHEXT`; POSIX has no such list;
+//   * ⛔ Windows searches the working directory, so trying the name "as given" first is its behaviour. POSIX
+//     does not — and trying it there lets a file in the working directory shadow the real tool.
+enum PathSearchShape
+	windowsPathExt
+	posix
+end 'PathSearchShape'
+
+// ⚠ **KEYED ON THE OS, exactly as its three siblings are.**
+function pathSearchShape(target Target) returns PathSearchShape
+	return match target.os 'os'
+		windows gives PathSearchShape.windowsPathExt
+		linux or
+			macos or
+			wasi gives PathSearchShape.posix
+	end 'os'
+end 'pathSearchShape'
+
+function pathListSeparator(shape PathSearchShape) returns ParsedInt
+	return match shape 'shape'
+		windowsPathExt gives WindowsPathListSeparatorByte
+		posix gives PosixPathListSeparatorByte
+	end 'shape'
+end 'pathListSeparator'
+
+function pathDirSeparator(shape PathSearchShape) returns ParsedInt
+	return match shape 'shape'
+		windowsPathExt gives WindowsDirSeparatorByte
+		posix gives PosixDirSeparatorByte
+	end 'shape'
+end 'pathDirSeparator'
+
+function searchesWorkingDirectory(shape PathSearchShape) returns bool
+	return match shape 'shape'
+		windowsPathExt gives true
+		posix gives false
+	end 'shape'
+end 'searchesWorkingDirectory'
 
 // ⭐ **THE COMMAND A `runProcess(cmd)`-SHAPED ENTRY BUILDS.** Two entry points hand the spawn a whole
 // COMMAND LINE a user wrote rather than an argv blob — `__gt_process_run` and the one-shot read probe — and
@@ -2063,6 +2116,31 @@ function buildSubpLastError(module StdModule)
 	module.functions.push(func)
 end 'buildSubpLastError'
 
+// `__gt_subp_last_error_code() -> code` — the same slot `buildSubpLastError` renders, as the number.
+//
+// ⭐ **IT EXISTS SO A CALLER CAN TELL "NOT FOUND" FROM "COULD NOT START" WITHOUT PARSING A MESSAGE.** Every
+// lane stores one Win32-style code there — Windows its own `GetLastError`, the POSIX lanes `errno` mapped
+// onto the same table — so `ERROR_FILE_NOT_FOUND` means the same thing on all of them. MEASURED: spawning a
+// path that does not exist stores 2 on x64-windows and on x64-linux alike.
+//
+// ⛔ **THE STDLIB MAY NOT CALL IT UNTIL A RELEASE THAT HAS IT IS THE SEED.** The stdlib is compiled by
+// whatever compiler builds this tree, including a released seed, and a seed that predates this builtin
+// cannot compile a stdlib naming it — MEASURED: a compiler built before this builtin existed fails on the
+// call with E3004, before it has compiled `build.maxon`, so the tree cannot be bootstrapped at all. The
+// compiler therefore carries it for a release before the stdlib uses it.
+function buildSubpLastErrorCode(module StdModule)
+	var func = IrFunction.createFromStd(SubpLastErrorCodeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let slotAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(slotAddr, label: SubpLastErrorLabel))
+	let code = emitLoadField(module, block: entry, record: slotAddr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(code))
+
+	module.functions.push(func)
+end 'buildSubpLastErrorCode'
+
 // ⭐ **AN OWNED, EMPTY `__ManagedMemory`.** `__managed_reserve` sets the capacity and leaves the length 0 —
 // that is its contract — so a reserved-but-unpublished record IS the empty answer rather than a record that
 // forgot something. Two entry points here need it and mean different things by it: `__gt_subp_last_error`
@@ -2222,19 +2300,20 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 end 'buildSubpEnvEntryFromBlock'
 
 // ⭐⭐ `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`: the
-// `PATH` + `PATHEXT` walk that turns a bare tool name into something `CreateProcessA` can launch.
+// `PATH` walk that turns a bare tool name into a path the spawn can launch. `shape` decides the separators,
+// whether `PATHEXT` is consulted, and whether the working directory is searched — see `PathSearchShape`.
 //
 // ⭐ **THE WALK IS ONE DOUBLE LOOP WITH A SYNTHETIC HEAD MEMBER ON EACH LIST**, which is what makes "the name
-// exactly as given" and "the name with no extension added" ordinary iterations rather than three special
-// cases in front of it: the directory list is `"" ; PATH…` and the extension list is `"" ; PATHEXT…`, so the
-// very first candidate tried IS the name verbatim.
+// with no directory" and "the name with no extension" ordinary iterations rather than special cases in front
+// of it. The directory head is Windows' working-directory search, so POSIX starts past it.
 //
 // ⚠⚠ **IT NEVER ANSWERS NULL, AND THAT IS FORCED BY STATIC OWNERSHIP.** The result is an OWNED
 // `__ManagedMemory`, so its `let` binding is dropped at scope exit through `__mm_decref`, which
 // dereferences the record header — a NULL would fault. Making `__mm_decref` null-tolerant would put a test
-// on every drop in every program to serve one corpus line, so a miss answers the BARE NAME instead, which
-// is exactly the String `stdlib/Subprocess.maxon`'s `resolveByName` returns on its own miss branch.
-function buildSubpResolvePath(module StdModule)
+// on every drop in every program to serve one caller, so a miss answers the BARE NAME instead. On POSIX,
+// where the working-directory head is never tried, a hit always carries a `/` and a miss never does — which
+// is how `stdlib/Subprocess.maxon` tells them apart there.
+function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	var func = IrFunction.createFromStd(SubpResolvePathName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2260,7 +2339,7 @@ function buildSubpResolvePath(module StdModule)
 	var measuredName = emitCStringLength(module, func: func, cur: entry, cstr: name, length: nameLen, ids: ids)
 	emitStoreField(module, block: measuredName, record: state, offset: RpNameLen, value: nameLen)
 	var afterPath = emitSubpReadEnvInto(module, func: func, ids: ids, cur: measuredName, state: state, varName: PathVarName, outOffset: RpPath, fallback: EmptyPathFallback)
-	var afterExts = emitSubpReadEnvInto(module, func: func, ids: ids, cur: afterPath, state: state, varName: PathExtVarName, outOffset: RpExts, fallback: PathExtDefault)
+	var afterExts = emitSubpExtensionsInto(module, func: func, ids: ids, cur: afterPath, state: state, shape: shape)
 
 	// The candidate buffer is sized for the longest combination that can exist: any directory of PATH, a
 	// separator, the name and any extension of PATHEXT, plus a terminator. One allocation for the whole walk.
@@ -2278,11 +2357,12 @@ function buildSubpResolvePath(module StdModule)
 	let candBuf = ids.mint()
 	module.appendOp(measuredExts, op: StdOp.call(candBuf, callee: SlabAllocName, args: argsOf(candSize)))
 	emitStoreField(module, block: measuredExts, record: state, offset: RpCand, value: candBuf)
-	let one = emitConst(module, block: measuredExts, value: 1, ids: ids)
-	emitStoreField(module, block: measuredExts, record: state, offset: RpDirIsHead, value: one)
+	let headFlag = emitConst(module, block: measuredExts, value: 1 if searchesWorkingDirectory(shape) else 0, ids: ids)
+	emitStoreField(module, block: measuredExts, record: state, offset: RpDirIsHead, value: headFlag)
 	module.setTerminator(measuredExts, op: StdOp.branch(dirHdr.id))
 
-	// dirHdr: the synthetic head member first (no directory), then each `;`-separated member of PATH.
+	// dirHdr: the synthetic head member where the platform searches the working directory, then each member
+	// of PATH.
 	var dirReal = module.addBlock(func, label: b"rpdirreal")
 	let isHead = emitLoadField(module, block: dirHdr, record: state, offset: RpDirIsHead, ids: ids)
 	let zeroH = emitConst(module, block: dirHdr, value: 0, ids: ids)
@@ -2296,8 +2376,15 @@ function buildSubpResolvePath(module StdModule)
 	let pathSpent = emitCmp(module, block: dirReal, a: firstByteD, b: zeroD, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(dirReal, op: StdOp.condBranch(pathSpent, thenBlockId: miss.id, elseBlockId: dirMeasure.id))
 
-	var measuredDir = emitSubpMemberLength(module, func: func, ids: ids, cur: dirMeasure, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen)
-	module.setTerminator(measuredDir, op: StdOp.branch(extInit.id))
+	var measuredDir = emitSubpMemberLength(module, func: func, ids: ids, cur: dirMeasure, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, separator: pathListSeparator(shape))
+
+	// ⛔ **AN EMPTY `PATH` MEMBER IS SKIPPED, ON EVERY PLATFORM.** `PATH=:/usr/bin` or `;C:\bin` would
+	// otherwise join nothing and a separator onto the name — `/git`, `\git` — and search the ROOT of the
+	// filesystem, which is no directory anybody put on `PATH`.
+	let dirLenM = emitLoadField(module, block: measuredDir, record: state, offset: RpDirLen, ids: ids)
+	let zeroM = emitConst(module, block: measuredDir, value: 0, ids: ids)
+	let emptyMember = emitCmp(module, block: measuredDir, a: dirLenM, b: zeroM, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(measuredDir, op: StdOp.condBranch(emptyMember, thenBlockId: dirNext.id, elseBlockId: extInit.id))
 
 	// extInit: reset the extension list to its own synthetic head for this directory.
 	let zeroE = emitConst(module, block: extInit, value: 0, ids: ids)
@@ -2319,10 +2406,10 @@ function buildSubpResolvePath(module StdModule)
 	let extsSpent = emitCmp(module, block: extReal, a: firstByteR, b: zeroR, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(extReal, op: StdOp.condBranch(extsSpent, thenBlockId: dirNext.id, elseBlockId: extMeasure.id))
 
-	var measuredExt = emitSubpMemberLength(module, func: func, ids: ids, cur: extMeasure, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen)
+	var measuredExt = emitSubpMemberLength(module, func: func, ids: ids, cur: extMeasure, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, separator: pathListSeparator(shape))
 	module.setTerminator(measuredExt, op: StdOp.branch(buildCand.id))
 
-	var built = emitSubpBuildCandidate(module, func: func, ids: ids, cur: buildCand, state: state)
+	var built = emitSubpBuildCandidate(module, func: func, ids: ids, cur: buildCand, state: state, dirSeparator: pathDirSeparator(shape))
 	module.setTerminator(built, op: StdOp.branch(testCand.id))
 
 	var attrOk = module.addBlock(func, label: b"rpattr")
@@ -2343,10 +2430,10 @@ function buildSubpResolvePath(module StdModule)
 	let isDirectory = emitCmp(module, block: attrOk, a: masked, b: zeroB, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(attrOk, op: StdOp.condBranch(isDirectory, thenBlockId: extNext.id, elseBlockId: hit.id))
 
-	var afterExtStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: extNext, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, headOffset: RpExtIsHead)
+	var afterExtStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: extNext, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, headOffset: RpExtIsHead, separator: pathListSeparator(shape))
 	module.setTerminator(afterExtStep, op: StdOp.branch(extHdr.id))
 
-	var afterDirStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: dirNext, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, headOffset: RpDirIsHead)
+	var afterDirStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: dirNext, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, headOffset: RpDirIsHead, separator: pathListSeparator(shape))
 	module.setTerminator(afterDirStep, op: StdOp.branch(dirHdr.id))
 
 	let candH = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
@@ -2420,10 +2507,26 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	return cont
 end 'emitSubpReadEnvInto'
 
-// The length of the `;`-separated member of `list` that starts at `start` — up to the next `;` or the
+// The extensions each directory's candidate is retried with. ⚠ **POSIX NEVER READS `PATHEXT`**, even when
+// something has set it: the variable is a Windows convention, and honouring a stray one would make `git`
+// resolve to a `git.EXE` that no POSIX spawn could run.
+function emitSubpExtensionsInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, shape PathSearchShape) returns IrBlock
+	return match shape 'shape'
+		windowsPathExt gives emitSubpReadEnvInto(module, func: func, ids: ids, cur: cur, state: state, varName: PathExtVarName, outOffset: RpExts, fallback: PathExtDefault)
+		posix gives emitSubpStoreLiteralInto(module, block: cur, ids: ids, state: state, outOffset: RpExts, text: PosixNoExtensions)
+	end 'shape'
+end 'emitSubpExtensionsInto'
+
+function emitSubpStoreLiteralInto(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, text ByteArray) returns IrBlock
+	let literal = emitLiteralCString(module, block: block, ids: ids, text: text)
+	emitStoreField(module, block: block, record: state, offset: outOffset, value: literal)
+	return block
+end 'emitSubpStoreLiteralInto'
+
+// The length of the member of `list` that starts at `start` — up to the next `separator` or the
 // terminator, whichever comes first. Shared by the PATH walk and the PATHEXT walk, which are the same list
 // shape with different contents.
-function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset) returns IrBlock
+function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator ParsedInt) returns IrBlock
 	var scanHdr = module.addBlock(func, label: b"rpmemhdr")
 	var scanStep = module.addBlock(func, label: b"rpmemstep")
 	var sepTest = module.addBlock(func, label: b"rpmemsep")
@@ -2447,7 +2550,7 @@ function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter
 	let len2 = emitLoadField(module, block: sepTest, record: state, offset: lenOffset, ids: ids)
 	let at2 = emitBin(module, block: sepTest, a: start2, b: len2, opcode: StdBinOpcode.add, ids: ids)
 	let ch2 = emitLoadByte(module, block: sepTest, base: list2, index: at2, ids: ids)
-	let sepConst = emitConst(module, block: sepTest, value: PathSeparatorByte, ids: ids)
+	let sepConst = emitConst(module, block: sepTest, value: separator, ids: ids)
 	let atSeparator = emitCmp(module, block: sepTest, a: ch2, b: sepConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(sepTest, op: StdOp.condBranch(atSeparator, thenBlockId: cont.id, elseBlockId: scanStep.id))
 
@@ -2458,7 +2561,7 @@ end 'emitSubpMemberLength'
 
 // Step one list on: leave the synthetic head member if that is where the walk stands, else advance past this
 // member and its separator. The two lists take exactly this step, which is why it is one helper.
-function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, headOffset ByteOffset) returns IrBlock
+function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, headOffset ByteOffset, separator ParsedInt) returns IrBlock
 	var leaveHead = module.addBlock(func, label: b"rpadvhead")
 	var pastMember = module.addBlock(func, label: b"rpadvsep")
 	let cont = module.addBlock(func, label: b"rpadvdone")
@@ -2476,8 +2579,8 @@ function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinte
 	emitStoreField(module, block: leaveHead, record: state, offset: headOffset, value: zeroH)
 	module.setTerminator(leaveHead, op: StdOp.branch(cont.id))
 
-	// Past this member; a `;` at the cursor is consumed too, and the terminator simply leaves the cursor on
-	// it, which is what the loop header reads as "the list is spent".
+	// Past this member; a separator at the cursor is consumed too, and the terminator simply leaves the cursor
+	// on it, which is what the loop header reads as "the list is spent".
 	var skipSep = module.addBlock(func, label: b"rpadvskip")
 	let start = emitLoadField(module, block: pastMember, record: state, offset: startOffset, ids: ids)
 	let len = emitLoadField(module, block: pastMember, record: state, offset: lenOffset, ids: ids)
@@ -2485,7 +2588,7 @@ function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinte
 	emitStoreField(module, block: pastMember, record: state, offset: startOffset, value: next)
 	let list = emitLoadField(module, block: pastMember, record: state, offset: listOffset, ids: ids)
 	let ch = emitLoadByte(module, block: pastMember, base: list, index: next, ids: ids)
-	let sepConst = emitConst(module, block: pastMember, value: PathSeparatorByte, ids: ids)
+	let sepConst = emitConst(module, block: pastMember, value: separator, ids: ids)
 	let onSeparator = emitCmp(module, block: pastMember, a: ch, b: sepConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(pastMember, op: StdOp.condBranch(onSeparator, thenBlockId: skipSep.id, elseBlockId: cont.id))
 
@@ -2494,9 +2597,9 @@ function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinte
 	return cont
 end 'emitSubpAdvanceMember'
 
-// Assemble `<dir>\<name><ext>` into the reused candidate buffer, NUL-terminated. The head members contribute
-// nothing, so the first candidate is the name verbatim.
-function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+// Assemble `<dir><dirSeparator><name><ext>` into the reused candidate buffer, NUL-terminated. The head
+// members contribute nothing, so a head candidate is the name verbatim.
+function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, dirSeparator ParsedInt) returns IrBlock
 	var withDir = module.addBlock(func, label: b"rpcdir")
 	var afterDirJoin = module.addBlock(func, label: b"rpcdirj")
 	var withExt = module.addBlock(func, label: b"rpcext")
@@ -2517,7 +2620,7 @@ function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMint
 	var afterDir = emitForwardCopy(module, func: func, cur: withDir, dest: cand, src: dirSrc, byteCount: dirLen, ids: ids)
 	let dirLen2 = emitLoadField(module, block: afterDir, record: state, offset: RpDirLen, ids: ids)
 	emitStoreField(module, block: afterDir, record: state, offset: RpCandLen, value: dirLen2)
-	emitSubpAppendByte(module, block: afterDir, ids: ids, state: state, outOffset: RpCand, lenOffset: RpCandLen, value: DirSeparatorByte)
+	emitSubpAppendByte(module, block: afterDir, ids: ids, state: state, outOffset: RpCand, lenOffset: RpCandLen, value: dirSeparator)
 	module.setTerminator(afterDir, op: StdOp.branch(afterDirJoin.id))
 
 	let candN = emitLoadField(module, block: afterDirJoin, record: state, offset: RpCand, ids: ids)
@@ -2593,8 +2696,9 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpResultBufferReader(module, name: SubpResultStderrName, bufOffset: ResErrBuf, lenOffset: ResErrLen)
 	buildSubpResultRelease(module)
 	buildSubpLastError(module)
+	buildSubpLastErrorCode(module)
 	buildSubpEnvEntry(module, shape: environmentSnapshotShape(target))
-	buildSubpResolvePath(module)
+	buildSubpResolvePath(module, shape: pathSearchShape(target))
 end 'installSubprocessRuntime'
 
 // ⭐ **THE SHELL WRAPPER IS INSTALLED ONE TIER UP, WITH `__gt_process_run`, AND NOT HERE.** Its callers are

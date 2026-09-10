@@ -1860,9 +1860,10 @@ end 'buildX64LinuxHandleFileTypeChunk'
 // captures the vector's base (`BackendDispatch.appendLinuxEnvpCapture`) and this chunk walks it. Each entry
 // is a `NAME=VALUE` C string, and a match is the name followed by `LinuxEnvSeparatorByte`.
 //
-// ⚠ **THE COUNT IS THE ANSWER ON BOTH EXITS.** On a fit it is what was written; on a too-small buffer it is
-// what WOULD have been written, which is `GetEnvironmentVariableA`'s convention and what both callers decode.
-// An unset variable answers the `PosixEnvUnset` the walk seeded, with no arm of its own.
+// ⛔ **THE TWO EXITS ANSWER DIFFERENT COUNTS, BECAUSE WINDOWS DOES.** On a fit the answer is what was written,
+// NOT counting the NUL; on a too-small buffer it is the size REQUIRED, which DOES — so a caller that retries
+// allocates exactly the answer and the value fits. `arm64PosixEmitEnvValueCopy` states the measurement that
+// made this a rule. An unset variable answers the `PosixEnvUnset` the walk seeded, with no arm of its own.
 function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
 	let SlotBufLen = 1 as StackSize
@@ -1877,6 +1878,7 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	let nameEnded = asm.newLabel()
 	let nextEntry = asm.newLabel()
 	let copyLoop = asm.newLabel()
+	let tooSmall = asm.newLabel()
 	let finish = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.rcx)
@@ -1919,14 +1921,14 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rax)
 
-	// The measure-and-copy tail — Windows's contract rather than this lane's: answer `strlen(value)`, and copy
-	// only when it fits STRICTLY inside the capacity, because the NUL needs the last byte.
+	// The measure-and-copy tail — Windows's contract rather than this lane's: copy only when the value fits
+	// STRICTLY inside the capacity, because the NUL needs the last byte.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
 	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: finish)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: tooSmall)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), wide: true)
@@ -1939,6 +1941,12 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rsi, disp: 1)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rdi, disp: 1)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLoop)
+
+	// The size required, counting the NUL.
+	asm.placeLabel(tooSmall)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
 
 	asm.placeLabel(nextEntry)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)

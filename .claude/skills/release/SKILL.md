@@ -54,6 +54,11 @@ about six of which mean anything to a reader. Write `## X.Y.Z — YYYY-MM-DD` wi
 ⛔ **DO NOT PASTE COMMIT SUBJECTS IN.** That was tried, and generating the entry then correcting it
 meant rewriting seventeen lines of twenty-one.
 
+⛔ **STATE WHAT CHANGED, NEVER HOW TO DO ANYTHING.** No commands, no install steps, no "click More
+info", no warnings about how to use it. Those belong in the release notes' own Install section and in
+each archive's `INSTALL.md`, which already carry them — a changelog is read months later by someone
+asking "what is different", and an instruction in it is either stale or duplicated.
+
 ## 3 · Write the website's release material
 
 ```bash

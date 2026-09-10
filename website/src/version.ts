@@ -9,4 +9,4 @@
 // interpolate a value, and a version pasted into one goes stale silently — so those commands are
 // written against a glob (`maxon-*-x64-linux.tar.gz`) instead, which is both correct for every
 // release and better for a reader who downloaded whichever one they downloaded.
-export const RELEASE_VERSION = '0.1.0';
+export const RELEASE_VERSION = '0.1.1';

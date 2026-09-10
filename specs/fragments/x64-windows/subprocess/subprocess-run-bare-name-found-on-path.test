@@ -1,34 +1,22 @@
-// Test: subprocess-not-found
+// Test: subprocess-run-bare-name-found-on-path
 function main() returns ExitCode
-	let exe = Executable.name("definitely-not-a-real-binary-xyzzy")
+	#if os(Windows)
+	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
-	var sawNotFound = false
-	try Subprocess.run(exe, arguments: argv) otherwise (e) 'handler'
-		#if os(Windows)
-		match e 'kind'
-			spawnFailed then sawNotFound = true
-			executableNotFound or
-				timeout or
-				ioFailed or
-				inputTooLarge then sawNotFound = false
-		end 'kind'
-		#else
-		match e 'kind'
-			executableNotFound then sawNotFound = true
-			spawnFailed or
-				timeout or
-				ioFailed or
-				inputTooLarge then sawNotFound = false
-		end 'kind'
-		#endif
-	end 'handler'
-	if sawNotFound 'check'
-		return 0
-	end 'check'
-	return 1
+	argv.push("/c")
+	argv.push("exit")
+	argv.push("7")
+	#else
+	let exe = Executable.name("sh")
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 7")
+	#endif
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
+	return result.exitCode() as ExitCode
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 7
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
@@ -84,8 +72,9 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_27]  ; "definitely-not-a-real-binary-xyzzy"
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_30]  ; "cmd"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -99,66 +88,74 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 r13, 0
+    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "/c"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "exit"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "7"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect Subprocess.run
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#4
-  matchnext#6:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchnext#7
-  matcharm#3:
-    x64.movRegImm32 r13, 1
-    x64.jmp matchcont
-  matchnext#7:
-    x64.cmpRegImm32 rax, 2
-    x64.setccReg greaterEqual, rcx
-    x64.cmpRegImm32 rax, 4
-    x64.setccReg lessEqual, rax
-    x64.andRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matchdead
-  matcharm#4:
-    x64.movRegImm32 r13, 0
-  matchcont:
+    x64.movRegImm32 r13, 2
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_SubprocessError
-    x64.movRegReg rax, r13
-    x64.jmp trycont
-  matchdead:
-  tryok:
-    x64.movRegReg rcx, r8
-    x64.callDirect __destruct_CollectedOutput
-    x64.movRegReg rax, r13
-  trycont:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont
-  check:
-    x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
-    x64.movRegImm32 r13, 1
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect CollectedOutput.exitCode
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r14, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_129]  ; "panic at subprocess-run-bare-name-found-on-path.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
-    x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

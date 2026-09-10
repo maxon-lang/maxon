@@ -136,8 +136,8 @@ public union Executable
 
 	/// Wrap either arm as a `FilePath`, WITHOUT resolving anything. For
 	/// `.path(p)` this is `p` unchanged; for `.name(n)` it is the bare name as
-	/// a path, which is exactly what the OS spawn primitive wants — it does
-	/// its own PATH lookup (Windows CreateProcessW + PATHEXT, POSIX execvp).
+	/// a path. The PATH search happens at the spawn, in `resolveByName` — see
+	/// there for why Windows and POSIX differ.
 	/// Throws `ExecutableError.notFound` only if `n` is not a well-formed path
 	/// string; a name that is simply absent from PATH resolves fine here and
 	/// fails later, at the spawn.
@@ -591,37 +591,43 @@ type StdioRuntimeTriple
 	end 'create'
 end 'StdioRuntimeTriple'
 
-/// Resolve `Executable.name(n)` to a launchable path token, and pass
-/// `Executable.path(p)` through unchanged. For `.name(n)` we first ask the
-/// subprocess runtime to resolve `n` against PATH (and PATHEXT on Windows).
-/// When the runtime can't find it but the underlying OS spawn primitive can
-/// still resolve a bare name (Windows CreateProcessW with `lpApplicationName
-/// = NULL` performs its own PATH+PATHEXT search), fall back to the bare name
-/// so the user-visible behaviour matches Swift's Subprocess on every host.
-/// We only throw `executableNotFound` on hosts where the OS spawn primitive
-/// requires a pre-resolved path (i.e. POSIX execvp-style — handled by the
-/// Unix runtime in a later phase).
+/// Resolve `Executable.name(n)` to a launchable path, and pass `Executable.path(p)` through unchanged.
 function resolveExecutablePath(executable Executable) returns String throws SubprocessError
 	return match executable 'r'
-		name(n) gives resolveByName(n)
+		name(n) gives try resolveByName(n)
 		path(p) gives p.path
 	end 'r'
 end 'resolveExecutablePath'
 
-function resolveByName(name String) returns String
-	let resolved = __Builtins.subprocessResolveOnPath(name.cstr())
-	let isNull = __Builtins.managedIsNull(resolved)
-
-	if isNull != 0 'missing'
-		// Resolver miss — let the OS spawn primitive try its own lookup.
-		// On Windows CreateProcessW iterates PATH+PATHEXT itself; on POSIX
-		// the runtime falls back to execvp. The bare name reaches argv[0]
-		// of the spawn contract as a single token.
+// ⭐⭐ **WINDOWS AND POSIX RESOLVE A NAME DIFFERENTLY, AND THE DIFFERENCE IS WHERE THE SEARCH HAPPENS.**
+//
+// On Windows the runtime's miss answers the bare name and `CreateProcessA` searches again — its own
+// directory, the working directory, the system directories — so a miss here is not yet "not found".
+//
+// On POSIX the spawn is raw `execve`, which searches NOTHING: the runtime's walk is the only search there is.
+// So a name containing `/` is a path and is used as written, and a bare name the walk did not find is not
+// found. ⛔ **HANDING THAT BARE NAME TO `execve` ANYWAY WOULD RUN A FILE OF THAT NAME IN THE WORKING
+// DIRECTORY**, since `execve` reads a slash-less path relative to it — the one place POSIX never looks.
+function resolveByName(name String) returns String throws SubprocessError
+	#if os(Windows)
+	return String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+	#else
+	let dirSeparator = "/"
+	if name.contains(dirSeparator) 'isAPath'
 		return name
-	end 'missing'
+	end 'isAPath'
 
-	return String.init(resolved)
+	let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+
+	// The walk never answers the working directory on POSIX, so a hit always carries a directory.
+	if not resolved.contains(dirSeparator) 'notOnPath'
+		throw SubprocessError.executableNotFound(name)
+	end 'notOnPath'
+
+	return resolved
+	#endif
 end 'resolveByName'
+
 
 /// Pack argc strings (executable name + argv) back-to-back into a single
 /// NUL-separated buffer. Each token contributes `utf-8 bytes + 0x00`. The
