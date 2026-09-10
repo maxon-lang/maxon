@@ -28,9 +28,9 @@ var r2 = await p2
 ```
 
 **Key properties:**
-- One owner — a coroutine belongs to the green thread that created it, is driven only by that green
-  thread, and is never handed to another OS thread. A coroutine spawned by a coroutine belongs to the
-  same green thread, so every frame `async` creates, at any depth, has one owner.
+- One owner — a coroutine belongs to the green thread that created it, runs only where that green
+  thread's strand runs, one member at a time, and is never itself put on a run queue. A coroutine spawned
+  by a coroutine belongs to the same green thread, so every frame `async` creates, at any depth, has one owner.
 - Cooperative scheduling — a coroutine keeps the green thread until it reaches an `await`, a `sleep`
   or an I/O point. What overlaps is the WAITING: N outstanding reads are in flight at once while their
   coroutines are parked.
@@ -1518,14 +1518,12 @@ end 'main'
 ```
 
 <!-- test: async-await.try-await.drives-the-timer-heap -->
-A `try await` park loop drives the TIMER heap, exactly as its `await` twin does.
-Both loops are the same machine — "nothing runnable, poll every engine, recheck" —
-and a park loop that omits one engine leaves the green threads parked on that
-engine unwoken. For a worker whose only wakeup is a `sleep()` deadline, omitting
-the timer poll means the awaiting thread never fires it: the run then survives only
-on whatever OTHER scheduler thread happens to poll timers, at that thread's park
-period, and on a single-processor run (`MAXON_MAX_PROCS=1`) it does not survive at
-all — it hangs.
+A `try await` of a coroutine that sleeps costs what an `await` of it costs. The two
+are ONE body (`buildGtAwait`, whose `throwing` flag selects only the exit): both
+park the caller and neither fires a timer itself — the `sleep()` deadline is fired
+by a machine's scheduler loop, whose idle park is bounded by the earliest deadline
+(`SchedRuntime.emitSchedParkTimeout`). What this case pins
+is that the `try` road waits on that same deadline and not on some longer bound.
 
 The assertion is RELATIVE and its control is IN THE SAME PROCESS, so it states the
 invariant directly ("`try await` costs what `await` costs") and is immune to how

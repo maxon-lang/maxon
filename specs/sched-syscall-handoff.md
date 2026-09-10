@@ -356,24 +356,20 @@ feed against a microsecond reply is a ~1000× margin**, which is why this is a s
 timing flake; it was deliberately built that way after a `stdin: hold` variant was rejected for being able
 to fail only by timing out.
 
-⛔⛔ **A SECOND THING IS ALSO LOST, AND THE PREDICTION THAT THIS CASE NEEDED IT FIXED WAS WRONG.**
-`emitGtRunOne` (`GtRuntime.maxon:5733-5768`) suspends the DRIVER inside `__gt_context_switch` and records
-it only as `g.waiter`, published to no queue — so a `g` that neither parks nor completes strands its whole
-driver chain, up to and including `main`. **That is real and measured**: with a read that never returns,
-the sentinel runs to completion on another machine at FOUR processors and `main` still never resumes.
+⭐⭐ **THE BLOCKED CALL HOLDS ITS OWN MACHINE AND ITS OWN STRAND, AND NOTHING ELSE.** No wait runs another
+green thread on the waiter's stack: an await, a mailbox wait or a timer parks its green thread onto its
+machine's scheduler context, and whoever completes the wait readies it through `__gt_ready_locked`. So a
+kernel call that never returns holds its machine and its own strand, and nothing else: that green thread's
+coroutines wait with it, while `main` — an ordinary green thread — parks and resumes on whichever machine
+takes its token.
 
-⇒ It was predicted here that the cure needed both halves — release the driver *and* retake the processor —
-and that *"each alone leaves one of the two cases below red"*. **MEASURED, and it is false: the retake
-alone greens both.** At one processor the sentinel's green thread is already sitting in P0's own ring when
-the reader blocks, so retaking P0 and starting a machine on it runs the sentinel directly and no driver has
-to move. The driver-release half was never built.
+⇒ **The retake is the whole cure for these cases.** At one processor the sentinel's green thread is already
+sitting in P0's own ring when the reader blocks, so retaking P0 and starting a machine on it runs the
+sentinel directly while the read is still in the kernel.
 
-⚠ **So the captive driver above is a LIVE DEFECT that this file does not gate**, and the reason it is
-tolerable is worth stating rather than leaving to be rediscovered: it can only bite a call that never
-returns, and a program holding a green thread that never returns **cannot exit anyway** — the compiler's exit path
-waits for live green threads (measured: a green thread parked 60 s and never awaited keeps the process
-alive after `main` returns). Curing it means `main` on a real green thread rather than the machine's own
-`g0`, which is a different change from this one.
+⚠ **A program holding a green thread that never returns still cannot exit**: the exit drain waits for live
+green threads, and a machine inside a kernel call is a running machine to the deadlock check, so the drain
+waits on it rather than calling it stuck.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

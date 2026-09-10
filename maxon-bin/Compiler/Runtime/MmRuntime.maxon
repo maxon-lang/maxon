@@ -2135,15 +2135,16 @@ end 'emitLoadRefcount'
 //     run Maxon code that retained and released another M's box.
 //   * ⚖ EC10 removed the second party instead of serialising against it. **An `async` frame is a COROUTINE
 //     of the green thread that called it** (USER, 2026-08-27: *"async … allows a function to yield the
-//     current green thread"*, and *"only 1 green thread can hold references to a box at a time"*), published
-//     only to its owner's queue and driven only by its owner's chain of drivers. `SchedRuntime.maxon`'s
-//     header states the invariant in full and is where it belongs; it is not restated here.
+//     current green thread"*, and *"only 1 green thread can hold references to a box at a time"*) — a member
+//     of its owner's STRAND, which one machine runs at a time. `SchedRuntime.maxon`'s header states the
+//     invariant in full and is where it belongs; it is not restated here.
 //
-// ⇒ **The box a refcount belongs to has ONE owning green thread, that green thread runs on ONE M, so the
-// read-modify-write below has no second party.** That is a property of the language, not of
-// `MAXON_MAX_PROCS`, which is why there is no `multiM` argument here as there is on `emitGlobalAccumulate`:
-// a `.data` counter really is reachable from every OS thread the process has and keeps its atomic; a
-// refcount is not and never was.
+// ⇒ **The box a refcount belongs to has ONE owning green thread, whose strand runs on one M at a time and
+// changes machine only through `__sched_lock` — whose release and acquire order everything one machine did
+// before everything the next does — so the read-modify-write below has no concurrent second party.** That is a
+// property of the language, not of `MAXON_MAX_PROCS`, which is why there is no `multiM` argument here as
+// there is on `emitGlobalAccumulate`: a `.data` counter really is reachable from every OS thread the process
+// has and keeps its atomic; a refcount is not and never was.
 //
 // ⚠ **THE ONE OS THREAD THAT IS NOT THE OWNER'S M REACHES EXACTLY TWO FUNCTIONS, AND THIS IS NOT ONE OF
 // THEM.** An emitted program creates OS threads at **three** `osThreadCreate` sites: the IOCP completion
@@ -2161,10 +2162,9 @@ end 'emitLoadRefcount'
 // every refcount it touches belongs to the green thread it is RUNNING; the monitor is safe because it runs
 // none.
 //
-// MEASURED from the emitted bytes of a program
-// using `async`, a subprocess and a heap `String` — the completion thread's whole call graph is
-// `__io_completion_loop` → `__gt_coro_enqueue`, five Win32 IAT calls, one direct call, no other Maxon
-// function and not one `lock` prefix. A queue append is all it does; it never touches a box.
+// The completion thread's Maxon call graph is `__io_completion_loop` → `__gt_ready_locked` and
+// `__sched_wake_or_spawn`: strand and run queues and scheduler words, every one of which states its
+// `MultiMSharing` class. It never touches a box.
 //
 // ⭐ **THE CONTROL IS COMMITTED, BECAUSE THE LAST ONE WAS NOT.** G2's measurement lived in
 // `temp/g2/rc-global.maxon`, and `temp/` is gitignored and swept — so the evidence for a `lock` prefix on
@@ -2537,9 +2537,9 @@ end 'ThreadColumn'
 // ⭐⭐ **`__mm_counter_thread_*()` — WHAT THE CALLING GREEN THREAD HAS ALLOCATED OR FREED.**
 //
 // **WITH GREEN THREADS** it walks TLS to the M, to its running GT, to that GT's OWNER, and answers the
-// owner's field. The owner and not the running GT, because a coroutine is its owner's work: `async` frames
-// are driven by their owner's chain of drivers on their owner's M, so billing them to the coroutine would
-// put a bracket's own allocations outside the bracket. A thread that has none of the three yet — no
+// owner's field. The owner and not the running GT, because a coroutine is its owner's work: an `async` frame
+// is a member of its owner's strand, so billing it to the coroutine would put a bracket's own allocations
+// outside the bracket. A thread that has none of the three yet — no
 // scheduler, no M, no running GT — answers 0, which is the true count for a process that has not allocated
 // on one.
 //

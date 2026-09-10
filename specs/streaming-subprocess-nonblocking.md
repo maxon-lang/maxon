@@ -41,7 +41,7 @@ after `release()` there is no child left to report an exit for and no pipe left 
 throws — unlike the blocking readers, which refuse a released handle through `requireLive`.
 
 **Targets — x64-windows only**, the restriction the whole streaming-subprocess family carries: the
-reader parks its green thread on the Windows completion driver, and every child here is `cmd`.
+reader parks its green thread until the Windows I/O completion port answers, and every child here is `cmd`.
 
 **How these children are built.** Each argument is a separate `argv` token and the runtime joins them
 with single spaces, quoting only a token that is empty or holds a space, a tab or a `"`. So `&` and

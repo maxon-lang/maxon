@@ -94,7 +94,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-stack-growth.grow-across-yield -->
-A thread `sleep`s (parks on the timer, context-switches back to the driver), RESUMES, and only THEN recurses
+A thread `sleep`s (parks on the timer, context-switches back to its machine's scheduler context), RESUMES, and only THEN recurses
 deep — so the growth happens on a stack the scheduler switched out and back in. The awaited sum is exact,
 proving `gt.sp`/`gt.fp` and the saved-rbp chain are consistent across a yield followed by a relocation.
 ```maxon

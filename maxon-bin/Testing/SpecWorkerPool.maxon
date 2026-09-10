@@ -22,17 +22,13 @@
 // so by citing a scheduler that no longer exists. The default processor count is the machine's since the
 // `DefaultMaxProcs` flip, and a green-thread program really does run on several Ms.
 //
-// What holds instead holds at EVERY `MAXON_MAX_PROCS`: a worker M is started only by
-// `__sched_wake_or_spawn`, reached only from the GREEN-THREAD arm of a publish door, and `spawn` is the
-// sole producer of green threads. **This harness spawns no service.** Its only concurrency is `async`,
-// and since EC10 an `async` frame is a COROUTINE of the green thread that created it — published only to
-// that thread's own queue, driven only by its chain of drivers, and so running on its M.
-// `SchedRuntime.maxon`'s header states the invariant; `specs/builtins-cpu-parallel.md`'s
-// `sched-max-active-workers-is-one-under-async` pins the reading.
+// What holds instead holds at EVERY `MAXON_MAX_PROCS`: a green thread and its coroutines form a STRAND,
+// and one machine runs one member of a strand at a time. **This harness spawns no service.** Its only
+// concurrency is `async`, and an `async` frame is a COROUTINE of the green thread that created it — a
+// member of its strand. `SchedRuntime.maxon`'s header states the invariant.
 //
 // ⚠ The IOCP completion thread IS a second OS thread here — the workers' pipes are read through it — and
-// it is not a counter-example: its whole call graph is `__io_completion_loop` -> `__gt_coro_enqueue`, so
-// it re-readies a parked drain onto its owner's queue and runs none of this file.
+// it is not a counter-example: it readies a parked drain (`__gt_ready_locked`) and runs none of this file.
 //
 // ⇒ the dispatcher and its drains interleave only at the drains' own yield points, which is exactly what
 // the four notes need. **A `spawn` added to this harness would end all four at once.**
@@ -1291,11 +1287,9 @@ typealias SlotInstantArray = Array with InstantMs
 // tell a worker two seconds into a compile from one that stopped four minutes ago — and bounded the
 // whole job by an estimate for want of the distinction. `spokeAt` is the parent's own array, handed to
 // this thread by the spawn: `async` gives a managed argument its OWN REFERENCE to the same heap object
-// (`Parser.emitAsyncCall`), and this drain is a COROUTINE of the dispatcher green thread — driven by the
-// dispatcher's own chain of drivers, on the dispatcher's own M (see the one-M section at the top of this
-// file; the old wording, "the compiler is single-M with cooperative scheduling", expired at the default flip).
-// So a write here is immediately and atomically visible to the dispatcher — this GT yields only inside
-// `readStdoutLine`.
+// (`Parser.emitAsyncCall`), and this drain is a COROUTINE of the dispatcher green thread — a member of its
+// strand, which runs one member at a time (see the section at the top of this file). So a write here is
+// visible to the dispatcher by its next turn — this GT yields only inside `readStdoutLine`.
 //
 // ⚠ IT STAMPS A CLOCK RATHER THAN COUNTING LINES, and the alternative is why: a counter would need the
 // dispatcher to remember the previous count AND when it changed — two more per-slot arrays and a second

@@ -9,12 +9,12 @@ category: concurrency
 
 ## Documentation
 
-`await p` drives the scheduler until **one named** promise completes. A dispatcher holding N of them
+`await p` parks the caller until **one named** promise completes. A dispatcher holding N of them
 cannot use it: awaiting slot 0 while slot 3 has already answered is head-of-line blocking, and the whole
 point of running N children is that whichever finishes first is served first.
 
 `__Builtins.awaitAny(promises)` is the way out. It takes an array whose element type is a
-`Promise with …`, drives the scheduler until **some** element has completed, and returns that element's
+`Promise with …`, parks the caller until **some** element has completed, and returns that element's
 **index**.
 
 ```maxon
@@ -64,39 +64,37 @@ type no `throws` clause can name, and its reply may not be stored at all — bot
 `specs/services.md`, whose `awaitany-returns-the-completed-index` and
 `a-stored-reply-decodes-serviceerror-through-the-storage-road` carry them.
 
-### The exit test is at the TOP of the drive loop, so an already-complete promise never parks
+### A wait registers on EVERY slot, and the first completer readies it once
 
-`__gt_await_any` is the **shared** cooperative drive loop — the same body `await` and the exit teardown run
-— with a third exit predicate. The loop tests its exit condition BEFORE it drives anything, so an array
-that already holds a completed promise returns at once, having switched into nothing.
-`no-park-when-one-is-already-complete` is the case that pins it: with the single promise in that array
-already complete and **nothing else runnable anywhere**, a compiler that tested only after driving would
-find no work, no timer and no child, and abort as a scheduler deadlock.
+`__gt_await_any` scans the array first (`__gt_any_completed`) and returns at once if some element has
+already completed, having parked on nothing. Otherwise it parks the caller like every other wait, and the
+registration (`__gt_register_park`'s awaitAny arm) runs on the far side of the switch, under
+`__sched_lock`: it scans again, readies the caller at once if a slot completed in between, and otherwise
+stores the caller as the awaiter of every slot — tagged (`AwaitAnyTag`), with its `selectDone` word
+cleared. That is Go's `selectgo`, one registration per case.
 
-Everything else in that loop is shared and must stay shared: the coroutine drain, the
-`__sched_find_runnable` fallback (this P's ring, the global queue, four rounds of stealing), the netpoll's
-timer and child waits, the `awaitOtherM` poll, and the deadlock abort.
+Whichever slot completes first takes the tagged awaiter in `__gt_runner_done`, under the same lock, sets
+`selectDone` and readies the caller through `__gt_ready_locked`; a second slot completing before the caller
+runs finds `selectDone` already set and readies nothing. On waking, the caller clears every slot's awaiter
+word that still names it — under the lock again — and scans. So no slot keeps a registration once
+`awaitAny` has returned, and a later plain `await` of any element finds the word clear.
 
-⭐ **WHICH CASE COVERS WHICH TIER, MEASURED RATHER THAN ASSUMED** — each reading is one line of the shared
-body sabotaged and the file re-run:
+⚠ **A SLOT HOLDS ONE AWAITER.** The registration refuses a slot whose awaiter word is already taken
+(`schedulerPromiseAwaitedTwice`) rather than overwrite it, because the overwritten waiter would never be
+woken. The front end cannot produce that shape.
 
-| the shared arm | the case that needs it |
-|---|---|
-| `__gt_coro_next`, this green thread's own coroutine queue | every `async` case here — all abort **92** without it, and so does a plain `async`+`await` program, which is what says the body is SHARED and not copied |
-| `__sched_find_runnable`, the scheduler's three tiers | **`over-service-replies` ALONE** (92 without it). `async` produces a COROUTINE of the calling green thread, never a green thread of its own, so only a real `spawn` — a service — reaches this arm |
-| the netpoll's timer wait | `over-a-mixed-array-of-sleeps` — three sleepers, no busy loop, and the **earliest deadline** wins |
-| `nothingLeft`'s deadlock abort | `an-empty-array-is-a-scheduler-deadlock` |
-
-### No K-way registration, and above all NO K LOCKS
-
-`awaitAny` registers on nothing. The exit test SCANS the array's status words from the driver, which needs
-no lock at all and leaves nothing for `__gt_promise_drop` to deregister.
+### K registrations, and still ONE lock
 
 Go orders channel locks by address so a K-way wait can hold them all. That is wrong here: both platform
 locks are **recursive on the wrong identity** (a Win32 `CRITICAL_SECTION` is recursive per OS THREAD) while
-green threads multiplex over one OS thread — so a green thread parking while holding one lets a different
-green thread on the same M take the recursive path straight into the critical section. Not a deadlock;
-silent FIFO corruption.
+green threads multiplex over one OS thread — so a green thread parking while holding one would let a
+different green thread on the same M take the recursive path straight into the critical section. Not a
+deadlock; silent FIFO corruption.
+
+So the K registrations take no per-promise lock: every awaiter word is guarded by the ONE scheduler lock.
+The registration, the completer's hand-over and the withdrawal each take it and release it with no switch
+in between — the registration on a machine's scheduler context after the park's switch, the other two in
+straight-line code — so no green thread ever holds it across a park.
 
 ### What the scan reads, and the one thing the caller owes it
 
@@ -108,17 +106,17 @@ the green-thread struct and nothing writes the slot back. That is the same contr
 `__Builtins.gtIsComplete` has had since G17 — the intrinsic asks nothing of its handle beyond it being one
 — and the same slot-level linearity gap named above. A caller that re-selects over an array must
 overwrite a consumed slot, exactly as `Testing/SpecWorkerPool.sendAndDrain` re-arms a drain with `set`.
+The registration writes the awaiter word of every slot it parks on, so a stale handle there is a write
+into a recycled struct, not only a wrong read.
 
 ### An EMPTY array is a scheduler deadlock, and that is Go's answer too
 
-Awaiting any of zero promises can never complete. The scan finds nothing, the drive loop finds nothing
-runnable, no timer and no child, and the shared body's `nothingLeft` arm aborts — the same abort a plain
-`await` of a thread nobody can run reaches, **exit 92**. Go's `select {}` reaches its own deadlock detector
-for exactly this reason. `an-empty-array-is-a-scheduler-deadlock` pins it.
-
-⚠ That case is also the only shape in which `awaitAny` can be a program's **first** scheduler call — an
-array with a promise in it has already spawned one — so it is what makes the lazy `__gt_init` at the top of
-the drive loop reachable. Without it the same program **segfaults** on a TLS slot nobody allocated.
+Awaiting any of zero promises can never complete. The scan finds nothing, the registration has no slot to
+register on, and the caller parks with nothing that can ever ready it. Once every machine is idle, the last
+one to join the idle list runs the deadlock check (`__sched_checkdead`, Go's `checkdead` at `mput`): no
+machine running, no timer, child or read pending, and `main` not finished — **exit 92**, the same answer a
+plain `await` of a thread nobody can run gets. Go's `select {}` reaches its own deadlock detector for
+exactly this reason. `an-empty-array-is-a-scheduler-deadlock` pins it.
 
 ### `Runtime.awaitAny` — the nicer spelling, and why it is not here
 
@@ -188,12 +186,14 @@ end 'main'
 ```
 
 <!-- test: await-any.no-park-when-one-is-already-complete -->
-⭐ **THE EXIT TEST IS AT THE TOP OF THE LOOP, AND THIS IS WHAT SAYS SO.** The promise is driven to
-completion by `Runtime.yield()` before `awaitAny` is called, and it is the only one in the program — so at
-the moment of the call nothing is runnable, no timer is pending and no child is parked. A drive loop that
-tested its exit condition only after driving would find all three empty and reach the same `nothingLeft`
-arm `an-empty-array-is-a-scheduler-deadlock` measures at exit 92; this returns `0` without switching into
-anything.
+⭐ **AN ALREADY-COMPLETE SLOT IS ANSWERED BY THE SCAN, BEFORE ANY PARK.** The promise runs to completion
+under `main`'s own `Runtime.yield()` loop before `awaitAny` is called, and it is the only one in the
+program — so at the moment of the call nothing else is runnable, no timer is pending and no child is
+parked. The scan at the top of `__gt_await_any` finds slot 0 `completed` and returns `0` without parking.
+
+⚠ The exit code cannot tell that road from the one behind it: were the scan skipped, the registration's own
+scan under `__sched_lock` would find the same slot and ready the caller at once. What this case pins is the
+answer — the completed slot is named, and its promise is still awaitable afterwards.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -274,10 +274,11 @@ end 'main'
 ```
 
 <!-- test: await-any.over-a-mixed-array-of-sleeps -->
-⭐ **THE NETPOLL CASE — nothing is runnable at all, so the shared body BLOCKS on the earliest timer.**
-Three sleepers and no other work: the drive loop finds no coroutine, nothing on the ring, nothing to
-steal, no parked child — and sleeps on the nearest deadline rather than spinning. The index that comes
-back is the shortest sleeper, which is deadline order and not array order.
+⭐ **THE TIMER CASE — nothing is runnable at all, so the machine BLOCKS on the earliest deadline.** Three
+sleepers and no other work: once all three coroutines are parked on their timers and `main` is parked in
+`awaitAny`, the machine has nothing to run and parks until the nearest deadline rather than spinning
+(`SchedRuntime.emitSchedParkTimeout`). Firing it readies the 20 ms sleeper, whose completion readies
+`main`. The index that comes back is the shortest sleeper, which is deadline order and not array order.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -378,15 +379,14 @@ end 'main'
 ```
 
 <!-- test: await-any.selects-from-inside-an-async-body -->
-⭐ **A SELECT INSIDE A COROUTINE — the NESTED driver, which is where a drive loop's own identity goes
-wrong.** `selfGt` is the running driver and `owner` is the green thread whose coroutines it may run, and
-both are read once in `entry`; for a top-level `awaitAny` they are GT0, and here the driver is itself an
-`async` frame two links down. The queue this loop drains is still ONE queue, because every link of a driver
-chain has the same owner.
+⭐ **A SELECT INSIDE A COROUTINE — the waiter is not its strand's owner.** `selectOver` is a coroutine of
+`main`'s green thread, and `main` is itself parked on `await outer` while it selects. So the thread the
+registration stores on each slot, the one a completer readies, and the one that withdraws on waking are all
+the coroutine rather than `main`: it is readied to the BACK of `main`'s strand queue, where a readied owner
+goes to the front (`__gt_ready_locked`), and the withdrawal names itself by the running thread
+(`M->currentGt`), which must agree with the thread the registration stored.
 
-Nothing about it is `awaitAny`'s own code — it is the shared body — which is exactly why the case is worth
-having: a select that only ever ran at the top would leave the whole nesting road untested for this entry
-point.
+A select that only ever ran on a strand's owner would leave that whole road untested for this entry point.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -451,11 +451,10 @@ end 'main'
 ```
 
 <!-- test: await-any.an-empty-array-is-a-scheduler-deadlock -->
-⭐ **THE ONE SHAPE IN WHICH `awaitAny` IS A PROGRAM'S FIRST SCHEDULER CALL**, because an array with a
-promise in it has already spawned one. Two things are pinned at once: the drive loop's lazy `__gt_init`
-runs (without it this program reads `currentP` through a TLS slot nobody allocated and **segfaults**), and
-an empty select is answered by the shared body's deadlock abort — exit **92**, promptly, rather than a
-hang or an index naming a promise that never completed.
+⭐ **A SELECT OVER NOTHING PARKS ON NOTHING.** The registration has no slot to store `main` on, so `main`
+parks with nothing that can ready it and the machine running it goes idle. As the last machine joins the
+idle list, `__sched_checkdead` finds no machine running, no timer, child or read pending, and `main`
+unfinished — exit **92**, promptly, rather than a hang or an index naming a promise that never completed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

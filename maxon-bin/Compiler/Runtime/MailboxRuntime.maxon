@@ -20,14 +20,14 @@
 // holding one would let another GT on the same M take the recursive path straight into the critical section.
 // That is not a deadlock; it is silent FIFO corruption, which is worse. `__mbox_recv` therefore RELEASES
 // before it parks and re-checks after it wakes, and the registration that makes it discoverable happens in
-// `__gt_register_park`'s mailbox arm, from the DRIVER, after the switch has saved its registers (W218).
+// `__gt_register_park`'s mailbox arm, on the machine's scheduler context, after the switch has saved its
+// registers.
 //
 // ⭐ **ONE LOCK — `__sched_lock` — FOR EVERY MAILBOX OPERATION, with a stated exit.** A per-mailbox
 // CRITICAL_SECTION would be 40 bytes per service and a second lock ORDER for two files to remember, and
 // the scheduler lock's cost is not visible on any measurement this tree takes. It also makes the wake
-// FREE of an ordering question: `__sched_publish_locked` requires exactly this
-// lock of its caller, so the append and the publish ride one critical section. A per-mailbox lock is a
-// follow-up that needs a measurement first.
+// FREE of an ordering question: `__gt_ready_locked` requires exactly this lock of its caller, so the append
+// and the ready ride one critical section. A per-mailbox lock is a follow-up that needs a measurement first.
 
 // ⭐⭐ **THE MAILBOX RECORD.** The first four words are read and written ONLY under `__sched_lock`, because
 // what must be indivisible is not a word — "is the queue empty AND is it closed AND is anybody parked on it"
@@ -39,9 +39,10 @@ let MboxOffHead = 0x00 as ByteOffset
 let MboxOffTail = 0x08 as ByteOffset
 
 // ⚠ **NAMED `parkedGt` AND NOT `waiter`, BECAUSE `GtOffWaiter` IS A DIFFERENT FACT ABOUT THE SAME THREAD.**
-// A GT's `waiter` is its DRIVER — who to context-switch back to. This is the green thread parked in
-// `__mbox_recv` on THIS mailbox, i.e. who to make `ready` when an envelope arrives. Two fields called
-// `waiter` in one wake sequence is exactly the confusion that writes a status into the wrong struct.
+// A GT's `waiter` is the scheduler context that switched it in — who to context-switch back to. This is the
+// green thread parked in `__mbox_recv` on THIS mailbox, i.e. who to make `ready` when an envelope arrives.
+// Two fields called `waiter` in one wake sequence is exactly the confusion that writes a status into the
+// wrong struct.
 let MboxOffParkedGt = 0x10 as ByteOffset
 
 // Non-zero once the mailbox has been closed — by the last handle drop, or by the loop on its way out after a
@@ -169,7 +170,7 @@ export let MboxAbandonName = b"__mbox_abandon"
 
 // ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
 // is.** There is no program that wants a mailbox without the green-thread substrate under it: `__svc_spawn`
-// calls `__gt_spawn_green` and every wake goes through `__sched_publish_locked`. And there is no bit of its
+// calls `__gt_spawn_green` and every wake goes through `__gt_ready_locked`. And there is no bit of its
 // own to gate it with, for `SlabRuntime.SlabScavengeName`'s stated reason — these functions gate nothing
 // (no import, no `.data` slot, no per-allocation maintenance), and `DeadFunctionElimination` drops them all
 // from every program that never spawns a service, because the only edge into them is the `funcAddr`/`call`
@@ -194,11 +195,11 @@ end 'installMailboxRuntime'
 // are "the parked receiver's reason for waiting has changed", and both must perform the wake in exactly the
 // same three parts, in exactly this order:
 //
-//   1. **CLEAR `parkedGt` AND SET `ready` UNDER THE LOCK.** The same lock `__mbox_recv` re-checks head and
-//      `closed` under, so a receiver can never register itself and then be missed: either it stored itself
-//      before this read (and is woken) or it has not yet reached the store and will re-check afterwards.
-//   2. **PUBLISH UNDER THE LOCK** — `__sched_publish_locked` requires it of its caller, and answers a wake
-//      DEBT rather than performing the wake.
+//   1. **CLEAR `parkedGt` UNDER THE LOCK.** The same lock `__mbox_recv` re-checks head and `closed` under,
+//      so a receiver can never register itself and then be missed: either it stored itself before this read
+//      (and is woken) or it has not yet reached the store and will re-check afterwards.
+//   2. **READY IT UNDER THE LOCK** — `__gt_ready_locked` requires it of its caller, and answers a wake DEBT
+//      rather than performing the wake.
 //   3. **RELEASE, THEN PAY THE DEBT.** `LeaveCriticalSection` is the StoreLoad fence
 //      `__sched_wake_or_spawn`'s idle-M scan depends on, and a nested leave releases nothing — so the wake
 //      may not move inside.
@@ -214,24 +215,21 @@ function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, m
 
 	let parked = emitLoadField(module, block: cur, record: mbox, offset: MboxOffParkedGt, ids: ids)
 	let noneParked = emitConst(module, block: cur, value: 0, ids: ids)
+	let nothingOwed = emitConst(module, block: cur, value: WakeDebtNone, ids: ids)
 	let nobodyWaiting = emitCmp(module, block: cur, a: parked, b: noneParked, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(nobodyWaiting, thenBlockId: unlock.id, elseBlockId: wakeParked.id))
 
 	// The wake debt reaches the release block as its block argument, because the two roads in disagree about
-	// it — an empty `parkedGt` published nothing and owes nothing. `emitSchedWakeIfOwed` states why the debt
+	// it — an empty `parkedGt` readied nothing and owes nothing. `emitSchedWakeIfOwed` states why the debt
 	// may not simply be paid where it is incurred.
 	let owed = ids.mint()
 	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(noneParked)))
+	cur.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(nothingOwed)))
 
-	// The slot is cleared BEFORE the status store, so a second waker on another M finds nobody to wake rather
-	// than publishing the same thread twice.
+	// The slot is cleared under the same lock as the ready, so a second waker on another M finds nobody to
+	// wake rather than readying the same thread twice.
 	emitStoreField(module, block: wakeParked, record: mbox, offset: MboxOffParkedGt, value: noneParked)
-	let readyStatus = emitConst(module, block: wakeParked, value: GtStatusReady, ids: ids)
-	emitStoreField(module, block: wakeParked, record: parked, offset: GtOffStatus, value: readyStatus)
-	let published = emitSchedPublishLocked(module, block: wakeParked, gt: parked, ids: ids)
-	module.setTerminator(wakeParked, op: StdOp.branch(unlock.id))
-	wakeParked.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(published)))
+	emitBranchWithDebt(module, from: wakeParked, to: unlock, debt: emitGtReadyLocked(module, block: wakeParked, gt: parked, ids: ids))
 
 	emitSchedLockLeave(module, block: unlock, ids: ids)
 	emitSchedWakeIfOwed(module, cur: unlock, owed: owed, wake: payWake, cont: cont, ids: ids)
@@ -277,9 +275,9 @@ function buildSvcSpawn(module StdModule)
 
 	// ⭐⭐ **`__gt_spawn_green`, NOT `__gt_spawn` — a SERVICE IS A GREEN THREAD AND NOT A COROUTINE.** The two
 	// bodies differ in one store (a coroutine copies its spawner's owner; a green thread is stamped with
-	// itself), and that store is what routes every later publish of this thread to a P's RING rather than to
-	// some other thread's coroutine queue. A coroutine here would be driven only by its spawner's chain of
-	// drivers, which is exactly the property a service must not have.
+	// itself), and that store is what makes this thread the head of a strand of its own, whose token goes to a
+	// P's RING, rather than a member of its spawner's strand. A coroutine here would run only where its
+	// spawner's work runs, which is exactly the property a service must not have.
 	let gt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(loopPtr)))
 	emitStoreField(module, block: entry, record: gt, offset: GtOffArgInline as ByteOffset, value: state)
@@ -407,13 +405,13 @@ function buildMboxRecv(module StdModule, rawFree ByteArray)
 	module.setTerminator(drained, op: StdOp.ret(noEnvelope))
 
 	// ⭐⭐ **THE REGISTRATION IS `__gt_register_park`'s AND THE LOCK IS ALREADY RELEASED — the two halves of this
-	// file's hard rule.** `emitGtPark` leaves a NOTE on the green thread and switches to its driver — a
-	// receiver is a service, never `main`, the one thread that drives its park — and `__gt_register_park`'s
-	// mailbox arm then performs the registration, re-checking head and `closed` under the lock and UNDOING the
-	// park if either has changed. Between this release and that registration a sender can arrive,
-	// find `parkedGt` still 0 and wake nobody — and the re-check is what notices. Resuming re-enters `attempt`,
-	// which takes the lock and asks again, so a spurious wake costs a loop iteration and nothing else.
-	emitGtPark(module, func: func, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
+	// file's hard rule.** `emitGtPark` leaves a NOTE on the green thread and switches to its machine's
+	// scheduler context, and `__gt_register_park`'s mailbox arm then performs the registration, re-checking head
+	// and `closed` under the lock and UNDOING the park if either has changed. Between this release and that
+	// registration a sender can arrive, find `parkedGt` still 0 and wake nobody — and the re-check is what
+	// notices. Resuming re-enters `attempt`, which takes the lock and asks again, so a spurious wake costs a
+	// loop iteration and nothing else.
+	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
 
 	module.functions.push(func)
 end 'buildMboxRecv'
@@ -546,7 +544,7 @@ end 'buildMboxHandleDropBox'
 // thread is its own consumer. But `emitGtIsDropped` reads exactly that ticket to mean *"the promise is gone,
 // do not RUN this thread"*, so a ticket added at spawn would make a never-yet-run service read as abandoned
 // to every popper (`GtRuntime.emitGtIsDropped`). Added here it is the honest statement it looks like: this
-// thread is finished, and the driver that switched into it supplies the runner's half.
+// thread is finished, and the strand runner that switched into it supplies the runner's half.
 //
 // ⭐⭐ **THE GREEN THREAD IS READ HERE AND IS NOT A PARAMETER, BECAUSE THE MAXON-TIER LOOP HAS NO WAY TO NAME
 // ONE.** `<T>.__loop` is ordinary program code (`ServiceLoop`) — its two parameters are the state and the
@@ -623,8 +621,8 @@ end 'buildMboxAbandon'
 //
 //   • **AN ENVELOPE ARRIVED, OR THE MAILBOX CLOSED, SINCE THE RECEIVE RELEASED THE LOCK.** The park is
 //     UNDONE: nothing will ever wake this thread, because the event it was waiting for has already happened
-//     and its waker found `parkedGt` still 0. The thread goes back to `ready` and is re-published, since it
-//     has already switched away to its driver.
+//     and its waker found `parkedGt` still 0. The thread is readied, since it has already switched away and
+//     is on no queue.
 //   • **NEITHER.** The thread registers itself as the mailbox's `parkedGt` and goes `waiting`, which is what
 //     the next `__mbox_send` or `__mbox_close` will find.
 //
@@ -648,13 +646,12 @@ end 'buildMboxAbandon'
 // a hang with no second source. The re-check stays because it is right and costs two loads under a lock the
 // caller already holds; what may not stay is a claim that it has been measured to matter.
 //
-// It terminates `cur` and answers the block to CONTINUE IN, `emitMboxWakeAndUnlock`'s shape — except that
-// here the caller owns the unlock, because `__gt_register_park`'s other three arms do too.
-export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBlock, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
+// It terminates `cur` into `cont`, handing it the wake debt as `cont`'s one block argument: the caller owns the
+// release and pays the debt after it, as `__gt_register_park` does for every arm that takes the lock.
+export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBlock, gt ValueId, mbox ValueId, cont IrBlock, ids ValueMinter)
 	var recheckClosed = module.addBlock(func, label: b"parkmboxclosed")
 	var undoPark = module.addBlock(func, label: b"parkmboxundo")
 	var registerWaiter = module.addBlock(func, label: b"parkmboxwait")
-	var cont = module.addBlock(func, label: b"parkmboxdone")
 
 	let head = emitLoadField(module, block: cur, record: mbox, offset: MboxOffHead, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
@@ -668,26 +665,7 @@ export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBl
 	let waitingStatus = emitConst(module, block: registerWaiter, value: GtStatusWaiting, ids: ids)
 	emitStoreField(module, block: registerWaiter, record: mbox, offset: MboxOffParkedGt, value: gt)
 	emitStoreField(module, block: registerWaiter, record: gt, offset: GtOffStatus, value: waitingStatus)
-	module.setTerminator(registerWaiter, op: StdOp.branch(cont.id))
-	registerWaiter.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(zero)))
+	emitBranchWithDebt(module, from: registerWaiter, to: cont, debt: emitConst(module, block: registerWaiter, value: WakeDebtNone, ids: ids))
 
-	// An undone park is re-published: the parker has already switched to its driver and is on no queue.
-	let readyStatus = emitConst(module, block: undoPark, value: GtStatusReady, ids: ids)
-	emitStoreField(module, block: undoPark, record: gt, offset: GtOffStatus, value: readyStatus)
-	let published = emitSchedPublishLocked(module, block: undoPark, gt: gt, ids: ids)
-	module.setTerminator(undoPark, op: StdOp.branch(cont.id))
-	undoPark.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(published)))
-
-	// The wake debt reaches the caller as `cont`'s block argument — the three roads in disagree about it, and
-	// only `__gt_register_park` knows where its own release is.
-	let owed = ids.mint()
-	cont.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
-	return cont
+	emitBranchWithDebt(module, from: undoPark, to: cont, debt: emitGtReadyLocked(module, block: undoPark, gt: gt, ids: ids))
 end 'emitMboxRegisterPark'
-
-// The wake debt an `emitMboxRegisterPark` continuation carries, read back by `__gt_register_park` so the
-// block-argument position is stated once rather than at the two ends of one edge.
-export function mboxRegisterParkWakeDebt(cont IrBlock) returns ValueId
-	let arg = try cont.blockArgs.get(0) otherwise panic("mboxRegisterParkWakeDebt: the mailbox park's continuation block carries no argument — `emitMboxRegisterPark` pushes exactly one, the wake debt")
-	return arg.valueId
-end 'mboxRegisterParkWakeDebt'

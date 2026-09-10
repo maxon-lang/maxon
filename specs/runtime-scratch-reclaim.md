@@ -38,9 +38,10 @@ would pass against the pre-S3 read probe, which allocated freely and released no
 The GT-struct case asks the recycling runtime's pair instead: the window took nothing from the
 allocator at all, and left nothing live.
 
-⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` and `__io_init` take GT0, the timer store,
-the process store and the completion port's lock the first time any of this is touched, and those
-regions are genuinely process-lifetime. Measuring across them would credit the window with
+⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` and `__io_init` run before `main` does, so the timer
+store, the process store and the completion port are in place before any window opens; what a first call
+can still create for the life of the process — the GT struct its processor's free list keeps for the next
+spawn is one — belongs outside the window too. Measuring across it would credit the window with
 allocations that are *supposed* to still be live. The warm-up call is what makes the window contain
 only per-call work.
 

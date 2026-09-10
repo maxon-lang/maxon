@@ -1324,12 +1324,12 @@ export union StdOp
 	// `osFreePages(addr, size)` RELEASES the `size`-byte page region an earlier `osAllocPages` committed at `addr`
 	// — the free twin the bump heap (which never frees) never needed, but the green-thread scheduler does: a
 	// completed GT's stack (possibly GROWN by the morestack, so of a size only the runtime knows) is released here,
-	// on `__gt_drive_until`'s completion path, so a spawn/await loop stays bounded without the fixed-size free-list
+	// on `__gt_runner_done`'s completion path, so a spawn/await loop stays bounded without the fixed-size free-list
 	// the 1 MiB rung used. TWO VALUE operands, no result — the mirror of `osExit`/`osCloseHandle`.
 	//
 	// ⚠⚠ **THE SIZE OPERAND IS WHAT MAKES THIS OP LOWERABLE ON THE THREE POSIX LANES AT ALL.** It carried the base
 	// ALONE until F1a, because `VirtualFree(addr, 0, MEM_RELEASE)` releases the whole reservation from its base and
-	// the only producer (`__gt_drive_until`) was x64-windows-gated anyway. But every POSIX page source needs the
+	// the only producer (`__gt_runner_done`) was x64-windows-gated anyway. But every POSIX page source needs the
 	// LENGTH — `munmap(addr, len)` takes one and has no "free the whole mapping" spelling to fall back on — so on
 	// x64-linux, arm64-linux and arm64-macOS a base-only op could not be lowered even in principle, and those
 	// refusals were FORCED BY THE VOCABULARY rather than judgements about what the target can do. ⇒ the size is
@@ -2839,21 +2839,10 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osLockEnter gives SyscallClass.schedulerBound
 		osLockLeave gives SyscallClass.schedulerBound
 
-		// ⛔⛔ **THE THREE WAITS ARE A SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
-		// reached ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
-		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
-		// processor taken from the very thing that would have used it, and the wait is already bounded by
-		// `__gt_timer_earliest` and by the park timeouts.
-		//
-		// ⛔⛔ **AND A SECOND, INDEPENDENT REASON THAT LIVES IN ANOTHER FILE: THE DEADLOCK CENSUS'S ARGUMENT
-		// FOR HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND
-		// THESE THREE ARMS ARE THE WHOLE OF WHY THAT IS TRUE.** A machine publishes `MQuiescedWaiting`
-		// immediately before parking, and it parks by emitting one of these three. Move any of them to
-		// `blocking` and `__sysmon` can take a processor from a machine that already advertises quiescence, at
-		// which point `__sched_any_executing` sees nothing executing mid-handoff and aborts a live program with
-		// exit 92 — with no compile error between the two files. The argument itself is stated once, at
-		// `SchedRuntime.buildSchedRetake`'s census note; these arms name it so they cannot be moved without
-		// meeting it.
+		// ⛔⛔ **THE THREE WAITS ARE THE SCHEDULER WAITING FOR ITS OWN WORK.** A machine's park and
+		// `__sched_syscall_regain`'s poll wait through them holding no processor, so there is none for
+		// `__sysmon` to take, and the park's wait is already bounded by `__gt_timer_when` and by the park
+		// timeouts.
 		osWaitHandle gives SyscallClass.schedulerBound
 		osWaitHandles gives SyscallClass.schedulerBound
 		osSleepMs gives SyscallClass.schedulerBound

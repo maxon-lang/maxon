@@ -9,10 +9,11 @@ category: concurrency
 
 ## Documentation
 
-`async f(args…)` spawns a **green thread** running `f` and yields a `Promise` handle; `await p` blocks the
-current green thread until `p`'s thread completes and yields its result. This first slice is **single-M
-cooperative**: one OS thread runs everything, a spawned thread runs only when a driver (`await`) hands it the
-processor, and it runs to completion in one shot (there is no mid-body yield yet).
+`async f(args…)` creates a **coroutine** of the calling green thread, running `f`, and yields a `Promise`
+handle; `await p` parks the caller until `p`'s coroutine completes and hands back its result. The scheduling
+is **cooperative**: a coroutine runs on the machine that holds its green thread's strand, one member of the
+strand at a time, and gives that machine up only at a wait — an `await`, a `sleep`, a `Runtime.yield()` or an
+I/O point.
 
 ```text
 function compute() returns int
@@ -20,8 +21,8 @@ function compute() returns int
 end 'compute'
 
 function main() returns ExitCode
-	let p = async compute()   // spawn a green thread; p is a Promise
-	let r = await p           // run it, collect its result
+	let p = async compute()   // a coroutine of main's green thread; p is a Promise
+	let r = await p           // park until it completes, then take its result
 	return r as ExitCode
 end 'main'
 ```
@@ -35,7 +36,7 @@ or float value needs a channel a later slice builds.
 
 ⭐⭐ **THE GREEN-THREAD FAMILY CARRIES NO `<!-- unsupported-targets: … -->` MARKER, AND THAT IS THE
 POINT: THE COMPILER ALREADY REFUSES IT, LOUDLY.** The context switch is hand-written ASSEMBLY and the
-driver reaches the host's clock, its timed park and its per-OS-thread storage directly, so a lane serves
+scheduler reaches the host's clock, its timed park and its per-OS-thread storage directly, so a lane serves
 this family only once a backend has written those out. All four native lanes have (x64-windows first —
 `X64GtRuntime`'s context switch, trampoline, relocating grower and Win32 substrate; then `Arm64GtRuntime`
 and the two Linux images). A WASI component has no addressable call stack for a context switch to move,
@@ -57,7 +58,7 @@ of those would be hiding a green lane rather than describing a red one.
 ## Tests
 
 <!-- test: async-scheduler.basic -->
-A spawned green thread runs its function and `await` collects the result.
+An `async` coroutine runs its function and `await` collects the result.
 ```maxon
 
 function compute() returns Integer
@@ -233,7 +234,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-scheduler.await-loop-bounded -->
 A spawn/await loop stays bounded: each spawn commits a fresh green-thread stack and each completed thread's
-stack is RELEASED (`osFreePages`/VirtualFree) as the driver reaps it, so 5000 iterations hold at most one
+stack is RELEASED (`osFreePages`/VirtualFree) as the strand runner reaps it, so 5000 iterations hold at most one
 resident stack at a time and exit cleanly. (P1.5-B1a′ replaced B1a's fixed-size 1 MiB free-list with
 alloc-fresh-on-spawn + free-on-complete, because the relocating morestack makes stacks variable-sized; the
 bound is now alloc+free churn rather than a recycle. Without either, every spawn would leak its stack
@@ -299,8 +300,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.out-of-order-await -->
-A promise's struct must survive until ITS OWN `await`, even when the thread completes early as a side effect of
-driving a DIFFERENT await (P1.5-B1c #87). `await p2` drives the FIFO run queue and completes `p1` first; `p1` is
+A promise's struct must survive until ITS OWN `await`, even when the thread completes early while a DIFFERENT
+await is parked (P1.5-B1c #87). While `main` is parked on `await p2`, its strand runs `p1` first, FIFO; `p1` is
 now a completed-but-un-awaited handle. Two intervening `async` spawns must NOT recycle `p1`'s struct — only `p1`'s
 own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1`'s real result (10), not `p4`'s
 (40). `10+20+30+40 = 100`. Reclaiming at completion instead of at await returned 130 here (a silent wrong answer).

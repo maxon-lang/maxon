@@ -33,10 +33,10 @@ blocked in a kernel call, would this field still be true of it?***
 |---|---|
 | `currentP` — the processor it holds, **or 0** | `id`, the shard index and the run-queue ring |
 | `currentGt` — the green thread it is executing | the steal count |
-| `systemStackSP` — its own 64 KB syscall stack | the deferred re-enqueue slots and the remote-free queue |
+| `systemStackSP` — its own 64 KB syscall stack | the remote-free queue |
 | its inline scheduler green thread (Go's `g0`) | `status`, and its link on the idle-P list |
 | **its park event, and its place on the idle-M list** | |
-| **the spinning bit and the two deadlock words** | |
+| **the spinning bit** | |
 | **its OS thread handle, and its link on the roster** | |
 
 ⚠ **`M->currentP` IS THE FIELD THE SPLIT EXISTS TO CREATE.** *"This thread holds no processor"* is one load
@@ -61,13 +61,13 @@ the syscall stack, and both are the M's, so they are the same two loads through 
 before. Only a reader that wants the PROCESSOR pays the extra field load — the allocator's shard read, and
 the scheduler's own per-schedule walks.
 
-### The process is single-M BY CONSTRUCTION for everything `async` creates — and multi-M for what `spawn` creates
+### Everything `async` creates runs on one machine at a time — and `spawn` is what makes a second worth starting
 
 ⚖ **AN `async f(…)` CALL DOES NOT CREATE A GREEN THREAD** (user, 2026-08-27). It creates a COROUTINE
-of the green thread that called it, published only to that green thread's coroutine queue and driven
-only by its chain of drivers — `sched-runqueue.md` is where that is stated in full. **Nothing an
-`async` program does publishes a GT to a P**, so nothing calls `__sched_wake_or_spawn` and **no worker
-OS thread is created for it, at any `MAXON_MAX_PROCS`.**
+of the green thread that called it, which joins that green thread's strand and runs only on the machine
+holding the strand — `sched-runqueue.md` is where that is stated in full. **A coroutine is never a token on
+a run queue**, so an `async`-only program publishes one token, `main`'s, and a program whose only green
+thread is `main` keeps one M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header says why).
 
 ⛔ **THAT IS NOW A STATEMENT ABOUT `async`, NOT ABOUT THE PROCESS, AND THE SENTENCE HERE USED TO CONFLATE
 THE TWO.** It said `DefaultMaxProcs` was 1 so an ordinary program built exactly one P and the rest sat
@@ -83,17 +83,14 @@ at the default. `steal-torture` — which is `async` — reads `workers=1 steals
 before the pin, on the same box, it read `workers=8 steals=3996` at N=12. The two SPAWN-driven programs read
 the other way, which is the same script's other family.
 
-⚠ **WHAT AN `async`-ONLY PROGRAM EXERCISES IS STILL LESS OF THE STRUCTURE.** Two of the four pieces run in
-one and are covered by the cases below: the **TLS indirection** (every green thread reaches `currentGt`
-through the M its TLS slot names, which is every async case in the corpus) and the **per-M syscall stack**
-(`a-green-thread-kernel-call-round-trips-its-processor-stack`). The **CAS claim**, the **Dekker park** and
-the run-queue hierarchy behind them are code no thread in such a program enters — dead-code elimination
-takes `__sched_runq_put`, `__sched_find_runnable`, `__sched_steal`, `__sched_worker_loop`,
-`__sched_wake_or_spawn`, `__gt_enqueue` and `__gt_dequeue` out of an async program's emitted binary
-entirely. A program that spawns keeps all of them and runs all of them. The **waiter** half of the deferred
-pair still has no producer in either kind; its yielder half does (`__gt_resched`'s handoff) and runs on
-every `Runtime.yield()`. ⚠⚠ **NOTHING UNREACHED IS DELETED, AND EVERY UNREACHED PIECE SAYS SO AT ITS OWN
-DECLARATION.**
+⚠ **WHAT AN `async`-ONLY PROGRAM EXERCISES IS STILL LESS OF THE STRUCTURE.** `main` is a green thread in
+every green-thread program, so one machine's whole road runs in it and is covered by the cases below: the
+**TLS indirection** (every green thread reaches `currentGt` through the M its TLS slot names, which is every
+async case in the corpus), the **per-M syscall stack** (`a-green-thread-kernel-call-round-trips-its-processor-stack`),
+`main`'s token going through its processor's ring, the scheduler loop's search, and the machine's park when
+it has nothing to run. What such a program never reaches is a SECOND machine: no worker loop runs and nothing
+is stolen. A program that spawns reaches all of it. ⚠⚠ **NOTHING UNREACHED IS DELETED, AND EVERY UNREACHED
+PIECE SAYS SO AT ITS OWN DECLARATION.**
 
 ⛔ **WHAT THE ALLOCATOR NOTE HERE USED TO SAY IS STALE TWICE OVER, and both corrections are
 measured.** It said *"at N>1 the allocator is one unsharded unlocked shard and the refcounts are a
@@ -154,8 +151,8 @@ thread that is EXECUTING, and the argument for each is the same argument one lev
 
 ### A spawned green thread is PUBLISHED LAST, and that ordering is load-bearing
 
-`__gt_spawn` creates a green thread and returns it UNQUEUED; the lowering fills its inline argument
-slots and its releaser, and only then calls `__gt_ready`, which appends it to the run queue and wakes
+slots and its releaser, and only then calls `__gt_ready`, which puts it on its strand queue and — when no
+machine holds that strand — publishes the strand's token and wakes an idle M.
 an idle M.
 
 ⚠ **THAT SPLIT EXISTS BECAUSE THE ONE-CALL SHAPE WAS A MEASURED WRONG ANSWER.** `__gt_spawn` used to
@@ -196,8 +193,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: sched-processor.many-green-threads-through-one-processor -->
-Thirty-two green threads spawned before any is awaited, so all thirty-two are on the run queue at
-once and one P drives every one of them: the scheduler's `currentGt` is written and restored around
+Thirty-two coroutines spawned before any is awaited, so all thirty-two are on `main`'s strand queue at
+once and one machine runs every one of them: the scheduler's `currentGt` is written and restored around
 each switch, and an M that lost track of which thread it was running would return one thread's result
 for another. The sum is index-derived, so any mis-pairing lands on a different number.
 ```maxon

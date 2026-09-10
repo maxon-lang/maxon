@@ -36,8 +36,8 @@
 //      libSystem call here takes is a VARIADIC one, and the door carries the caller's one 16-byte
 //      outgoing region across with the switch.
 //
-// ⭐ **THE CONTEXT SWITCH TAKES TWO ARGUMENTS AND TOUCHES NO `.data` AT ALL.** The Std-tier drivers own
-// the current-GT store (`GtRuntime.maxon:5137`, `:5165`) — the same property x64's switch has, and the
+// ⭐ **THE CONTEXT SWITCH TAKES TWO ARGUMENTS AND TOUCHES NO `.data` AT ALL.** The Std-tier strand runner owns
+// the current-GT store (`GtRuntime.emitGtExecute`) — the same property x64's switch has, and the
 // reason a fresh green thread can read its own GT out of x1 (the switch leaves `to` untouched, exactly
 // as x64 leaves it in rdx).
 //
@@ -252,7 +252,7 @@ end 'arm64GtAppendPairs'
 
 // The entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call: no incoming
 // register arguments, no prologue, and x29 is the seed frame's zero — which is what stops the panic
-// backtrace at a green thread's boundary instead of walking into the driver that spawned it.
+// backtrace at a green thread's boundary instead of walking into the scheduler context that switched it in.
 //
 // It reads its own GT out of x1 (the switch left `to` there), loads the async function and its argument
 // buffer from the struct, fills every `MaxAsyncArgs` argument register, calls, captures x0 into
@@ -285,9 +285,10 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GtTrampFuncPtrReg, value: GtStatusCompleted)
 
 	// ⛔⛔ **`STLR`, NOT `STR` — THIS IS THE PUBLICATION, AND THE TWO STORES ABOVE ARE WHAT IT PUBLISHES
-	// (G3).** An awaiting driver on ANOTHER M spins on `gt.status == completed` and then reads `gt.result` /
-	// `gt.threw`. On this weakly-ordered ISA a plain `str` here lets the flag become visible before the two
-	// words it announces, and the awaiter reads a result the thread had not written yet — **a wrong awaited
+	// (G3).** A reader on ANOTHER M — an awaiter's registration, `__gt_is_complete` — tests
+	// `gt.status == completed` and then reads `gt.result` / `gt.threw`. On this weakly-ordered ISA a plain `str`
+	// here lets the flag become visible before the two words it announces, and the awaiter reads a result the
+	// thread had not written yet — **a wrong awaited
 	// value, not a crash**, which no golden on this lane could see. The store-release orders both of them
 	// before itself. Its acquire partner is `GtRuntime.emitGtLoadPublishedStatus`, which every reader of this
 	// word goes through; neither half is a fix alone.
@@ -301,8 +302,8 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	// must be materialised, and that register's last read was the argument-marshalling loop far above.
 	arm64EmitStoreReleaseWord64At(asm, src: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffStatus, scratch: Arm64GtTrampArgBufReg)
 
-	// __gt_context_switch(from = gt, to = gt.waiter) — never returns; the driver that ran this thread set
-	// its waiter before handing it the processor.
+	// __gt_context_switch(from = gt, to = gt.waiter) — never returns; the strand runner that switched this thread
+	// in set its waiter first.
 	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchToReg, base: Arm64GtTrampGtReg, byteOffset: GtOffWaiter)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64GtSwitchFromReg, src: Arm64GtTrampGtReg)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtContextSwitchName)

@@ -31,10 +31,8 @@ the caller to the front of the queue would be no yield at all: it would hand the
 the thread that just gave it up. **If nothing else is runnable it returns promptly and the caller simply
 continues** — a yield never blocks waiting for work to appear.
 
-`main` is the one caller that is not itself a queued green thread — it is the thread the scheduler runs
-everything else from — so a yield taken there is not a trip through the queue: it gives the queued work a
-turn and comes back. The promise is the same either way, which is why `Runtime.yield()` needs no separate
-spelling for it.
+`main` is an ordinary green thread, so a yield taken there takes the same road as one taken anywhere else —
+which is why `Runtime.yield()` needs no separate spelling for it.
 
 That makes `Runtime.yield()` the right primitive for a wait loop that has something to re-check:
 
@@ -51,15 +49,15 @@ substitute for `await` or `sleep`, which are the *blocking* waits and which cost
 ### It is not `sleep(0)`
 
 `sleep(ms)` parks the calling green thread on a timer and resumes it once the deadline passes, so even
-`sleep(0)` occupies a timer entry for the round trip. `Runtime.yield()` occupies none: it moves the caller
-through the run queue instead. A program may therefore yield as often as it likes without competing for the
+`sleep(0)` occupies a timer entry for the round trip. `Runtime.yield()` occupies none: it only re-queues the
+caller instead. A program may therefore yield as often as it likes without competing for the
 timer store, which matters precisely when many green threads are yielding at once.
 
 ### It is safe outside any async context
 
-Calling it from a program that has never spawned a green thread — including before anything has initialised
-the scheduler — is well defined and inert: the call returns and the program continues. This is what lets
-library code yield without first asking whether its caller happens to be concurrent.
+Calling it from a program that has never spawned anything is well defined and inert: the scheduler is up
+before `main` runs, `main` is its only green thread, and a yield with nothing else runnable comes straight
+back. This is what lets library code yield without first asking whether its caller happens to be concurrent.
 
 ### It counts as yielding
 
@@ -69,28 +67,22 @@ callee that can actually give up the scheduler — a function that only computes
 the same footing as `sleep`, which is likewise a scheduler park rather than an I/O wait.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** `Runtime.yield()` lowers to `__gt_resched`, the scheduler's run-queue handoff, so it
+statement of it.** `Runtime.yield()` lowers to `__gt_resched`, the scheduler's yield park, so it
 serves the lanes that have a green-thread substrate and is refused with **E3104** on the ones that do not.
 
 ## Tests
 
 <!-- test: runtime-yield.sibling-runs -->
-The discriminating case: a yield really does hand the processor to a SIBLING green thread. `spinner` yields a
-thousand times and then reports whether `setter` ever ran; `setter` sets the flag as its first act, so the
-only question the exit code answers is whether `spinner`'s yields let it run at all. `3` (`1` seen + `2`
-acknowledged) means they did; `2` means a thousand yields went by and the sibling never got a turn.
+The discriminating case: a yield really does hand the processor to a SIBLING that would not otherwise run
+first. `spinner` is created FIRST, so it is the member of `main`'s strand that runs first once `main` parks on
+its await; it yields a thousand times and then reports whether `setter` ever ran. `setter` sets the flag as its
+first act, so the only question the exit code answers is whether `spinner`'s yields let it in. `3` (`1` seen +
+`2` acknowledged) means they did; `2` means a thousand yields went by and the sibling never got a turn.
 
-**Spawn order is what makes it a test rather than a coincidence, and it is deliberately the awkward way
-round.** `spinner` is spawned LAST, so it is the thread the scheduler reaches first — a yield that did
-nothing would therefore leave `spinner` running until it finished, with `setter` still unstarted and `flag`
-still `0`. Spawning the spinner first would prove nothing: `setter` would already have run before the
-spinning began, and the case would pass with the yield removed entirely.
-
-That is not hypothetical. This case previously spawned two threads that each appended a digit to a global,
-and claimed a particular interleaving proved the handover — but the interleaving followed from spawn order
-alone, and the case passed verbatim against a `Runtime.yield()` compiled to `return`. It caught nothing for
-as long as it existed. The shape below was checked the only way this claim can be: by making the primitive
-inert and confirming the case goes red.
+**Creation order is what makes it a test rather than a coincidence.** A strand runs its members in the order
+they were readied, so a spinner created AFTER the setter would find the flag already set whether or not its
+yields did anything, and the case would pass with the yield removed. Checked the only way this claim can be:
+with `__gt_resched` made to return at once, this case reads `2`.
 
 Both spawned functions yield, which is also required rather than decorative: `async` demands a callee that
 can give up the scheduler, so a `setter` without one would be refused by E3073 — the very rule this document
@@ -114,10 +106,10 @@ function spinner() returns Integer
 end 'spinner'
 
 function main() returns ExitCode
-	let p1 = async setter()
-	let p2 = async spinner()
-	let seen = await p2
-	let ack = await p1
+	let p1 = async spinner()
+	let p2 = async setter()
+	let seen = await p1
+	let ack = await p2
 	return (seen + ack) as ExitCode
 end 'main'
 ```
@@ -126,9 +118,9 @@ end 'main'
 ```
 
 <!-- test: runtime-yield.nothing-runnable -->
-Yielding with nobody to yield to PROCEEDS rather than blocking. The spawned thread is the only runnable one,
-so each of its yields finds an empty run queue and returns straight away; the thread runs to completion and
-its value is awaited normally.
+Yielding with nobody to yield to PROCEEDS rather than blocking. The coroutine is the only runnable member of
+`main`'s strand — `main` is parked on its await — so each of its yields finds nothing else to run and comes
+straight back; the thread runs to completion and its value is awaited normally.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -151,9 +143,9 @@ end 'main'
 ```
 
 <!-- test: runtime-yield.spin-wait-from-main -->
-**A spin-wait on the MAIN thread makes progress.** `main` is not itself a spawned thread — it is the one the
-scheduler runs everything else from — so a yield taken there has to give queued green threads a turn just as a
-yield from a spawned thread does. This is the case that makes `while not ready { Runtime.yield() }` usable
+**A spin-wait on the MAIN thread makes progress.** `main` is a green thread like any other, so a yield taken
+there puts it behind its strand's runnable members exactly as a yield from a coroutine does, and `worker`
+gets its turn. This is the case that makes `while not ready { Runtime.yield() }` usable
 from `main`, and the exit code distinguishes the two outcomes exactly: `8` means the worker ran during the
 spin, `7` means a thousand yields went by without it running once.
 ```maxon

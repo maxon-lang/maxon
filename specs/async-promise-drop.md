@@ -22,11 +22,11 @@ thread that is neither awaited nor dropped leaks silently — so the runtime kee
 per spawn, one down per await-reclaim AND per drop-reclaim) and the one OS-exit leak gate asserts it is zero.
 A leak (or an over-reclaim) reports `RuntimeAbort.greenThreadLeak` (75), distinct from the heap gate's 101.
 
-`__gt_promise_drop` branches on the thread's state: a `completed` thread (which may have run as a side effect
-of driving a DIFFERENT await) has already had its stack freed, so only its struct is reclaimed; a `ready`
-(never-run) thread is unlinked from the run queue and its seed stack freed; a `waiting` (parked) thread is
-removed from the timer / process stores — closing a parked child's handle to abandon the wait — and its stack
-freed.
+`__gt_promise_drop` branches on the thread's state: a `completed` thread (which may have run while its owner
+was parked on a DIFFERENT await) has already had its stack freed, so only its struct is reclaimed; a `ready`
+(never-run) thread is renounced where it sits in its strand's queue, and whoever pops it reclaims it and frees
+its seed stack instead of running it; a `waiting` (parked) thread is removed from the timer / process stores —
+closing a parked child's handle to abandon the wait — and its stack freed.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Dropping a promise reaps a green-thread struct and releases its stack through
@@ -35,9 +35,10 @@ statement of it.** Dropping a promise reaps a green-thread struct and releases i
 ## Tests
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
-A spawned green thread that is never awaited is DROPPED at scope exit: it is unlinked from the run queue, its
-seed stack freed and its struct reclaimed, and `__gt_live_count` balances to zero — so the program exits with
-`main`'s own code (0), not the GT-leak abort (75). Before #88 this spawn leaked its struct + stack silently.
+A spawned green thread that is never awaited is DROPPED at scope exit: it is renounced where it sits in its
+strand's queue, so it is reclaimed — seed stack and struct — rather than run, and `__gt_live_count` balances to
+zero — so the program exits with `main`'s own code (0), not the GT-leak abort (75). Before #88 this spawn leaked
+its struct + stack silently.
 ```maxon
 
 function trivial() returns Integer
@@ -56,10 +57,15 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.completed-sibling-drop-no-leak -->
-A sibling promise that COMPLETES as a side effect of driving another await is dropped through the `completed`
-arm — its struct is reclaimed WITHOUT double-freeing the stack (`__gt_drive_until` already freed it at
-completion). `await b` drives the FIFO run queue and runs `a` to completion; `return (await b)` then drops the
-completed-but-un-awaited `a`. The awaited sibling's result (20) is intact, and the live count balances to zero.
+A sibling promise that COMPLETES while another is awaited, and is then dropped — its struct is reclaimed
+WITHOUT double-freeing the stack (the runner freed it at completion). While `main` is parked on `await b` its
+strand runs `a` and `b` FIFO, so `a` has completed by the time `main` resumes; the peek answers `1` for it, and
+`a` is dropped at scope exit. `20 + 1 = 21`: the awaited sibling's result is intact, and the live count balances
+to zero.
+
+⚠ **`a` MUST BE BOUND.** `_ = async ten()` discards the promise at its own statement, before `main` parks — so
+`ten` never runs and the drop reclaims a never-run thread, which is `never-ran-drop-no-leak` again. The peek
+pins that `a` really had completed when it was dropped: a thread that has not run reads `0`.
 ```maxon
 
 function ten() returns Integer
@@ -73,20 +79,21 @@ function twenty() returns Integer
 end 'twenty'
 
 function main() returns ExitCode
-	_ = async ten()
+	let a = async ten()
 	let b = async twenty()
-	return (await b) as ExitCode
+	let r = await b
+	return (r + __Builtins.gtIsComplete(a.inner)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-20
+21
 ```
 
 <!-- test: async-promise-drop.never-ran-drop-not-run -->
 Pins the divergence from a fire-and-forget-run model: a dropped thread's body NEVER RUNS. `incFlag` would set
-the global to 1 if it ran, but `p` is never awaited (nothing drives the scheduler), so `incFlag` is never
-scheduled and the global stays 0. The drop cancels the never-run thread; it does not run it.
+the global to 1 if it ran, but `p` is never awaited and `main` never parks or yields, so its strand never
+reaches `incFlag` and the global stays 0. The drop cancels the never-run thread; it does not run it.
 ```maxon
 var flag = 0
 
@@ -108,10 +115,10 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-promise-drop.spawn-drop-loop-bounded -->
 The real #88 leak shape: a loop that spawns a promise every iteration and never awaits it. Each iteration's
-promise is dropped at the loop body's scope exit — unlinked from the run queue (so it cannot be run by a later
-drive) and its struct recycled onto the free-list, which the next spawn reuses. Memory stays bounded across
-1000 iterations and the live count balances to zero (exit 0). Before #88 each iteration bump-leaked its struct
-and seed stack, invisible to `__mm_alloc_count`.
+promise is dropped at the loop body's scope exit — renounced in its strand's queue (so it is reclaimed rather
+than run when the queue reaches it) and its struct recycled onto the free-list, which the next spawn reuses.
+Memory stays bounded across 1000 iterations and the live count balances to zero (exit 0). Before #88 each
+iteration bump-leaked its struct and seed stack, invisible to `__mm_alloc_count`.
 ```maxon
 
 function trivial() returns Integer
@@ -134,12 +141,17 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-cancel -->
-A promise PARKED on a timer is dropped-cancelled at scope exit. `slow` sleeps 200 ms (parks on the timer);
-`fast` completes immediately. `await q` drives the scheduler: `slow` runs first, parks on its timer and yields;
-`fast` then runs to completion, so `await q` returns 42 while `slow` is still parked. `return r` drops `slow` —
-the `waiting` arm removes it from the timer store, frees its stack and reclaims its struct — with NO hang (the
-200 ms timer is never waited on) and NO use-after-free (the netpoller never touches the freed `slow`). The live
-count balances to zero.
+A promise PARKED on a timer is dropped-cancelled at scope exit. `sleeper` sleeps 200 ms; `fast` completes
+immediately. `await q` parks `main`, and its strand runs its other members FIFO: `sleeper` runs first and parks
+on its timer; `fast` then runs to completion, so `await q` returns 42 while `sleeper` is still parked — the peek
+adds `0`, where a completed thread would add `1`. Scope exit drops `s` — the `waiting` arm removes it from the
+timer store, frees its stack and reclaims its struct — with NO hang (the 200 ms timer is never waited on) and NO
+use-after-free (no timer fire ever touches the freed thread). The live count balances to zero.
+
+⚠ **`s` MUST BE BOUND.** `_ = async sleeper()` discards the promise at its own statement, before `main` parks:
+`sleeper` never runs, never arms its timer, and the drop takes the QUEUED arm — and this case once read exactly
+that way while describing the `waiting` arm. **MEASURED at SV2, by a sabotage that should have turned it red
+and did not.**
 ```maxon
 
 function sleeper() returns Integer
@@ -153,10 +165,10 @@ function fast() returns Integer
 end 'fast'
 
 function main() returns ExitCode
-	_ = async sleeper()
+	let s = async sleeper()
 	let q = async fast()
 	let r = await q
-	return r as ExitCode
+	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -165,16 +177,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-through-a-rearm -->
-⛔⛔ **THE CASE ABOVE DOES NOT REACH THE `waiting` ARM, AND ITS OWN DESCRIPTION SAYS IT DOES.** It reads *"`return
-r` drops `slow` — the `waiting` arm removes it from the timer store"*, and `_ = async sleeper()` DISCARDS the
-promise at its own statement, before `await q` has driven anything: `sleeper` has never run, its status is the
-slab's `ready`, and the drop takes the QUEUED arm. So the timer-store deregistration had no committed case at
-all. **MEASURED at SV2, by a sabotage that should have turned that case red and did not.**
-
-This one really does drop a TIMER-PARKED promise, and the RE-ARM is what makes it so: `await q` drives, which
-runs `sleeper` up to its `sleep(200)` and parks it on the timer; only THEN does `p = async fast()` renounce it.
-The `waiting` arm removes it from the store, frees the stack a parked coroutine is suspended on and reclaims
-the struct — with no hang (the 200 ms deadline is never waited on) and no use-after-free.
+The same deregistration reached through the OTHER door that drops a promise: a RE-ARM rather than scope exit.
+`await q` parks `main`, so the strand runs `sleeper` up to its `sleep(200)` and parks it on the timer; only
+THEN does `p = async fast()` renounce it. The `waiting` arm removes it from the store, frees the stack a parked
+coroutine is suspended on and reclaims the struct — with no hang (the 200 ms deadline is never waited on) and
+no use-after-free.
 
 ⭐ Its own RED reading: point `__gt_promise_drop`'s park-kind refusal at `GtParkKindTimer` instead of
 `GtParkKindMailbox` and this exits **94** where it exits 42.
@@ -439,9 +446,9 @@ after — so ONE `async` spawn reaches a merge having been given to the containe
 must therefore reconcile NOTHING. If either door fails to record the move, `reconcileMovesAtMerge` sees the
 binding live on that edge, emits `__gt_promise_drop` there, and the container is left holding a **cancelled**
 thread: it never completes, so a non-blocking poller waits on it forever. `arm` is called twice, taking a
-different door each time; each stored thread must run to completion under the drive and be awaitable for its
-value, so the sum is 42. The bounded drive is what makes a cancelled thread a VERDICT (exit 2) instead of a
-hang.
+different door each time; each stored thread must run to completion while the bounded yield loop
+(`completesUnderTheDrive`) gives it turns, and be awaitable for its value, so the sum is 42. The bound is what
+makes a cancelled thread a VERDICT (exit 2) instead of a hang.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

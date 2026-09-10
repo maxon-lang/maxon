@@ -441,8 +441,8 @@ scaled=42
 **THE SCOPE GUARD — a `spawn` anywhere does not make the whole program concurrent.** Whether a type is a
 service is a WHOLE-PROGRAM property (`services.md`, *"a `spawn` anywhere makes the type a service"*), and
 the tempting cheap implementation of this rule inherits that shape: refuse every global write in any
-program that spawns. This program spawns one, and `bookKeeping` is still reached from `main` alone — from
-`GT0`, one green thread, before and after an await that is fully ordered. Its two writes are as safe as
+program that spawns. This program spawns one, and `bookKeeping` is still reached from `main` alone — one
+green thread, before and after an await that is fully ordered. Its two writes are as safe as
 they are in a program with no `spawn` in it at all.
 
 ⚠ **THE SECOND CALL IS PAST THE `await` ON PURPOSE.** A reachability walk that stopped at the first

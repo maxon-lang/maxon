@@ -1101,10 +1101,10 @@ what closes the mailbox. `inner` is dropped at the end of the labelled block and
 and BOTH services' queued work runs — which is the property under test.
 
 ⚠⚠ **THE ORDER OF THE TWO LINES IS THE EXIT DRAIN'S AND NOT CAUSALITY, AND THIS CASE SAYS SO RATHER THAN
-IMPLYING OTHERWISE.** At the default `MAXON_MAX_PROCS=1` nothing runs on a service's green thread until the
-main thread stops running — an early handle drop closes the mailbox and publishes the parked receiver, but
-nobody drives it — so both handlers run at the exit drain, in the order the drain reaps them, which is
-spawn order. MEASURED stable across five runs at N=1 and three at N=4.
+IMPLYING OTHERWISE.** At one processor nothing runs on a service's green thread until the main thread stops
+running — an early handle drop closes the mailbox, but `main` never parks, so its machine takes nothing else
+off the ring — and both handlers run at the exit drain, in the order the drain's scheduler loop takes them
+off the ring, which is spawn order. MEASURED stable across five runs at N=1 and three at N=4.
 `two-instances-are-independent` is the case whose order IS forced, by a handle transfer.
 
 ⚠⚠ **THE `stdout` BLOCK PINS THAT ORDER EXACTLY, SO THIS CASE IS A TRIPWIRE ON THE DRAIN AND NOT ONLY ON
@@ -3659,9 +3659,10 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: pending-reply-dropped-then-answered -->
-The dropped cell of the first send is still pending when the SECOND send's await drives the service, so the
-replier writes into a cell its awaiter has already renounced. That is the ordering the teardown rendezvous
-exists for, and freeing the cell at the drop is a clobbered green thread rather than a leak.
+The dropped cell of the first send is still pending when the SECOND send's await parks `main` and the
+service runs, so the replier writes into a cell its awaiter has already renounced. That is the ordering the
+teardown rendezvous exists for, and freeing the cell at the drop is a clobbered green thread rather than a
+leak.
 ```maxon
 type Echo
 	var n as Integer
@@ -3692,10 +3693,10 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: completed-reply-dropped-is-reclaimed -->
-The other order: `p`'s first cell COMPLETES while the middle await drives the service (its message is ahead in
-FIFO order), and only THEN is it dropped — by the RE-ARM on the next line. The drop finds the runner ticket
-already there and reclaims; an arm that took a completed cell as merely queued would strand the struct
-invisibly, because the green-thread count the exit gate reads has already been debited.
+The other order: `p`'s first cell COMPLETES while `main` is parked on the middle await and the service runs
+(its message is ahead in FIFO order), and only THEN is it dropped — by the RE-ARM on the next line. The drop
+finds the runner ticket already there and reclaims; an arm that took a completed cell as merely queued would
+strand the struct invisibly, because the green-thread count the exit gate reads has already been debited.
 ```maxon
 type Echo
 	var n as Integer
@@ -3725,8 +3726,9 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: rpc-from-inside-a-service -->
 ⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
-green thread — not the main one — is the awaiter, and the drive that completes its cell runs `Inner` from
-`Outer`'s own stack. The graph `Outer → Inner` is acyclic, which is what makes this legal.
+green thread — not the main one — is the awaiter: the await parks `Outer`, `Inner` runs on its own stack, and
+the reply that completes the cell readies `Outer`. The graph `Outer → Inner` is acyclic, which is what makes
+this legal.
 ⚠ The peer's handle crosses as a message ARGUMENT rather than as `Outer`'s state, so the subject stays the
 cross-green-thread wake and not the walk `deepmove.a-record-with-managed-fields-crosses` pins.
 ```maxon
@@ -4036,21 +4038,16 @@ ring is real all the same: `main` awaits `A.kick`, `A.kick` awaits `B.work` thro
 `B.work` awaits `A.ack` — which `A` cannot serve, because `A` is inside `kick`.
 
 ⇒ **the refusal a static check cannot make, the runtime must.** Every green thread in the program is
-parked and none of them can ever become ready, which is exactly the `nothingLeft` arm of
-`__gt_drive_until` — `RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The answer is
-a diagnosis rather than a hang: a wedged process tells you nothing and costs a 120 s harness timeout; a 92
-names the condition.
+parked and none of them can ever become ready — the scheduler's `checkdead` (Go's, at `mput`):
+`RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The answer is a diagnosis rather
+than a hang: a wedged process tells you nothing and costs a 120 s harness timeout; a 92 names the condition.
 
 ⭐⭐ **THE DETECTOR DECIDES UNDER `__sched_lock`, SO THE ANSWER IS THE SAME AT EVERY PROCESSOR COUNT.** Every
-blocked party in this program is a DRIVER — an await runs `__gt_drive_until` on the calling M — and a driver
-that finds nothing to run and nothing to wait on declares itself quiescent under the scheduler lock, takes a
-final look at every source it consulted in the same hold, and then walks the roster of machines. A machine
-that is executing, or that declared before the latest publish or completion (`__sched_progress`), answers
-*"not yet"* and the driver parks for one poll, still declared; a roster with nobody executing is exit 92 at
-once. At one processor the roster is the driver alone; at four it is `main` and the two workers hosting
-`A.kick` and `B.work`, all three declared. `SchedRuntime.MOffQuiesced` and `MOffQuiescedGen` carry the two
-words and the interleavings each one closes; `procs: 4` is what makes this case exercise the roster rather
-than the solitary machine.
+blocked party in this program is a PARKED green thread — an await parks its caller, it does not run anything
+on the caller's stack — so once the last runnable thread has parked, every machine goes idle. The last
+machine to join the idle list runs `checkdead` in the same hold of the lock: no machine running, no timer,
+child or read pending, and `main` not finished is exit 92 at once. `procs: 4` is what makes this case take
+that decision on the fourth idle machine rather than the only one.
 
 ⚠ The closure clones the handle it forwards (`m.clone()`): a message parameter arrives BORROWED and a
 send MOVES, so the handle crossing into `B.work` has to be one this frame owns — E3138 otherwise, which
@@ -5302,11 +5299,12 @@ names a thread true
 <!-- procs: 4 -->
 ⭐⭐ **W226's SHAPE, COMMITTED — AND IT IS THE PROOF THAT THE LEAK IT PREDICTED IS NOT THERE.** No case in
 this file had a handler use `async` at all, and the `SV1` review that opened `W226` could not measure whether
-a coroutine owned by a service green thread is STRANDED when its owner is reclaimed: since `EC10` a coroutine
-is published only to its owner's queue and driven only by that owner's chain of drivers, so if `<T>.__loop`
-exits with work still on its `coroHead`, nothing drives it and nothing frees it — and a stranded slab
-allocation never reaches the exit gate, which is why the row says the shape *"is invisible to every gate the
-suite has"*.
+a coroutine owned by a service green thread is STRANDED when its owner is reclaimed: a coroutine runs only on
+its owner's strand, so the prediction was that if `<T>.__loop` exits with a coroutine still on its strand
+queue, nothing runs it and nothing frees it — and a stranded slab allocation never reaches the exit gate,
+which is why the row says the shape *"is invisible to every gate the suite has"*. What prevents it is the
+strand's reference count (`GtOffStrandRefs`): the owner's struct outlives its return until every coroutine
+it created has finished, and a dropped coroutine still runs out its body on the owner's strand.
 
 ⭐ **SO IT WAS MEASURED AGAINST `__Builtins.mmRawAllocLive()` RATHER THAN THE EXIT CODE, AND THE ANSWER IS
 NO.** 100 rounds of *spawn a service, send one message whose handler `async`s a 30 ms sleep and NEVER awaits
@@ -5369,12 +5367,11 @@ survived
 leaves `async work()` in the service's own state and replies, so between that reply and the next message the
 service waits on its mailbox still owning a coroutine that has not run. `main` then awaits `finish`.
 
-⛔ **A PARK THAT DROVE THE SCHEDULER HERE WOULD DEADLOCK.** A drive runs other green threads NESTED on the
-parked thread's stack, so the service's mailbox wait would run `main` on top of the service — and `main`,
-awaiting the `finish` reply only that service can send, would be waiting on the frame it is standing on.
-MEASURED with every green thread that owns a coroutine driving its park: **exit 92** (`schedulerDeadlock`) at one
-processor and at four. Only `main`, which no green thread can await, may drive its park; the service switches
-to its driver, and the program answers `1 + 1`.
+⛔ **A WAIT PARKS, AND THIS SHAPE IS WHY IT MAY DO NOTHING ELSE.** A mailbox wait that ran other green
+threads nested on the waiter's stack would run `main` on top of the service — and `main`, awaiting the
+`finish` reply only that service can send, would be waiting on the frame it is standing on: MEASURED on such
+a runtime, **exit 92** (`schedulerDeadlock`) at one processor and at four. The service parks onto its
+machine's scheduler context instead, `main` runs on its own stack, and the program answers `1 + 1`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -5457,12 +5454,13 @@ end 'main'
 
 <!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
 <!-- procs: 1 -->
-⛔⛔ **`main` NEVER ENTERS A RUN QUEUE, SO NO SERVICE's DRIVE CAN RUN IT.** `Middle.go` awaits `Slow.get`, and
-an await DRIVES: it runs whatever it takes off a run queue on `Middle`'s own stack. `main`'s `sleep(1)` ends
-while that drive is waiting out `Slow`'s `sleep(20)`; were `main` queued on its wake, the drive would take it
-and run it on top of `Middle`, and `main`'s `await r1` — a reply only `Middle` can send — would wait on the
-frame it stands on. MEASURED with `main` parking like any other green thread: **exit 92**
-(`schedulerDeadlock`) on one processor. `main` drives its own parks instead, and both replies arrive.
+⛔⛔ **NOTHING RUNS ON TOP OF A PARKED GREEN THREAD, SO `main` MAY WAKE WHILE THE SERVICE IT AWAITS IS
+ITSELF WAITING.** `Middle.go` awaits `Slow.get`, which parks `Middle`. `main`'s `sleep(1)` ends while
+`Middle` is parked waiting out `Slow`'s `sleep(20)`, and `main` is readied like any other green thread and
+runs on its own stack, switched in from a machine's scheduler context — never on `Middle`'s. An await that
+ran whatever it took off a run queue on the awaiter's own stack would run `main` on top of `Middle`, and
+`main`'s `await r1` — a reply only `Middle` can send — would wait on the frame it stands on: MEASURED on such
+a runtime, **exit 92** (`schedulerDeadlock`) on one processor. Here both replies arrive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

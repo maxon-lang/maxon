@@ -7,8 +7,8 @@
 // encoders directly, like the `mrt_*` panic runtime (X64Runtime.maxon).
 //
 // ⭐ THE TWO CHUNKS TOUCH NO `.data` GLOBAL. The context switch passes the `to` GT through in rdx unchanged, so
-// the trampoline reads its own GT from rdx (not from any current-GT word); the drivers own `M->currentGt`
-// (see GtRuntime.maxon's header). The context switch also repoints the NT_TIB stack bounds on every switch
+// the trampoline reads its own GT from rdx (not from any current-GT word); the strand runner owns
+// `M->currentGt` (`GtRuntime.emitGtExecute`). The context switch also repoints the NT_TIB stack bounds on every switch
 // (`gs:[0x08]`/`gs:[0x10]`, and the `to`/`from` GTs' saved-bounds fields via their rdx/rcx pointers) — a SEGMENT
 // and register-pointer accesses, still no rdata relocation, so both chunks stay pure register/stack/segment
 // code exactly like the panic runtime. The INLINE shim, by contrast, DOES reference the
@@ -282,7 +282,8 @@ end 'buildGtContextSwitchChunk'
 // no incoming register arguments and no prologue built for it. It reads its own GT from rdx (which the
 // context switch left holding `to`), loads the async function + arg buffer from the GT, loads all
 // MaxAsyncArgs argument slots into the ABI argument registers, calls the function, captures its R8 result
-// and marks the GT completed, then context-switches to the GT's waiter (always set by the driver that ran it).
+// and marks the GT completed, then context-switches to the GT's waiter (always set by the strand runner that
+// switched it in).
 //
 // The stack is 16-aligned on entry (`__gt_spawn` lays `gt.sp` so the switch-in `ret` lands with rsp = stack
 // top, a page boundary), so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned
@@ -320,12 +321,12 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
 
-	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE (G3).** An awaiting
-	// driver on another M spins on `gt.status == completed` and then reads the two words stored just above,
-	// so the flag must not become visible before them. x86-64 is TOTAL STORE ORDER — stores are never
-	// reordered with other stores — so an ordinary `mov` gives exactly that, and nothing extra is emitted
-	// here. (`mfence` would order STORE→LOAD, a sequential-consistency obligation this publication does not
-	// have.) The weakly-ordered lanes are where the instruction has to change:
+	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE (G3).** A reader on
+	// another M — an awaiter's registration, `__gt_is_complete` — tests `gt.status == completed` and then reads
+	// the two words stored just above, so the flag must not become visible before them. x86-64 is TOTAL STORE
+	// ORDER — stores are never reordered with other stores — so an ordinary `mov` gives exactly that, and
+	// nothing extra is emitted here. (`mfence` would order STORE→LOAD, a sequential-consistency obligation
+	// this publication does not have.) The weakly-ordered lanes are where the instruction has to change:
 	// `Arm64GtRuntime.buildArm64GtTrampolineChunk` emits an `STLR` at this exact point and says so.
 	//
 	// ⚠ There is no COMPILER half to worry about either, unlike the Std-tier publication
@@ -782,21 +783,10 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		LeaveCriticalSection gives SyscallClass.schedulerBound
 		InitializeCriticalSection gives SyscallClass.schedulerBound
 
-		// ⛔⛔ **THE THREE WAITS ARE THE SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
-		// shimmed ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
-		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
-		// processor taken from the very thing that would have used it, and the wait is already bounded by
-		// `__gt_timer_earliest` and by the park timeouts.
-		//
-		// ⛔⛔ **AND A SECOND, INDEPENDENT REASON THAT LIVES IN ANOTHER FILE: THE DEADLOCK CENSUS'S ARGUMENT FOR
-		// HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND THE
-		// `WaitForSingleObject` ARM IS THE WHOLE OF WHY THAT IS TRUE.** A machine declares `MQuiescedWaiting`
-		// immediately before parking, and both parks wait through this import. Move it to `blocking` and
-		// `__sysmon` can take a processor from a machine that already advertises quiescence, at which point
-		// `__sched_any_executing` sees nothing executing mid-handoff and aborts a live program with exit 92 —
-		// with no compile error between the two files. The argument itself is stated once, at
-		// `SchedRuntime.buildSchedRetake`'s census note; this arm names it so the arm cannot be moved without
-		// meeting it.
+		// ⛔⛔ **THE THREE WAITS ARE THE SCHEDULER WAITING FOR ITS OWN WORK.** A machine's park and
+		// `__sched_syscall_regain`'s poll wait through them holding no processor, so there is none for
+		// `__sysmon` to take, and the park's wait is already bounded by `__gt_timer_when` and by the park
+		// timeouts.
 		WaitForSingleObject gives SyscallClass.schedulerBound
 		WaitForMultipleObjects gives SyscallClass.schedulerBound
 		Sleep gives SyscallClass.schedulerBound
@@ -1571,11 +1561,10 @@ end 'emitGtStackGuard'
 // It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
 // lpOverlapped IS the reading GT's embedded OVERLAPPED, so `gt = lpOverlapped - GtOffOverlapped` (CONTAINING_RECORD).
 // It writes to `gt.io_result` the byte count, or `SubpReadFailedCount` when the packet says the IO FAILED for some
-// reason other than the broken pipe that is a clean end of stream. Then — THE HANDSHAKE — it SPIN-WAITS on
-// `gt.ioParked == 1` (the reading GT
-// sets it only AFTER `status = waiting`, so this ordering guarantees the `status = ready` below lands AFTER the GT's
-// own waiting-write: no torn status, no lost wakeup). It sets `status = ready`, publishes the GT under `__sched_lock`,
-// and `SetEvent`s `__io_done_event` to wake a driver's netpoll `WaitForSingleObject`. The publish door is PURE
+// reason other than the broken pipe that is a clean end of stream. Then — THE HANDSHAKE — it SPIN-WAITS, holding no
+// lock, until `gt.ioParked` is non-zero (the reading GT's registration sets it only AFTER `status = waiting`, so the
+// ready below lands after the GT's own waiting-write: no torn status, no lost wakeup). It readies the GT under
+// `__sched_lock` (`__gt_ready_locked`) and pays the wake debt that answers after the release. The ready door is PURE
 // MEMORY (no shim), so calling it from this thread is safe.
 //
 // gt is spilled to a frame local (not a callee-saved register) and reloaded after each call, which
@@ -1589,7 +1578,7 @@ let IoLoopKeyLocalDisp = -0x10 as Imm32  // lpCompletionKey out-param (unused)
 let IoLoopOverlappedLocalDisp = -0x18 as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
 let IoLoopGtLocalDisp = -0x20 as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
 
-// ⭐ **THE WAKE DEBT `__sched_publish_locked` ANSWERED** — 1 when a GREEN THREAD was published, so a
+// ⭐ **THE WAKE DEBT `__gt_ready_locked` ANSWERED** — `WakeDebtOwed` when a strand token was published, so a
 // `__sched_wake_or_spawn` is owed after the release. It is a FRAME LOCAL rather than a register because
 // `LeaveCriticalSection` sits between the answer and its use and clobbers every volatile register.
 //
@@ -1605,7 +1594,6 @@ let IoLoopSpinLabel = 1 as BlockId
 let IoLoopSpunLabel = 2 as BlockId
 let IoLoopExitLabel = 4 as BlockId
 let IoLoopAbandonedLabel = 5 as BlockId
-let IoLoopNoWakeLabel = 6 as BlockId
 let IoLoopCleanEofLabel = 7 as BlockId
 let IoLoopDequeuedLabel = 8 as BlockId
 
@@ -1614,7 +1602,7 @@ let IoLoopDequeuedLabel = 8 as BlockId
 let IoLoopGlobalPtrReg = X64Register.r11
 
 // Load a `.data` global's VALUE into `dest` — `lea r11, [rip+label] ; mov dest, [r11]`. The completion loop reads
-// `__io_iocp`/`__sched_lock`/`__io_done_event` this way, through the ordinary rdata-relocation path.
+// `__io_iocp`/`__sched_lock` this way, through the ordinary rdata-relocation path.
 function emitIoLoopLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
 	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: IoLoopGlobalPtrReg, label: label)
 	encodeLoadRegBaseDisp(code, destReg: dest, base: IoLoopGlobalPtrReg, disp: 0, wide: true)
@@ -1700,16 +1688,10 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
 
-	// ⭐ LOCK __sched_lock, held across the WHOLE decision below — so the completion thread's abandoned-vs-normal
-	// branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are SERIALIZED, guaranteeing
-	// exactly one side frees the GT and neither dereferences it after free. `bytes` is still in [rbp-bytes]; gt in
-	// [rbp-gt].
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
-
-	// spin: wait until gt.ioParked != 0 — the reader committed to parking (state IoParkedInFlight, 1) or the drop
-	// arm abandoned it (IoParkedAbandoned, 2). Holding __sched_lock does not block the reader (it sets ioParked without
-	// the lock), so this cannot deadlock; in practice ioParked is already set (the packet arrives long after park).
+	// spin: wait until gt.ioParked != 0 — the reader's registration has published its park (IoParkedInFlight, 1),
+	// or the drop arm has abandoned it (IoParkedAbandoned, 2). The packet can arrive before the reader has even
+	// switched out, and everything between its `ReadFile` and that registration — the syscall bracket's exit, which
+	// may wait on `__sched_lock` for a processor, among it — must be able to run, so the spin holds no lock.
 	loopLabels.place(IoLoopSpinLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
@@ -1719,41 +1701,44 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	code.push(0x90)
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopSpinLabel)
 
-	// spun: rax = gt, rcx = gt.ioParked. ABANDONED (2) → the drop arm cancelled this read: signal drain-done and
-	// touch the GT no further (the drop arm frees it). Else (1) → NORMAL completion.
+	// ⭐ spun: LOCK __sched_lock, held across the WHOLE decision below — so the completion thread's
+	// abandoned-vs-normal branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are
+	// SERIALIZED, guaranteeing exactly one side owns the GT. `ioParked` is re-read under it: the drop arm may have
+	// moved it from 1 to 2 since the spin read it, and nothing but this thread moves it on from either.
 	loopLabels.place(IoLoopSpunLabel, value: code.count())
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
+
+	// rax = gt, rcx = gt.ioParked. ABANDONED (2) → the drop arm cancelled this read: signal drain-done and touch the
+	// GT no further (the drop arm frees it). Else (1) → NORMAL completion.
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
 
-	// NORMAL: gt.io_result = the classified count ; gt.status = ready.
+	// NORMAL: gt.io_result = the classified count.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
-	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffStatus as Imm32, srcReg: X64Register.rcx)
 
-	// Publish the re-readied thread on whichever queue its KIND belongs to, under the outer __sched_lock —
-	// which is exactly the lock `__sched_publish_locked` requires of its caller.
+	// Ready the reader under the outer __sched_lock — exactly the lock `__gt_ready_locked` requires of its
+	// caller. The door reads which strand the reader belongs to off the GT itself: this thread has no M, so
+	// nothing here could say. A strand token it publishes goes to the GLOBAL queue (`__sched_runq_put`'s
+	// `p == 0` arm), the tier a token belongs to when no processor owns it.
 	//
-	// ⭐ **THE ROUTING DOOR, BECAUSE WHICH QUEUE IS NOT KNOWABLE FROM HERE.** A parked reader is a COROUTINE of
-	// one green thread or a GREEN THREAD itself, whose owner is ITSELF — `__gt_coro_enqueue` would append the
-	// latter to its own queue, where nothing but the thread itself could ever drain it. The door reads
-	// `owner == gt` and routes; for a green thread on this P-less OS thread that means the GLOBAL queue
-	// (`__sched_runq_put`'s `p == 0` arm), which is the tier a thread belongs to when no processor owns it.
-	//
-	// ⭐⭐ **AND ITS ANSWER IS THE WAKE DEBT, WHICH IS WHY THE RESULT IS SPILLED RATHER THAN DISCARDED.** A
-	// green thread published here may belong to a parked or absent worker M — this event wakes only the
-	// netpoll — so somebody owes `__sched_wake_or_spawn`. It may not be called here: the caller holds the
-	// lock, and a wake inside a critical section has no StoreLoad fence (the release IS the fence). It is paid
-	// below, after `LeaveCriticalSection`, and ONLY if owed — an unconditional wake would start an OS thread
-	// for a coroutine that no M but this one's owner can run.
+	// ⭐⭐ **ITS ANSWER IS THE WAKE DEBT, WHICH IS WHY THE RESULT IS SPILLED RATHER THAN DISCARDED.** A token
+	// published here has no machine looking for it, so somebody owes `__sched_wake_or_spawn`. It may not be
+	// called here: the caller holds the lock, and a wake inside a critical section has no StoreLoad fence (the
+	// release IS the fence). It is paid below, after `LeaveCriticalSection`, and ONLY if owed — a member readied
+	// onto a strand some machine is already running owes nobody, and an unconditional wake would start an OS
+	// thread that finds nothing to run.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeCallDirect(code, callFixups: callFixups, targetName: SchedPublishLockedName)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtReadyLockedName)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, srcReg: X64Register.r8)
 
 	// gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and knows the GT is
-	// queued rather than in flight — then Leave __sched_lock and SetEvent __io_done_event → loop_top. ⚠ It
-	// does NOT unlink: a ring cannot be spliced, so the drop renounces the GT in place, leaving a tombstone the
-	// queue's popper reclaims. `emitGtIoCancelArm` carries the protocol.
+	// queued rather than in flight — then Leave __sched_lock. ⚠ It does NOT unlink: a queue is not spliced,
+	// so the drop renounces the GT in place, leaving a tombstone the queue's popper reclaims.
+	// `emitGtIoCancelArm` carries the protocol.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
@@ -1761,27 +1746,17 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
 
 	// ⭐⭐ **PAY THE WAKE DEBT, AFTER THE UNLOCK — AND THAT ORDER IS THE DEKKER ORDERING RATHER THAN LOCK
-	// HYGIENE (SV1).** `LeaveCriticalSection` is a full barrier, so the queue publish above cannot be
-	// reordered past `__sched_wake_or_spawn`'s reads of every P's `idleFlag`; called inside the critical
-	// section it would have no fence and a missed wakeup would be a green thread waiting out a parked
-	// worker's 100 ms timeout. ⚠ It is CONDITIONAL because a coroutine publish must wake nobody: no worker
-	// M can run one, so the wake would find nothing idle and its SPAWN arm would start an OS thread that
-	// idles for the life of the process.
+	// HYGIENE.** `LeaveCriticalSection` is a full barrier, so the queue publish above cannot be reordered past
+	// `__sched_wake_or_spawn`'s reads of every P's `idleFlag`; called inside the critical section it would have
+	// no fence and a missed wakeup would be a token waiting out a parked machine's timeout.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopNoWakeLabel)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: WakeDebtNone as Imm32)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopTopLabel)
 	encodeCallDirect(code, callFixups: callFixups, targetName: SchedWakeOrSpawnName)
-
-	// ⭐ **AND WAKE THE DRIVER.** `__io_done_event` wakes the thread blocked in `__gt_drive_until`'s netpoll,
-	// which is the green thread that owns a re-readied coroutine — the whole wake set for that kind, where
-	// the per-P events above are the wake set for a green thread.
-	loopLabels.place(IoLoopNoWakeLabel, value: code.count())
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoDoneEventLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetEvent))
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 
-	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __sched_lock, loop. No enqueue,
-	// no SetEvent — the drop arm spins on ioParked==3 on the dropping thread and owns the free.
+	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __sched_lock, loop. No ready
+	// and no wake — the drop arm spins on ioParked==3 on the dropping thread and owns the free.
 	loopLabels.place(IoLoopAbandonedLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)

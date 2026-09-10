@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-`await` blocks: it drives the scheduler until one named promise completes. A dispatcher holding N
+`await` blocks: it parks the caller until one named promise completes. A dispatcher holding N
 concurrent promises cannot afford that — awaiting slot 0 while slot 3 has already answered is
 head-of-line blocking, and the whole point of running N children is that whichever finishes first is
 served first. The peek is the way out, and it is two halves that only work together:
@@ -26,7 +26,7 @@ is that poller, and it is the only caller in the tree.
 
 ### The peek is a QUESTION, never a step
 
-`__Builtins.gtIsComplete` loads the status word and compares it. It does not drive the scheduler, does
+`__Builtins.gtIsComplete` loads the status word and compares it. It does not park, does
 not advance the thread and does not retire the promise — so peeking any number of times leaves the
 promise exactly as awaitable as it was, and `await`'s linearity (E3100) counts none of them.
 
@@ -80,8 +80,8 @@ the peek. `rejected-on-wasm` pins that attribution rather than assuming it, and 
 ## Tests
 
 <!-- test: promise-peek.completes-under-the-drive -->
-⭐ **THE DISCRIMINATING CASE.** A freshly spawned thread has not run, so the peek is `0`; driving the
-scheduler runs it to completion, so the same peek becomes `1`; and the promise is still awaitable
+⭐ **THE DISCRIMINATING CASE.** A freshly spawned thread has not run, so the peek is `0`; the program's
+yield loop lets it run to completion, so the same peek becomes `1`; and the promise is still awaitable
 afterwards. It is the `0 -> 1` TRANSITION that pins the mechanism rather than either reading alone —
 a peek that dereferenced the handle read a word off the green thread's own stack, which on a fresh
 `VirtualAlloc`'d (zero-filled) stack ALSO answers `0`, so the not-yet-complete half is satisfied by the

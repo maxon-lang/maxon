@@ -5,7 +5,7 @@ keywords: [scheduler, green-threads, coroutine, run-queue, ring, work-stealing, 
 category: system
 ---
 
-# The coroutine queue, and the green-thread run-queue hierarchy behind it
+# The strand queue, and the green-thread run-queue hierarchy behind it
 
 ## Documentation
 
@@ -16,55 +16,59 @@ and the whole of the scheduler a Maxon program can reach follows from that one s
 
 | | |
 |---|---|
-| **a coroutine** | what `async f(…)` creates. It is OWNED by one green thread (`GtOffOwner`), is published only to that green thread's coroutine queue, and is driven only by that green thread's chain of drivers. A coroutine spawned by a coroutine belongs to the SAME green thread, so the relation is transitive and every frame `async` ever creates, at any nesting depth, lands in exactly one queue. |
-| **a green thread** | a unit the P/M scheduler may hand to any OS thread. GT0 — a processor's inline scheduler context — is one, and **`spawn` is the producer of every other** (SV1: a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
+| **a coroutine** | what `async f(…)` creates. It is OWNED by one green thread (`GtOffOwner`), joins that green thread's STRAND, and runs only on the machine holding the strand. A coroutine spawned by a coroutine belongs to the SAME green thread, so the relation is transitive and every frame `async` ever creates, at any nesting depth, lands in exactly one strand. |
+| **a green thread** | a unit the P/M scheduler may hand to any OS thread. `main` is one — `__gt_run_main` runs it as an ordinary green thread — and **`spawn` is the producer of every other** (SV1: a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
 
 ⇒ **only one green thread can hold references to a box at a time, and that is a language guarantee
-rather than a thread count.** Every refcount read-modify-write on a box therefore happens on the OS
-thread running that box's one owning green thread.
+rather than a thread count.** A strand runs on at most one machine at a time and moves between machines
+only through `__sched_lock`, so every refcount read-modify-write on a box happens on the machine running
+that box's strand, one machine at a time.
 
-**The coroutine queue** is an intrusive FIFO through `GtOffNext`, with its two ends on the owning green
-thread's own struct. `__gt_coro_enqueue` appends and `__gt_coro_next` is the one place a driver asks what
-runs next; `__sched_lock` covers every access to it, because the IOCP completion thread appends to it too
-when a coroutine parked on a pipe read becomes runnable again. That completion thread is the ONLY other OS
-thread that touches the queue, and it is the reason the lock is there.
+**The strand queue** is an intrusive FIFO through `GtOffNext`, with its two ends on the owning green
+thread's own struct, holding whichever members of the strand are runnable. A run queue never holds a
+member: it holds the strand's OWNER as a token, and the machine that pops the token becomes the strand's
+one executor (`GtOffStrandHolder`) and runs members off this queue (`__gt_run_strand`) until it is empty.
+A readied coroutine joins the back and a readied owner the FRONT, so a strand runs its owner first when
+the owner is ready. `__gt_coro_enqueue` appends and `__gt_strand_next` is the one place the strand runner
+asks what runs next. `__sched_lock` covers every access, because whoever completes a wait readies the
+waiter onto this queue — another machine firing a timer or answering a reply, or the IOCP completion
+thread finishing a pipe read.
 
 ⚠ **THE TWO DOORS DIFFER IN WHO TAKES THAT LOCK, AND A READER WHO GETS IT BACKWARDS WRITES A RACE.**
-`__gt_coro_next` takes it around its own dequeue. `__gt_coro_enqueue` does **not** — it REQUIRES the
-caller to hold it, because its callers already do: the completion thread holds it across its whole
-abandoned-vs-normal decision, and `__gt_timer_check` / `__gt_proc_check` hold it across the store walk
-they publish from. `osLockEnter` is a Win32 CRITICAL_SECTION and therefore RECURSIVE, so calling it
+`__gt_strand_next` takes it around its own dequeue and, finding the queue empty, gives the strand up in the
+same critical section. `__gt_coro_enqueue` does **not** — it REQUIRES the caller to hold it, because its
+callers already do: `__gt_ready_locked`, the one door every waker readies through, and the strand runner
+placing a yielder. `osLockEnter` is a Win32 CRITICAL_SECTION and therefore RECURSIVE, so calling it
 without the lock produces no diagnostic anywhere — only a queue two OS threads can be inside at once.
 
 **A yield goes to the TAIL**, which is the whole content of *"let someone else have a turn"*. The
 bootstrap measured what the other choice costs — *"a thousand yields from one green thread left a
 sibling that had never run still unrun"* — and the tail is what refuses it.
 
-### The green-thread run-queue hierarchy — and `spawn` is what reaches it
+### The green-thread run-queue hierarchy — and every green-thread program reaches it
 
-W212 built Go's three tiers. Nothing an `async` program does enters any of them, because what they
-schedule is GREEN THREADS — and since SV1 a `spawn` produces those, so a program that spawns a service
-reaches all three:
+W212 built Go's three tiers. What they schedule is strand TOKENS — a green thread standing for itself and
+every coroutine it owns — so every green-thread program reaches them with `main`'s own token:
+`__gt_run_main` readies `main` onto its machine's ring before the scheduler loop's first search. `async`
+never adds a token; a `spawn` does (SV1), so a program that spawns services puts many through all three:
 
 | Tier | What it is | Who writes it |
 |---|---|---|
 | **the per-P ring** | 256 fixed slots on the P struct, addressed by two MONOTONIC counters (`runqhead`, `runqtail`); the slot is `counter mod 256` and the length is `tail - head` | the owning P's M pushes at the tail with no lock; the owner AND any thief take from the head by CAS |
-| **the global queue** | the intrusive FIFO through `GtOffNext` that used to be the whole scheduler | every mutation under `__sched_lock` |
+| **the global queue** | an intrusive FIFO through `GtOffRunqNext` — its own link, because an owner can sit on its strand queue while its token waits here | every mutation under `__sched_lock` |
 | **stealing** | four rounds, each visiting every other ACTIVE P once from a random start, grabbing HALF a victim's ring into the thief's own | the thief, by CAS on the victim's head |
 
-⛔ **WHICH TIER A PROGRAM REACHES IS OBSERVABLE IN THE EMITTED BINARY, NOT MERELY ASSERTED, AND IT IS
-DECIDED BY WHETHER THE PROGRAM SPAWNS.** For an `async`-only program `__gt_ready` publishes to the owner's
-coroutine queue, so nothing reaches `__sched_runq_put`; nothing reaches it, so nothing reaches
-`__sched_wake_or_spawn`, so **no worker OS thread is created at any `MAXON_MAX_PROCS`** — and dead-code
-elimination then takes the whole tier out. MEASURED on the first case below, the emitted program contains
-`__sched_runq_put`, `__sched_runq_get`, `__sched_steal`, `__sched_find_runnable`, `__sched_worker_loop`,
-`__sched_wake_or_spawn`, `__gt_enqueue` and `__gt_dequeue` before the EC10 pin and **none of the eight**
-after it.
+⛔ **WHETHER A SECOND MACHINE EVER RUNS IS DECIDED BY THE WORK, NOT BY `MAXON_MAX_PROCS`.** The only thing
+that starts a worker is `__sched_wake_or_spawn`, reached when a token is published — a `spawn`, or a strand
+readied while no machine held it. An `async`-only program has one token, `main`'s: its coroutines are
+readied onto `main`'s strand, and the machine that fires a timer or reaps a child for a strand takes that
+strand's token itself rather than waking another. So a program whose only green thread is `main` keeps one
+M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header).
 
-⭐ **A `spawn` PUTS ALL EIGHT BACK** (`SERVICES_DESIGN.md`, *"Send is a MOVE"*). `__svc_spawn` calls
-`__gt_spawn_green` and publishes to a P RING, which is exactly what a ring, a steal and a worker loop are
-for — so the five cases at the END of this file, which drive services, are the tier's first spec-level
-readers. They are also why the tier is no longer describable as "unreached".
+⭐ **A `spawn` IS WHAT ADDS TOKENS** (`SERVICES_DESIGN.md`, *"Send is a MOVE"*). `__svc_spawn` calls
+`__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
+steal and a worker loop are for — so the five cases at the END of this file, which run services, are where
+the tiers carry more than `main`'s one token.
 
 ### The dropped-thread protocol, which is unchanged
 
@@ -76,7 +80,7 @@ party adds its own half-ticket to it exactly once:
 | Party | Who that is | What it does first | Ticket |
 |---|---|---|---|
 | the **consumer** | the promise's owner: `await`, `try await`, or `__gt_promise_drop` (and the `cancel` that routes through it) | takes the result, or renounces it; gives back the thread's slot in `__gt_live_count` | 1 |
-| the **runner** | whoever finishes with the thread's EXECUTION: the driver whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | frees the seed stack | 2 |
+| the **runner** | whoever finishes with the thread's EXECUTION: the strand runner whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | frees the seed stack | 2 |
 
 **The party whose add hands back the OTHER ticket is SECOND, and the second party performs the
 teardown** — the releaser call and the struct free. Neither side has to know what the other is doing,
@@ -84,7 +88,7 @@ and every read of the struct that precedes a party's own add is safe by construc
 makes the runner's stack-length load and the awaiter's `result` load race-free without a lock.
 
 A coroutine renounced while it was still QUEUED reads exactly `1` in that word, and that is the whole
-dropped-thread test: `__gt_coro_next` refuses to hand such a coroutine back, and
+dropped-thread test: `__gt_strand_next` refuses to hand such a coroutine back, and
 `__gt_coro_sweep_dropped` takes the ones sitting at the queue's front — which is what keeps a
 spawn-and-drop loop that never schedules anything bounded. **The word is a field of its own and not a
 status**, because the hand-assembled trampoline overwrites `status` with `completed` unconditionally and
@@ -102,8 +106,9 @@ assertion rather than what narrows it. And the argument that used to follow, *"o
 which is what makes a global counter a legal channel"*, has been **withdrawn at the language level**: a
 message may no longer write a module-level `var` at all (`specs/green-thread-globals.md`, E3143), and
 every service case below now tallies in `self` and reports through an awaited reply. What remains true is
-the COROUTINE half — a coroutine cannot reach a second processor at any processor count, so the `async`
-answers below are the answers everywhere. **Work stealing, the head CAS under contention and the Dekker
+the COROUTINE half — a strand runs one member at a time, on one machine at a time, in its own queue's order
+at any processor count, so the `async` answers below are the answers everywhere. **Work stealing, the head
+CAS under contention and the Dekker
 fence on the ring publish are still out of reach from a case pinned to one P**; the multi-processor gate is
 `scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
 `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program and
@@ -111,7 +116,8 @@ fence on the ring publish are still out of reach from a case pinned to one P**; 
 
 ⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS UNREACHABLE FOR A COROUTINE ALTOGETHER, WHATEVER ELSE THE
 PROGRAM SPAWNS.** It needs a second M popping the thread out of the dropper's queue while the dropper is
-still spawning; a coroutine enters no queue a second M reads, so no processor count exposes it.
+still spawning. A coroutine's queue is its strand's, and only the machine holding the strand pops it — the
+machine running the dropper — so no processor count exposes it.
 `scripts/multicore-stress/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
 
 ⚠ **EVERY CASE HERE CARRIES An `unsupported-targets:` MARKER, and that is a property of the subject.** They are all
@@ -132,13 +138,13 @@ widen when that band does.
 — so `inner`, spawned by the coroutine `outer`, belongs to the same green thread `main` does, and lands
 in the SAME queue as `sibling`, which `main` spawned. It is the case that states the transitivity
 DIRECTLY, in positions rather than in an exit code: `outer` runs first, spawns `inner` behind `sibling`,
-and then awaits `inner` — which drives the ONE queue, so `sibling` runs before `inner` even though
-`inner` is what is being awaited and `sibling` is nobody's business.
-
+and then awaits `inner` — which parks `outer`, and the strand runner takes the ONE queue in order, so
+`sibling` runs before `inner` even though `inner` is what is being awaited and `sibling` is nobody's
+business.
 ⚠ **IT IS NOT THE ONLY CASE THAT CAN SEE THE STAMP BE *WRONG* RATHER THAN MISSING — a first cut of this
 paragraph said it was, and the review measured otherwise.** MEASURED against `__gt_spawn` stamping
 `gt.owner = currentGt` — the SPAWNER — instead of `currentGt.owner`: this case reads
-`ra=0 rb=1 posA=1 posB=2 posC=0` (`inner` lands in `outer`'s own queue, which nothing drives, so `await c`
+`ra=0 rb=1 posA=1 posB=2 posC=0` (`inner` lands in `outer`'s own queue rather than `main`'s, so `await c`
 bails and answers the unset result slot), **every other case in THIS FILE still passes** because none of
 them nests an `async` inside an `async` — and **EIGHT cases elsewhere go red for the same sabotage**:
 `async-await.nested`, `.nested-two-levels`, `.nested-in-expression`, `.nested-spawn-then-await-late`,
@@ -194,7 +200,7 @@ ra=1 rb=1 posA=1 posB=2 posC=3
 ```
 
 <!-- test: sched-runqueue.spawn-order-is-fifo-within-one-green-thread -->
-**FIFO WITHIN ONE GREEN THREAD.** A coroutine queue is a queue and not a stack: three coroutines spawned
+**FIFO WITHIN ONE GREEN THREAD.** A strand queue is a queue and not a stack: three coroutines spawned
 in order run in that order, whatever order their promises are awaited in. The awaits here run BACKWARDS
 on purpose — `p3` first — so a queue that handed back the newest entry would be visible as `a3=1`.
 ```maxon
@@ -242,15 +248,17 @@ s=3 a1=1 a2=2 a3=3
 ```
 
 <!-- test: sched-runqueue.a-yield-hands-the-processor-to-a-never-run-sibling -->
-**THE HANDOFF ARM, THE TEST THAT SELECTS IT, AND THE END THE YIELDER IS DRAINED TO.** A yield hands the
-processor over only if somebody is queued, and "queued" means *in my owner's coroutine queue* — one load
-and one compare. `yielder` yields a thousand times while `sibling` has never run, and this one case pins
-BOTH halves of the yield:
+**THE TAIL, AND THE ARM THAT DOES NOT DECIDE IT.** A yield parks the yielder and the strand runner places
+it: behind whatever its strand already has runnable, or — with nothing else runnable — at the back of its
+strand queue with the strand's token on the GLOBAL queue (`a-yield-goes-behind-the-global-queue`).
+`yielder` yields a thousand times while `sibling` has never run, and this case pins the half of that which
+decides whether `sibling` ever gets a turn:
 
-• **the arm choice** — a yield that read an empty queue would take the poll arm and hand the processor
-  to nobody: a thousand yields, and a sibling that had never run still unrun;
-• **the TAIL** — a drained yielder that went to the queue's FRONT would be handed straight back on the
-  next pop, a thousand times over, with the same result. It is the tail that lets `sibling` in.
+• **the TAIL** — a yielder placed at the strand queue's FRONT would be handed straight back on the next
+  pop, a thousand times over, and a sibling that had never run would still be unrun. It is the tail that
+  lets `sibling` in.
+• **not the arm** — both arms append the yielder behind `sibling`; the arm decides only whether the strand
+  also goes behind the global queue, which nothing in this program can see.
 
 It reads the sibling's flag as its own result, so the assertion is what the YIELDER saw.
 ```maxon
@@ -292,10 +300,10 @@ seen=1 done=1
 <!-- test: sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run -->
 **THE POPPER'S HALF OF THE DROPPED-THREAD PROTOCOL.** `marker`'s promise is dropped while two live
 coroutines sit around it in the queue — one ahead of it, one behind — so the drop's own front-of-queue
-sweep cannot reach it and `__gt_coro_next` is what has to refuse it. `await p2` drives past `marker`; it
-must reclaim that coroutine instead of running it, so `ran` stays 0 and the two live results still
-arrive. A scheduler that ran it would both set `ran` and leave a thread nobody awaits, which is the
-`__gt_live_count` abort (75) rather than 7.
+sweep cannot reach it and `__gt_strand_next` is what has to refuse it. While `main` is parked on its
+awaits the strand runner reaches `marker`, and it must reclaim that coroutine instead of running it, so
+`ran` stays 0 and the two live results still arrive. A scheduler that ran it would both set `ran` and leave
+a thread nobody awaits, which is the `__gt_live_count` abort (75) rather than 7.
 ```maxon
 var ran = 0
 
@@ -329,8 +337,9 @@ ran=0
 ```
 
 <!-- test: sched-runqueue.a-spawn-drop-loop-stays-bounded -->
-**THE SWEEP'S HALF.** Five thousand coroutines are spawned and dropped without anything ever driving the
-scheduler, so nothing would pop them and the mark alone would leave five thousand structs alive. Each
+**THE SWEEP'S HALF.** Five thousand coroutines are spawned and dropped while `main` never parks, so the
+strand runner never reaches them, nothing would pop them and the mark alone would leave five thousand
+structs alive. Each
 drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's queue, where the
 one it just marked is sitting, so the live raw-allocation count stays at its steady state rather than
 growing with the loop. `__Builtins.mmRawAllocLive()` counts exactly the population a GT struct belongs
@@ -369,8 +378,9 @@ ran=0 live=bounded
 ```
 
 <!-- test: sched-runqueue.a-drop-that-arrives-after-completion-reclaims -->
-**THE RUNNER-FIRST ARRIVAL ORDER.** `p` is never awaited, but `await q` drives the scheduler past it, so
-`p` runs to completion and the driver's hand-off adds the RUNNER ticket while the promise is still live —
+**THE RUNNER-FIRST ARRIVAL ORDER.** `p` is never awaited, but while `main` is parked on `await q` its strand
+runs `p` too, so `p` runs to completion and the strand runner's `__gt_runner_done` adds the RUNNER ticket
+while the promise is still live —
 the struct survives, because it still holds a result an un-awaited promise owns. The loop body's scope exit
 then drops `p`, and that dropper is the SECOND arrival: it finds the runner's ticket and reclaims. Three
 iterations, and `mmRawAllocLive()` is identical before and after, so every struct came back.
@@ -475,18 +485,17 @@ total=4 stillParked=4 liveGrew=0
 ```
 
 <!-- test: sched-runqueue.no-coroutine-is-ever-stolen -->
-**THE STEAL COUNTER, AND WHAT IT NOW READS BY CONSTRUCTION.** `__Builtins.schedStealCount()` walks
+**THE STEAL COUNTER, AND WHAT IT READS BY CONSTRUCTION.** `__Builtins.schedStealCount()` walks
 `__sched_procs` and sums every processor's steal counter, so it is the only way a Maxon program can
-observe that work stealing happened at all. A coroutine is published only to its owner's queue, so
-**no coroutine is ever stolen at any processor count** and this reads 0 — the answer everywhere, not
-just at the one processor a spec case gets.
+observe that work stealing happened at all. A coroutine is never a token on a run queue — it waits on its
+green thread's strand queue, which only the machine holding the strand reads — so **no coroutine is ever
+stolen at any processor count**. The one token this program publishes is `main`'s, and a program whose only
+green thread is `main` keeps one M (`SchedRuntime.maxon`'s header says why), so nothing is there to steal
+it either: this reads 0 everywhere, not just at the one processor a spec case gets.
 
-⚠ **AND THE ZERO IS NOW AN UNREACHED ARM RATHER THAN AN EXECUTED PATH, WHICH IS EXACTLY WHY THIS CASE
-KEEPS ITS SUBJECT AND LOST ITS OLD JUSTIFICATION.** It used to say *"the scheduler still RUNS its
-stealing rounds here"*; it does not — `__sched_find_runnable` is not even laid out in this program any
-more. What the case still pins is that the QUERY works: the builtin, the `__sched_steal_count` walk it
-roots and the per-P counter it reads are all still emitted and still answer. `multicore-stress/pin-matrix.sh`,
-which can raise `MAXON_MAX_PROCS`, is where the zero becomes a measurement of the pin.
+⚠ **WHAT THE CASE PINS IS THE QUERY.** The builtin, the `__sched_steal_count` walk it roots and the per-P
+counter it reads are all emitted and all answer. `multicore-stress/pin-matrix.sh`, which can raise
+`MAXON_MAX_PROCS`, is where the zero becomes a measurement of the pin.
 ```maxon
 function work(v Integer) returns Integer
 	__Builtins.parallelBoundary()
@@ -533,11 +542,10 @@ scheduled and answering, at the point in the program where the overflow has just
 
 ⚠ **A LOST THREAD IS NOW A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND THE BOUNDED SPIN IS GONE WITH THE
 GLOBAL.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
-green thread in the program is parked and none can become ready — which is `__gt_drive_until`'s
-`nothingLeft` arm, **exit 92**, within one poll of the last machine declaring itself quiescent
-(`services.a-blocking-cycle-through-an-indirect-call-aborts` measures that code at four processors). The
-case's `<!-- procs: 1 -->` pins the ring arithmetic above, not the detector, which decides under
-`__sched_lock` at every count.
+green thread in the program is parked and none can become ready — which is the scheduler's `checkdead`,
+**exit 92**, taken by the last machine to go idle (`services.a-blocking-cycle-through-an-indirect-call-aborts`
+measures it at four processors). The case's `<!-- procs: 1 -->` pins the ring arithmetic above, not the
+detector, which decides under `__sched_lock` at every count.
 
 ⭐ **SEEN RED.** With `__sched_runq_put`'s overflow no longer publishing the thread that overflowed it —
 one line, the `emitSchedEnqueueLocked` at `moveDone` — exactly one thread is lost, which is the arithmetic:
@@ -826,14 +834,15 @@ runs FIRST and the yielder resumes second. Routed to the ring instead, the yield
 `spawnee` and the two positions would swap.
 
 ⭐⭐ **SEEN RED TWICE, FOR TWO DIFFERENT CAUSES, AND IT IS THE ONLY CASE IN THIS FILE THAT CATCHES EITHER.**
-Against the tree this case was restored into it read `sPos=2 yPos=1` — not a routing bug but a yield that
-handed off to nobody at all, `__gt_resched` asking only about its owner's COROUTINE queue (see
-`GtRuntime.GtReschedName`, where the three shapes of that defect are written down). Against the fixed tree
-with `__sched_publish_yield` re-pointed at the local ring — one argument, `SchedGreenEnd.localRing` — it
-reads `sPos=2 yPos=1` again, now for the reason its own prose names. **MEASURED under that second
-sabotage, every other case in this file stays GREEN, `a-yield-hands-the-processor-to-a-never-run-sibling`
+Both readings predate the park model, whose strand runner now does the routing. Against the tree this case
+was restored into it read `sPos=2 yPos=1` — not a routing bug but a yield that handed off to nobody at all,
+because the yield asked only about its owner's coroutines. With the yielder's publish re-pointed at the
+local ring it read `sPos=2 yPos=1` again, now for the reason its own prose names. **MEASURED under that
+second sabotage, every other case in this file stayed GREEN, `a-yield-hands-the-processor-to-a-never-run-sibling`
 included**: that one discriminates the FRONT of a queue from its TAIL, which a single FIFO can express,
-and is blind to RING-versus-GLOBAL, which only a green thread has two tiers to have.
+and is blind to RING-versus-GLOBAL, which only a green thread has two tiers to have. The publish this case
+guards is the strand runner's `__gt_enqueue` of the strand's token when a yielder's strand has nothing else
+runnable (`GtRuntime.buildGtRunStrand`).
 
 ⚠ **`spawnee`'s HANDLE IS DROPPED BEFORE IT HAS RUN, AND THAT IS THE POINT AT WHICH IT IS STILL QUEUED.**
 A drop closes the mailbox, and a closed mailbox DRAINS what is already in it — so the message survives
@@ -956,16 +965,16 @@ sPos=1 yPos=2
 <!-- procs: 1 -->
 **THE STEAL COUNTER, AND THE ONE ANSWER A SPEC CAN PIN — the SERVICE twin of
 `no-coroutine-is-ever-stolen` above, and the reason the two are different cases.** That one reads 0
-because a coroutine never enters a P ring at all, so its zero is an arm nothing executes. This one reads
-0 for the opposite reason: twelve services and twelve hundred messages DO fill a ring, `__sched_steal` IS
-laid out and its rounds ARE reached — there is simply nobody to steal from at one processor. That is what
-makes the `steals > 0` reading in `multicore-stress/pin-matrix.sh` a measurement rather than a number that is
-always there.
+because a coroutine is never a token on a run queue, and the one token its program publishes, `main`'s,
+never has a second machine to take it. This one reads 0 for the opposite reason: twelve services and twelve
+hundred messages DO fill a ring and the steal rounds ARE reached — there is simply nobody to steal from at
+one processor. That is what makes the `steals > 0` reading in `multicore-stress/pin-matrix.sh` a
+measurement rather than a number that is always there.
 
 ⭐ **SEEN RED, AND THE TWIN STAYED GREEN — which is the whole reason these are two cases.** With
 `DefaultMaxProcs` raised from 1 to 12, so that a spec case finally HAS somebody to steal from, this case
 reads `done=1200 steals=1062` and `steals=1197` on two builds — while `no-coroutine-is-ever-stolen` above
-**passes unchanged**, because a coroutine enters no queue a thief can reach at any processor count. One
+**passes unchanged**, because a coroutine is never a token a thief can take, at any processor count. One
 sabotage, two opposite answers, each the one its case claims.
 
 ⛔⛔ **THE TALLY WAS A MODULE-LEVEL `var done` UNTIL `green-thread-globals.md` REFUSED IT, AND THIS CASE'S

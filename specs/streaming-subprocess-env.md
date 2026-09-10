@@ -28,7 +28,7 @@ environment anyway. So the child expands a name the parent never had and echoes 
 pipe the streaming reader is holding.
 
 **Targets — x64-windows only**, the restriction the whole streaming-subprocess family carries: the
-reader parks its green thread on the Windows completion driver, and the child here is `cmd`.
+reader parks its green thread until the Windows I/O completion port answers, and the child here is `cmd`.
 
 ## Tests
 

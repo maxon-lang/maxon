@@ -37,7 +37,7 @@ entry point with an empty body, and the emitted program pays one call and one re
 ⚠⚠ **AND SINCE EC10 THE MARKER BUYS NO PARALLELISM WHATEVER, WHICH IS WORTH SAYING OUT LOUD BECAUSE THE
 NAME SUGGESTS OTHERWISE.** ⚖ An `async` call creates a COROUTINE of the calling green thread (user
 ruling, 2026-08-27), so a CPU-bound function marked with this and spawned with `async` runs to
-completion on the caller's own OS thread, at the point the driver reaches it — sequentially, exactly as
+completion on the machine running the caller's strand, when the strand reaches it — sequentially, exactly as
 a direct call would, plus a coroutine's stack and switch. What the marker does is satisfy E3073 for a
 function that neither waits nor yields, and that is ALL it does. ⇒ **its natural future is as the marker
 on a `spawn` target** (`SERVICES_DESIGN.md`), where a CPU-bound body really would run on another M and

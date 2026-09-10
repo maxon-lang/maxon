@@ -21,9 +21,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-`sleep` works from the main thread (`GT0`) and from a spawned `async` thread alike. When the run queue
-empties, the scheduler **netpolls** — it waits on the earliest timer deadline with a real OS sleep (never a
-busy-spin) — and re-enqueues each parked thread once its deadline arrives. Because the wait is on the
+`sleep` works from `main` and from an `async` coroutine alike — `main` is a green thread like any other.
+When a machine has nothing to run, it **netpolls**: it parks until the earliest timer deadline with a real OS
+wait (never a busy-spin), and readies each parked thread once its deadline arrives. Because the wait is on the
 EARLIEST deadline, threads resume in deadline order: a shorter sleep resumes before a longer one regardless
 of spawn order.
 
@@ -84,8 +84,8 @@ ARMING order, and that case answered `1432` where the rule says `4321`.
 ## Tests
 
 <!-- test: async-sleep.basic -->
-The main thread (GT0) sleeps, then returns a value: GT0 parks on the timer, the netpoll waits, and GT0
-resumes with its state intact.
+`main` sleeps, then returns a value: its green thread parks on the timer, the machine waits out the deadline,
+and `main` resumes with its state intact.
 ```maxon
 function main() returns ExitCode
 	sleep(50)

@@ -28,15 +28,16 @@ is refused) and returns an `int` (the byte count), so its result is usable in va
 **x64-windows only** (the whole IOCP substrate is x64-windows-gated at this rung).
 
 Mechanically: an overlapped named pipe is registered with a process-wide I/O completion port; a completion
-thread created at scheduler init drains the port with `GetQueuedCompletionStatus` and re-readies the parked
-reading thread — under a `CRITICAL_SECTION` that guards the run queue against the scheduler's own dequeue
-(the first cross-thread run-queue mutation) — then signals an auto-reset event the netpoll waits on. A
-publish-after-park handshake (the reading thread sets a `parked` flag only AFTER committing `waiting`; the
-completion thread spins on that flag before re-readying) closes the lost-wakeup / torn-status race a
-completion arriving before the park would otherwise cause.
+thread created at scheduler init drains the port with `GetQueuedCompletionStatus` and readies the parked
+reading thread through `__gt_ready_locked`, under `__sched_lock` — the lock every run-queue and strand-queue
+access takes — then, when that ready published a strand token, pays the wake it owes
+(`__sched_wake_or_spawn`) after releasing the lock. A publish-after-park handshake (the park's registration
+sets a `parked` flag only AFTER committing `waiting`; the completion thread spins on that flag before
+readying) closes the lost-wakeup / torn-status race a completion arriving before the park would otherwise
+cause.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** Reading a line from a spawned child parks the calling green thread on the driver,
+statement of it.** Reading a line from a spawned child parks the calling green thread,
 and the interleaving cases additionally reach `__gt_sleep` — neither of which wasm32-wasi lowers.
 
 ### ⭐ arm64-macOS RUNS THE PROBE, BUT NOT THE PART OF IT THAT PARKS
@@ -52,16 +53,15 @@ IN FLIGHT.** This lane builds no completion port, no wake event and no drain thr
 operation to run a sleeper against and none to cancel. MEASURED with `interleave-with-sleep`'s own
 shape, recording completion ORDER rather than a sum: this lane answers **12** (the reader finishes
 first) where Windows answers **21**. What the siblings below pin is that the probe reads a child's
-bytes and answers the count, from GT0 and from a spawned green thread; the yielding half waits on a
+bytes and answers the count, from `main` and from an `async` coroutine; the yielding half waits on a
 kqueue this lane does not have.
 
 ## Tests
 
 <!-- test: spawn-read-line.top-level -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-The main thread (GT0) reads a child's stdout. The read yields (GT0 self-drives its own scheduler loop until
-the completion thread signals the read is done), then GT0 resumes and returns the byte count. `cmd /c echo
-hello` writes `hello\r\n` = 7 bytes.
+`main` reads a child's stdout. The read parks `main` until the completion thread readies it, then `main`
+resumes and returns the byte count. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 ```maxon
 function main() returns ExitCode
 	let n = spawnReadLine("cmd /c echo hello")
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: spawn-read-line.posix-top-level -->
 <!-- unsupported-targets: x64-windows -->
-`top-level`'s subject on the POSIX lane. GT0 reads a child's stdout through the one-shot probe and returns
+`top-level`'s subject on the POSIX lane. `main` reads a child's stdout through the one-shot probe and returns
 the byte count; `echo hello` writes `hello\n` = SIX bytes, an LF where `cmd /c echo` writes CRLF.
 
 ⚠ **THE READ COMPLETES IN ITS CALLER HERE RATHER THAN ON A COMPLETION THREAD.** There is no IOCP and no
@@ -94,9 +94,11 @@ end 'main'
 
 <!-- test: spawn-read-line.spawned-reader -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-The read runs inside a SPAWNED green thread (`stackBase != 0`), so its resume goes through the CROSS-THREAD
-path: the completion thread re-enqueues the reading thread onto the run queue under the run-queue lock, and
-the driver dequeues and switches back into it. Exercises the lock + cross-thread `__gt_enqueue`.
+The read runs inside an `async` coroutine rather than in `main`, so the completion thread readies a member
+that is not its strand's owner: `__gt_ready_locked` appends it to the back of `main`'s strand queue under
+`__sched_lock` and — `main` being parked on its await, so no machine holds the strand — publishes the
+strand's token, and the machine that pops it switches back into the reader. `top-level` takes the owner's
+arm of the same door; this case takes the coroutine's.
 ```maxon
 function reader() returns Integer
 	return spawnReadLine("cmd /c echo hello")
@@ -115,15 +117,14 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: spawn-read-line.posix-spawned-reader -->
 <!-- unsupported-targets: x64-windows -->
-The read runs inside a SPAWNED green thread (`stackBase != 0`) rather than on GT0, so the reader's stack is
-a scheduler-allocated one and its result travels back through the promise rather than through a plain
-return. `main` awaits it and returns the byte count.
+The read runs inside an `async` coroutine rather than in `main`, so its result travels back through the
+promise rather than through a plain return. `main` awaits it and returns the byte count.
 
 ⚠ On this lane the resume is NOT cross-thread — the read completes in the reading GT itself — so what this
-case adds over `posix-top-level` is the spawned-stack path, not the run-queue lock its Windows sibling
+case adds over `posix-top-level` is the coroutine path, not the cross-thread ready its Windows sibling
 exercises. It is worth its own case for the reason `async-subprocess.posix-multi-concurrent` is: a probe
-that only ever ran on GT0 would not notice a reader that answered correctly there and clobbered a spawned
-GT's frame.
+that only ever ran in `main` would not notice a reader that answered correctly there and clobbered a
+coroutine's frame.
 ```maxon
 function reader() returns Integer
 	return spawnReadLine("echo hello")

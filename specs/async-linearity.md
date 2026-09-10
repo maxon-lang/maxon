@@ -54,7 +54,7 @@ These cases are **scalar twins** of `specs/async-await.md`'s linearity tests, wh
 (no the compiler I/O yet); the linearity rule is structural and fires identically for a scalar promise.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** These cases spawn and await, so they reach the driver's `QueryPerformanceCounter`
+statement of it.** These cases spawn and await, so they reach the scheduler's `QueryPerformanceCounter`
 and `VirtualFree` entries, which exist only on x64-windows at this rung. The marker is not an opt-in.
 
 ⚠⚠ **THE `error.*` CASES CARRY THE MARKER TOO, AND THIS PARAGRAPH USED TO SAY THEY DID NOT.** It read
@@ -491,7 +491,7 @@ error E3142: <fragment>:10:2: this promise was already consumed by an earlier 'a
 ```
 
 <!-- test: async-linearity.error.cancel-then-await -->
-And the other order. A cancelled promise has no result to hand over — awaiting it would drive a thread
+And the other order. A cancelled promise has no result to hand over — awaiting it would park on a thread
 whose struct is on the free list.
 ```maxon
 function makeValue() returns Integer

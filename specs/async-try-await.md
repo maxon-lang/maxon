@@ -17,7 +17,7 @@ captures both when the spawned thunk returns, so awaiting such a promise must be
 let r = try await p otherwise <handler>
 ```
 
-`try await` lowers to `__gt_try_await`, the throwing twin of `__gt_await`: it drives the scheduler exactly
+`try await` lowers to `__gt_try_await`, the throwing twin of `__gt_await` and the same body: it parks exactly
 as `__gt_await` does, then returns the awaited thunk's `(result, errorFlag)` pair through the dual-register
 exit. The `try … otherwise …` desugar then reads the flag exactly as it does for a throwing CALL — so
 every `otherwise` shape (a fallback value, `ignore`, a bare propagate, a `panic`, and the `(e)` binding
@@ -33,7 +33,7 @@ This slice is **scalar-only** (like B1a): the awaited result and the async argum
 values, and the thrown error is a scalar enum or a union whose payload is scalar.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** Every case here awaits, so it reaches the driver. The `try`/`otherwise` VALUE FLOW
+statement of it.** Every case here awaits, so it reaches the scheduler. The `try`/`otherwise` VALUE FLOW
 being pinned is target-neutral and is covered without a marker by `try-otherwise-value-flow`.
 
 ## Tests

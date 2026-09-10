@@ -497,8 +497,8 @@ threads; what they cannot do at one processor is travel between MACHINES.
 ⛔⛔ **THE OTHER HALF — "a remote free ACTUALLY HAPPENS" — IS NOT A SPEC CASE, AND THAT WAS MEASURED RATHER
 THAN ASSUMED.** Two versions were written and both were flaky under suite load: eight messages failed 1 run
 in 6, and so did a version that **waited** for the property, sending up to 500 waves and stopping the instant
-a box crossed. The reason is structural, not a matter of scale: `main` sends and then awaits, so main's own
-driver runs the receivers INLINE on main's machine unless a worker M steals one first — and whether the OS
+a box crossed. The reason is structural, not a matter of scale: `main` sends and then awaits, so once `main`
+parks its own machine runs the receivers unless a worker M steals one first — and whether the OS
 schedules that worker while twelve harness workers are competing is not something the program decides.
 `pin-matrix.sh:100-137` had already measured the same wall from the other side: at total CPU saturation
 *both* 400 and 4,000 rounds failed 40 of 40, and *"no program-side change can fix that"*.

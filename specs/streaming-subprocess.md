@@ -50,7 +50,7 @@ appends into; the reader scans for `\n`, returns everything through the first on
 buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** The streaming reader parks its green thread on the driver, and several cases reach
+statement of it.** The streaming reader parks its green thread, and several cases reach
 `__gt_sleep` directly — neither of which wasm32-wasi lowers.
 
 ### ⭐ arm64-macOS RUNS THESE BUILTINS, AND THE READ IS WHERE THE TWO LANES GENUINELY PART
@@ -78,9 +78,8 @@ would pin a limitation as a specification.
 
 <!-- test: streaming-subprocess.echo-read -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-The main thread (GT0) spawns `cmd /c echo hello`, reads its one stdout line (`hello\r\n`, 7 bytes), waits,
-and releases. The read yields on GT0's own scheduler loop until the completion thread signals it done. The
-line's byte length (7) is returned.
+`main` spawns `cmd /c echo hello`, reads its one stdout line (`hello\r\n`, 7 bytes), waits, and releases.
+The read parks `main` until the completion thread readies it. The line's byte length (7) is returned.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c echo hello")
@@ -103,7 +102,7 @@ end 'main'
 <!-- test: streaming-subprocess.posix-echo-read -->
 <!-- unsupported-targets: x64-windows -->
 `echo-read`'s subject on the POSIX lane, and the case that proves the seven bare-name `subp*` builtins run
-here at all. GT0 spawns `echo hello`, reads its one stdout line, waits, and releases; the line's byte
+here at all. `main` spawns `echo hello`, reads its one stdout line, waits, and releases; the line's byte
 length (`hello\n`, SIX — an LF where `cmd /c echo` writes CRLF) is returned.
 
 ⛔⛔ **THIS ENTIRE FAMILY SEGFAULTED ON THIS LANE UNTIL THE CASE EXISTED, AND NOTHING REFUSED IT.**
@@ -198,8 +197,9 @@ end 'main'
 
 <!-- test: streaming-subprocess.spawned-reader -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-The read runs inside a SPAWNED green thread, so its resume goes through the cross-thread path: the
-completion thread re-enqueues the reading GT under the run-queue lock and the driver switches back into it.
+The read runs inside an `async` coroutine rather than in `main`, so its resume is a cross-thread ready of a
+coroutine: the completion thread readies the reader onto `main`'s strand queue under `__sched_lock`, and the
+machine that takes the strand switches back into it.
 The reader returns the line's byte length (7); `main` awaits it.
 ```maxon
 function reader() returns Integer

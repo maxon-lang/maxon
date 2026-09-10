@@ -195,15 +195,13 @@ end 'requireUnreachableStdlibStayedDead'
 //        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
-//      * `__sched_publish_locked` and `__sched_wake_or_spawn` — the IOCP completion thread's re-ready of a
-//        parked thread and the wake it may owe (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names
-//        both UNCONDITIONALLY, while every Std caller of the publish doors sits behind `__gt_ready` or a
-//        driver's drain, which a program that spawns nothing does not reach — so a SUBPROCESS-only program,
-//        which installs the IOCP substrate and therefore the completion loop but never spawns, reaches them
-//        from data alone. MEASURED for a predecessor by adding the call without a root: `panic at
-//        X64Backend.maxon:2280: resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`,
-//        seventeen `subprocess-builtins` cases at once, exactly the shape `__mm_leak_check`'s note above
-//        predicts.
+//      * `__gt_ready_locked` and `__sched_wake_or_spawn` — the IOCP completion thread's ready of a parked
+//        reader and the wake it may owe (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names both
+//        UNCONDITIONALLY, while a program's Std callers of them may all be unreachable — so a program that
+//        installs the IOCP substrate and therefore the completion loop reaches them from data alone. MEASURED
+//        for a predecessor by adding the call without a root: `panic at X64Backend.maxon:2280:
+//        resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`, seventeen `subprocess-builtins`
+//        cases at once, exactly the shape `__mm_leak_check`'s note above predicts.
 //      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
 //        in exactly `__mm_leak_check`'s position and for exactly its reason.
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
@@ -248,13 +246,9 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// calling functions that were never laid out, which is a LINK failure and not a compile error, in exactly
 	// the programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
 	//
-	// ⚠ **THE PAIR HAS CHANGED TWICE, AND BOTH TIMES BECAUSE THE CHUNK's CALLS DID.** It was `__gt_enqueue`
-	// plus `__sched_wake_or_spawn` until EC10, then `__gt_coro_enqueue` alone (a coroutine goes to its owner's
-	// queue, and no worker M can run one, so there was nobody to wake); SV1 makes the loop publish through the
-	// ROUTING door, because a re-readied reader may now be a GREEN THREAD, and gives the wake back
-	// conditionally for the same reason. `__gt_coro_enqueue` is no longer rooted — `__sched_publish_locked`
-	// calls it, so the walk reaches it by an ordinary edge.
-	try markCompilerOwnedRoot(SchedPublishLockedName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⚠ **THE PAIR IS WHATEVER THE CHUNK CALLS**: the ready door and the wake its debt may owe. What the ready
+	// door calls in turn is reached by ordinary edges from it.
+	try markCompilerOwnedRoot(GtReadyLockedName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
 
 	// ⭐ **THE SYSCALL BRACKET AND ITS RETURN ROAD, AND IT IS THE IOCP LOOP'S CASE EXACTLY.** All three are

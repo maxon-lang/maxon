@@ -49,13 +49,13 @@ function main() returns ExitCode
 end 'main'
 ```
 
-When every green thread is parked (on a timer or a child), the scheduler **netpolls**: it blocks the single OS
-thread on the parked children with a real `WaitForMultipleObjects` (bounded by the earliest timer deadline when a
-timer is also pending, else indefinitely), never a busy-spin, and resumes each thread once its child exits. Because
-the wait is bounded by the earliest timer, a thread that is merely sleeping still wakes on time even while another
-thread's child is still running.
+When no machine has anything to run and a child is parked, the idle machine's park is bounded by a short poll
+period (`ParkPollWithChildrenMs`), and each time it wakes it polls every parked child with a zero-timeout wait
+(`__gt_proc_check`) and readies each thread whose child has exited — never a busy-spin. The same wake fires every
+due timer, so a thread that is merely sleeping still wakes on time even while another thread's child is still
+running.
 
-`__Builtins.runProcess` works from the main thread (`GT0`) and from a spawned `async` thread alike. Its argument is a
+`__Builtins.runProcess` works from `main` and from an `async` coroutine alike. Its argument is a
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
@@ -65,7 +65,7 @@ never a hang. Parking more than the store's 64-slot capacity concurrently throws
 rather than corrupting the parallel arrays. Both used to abort the process (exit 1 / exit 70); now they recover.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** A subprocess promise is reaped by the driver, so these cases need the substrate.
+statement of it.** A parked child is reaped by the scheduler loop (`__gt_proc_check`), so these cases need the substrate.
 ⚠ The two `error.` cases are front-end refusals (`E3005`, `E3057`), are target-neutral, and carry NO
 marker.
 
@@ -380,7 +380,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
 runtime now THROWS its spawn-failure error (P1.5 #93) rather than aborting the process — so the direct
-`try __Builtins.runProcess(bad) otherwise 42` on GT0 catches it and returns the fallback 42. Before #93 this aborted with exit
+`try __Builtins.runProcess(bad) otherwise 42` in `main` catches it and returns the fallback 42. Before #93 this aborted with exit
 1; now the program runs to a normal return, proving the spawn failure is recoverable, not fatal.
 ```maxon
 function main() returns ExitCode
@@ -413,7 +413,7 @@ end 'main'
 Parking more than the store's capacity (64, `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`) children
 concurrently must NOT write past the 64-slot parallel arrays. Sixty-five children are spawned as LIVE promises
 before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive by
-distinct bindings). `await p64` drives them in run-queue order: the first sixty-four (`p00`..`p63`) each park on the
+distinct bindings). While `main` is parked on `await p64` its strand runs them in spawn order: the first sixty-four (`p00`..`p63`) each park on the
 process store (slots 0..63), and the sixty-fifth park (`p64`) finds the store full — so `__gt_process_run` THROWS
 its store-overflow error (P1.5 #93) rather than aborting with exit 70. `p64`'s `child` catches it via
 `otherwise 88` and completes with 88, which `await p64` returns — proving the 64-slot bound is now a RECOVERABLE
