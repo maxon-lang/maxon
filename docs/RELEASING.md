@@ -47,14 +47,12 @@ disagrees with it. That single check is what keeps the archives, the MSI's `Prod
 winget manifest and the Homebrew formula from naming different releases — a binary built before a
 version bump reports the old one, and asking the artifact is the only way to notice.
 
-⛔ **v0.1.1 IS CUT BY HAND, FOR THE SAME REASON v0.1.0 WAS.** `--define` is a flag the v0.1.0 seed does
-not have, and the workflows build with `-o` — a PATH build, which never runs `build.maxon` and so never
-supplies the version. A workflow release built from that seed reports `dev`, and `--publish` refuses the
-tag: loud, but not a release. Build v0.1.1 locally, where the slot compiler runs the manifest.
-
-⇒ **From v0.1.2 the seed understands both, so `ci.yml` and `release.yml` can drop the `-o` and build
-`maxon build maxon-bin` through the manifest** — which stamps the version itself and needs nothing from
-the workflow. Delete the `-o` and its comment on the day that seed lands.
+⛔ **THE WORKFLOWS BUILD TWICE: THE SEED BUILDS `C1`, AND `C1` BUILDS THE COMPILER THAT SHIPS**
+([`scripts/build-from-seed.sh`](../scripts/build-from-seed.sh)). A seed older than named manifest
+targets reads `maxon-bin` as a path, so it never runs `build.maxon` — where the version comes from —
+and its output reports `dev`; that output's own runtime is also the seed's. `C1` builds by name, so the
+second build runs the manifest and carries this ref's version and runtime. MEASURED on the 0.1.1
+rehearsal: one build produced `maxon-dev-x64-windows`, and the MSI step refused it.
 
 ⇒ **Cut a `release/X.Y.Z` branch or tag `vX.Y.Z`, then rebuild, then package.** The number follows
 the ref, so there is no file to forget to edit — but packaging without the rebuild still publishes
@@ -76,9 +74,10 @@ reaches **the compiler's own behaviour** only after a second — the first build
 runtime emitted by the compiler that predates the change.
 
 That matters for a release because `release.sh --package` runs the suite with the compiler it is about
-to ship, and the spec-test worker IS that compiler. Build twice whenever the seed you started from
-predates a runtime change; `fixpoint.sh` will not tell you, because it compares two stages that are
-both past the convergence point while the slot still holds the one that is not.
+to ship, and the spec-test worker IS that compiler. The workflows always build twice from the seed;
+locally, `scripts/self-compiles-needed.sh` says whether you need one build or two. `fixpoint.sh` will
+not tell you, because it compares two stages that are both past the convergence point while the slot
+still holds the one that is not.
 
 ---
 
