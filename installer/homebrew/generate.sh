@@ -72,7 +72,6 @@ formula="$OUT/maxon.rb"
 class Maxon < Formula
   desc "Systems language whose compiler is written in itself"
   homepage "https://maxon.dev"
-  version "$version"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
