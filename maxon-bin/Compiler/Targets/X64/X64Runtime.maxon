@@ -69,21 +69,15 @@
 // with those on one stack, so they are one fact, and a second copy could only ever drift
 // into a silent misalignment.
 
-// The first outgoing STACK argument sits just above the shadow space. Only `WriteFile`
-// needs one here (its 5th parameter, `lpOverlapped`).
-let FirstStackArgDisp = ShadowSpaceBytes as Imm32
-
 // --- kernel32 ---
 //
-// ⭐ **EXPORTED AT W35, WHEN THE ISEL BECAME A SECOND READER.** This selector lived here, unexported,
-// because the hand-assembled panic chunk below was the only thing that named it — the same reason
-// `StderrFd` lived in `BacktraceFormat.maxon`. `printError` ended both: `StdToX64Conversion.win64StdHandleSelector`
-// materializes this for `osWriteStderr` exactly as it materializes `StdOutputHandle`/`StdInputHandle`.
-// The two mechanisms still share nothing else (this file hand-assembles chunks with no register
-// allocator; the isel is register-allocated), so the constant is exported rather than moved — one
-// spelling, read from both. Its POSIX counterpart went the other way and MOVED, to
-// `StdLoweringShared.StderrFd`: a descriptor is a target-independent fact and belongs with its stdout
-// twin, where a Win32 HANDLE SELECTOR is an x64-Windows one and belongs with the rest of this table.
+// ⭐ **EXPORTED BECAUSE TWO MECHANISMS MATERIALIZE IT**: this file's hand-assembled chunks, which have no
+// register allocator, and `StdToX64Conversion.win64StdHandleSelector`, which is register-allocated. They
+// share nothing else, so the selector is exported rather than moved — one spelling, read from both.
+//
+// ⚠ Its POSIX counterpart lives in `StdLoweringShared.StderrFd` instead, beside its stdout twin: a
+// DESCRIPTOR is a target-independent fact, where a Win32 HANDLE SELECTOR is an x64-Windows one and belongs
+// with the rest of this table.
 export let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
 
 // AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
@@ -137,10 +131,115 @@ let HexBitsPerDigitShift = 2
 // below it.
 let HexNibbleMask = 0xF
 
+// ==========================================================================
+// The x64-WINDOWS console write path — its constants, its `.data` cache, and its names
+// ==========================================================================
+//
+// ⭐ **x64-WINDOWS ONLY, BY CONSTRUCTION.** A console is a Win32 object: Linux writes bytes at a
+// descriptor with one `write` syscall and arm64/wasm reach their own primitives, so none of this has a
+// counterpart on those lanes and none of them emits `mrt_write_stream`.
+
+// `CP_UTF8` — the code page a Maxon `String`'s bytes are in, named at each conversion rather than set once
+// on the console. The console's own output code page belongs to the console: it is shared with the parent
+// shell and with every sibling attached to it, it cannot be restored without writing state a concurrent
+// process may be depending on, and it says nothing at all when the stream is a pipe or a file.
+let ConsoleCodePageUtf8 = 65001
+
+// ⛔ **`dwFlags = 0`, NEVER `MB_ERR_INVALID_CHARS`.** A Maxon `String` is not validated UTF-8
+// (`stdlib/String.maxon`) and `__Builtins.writeStdout(anyByteArray.managed)` is legal, so an ill-formed
+// byte must become U+FFFD rather than fail the call and take a diagnostic with it.
+let ConsoleWidenNoFlags = 0
+
+// The UTF-16 units one conversion produces, which is also the bytes one slice consumes — ONE constant for
+// both, because that is what makes the buffer big enough.
+//
+// ⭐ **units ≤ input bytes, ALWAYS**: a 1-, 2- or 3-byte sequence widens to one unit and a 4-byte sequence
+// to two, so K input bytes can never produce more than K units. `ERROR_INSUFFICIENT_BUFFER` is therefore
+// unreachable by construction rather than by a check.
+//
+// ⚠ **32 IS A STACK BUDGET, NOT A THROUGHPUT CHOICE.** `mrt_write_stream` is un-guarded and free-rides on
+// the green-thread guard margin together with the rest of the un-guarded `mrt_` diagnostic chain, so the
+// `2 × K` bytes the buffer costs come out of what that chain leaves. Raising it is legal exactly as far as
+// `requireWriteStreamFitsGreenThreadStack` says — which is the point of that certificate: the number below
+// is a reading, and a reading with no gate under it is a comment that rots.
+let ConsoleWideBufferUnits = 32
+
+// The width of one UTF-16 code unit. It appears once as a `lea` index scale and once in the buffer's size;
+// there is no 16-bit load or store anywhere here, because only the kernel ever reads the units.
+let Utf16UnitBytes = 2
+
+// A UTF-8 CONTINUATION byte is `10xxxxxx`. A slice cut at `ConsoleWideBufferUnits` may land inside a
+// sequence, so the cut walks LEFT off any continuation bytes before converting — at most three steps,
+// which is the longest tail a well-formed sequence has.
+let Utf8ContinuationMask = 0xC0
+let Utf8ContinuationTag = 0x80
+let Utf8MaxContinuationBackoff = 3
+
+// The OUTGOING stack-argument slots `mrt_write_stream` fills, named rather than left as bare 0/1 for the
+// reason `StdToX64Conversion`'s `CreateProcess*Slot` family is: an index at an `[rsp+disp]` store says
+// nothing about which argument of which call is being written. `win64OutgoingArgDisp` turns each into
+// `[rsp + shadow + slot*8]`, which is exactly where the GT syscall shim copies them from.
+let WriteFileOverlappedArgSlot = 0  // WriteFile arg 5: lpOverlapped = NULL
+let WriteConsoleReservedArgSlot = 0  // WriteConsoleW arg 5: lpReserved = NULL
+let WidenBufferArgSlot = 0  // MultiByteToWideChar arg 5: lpWideCharStr
+let WidenBufferUnitsArgSlot = 1  // MultiByteToWideChar arg 6: cchWideChar
+
+// ⭐⭐ **ONE `.data` CELL PER STANDARD STREAM, HOLDING WHAT THE PROBE ANSWERED.** Console-ness is a property
+// of the handle for the life of the process, so it is asked once per stream and read on every write after
+// that. `unprobed` is 0 because `.data` starts zeroed, so "not yet asked" costs no initializer.
+//
+// ⭐ **THE RACE IS BENIGN AND THAT IS WHY THERE IS NO LOCK.** Two threads writing one cell write the SAME
+// answer — `GetConsoleMode` on one handle cannot say two things — so a lost update costs at most one extra
+// probe. A byte is written whole by the ISA, so no reader can see half a verdict.
+enum ConsoleVerdict
+	unprobed = 0
+	isConsole = 1
+	notConsole = 2
+end 'ConsoleVerdict'
+
+// ⭐ **THE THREE CELLS ARE ONE RUN, INDEXED BY `StdInputHandleSelector - selector`** — the property
+// `ConsoleRuntime` already states for the POSIX descriptors, so the map is one subtraction. They are three
+// 1-byte slots pushed CONSECUTIVELY into one `DataSectionEntryArray`, and
+// `GlobalDataTable.sortBySizeDescendingStable` appends each size class in declaration order, so they are
+// adjacent in `.data` by construction rather than by luck.
+//
+// ⚠ **STANDARD INPUT GETS A CELL IT NEVER USES**, and one byte buys a total map: with a two-cell run based
+// at the OUTPUT selector, an input selector would index one byte BEFORE the run, and nothing structural
+// would say so. Its cell is therefore the run's BASE, because index 0 is standard input's.
+let ConsoleProbeStdinLabel = b"__mrt_console_probe_stdin"
+let ConsoleProbeStdoutLabel = b"__mrt_console_probe_stdout"
+let ConsoleProbeStderrLabel = b"__mrt_console_probe_stderr"
+
+// ⭐ **THE CACHE IS LAID OUT FOR EVERY x64-WINDOWS PROGRAM, ON THE TARGET ALONE.** Its reader is
+// `mrt_write_stream`, which every such binary carries: a program that never prints still panics, and a
+// panic writes to stderr. There is no usage bit that could gate it more tightly.
+//
+// ⚠ **1-BYTE SLOTS, AND THE WIDTH IS LOAD-BEARING.** `layOut` orders `.data` by storage size descending,
+// so a 1-byte runtime slot lands after every user global of every width — which is what keeps
+// `RequiredData`'s prefix-from-byte-0 rule pinning the same bytes it pinned before. An 8-byte cell here
+// would displace every sub-word user global in the corpus.
+export function x64WindowsRuntimeGlobals(target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if target.cpu != CpuArch.x64 or target.os != Os.windows 'notThisLane'
+		return out
+	end 'notThisLane'
+
+	pushRuntimeGlobal(out, label: ConsoleProbeStdinLabel, sharing: MultiMSharing.lastWriterWins, valueType: StdType.i8)
+	pushRuntimeGlobal(out, label: ConsoleProbeStdoutLabel, sharing: MultiMSharing.lastWriterWins, valueType: StdType.i8)
+	pushRuntimeGlobal(out, label: ConsoleProbeStderrLabel, sharing: MultiMSharing.lastWriterWins, valueType: StdType.i8)
+	return out
+end 'x64WindowsRuntimeGlobals'
+
 // --- Runtime function names ---
 //
-// The names every lane shares are `Targets/Shared/BacktraceFormat`'s. These two are x64-Windows's own:
-// a VEH callback and the trampoline the x86-64 kernel demands.
+// The names every lane shares are `Targets/Shared/BacktraceFormat`'s. These three are x64-Windows's own:
+// a VEH callback, the trampoline the x86-64 kernel demands, and the one stream writer.
+
+// ⭐ **THE ONE WRITE PATH BOTH PRODUCERS REACH.** The isel lowers `osWriteStdout`/`osWriteStderr` to a call
+// of this name and the panic writer tail-calls it, so the console probe, the widening and the two loops
+// exist exactly once. EXPORTED because `StdToX64Conversion` names it.
+export let WriteStreamName = b"mrt_write_stream"
 
 // The vectored exception handler `AddVectoredExceptionHandler` registers. A different name from the
 // POSIX `FaultHandlerName` because the two are reached differently — one is a callback the OS invokes
@@ -189,6 +288,10 @@ export type X64RuntimeAsm
 	export var frameBytes as StackSize
 	export var slotAreaBytes as StackSize
 
+	// What `beginFunction` reserved for OUTGOING stack arguments, kept so `outgoingArgDisp` can refuse a
+	// slot outside it.
+	export var outgoingArgBytes as StackSize
+
 	// Open a function: allocate its frame and emit `push rbp; mov rbp, rsp; sub rsp, N`.
 	//
 	// `slots` is how many 8-byte locals the body needs; `outgoingStackArgBytes` is space for
@@ -205,11 +308,16 @@ export type X64RuntimeAsm
 		encodePushReg(code, reg: X64Register.rbp)
 		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
 
-		// No certificate: every panic-runtime chunk's frame is a hand-counted handful of slots (the
-		// widest is `mrt_write_hex64`'s 17-byte buffer), so none can reach the guard page. A chunk
-		// that ever wanted a page-sized buffer would panic here rather than emit a frame that
-		// steps over it — and would then have to name a free scratch register, which is a claim
-		// about ITS entry contract that this shared builder cannot make on its behalf.
+		// No certificate: every runtime chunk's frame is a hand-counted handful of slots — the widest is
+		// `mrt_write_stream`'s UTF-16 buffer at 0xC0 bytes, an order of magnitude short of a page — so none
+		// can reach the guard page. A chunk that ever wanted a page-sized buffer would panic here rather
+		// than emit a frame that steps over it, and would then have to name a free scratch register, which
+		// is a claim about ITS entry contract that this shared builder cannot make on its behalf.
+		//
+		// ⚠ THE GUARD PAGE IS NOT THE ONLY CEILING. A chunk emitted for x64-windows is also un-guarded
+		// against a GREEN THREAD's 2 KB stack, which is a far tighter bound; `buildWriteStreamChunk`
+		// certifies itself against it, because the budget is a property of the CHAIN a chunk sits in and
+		// not of any one frame.
 		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
 
 		return Self{
@@ -224,7 +332,8 @@ export type X64RuntimeAsm
 			stringLabels: RuntimeStringLabelArray.create(),
 			stringBytes: RuntimeStringBytesArray.create(),
 			frameBytes: frameBytes,
-			slotAreaBytes: slotAreaBytes
+			slotAreaBytes: slotAreaBytes,
+			outgoingArgBytes: outgoingStackArgBytes
 		}
 	end 'beginFunction'
 
@@ -292,6 +401,26 @@ export type X64RuntimeAsm
 
 		return -offset as Imm32
 	end 'slotDisp'
+
+	// ⭐⭐ **THE `[rsp + disp]` DISPLACEMENT OF OUTGOING STACK-ARGUMENT SLOT `index`, BOUNDS-CHECKED — the
+	// COMPLETE site, so a reservation too small for the calls a chunk makes cannot be silent.** The
+	// reservation is a number a builder works out from the widest import it names, and nothing structural
+	// ties that arithmetic to the stores; a chunk that grew a call with one more stack word than it reserved
+	// would write into `spillSlotBaseDisp`'s first spill slot and corrupt a live value with no fault. Every
+	// outgoing-argument store in this file goes through here, so the disagreement is a BUILD-TIME panic
+	// naming the slot and the reservation instead.
+	//
+	// The rule itself is `win64OutgoingArgDisp`'s and is not restated: this adds the certificate, not a
+	// second addressing convention.
+	export function outgoingArgDisp(index MachineWord) returns Imm32
+		let regionEnd = (index + 1) * SpillSlotBytes
+
+		if (regionEnd as StackSize) > self.outgoingArgBytes 'outOfRegion'
+			panic("X64RuntimeAsm.outgoingArgDisp: outgoing stack-argument slot {index} ends at byte {regionEnd} of the outgoing region but `beginFunction` reserved only {self.outgoingArgBytes} — the store would land on spill slot 0 and corrupt a live value. Raise the chunk's `outgoingStackArgBytes` to cover the widest call it makes")
+		end 'outOfRegion'
+
+		return win64OutgoingArgDisp(index)
+	end 'outgoingArgDisp'
 end 'X64RuntimeAsm'
 
 // ==========================================================================
@@ -443,49 +572,381 @@ function emitTextBoundsGuard(asm X64RuntimeAsm, offsetReg X64Register, scratchA 
 end 'emitTextBoundsGuard'
 
 // ==========================================================================
+// mrt_write_stream(rcx = GetStdHandle selector, rdx = bytes, r8 = length) -> rax = bytes accepted
+// ==========================================================================
+
+// ⭐⭐ **THE ONE WRITE PATH OF AN x64-WINDOWS PROGRAM.** Every byte `print`, `printError` and the panic
+// runtime put on a standard stream leaves through here, so the console probe and the UTF-16 widening are
+// written once. A second copy in the isel would be free to drift from this one on exactly the buffer
+// arithmetic that is hardest to get right.
+//
+// It answers the number of bytes of the CALLER's buffer that were accepted, which is what
+// `__Builtins.writeStdout` returns.
+//
+// ⛔ **THE CONSOLE ROAD RETURNS THE INPUT BYTE COUNT, NOT `WriteConsoleW`'s OUT-PARAM**, which counts
+// UTF-16 CODE UNITS — a different quantity that would make `print` report a different number on a console
+// than on a pipe for the same string. `specs/print-error-function.md` builds exit codes out of the answer.
+//
+// Slots: 0 selector, 1 handle, 2 bytes, 3 length, 4 offset, 5 slice, 6 units, 7 units already accepted,
+// 8 the Win32 out-param word, 9.. the UTF-16 buffer.
+let WriteStreamSlotSelector = 0
+let WriteStreamSlotHandle = 1
+let WriteStreamSlotBytes = 2
+let WriteStreamSlotLength = 3
+let WriteStreamSlotOffset = 4
+let WriteStreamSlotSlice = 5
+let WriteStreamSlotUnits = 6
+let WriteStreamSlotDone = 7
+let WriteStreamSlotOutWord = 8
+let WriteStreamSlotWide = 9
+
+// The outgoing stack-argument words the frame reserves: the WIDEST of the three Win32 calls made from it,
+// because ONE outgoing region serves all of them. Read from the same constants the GT syscall shim copies
+// by (`StdToX64Conversion`), so the reservation and the copy cannot disagree. A FUNCTION because a global
+// initializer may not call one.
+//
+// ⚠ **THIS LIST IS NOT WHAT MAKES THE RESERVATION RIGHT — `X64RuntimeAsm.outgoingArgDisp` IS.** Naming the
+// calls here is an enumeration, and an enumeration a fourth call can be added to without touching. The
+// STORES are the complete site, and each of them refuses a slot outside what was reserved, so a list that
+// fell behind the chunk's call sites is a build-time panic rather than a frame written past its region.
+function writeStreamOutgoingArgWords() returns MachineWord
+	var widest = WriteFileStackArgWords
+
+	if WriteConsoleStackArgWords > widest 'consoleWrite'
+		widest = WriteConsoleStackArgWords
+	end 'consoleWrite'
+
+	if MultiByteToWideCharStackArgWords > widest 'widen'
+		widest = MultiByteToWideCharStackArgWords
+	end 'widen'
+
+	return widest
+end 'writeStreamOutgoingArgWords'
+
+// The 8-byte slots the UTF-16 buffer occupies.
+function writeStreamWideSlots() returns StackSize
+	return (alignUp(ConsoleWideBufferUnits * Utf16UnitBytes, alignment: SpillSlotBytes) / SpillSlotBytes) as StackSize
+end 'writeStreamWideSlots'
+
+// The two words a `call` and the prologue's `push rbp` put below a chunk's own frame — what a footprint
+// costs beyond the reservation `beginFunction` made.
+let ChunkEntryWordsBytes = 2 * StackWordBytes
+
+// ⭐⭐ **WHAT THE REST OF THE UN-GUARDED CHAIN ALREADY SPENDS.** The deepest chain of un-guarded frames on
+// this lane is the fault diagnostic — `mrt_fault_thunk` → `mrt_fault_backtrace` → `mrt_walk_frames` →
+// `mrt_print_frame` → `mrt_write_hex64` → `mrt_write_cstr_stderr` → `mrt_write_stream` — and each frame
+// costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 112 + 96 + 96 + 48 = 544.
+// The green-thread syscall shim adds at most 56 more on the GT stack across a call (the pushed r10 and
+// `emitGtExitSyscall`'s slow frame), which no chunk's own frame accounts for.
+//
+// ⚠ **IT IS MEASURED FROM THOSE BUILDERS AND NOTHING RE-DERIVES IT**, so widening any un-guarded chunk's
+// frame leaves this number stale in the OPTIMISTIC direction. Re-measure it at the builder that grew.
+let UnguardedDiagnosticChainBytes = 544 + 56
+
+// ⛔⛔ **THE CEILING ON `ConsoleWideBufferUnits`, AND IT IS THE GREEN-THREAD STACK RATHER THAN THE GUARD
+// PAGE.** This chunk is emitted with no stack-guard check, so it spends the margin the guard leaves below
+// a green thread's 2 KB stack (`GtRuntime.gtStackGuardMargin`) — and it spends it AFTER the diagnostic
+// chain above has. A buffer raised for throughput would otherwise overflow that stack silently, on the one
+// path where the symptom is a corrupted neighbouring green thread rather than a fault.
+//
+// The frame is read back from `beginFunction` rather than recomputed, so this certificate cannot come to
+// disagree with the frame it certifies.
+function requireWriteStreamFitsGreenThreadStack(frameBytes StackSize, target Target)
+	let footprint = (frameBytes as ParsedInt) + ChunkEntryWordsBytes
+	let budget = gtStackGuardMargin(target) - UnguardedDiagnosticChainBytes
+
+	if footprint > budget 'overflowsGreenThreadStack'
+		panic("requireWriteStreamFitsGreenThreadStack: mrt_write_stream's frame is {footprint} bytes but the un-guarded chain leaves only {budget} of the {gtStackGuardMargin(target)}-byte green-thread guard margin — a green thread printing through it would run off its 2 KB stack with no fault. Lower ConsoleWideBufferUnits ({ConsoleWideBufferUnits} units cost {ConsoleWideBufferUnits * Utf16UnitBytes} bytes of frame), or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile against the >5% rule")
+	end 'overflowsGreenThreadStack'
+end 'requireWriteStreamFitsGreenThreadStack'
+
+// `dest = &<this stream's probe cell>` — the whole selector-to-cell map, which is one subtraction because
+// the three `GetStdHandle` selectors descend as the three cells ascend (see `ConsoleProbeStdinLabel`).
+// Clobbers rax and r11, so `dest` may be neither.
+function emitConsoleCellPtr(asm X64RuntimeAsm, dest X64Register)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r11, value: StdInputHandleSelector)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: dest, label: ConsoleProbeStdinLabel)
+	encodeLeaRegBaseIndexScale(asm.code, dest: dest, base: dest, index: X64Register.r11, scale: MemoryIndexScale.byOne)
+end 'emitConsoleCellPtr'
+
+// ⛔⛔ **A WIN32 `BOOL` OR `int` IS A DWORD, SO THE HIGH HALF OF RAX IS UNDEFINED WHEN THE CALL RETURNS**,
+// and every comparison in this file is `cmp r64, imm32` (`encodeGrp1RegImm32` emits REX.W). `mov eax, eax`
+// zero-extends, which makes the value the register holds the one the kernel actually answered.
+//
+// ⛔ It is not cosmetic at `MultiByteToWideChar`: a garbage high half would survive the zero test, be stored
+// as `units`, and hand `WriteConsoleW` a count that reads far past the 64-byte frame buffer. The other two
+// sites test a BOOL, where garbage above a zero low half would merely take the fallback — the same answer
+// for the wrong reason, which is why all three narrow rather than only the one that must.
+function emitNarrowRaxToDword(asm X64RuntimeAsm)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+end 'emitNarrowRaxToDword'
+
+// `WriteFile(handle, bytes + offset, length - offset, &out, NULL)` — the raw-byte write, leaving the
+// accepted count in the out-param slot. Shared by the NOT-A-CONSOLE road, which is the whole of what it
+// does, and by the console road's fallback, which reaches it with a non-zero offset.
+//
+// ⚠ The out-param word is zeroed BEFORE the call and read back WHOLE. `lpNumberOfBytesWritten` is a
+// `DWORD*` and the slot is eight bytes, so without the zeroing the high half would carry whatever the
+// frame last held; with it the count arrives zero-extended and exact, and a `WriteFile` that FAILS having
+// written nothing reads back 0 rather than garbage.
+function emitWriteStreamRawWrite(asm X64RuntimeAsm, usesGt bool)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteFileOverlappedArgSlot), srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rdx, src: X64Register.r11, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
+
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteFile), usesGt: usesGt)
+end 'emitWriteStreamRawWrite'
+
+// ⛔⛔ **EVERY IMPORT CALL HERE GOES THROUGH `emitGtGatedIatCall`, NOT `encodeIatCall`.** A hand-assembled
+// chunk is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's
+// `iatCall` is, so calling the IAT directly would run a Win32 call on a 2 KB green-thread stack and would
+// delete the `blocking` syscall bracket from the hottest slot there is — every `print` from a green thread.
+function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeChunk
+	if ConsoleWideBufferUnits <= Utf8MaxContinuationBackoff 'bufferTooSmallToBackOff'
+		panic("buildWriteStreamChunk: ConsoleWideBufferUnits is {ConsoleWideBufferUnits}, which is not more than the {Utf8MaxContinuationBackoff}-byte continuation back-off — a cut slice could then be walked down to zero bytes and the outer loop would never advance")
+	end 'bufferTooSmallToBackOff'
+
+	let wideSlots = writeStreamWideSlots()
+	var asm = X64RuntimeAsm.beginFunction(((WriteStreamSlotWide + wideSlots) as StackSize), outgoingStackArgBytes: ((writeStreamOutgoingArgWords() * SpillSlotBytes) as StackSize))
+	requireWriteStreamFitsGreenThreadStack(asm.frameBytes, target: target)
+
+	// The buffer grows UPWARD in memory from the LAST of the slots it occupies, because slots grow downward
+	// from rbp — `mrt_write_hex64`'s idiom.
+	let wideDisp = asm.slotDisp(((WriteStreamSlotWide + wideSlots - 1) as StackSize))
+
+	let done = asm.newLabel()
+	let cellReady = asm.newLabel()
+	let verdictReady = asm.newLabel()
+	let notAConsole = asm.newLabel()
+	let outerLoop = asm.newLabel()
+	let sliceChosen = asm.newLabel()
+	let backOffLoop = asm.newLabel()
+	let innerLoop = asm.newLabel()
+	let sliceWritten = asm.newLabel()
+	let rawFallback = asm.newLabel()
+	let consoleDone = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), srcReg: X64Register.r8)
+
+	// Nothing to write is answered before any OS call — which is also what keeps `cbMultiByte = 0`, the one
+	// value `MultiByteToWideChar` reports as FAILURE, out of reach. rax is the answer on every exit, so the
+	// zero it is tested against here is already the one this exit returns.
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// The handle is asked for on every write, unlike the verdict below: `SetStdHandle` may replace a standard
+	// handle at any point, so a cached one could name a stream the program has since redirected, and
+	// `GetStdHandle` is a read of a word the process already holds.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetStdHandle), usesGt: usesGt)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), srcReg: X64Register.rax)
+
+	// Is this stream a console? Asked once per stream and cached; every later write reads the cell.
+	emitConsoleCellPtr(asm, dest: X64Register.r10)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: ConsoleVerdict.unprobed.rawValue)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: cellReady)
+
+	// ⛔ **`GetConsoleMode`, NOT `GetFileType`, AND `> NUL` IS WHAT SEPARATES THEM.** A redirect to `NUL`
+	// answers `FILE_TYPE_CHAR` — the same word a real console answers — while `WriteConsoleW` FAILS on that
+	// handle, so a file-type test would send that program's output down a road that discards it and reports
+	// success. `GetConsoleMode` succeeds for a console and for nothing else, which is the question here.
+	// `specs/terminal-color-detection.md`'s colour predicate asks a genuinely different question — "is a
+	// terminal on the other end" — and is right to use `GetFileType`; the two must not be folded together.
+	//
+	// The mode word lands in the Win32 out-param slot and is never read: the CALL's verdict is the answer.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetConsoleMode), usesGt: usesGt)
+	emitNarrowRaxToDword(asm)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: ConsoleVerdict.notConsole.rawValue)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: verdictReady)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: ConsoleVerdict.isConsole.rawValue)
+
+	asm.placeLabel(verdictReady)
+	emitConsoleCellPtr(asm, dest: X64Register.r10)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r10, disp: 0, srcReg: X64Register.r8)
+
+	// Both roads arrive with r10 = this stream's cell, so the cached and the freshly probed paths take the
+	// same instructions from here on.
+	asm.placeLabel(cellReady)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: ConsoleVerdict.isConsole.rawValue)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notAConsole)
+
+	// --- the CONSOLE road: widen a slice at a time and hand the units over ---
+	asm.placeLabel(outerLoop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: consoleDone)
+
+	// slice = min(remaining, K). An uncut slice is whole by definition and needs no back-off.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: ConsoleWideBufferUnits)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: sliceChosen)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ConsoleWideBufferUnits)
+
+	// ⭐ **A CUT SLICE WALKS LEFT WHILE THE BYTE IT CUTS AT IS A CONTINUATION BYTE**, so a multi-byte
+	// sequence is never split across two conversions and never widened into a run of U+FFFDs.
+	//
+	// ⛔ **THE BYTE UNDER TEST IS THE ONE THE NEXT SLICE WOULD START WITH — `bytes[offset + slice]`, THE
+	// FIRST EXCLUDED BYTE — NOT THE LAST INCLUDED ONE.** A slice that ends ON a continuation byte may hold a
+	// whole sequence, and one that ends on a LEAD byte has certainly split one. MEASURED against a real
+	// console with the other reading: `é` cut between its two bytes reached the screen as two replacement
+	// characters, because its lead byte read as "not a continuation" and the walk stopped there.
+	//
+	// ⚠ Reading at the cut is IN BOUNDS precisely because the slice was cut: this arm runs only when
+	// `remaining > ConsoleWideBufferUnits`, so `offset + slice` is still inside the caller's buffer.
+	//
+	// ⭐ **TERMINATION.** The walk is bounded at `Utf8MaxContinuationBackoff` steps — the longest tail a
+	// well-formed sequence has — and the builder refuses a buffer that small, so `slice >=
+	// ConsoleWideBufferUnits - 3 >= 1` on this road and `slice = remaining` on the other. The outer loop
+	// therefore advances `offset` by at least one byte every iteration.
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+
+	asm.placeLabel(backOffLoop)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: Utf8MaxContinuationBackoff)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: sliceChosen)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: X64Register.r9, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.r11, disp: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.r9, imm: Utf8ContinuationMask)
+	emitCmpRegImm(asm, reg: X64Register.r9, imm: Utf8ContinuationTag)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: sliceChosen)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: backOffLoop)
+
+	asm.placeLabel(sliceChosen)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), srcReg: X64Register.rax)
+
+	// MultiByteToWideChar(CP_UTF8, 0, bytes + offset, slice, wide, K).
+	// ⛔ `cbMultiByte` is the EXPLICIT slice length and never -1: an embedded NUL is a byte committed specs
+	// push through this door, and -1 would stop at the first one.
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rbp, disp: wideDisp)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferArgSlot), srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ConsoleWideBufferUnits)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WidenBufferUnitsArgSlot), srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: ConsoleCodePageUtf8)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ConsoleWidenNoFlags)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotBytes), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), wide: true)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar), usesGt: usesGt)
+	emitNarrowRaxToDword(asm)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotUnits), srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.rax)
+
+	// WriteConsoleW accepts a PREFIX of the units it is offered, so the slice is offered again from where it
+	// stopped until every unit has landed.
+	asm.placeLabel(innerLoop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotUnits), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: sliceWritten)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: wideDisp)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rdx, base: X64Register.rdx, index: X64Register.r11, scale: MemoryIndexScale.byTwo)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteConsoleReservedArgSlot), srcReg: X64Register.rax)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteConsoleW), usesGt: usesGt)
+	emitNarrowRaxToDword(asm)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
+
+	// ⛔ **TRUE WITH ZERO UNITS ACCEPTED MUST LEAVE THIS LOOP**, or it spins for ever offering the same units
+	// to a console that is taking none.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: rawFallback)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotDone), srcReg: X64Register.r11)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: innerLoop)
+
+	asm.placeLabel(sliceWritten)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: outerLoop)
+
+	// ⛔⛔ **A REFUSED CONVERSION OR A FAILED CONSOLE WRITE NEVER DROPS BYTES** — it writes the RAW remaining
+	// bytes at the handle instead. Mojibake is recoverable; a vanished diagnostic is not. A console that
+	// accepted part of a slice before failing sees at most `ConsoleWideBufferUnits` bytes twice, and
+	// duplication is the safe direction.
+	//
+	// ⛔ **THE ANSWER IS WHAT ACTUALLY LANDED — the bytes the console took plus the bytes the fallback
+	// moved — and NOT the caller's length.** Every slice before this point was accepted whole (the inner
+	// loop leaves only when every unit has landed), so `offset` is exactly that prefix; `WriteFile`'s
+	// out-param is the rest. Answering the full length here would report a write nothing performed if the
+	// fallback failed too, which is the one road on which this function can honestly say "less".
+	asm.placeLabel(rawFallback)
+	emitWriteStreamRawWrite(asm, usesGt: usesGt)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(consoleDone)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotLength), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	// --- the NOT-A-CONSOLE road: one `WriteFile`, answering the count the kernel reports ---
+	asm.placeLabel(notAConsole)
+	emitWriteStreamRawWrite(asm, usesGt: usesGt)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), wide: true)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WriteStreamName)
+end 'buildWriteStreamChunk'
+
+// ==========================================================================
 // mrt_write_cstr_stderr(rcx = NUL-terminated string)
 // ==========================================================================
 
-// Write a C string to stderr. The emitted program links no CRT — there is no `fprintf`,
-// and stderr is a HANDLE you ask kernel32 for — so this is `GetStdHandle(-12)` plus
-// `WriteFile`, with the length measured here because a C string does not carry one.
-//
-// Slots: 0 = cstr, 1 = length, 2 = WriteFile's lpNumberOfBytesWritten out-param.
-// One outgoing stack argument: WriteFile's 5th parameter (lpOverlapped).
+// Write a C string to stderr. The length is measured here because a C string does not carry one; everything
+// else — the handle, the console probe, the widening, the empty-string case — belongs to `mrt_write_stream`
+// and is not repeated here. rcx survives the length walk, so the string needs no frame slot.
 function buildWriteStderrChunk() returns FunctionCodeChunk
-	let SlotCstr = 0
-	let SlotLength = 1
-	let SlotWritten = 2
-	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: 8)
+	var asm = X64RuntimeAsm.beginFunction(0)
 
-	let done = asm.newLabel()
-
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), srcReg: X64Register.rcx)
-
-	// RCX holds the string start untouched across the walk, so the length needs no second slot.
 	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rax)
-
-	// An empty string is a no-op — WriteFile with a zero count is legal but pointless, and
-	// skipping it keeps the empty case from depending on that.
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
-
-	// GetStdHandle(STD_ERROR_HANDLE). The parameter is a DWORD, so the 32-bit `mov` — which
-	// zero-extends — puts exactly (DWORD)-12 in ECX.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: StdErrorHandle)
-	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetStdHandle))
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStreamName)
 
-	// WriteFile(handle, cstr, length, &written, NULL)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten))
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: FirstStackArgDisp, srcReg: X64Register.rax)
-	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.WriteFile))
-
-	asm.placeLabel(done)
 	return asm.finishFunction(WriteStderrName)
 end 'buildWriteStderrChunk'
 
@@ -1033,7 +1494,7 @@ end 'emitCoverageAbortDump'
 // `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_hex64` are OS-NEUTRAL — they call each
 // other and `mrt_write_cstr_stderr` BY NAME and touch no IAT — so the Linux runtime appends them
 // unchanged. Only THREE chunks differ from Windows, all because Linux reaches the OS through raw syscalls
-// rather than kernel32 imports: the stderr writer (`write` vs GetStdHandle+WriteFile), the fault ENTRY (a
+// rather than kernel32 imports: the stderr writer (`write` vs a call into `mrt_write_stream`), the fault ENTRY (a
 // SIGFPE handler reading the ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init`
 // (rt_sigaction vs AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows
 // twins (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to
@@ -1050,8 +1511,12 @@ function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
 end 'buildLinuxSigreturnTrampolineChunk'
 
 // mrt_write_cstr_stderr (LINUX) — rcx = NUL-terminated string. The Linux twin of `buildWriteStderrChunk`:
-// the same strlen, then a single `write(2, cstr, len)` syscall instead of GetStdHandle+WriteFile through
-// the IAT. Keeps the file's internal Win64 convention (the string arrives in rcx).
+// the same strlen, then a single `write(2, cstr, len)` syscall where the Windows one hands the bytes to
+// `mrt_write_stream`. Keeps the file's internal Win64 convention (the string arrives in rcx).
+//
+// ⭐ It measures, writes and guards the empty case in ONE body because a descriptor takes bytes as they
+// are: there is nothing on this lane for a stream writer to decide, so there is no `mrt_write_stream`
+// beneath it to decide it.
 function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
@@ -1169,11 +1634,14 @@ end 'buildLinuxRuntimeInitChunk'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
-		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
+
+		// ⚠ Linux needs no `usesGt`: every OS call in its half is a raw `syscall` instruction, which runs on
+		// whatever stack it is on and asks the scheduler nothing.
 		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
 		macos or
 			wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
@@ -1201,11 +1669,16 @@ function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X
 	chunks.push(buildWriteHexChunk())
 end 'appendX64SharedRuntimeChunks'
 
-// The Windows-ONLY half of the fault runtime: the VEH `runtime_init` + `fault_thunk`, over a
-// GetStdHandle+WriteFile stderr writer. Everything else it needs comes from the shared appender above.
-function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
+// The Windows-ONLY half of the fault runtime: the VEH `runtime_init` + `fault_thunk`, plus the ONE stream
+// writer every producer in the program reaches and the C-string front end the diagnostics call it through.
+// Everything else it needs comes from the shared appender above.
+//
+// ⚠ `usesGt` travels this far because `mrt_write_stream` calls the IAT by hand, and a hand-assembled call
+// is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's is.
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildRuntimeInitChunk())
 	chunks.push(buildFaultThunkChunk())
+	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
 end 'appendX64WindowsRuntimeChunks'

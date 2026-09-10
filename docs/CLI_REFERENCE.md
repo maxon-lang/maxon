@@ -372,17 +372,18 @@ test body means the same thing it means in the shell you typed the command in.
 anything is staged, so a generated test source can never be swept into the project's next ordinary
 build or into the next run's own discovery.
 
-**On Windows, every emitted program sets the console to UTF-8 as it starts.** A Maxon program writes
-UTF-8 bytes at the handle and has no way to say so per write: `WriteFile` hands a console BYTES, and the
-console decodes them with its own output code page — the machine's OEM page unless somebody changed it,
-which reads an em-dash as three Latin-1 letters. So the entry stub calls `SetConsoleOutputCP(CP_UTF8)`
-once, ahead of every writer in the process including the panic path.
+**On Windows, an emitted program converts per write and changes nothing about the console.** A Maxon
+program holds UTF-8 bytes; a Windows console consumes UTF-16 and decodes anything else with its own output
+code page — the machine's OEM page unless somebody changed it, which reads an em-dash as three Latin-1
+letters. So each standard stream is asked ONCE, on its first write, whether its handle is a console
+(`GetConsoleMode`); a console gets the bytes converted and handed over as UTF-16, and a pipe or a
+redirected file gets them exactly as they are. `print`, `printError` and the panic path all take the same
+road, so a backtrace reads the way a `print` does.
 
-It changes how bytes are READ, never which bytes are written: a redirected stream — a pipe, a file, a
-captured golden — is byte-for-byte what it was, and a process with no console fails the call harmlessly.
-⚠ The code page belongs to the CONSOLE, which is shared with the parent shell, and it is **not restored
-on exit**: restoring is a write to state a sibling process may be relying on, and this compiler puts
-worker processes on its own console. A console therefore keeps UTF-8 after a Maxon program has run.
+The console's own state is never written, so nothing about it outlives the program: a shell's code page is
+whatever it was before, and a sibling process attached to the same console is unaffected. Redirected
+output is byte-for-byte the UTF-8 the program produced — a pipe, a file and a captured golden all see the
+same bytes as each other and as every other target.
 
 **`--color=auto` degrades to `never` on wasm32-wasi.** Asking the OS what kind of object a handle is
 needs a host call: **x64-windows** makes it with `GetFileType`, **arm64-macos** with `isatty`, and both

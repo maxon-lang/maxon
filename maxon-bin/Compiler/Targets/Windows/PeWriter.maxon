@@ -317,20 +317,27 @@ export enum IatSlot
 	// entry point here alone would be the lone wide producer feeding narrow consumers.
 	GetModuleFileNameA = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐⭐ **THE CONSOLE'S OUTPUT CODE PAGE, AND WHY EVERY BINARY IN THIS LANGUAGE IMPORTS IT.** A Maxon
-	// program writes UTF-8 bytes straight at the handle, and a Windows console decodes whatever bytes
-	// reach it with ITS OWN output code page — which is the machine's OEM page unless somebody changed it.
-	// MEASURED: an em-dash (`E2 80 94`) reaches a reader as three Latin-1 letters, and so does every
-	// non-ASCII byte the compiler's own diagnostics and `maxon test`'s report emit.
+	// ⭐⭐ **THE THREE CONSOLE-WRITE IMPORTS, AND WHY EVERY BINARY IN THIS LANGUAGE CARRIES THEM.** A Maxon
+	// program emits UTF-8; a Windows console consumes UTF-16 and decodes anything else with a code page that
+	// belongs to the console rather than to this process. So the write path asks PER STANDARD STREAM whether
+	// the handle is a console (`GetConsoleMode`), widens the bytes when it is (`MultiByteToWideChar`) and
+	// hands the units over (`WriteConsoleW`); a pipe or a redirected file takes the raw bytes unchanged.
 	//
-	// ⛔ **IT IS MANDATORY RATHER THAN OPTIONAL, AND ITS PLACE IN THIS LIST IS THAT CLAIM.** The band below
-	// is for imports whose PRODUCER a build may not have; this one's producer is the entry stub, which every
-	// binary has. A program that never prints still panics, and a panic writes to stderr.
+	// ⛔ **`GetConsoleMode`, NOT `GetFileType`** — see `GetFileType`'s own slot below, which asks a
+	// different question for a different consumer. `> NUL` is `FILE_TYPE_CHAR` and `WriteConsoleW` fails on
+	// it, so a file-type test would send that output down a road that reports success and discards it.
 	//
-	// ⚠ **SO IT SITS ABOVE `GetEnvironmentVariableA`, NOT PAST `Module32NextW`.** The optional band must stay
-	// the TRAILING run of kernel32's slots — that is the property `isOptionalTrailingImport`'s header states
-	// and the one that keeps omitting the band from repointing anything.
-	SetConsoleOutputCP = IatSlotMeta{dll: ImportDll.kernel32}
+	// ⛔ **THEY ARE MANDATORY RATHER THAN OPTIONAL, AND THEIR PLACE IN THIS LIST IS THAT CLAIM.** The band
+	// below is for imports whose PRODUCER a build may not have; these three have one in every binary — the
+	// emitted `mrt_write_stream`, which `print`, `printError` and the panic writer all reach. A program that
+	// never prints still panics, and a panic writes to stderr.
+	//
+	// ⚠ **SO THEY SIT ABOVE `GetEnvironmentVariableA`, NOT PAST `Module32NextW`.** The optional band must
+	// stay the TRAILING run of kernel32's slots — that is the property `isOptionalTrailingImport`'s header
+	// states and the one that keeps omitting the band from repointing anything.
+	GetConsoleMode = IatSlotMeta{dll: ImportDll.kernel32}
+	WriteConsoleW = IatSlotMeta{dll: ImportDll.kernel32}
+	MultiByteToWideChar = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS (Workstream O3).** APPENDED AFTER `GetModuleFileNameA` for the reason
 	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
@@ -737,7 +744,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetFileAttributesA or
 			GetCommandLineA or
 			GetModuleFileNameA or
-			SetConsoleOutputCP gives false
+			GetConsoleMode or
+			WriteConsoleW or
+			MultiByteToWideChar gives false
 
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides

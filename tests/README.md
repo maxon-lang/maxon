@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Fourteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Fifteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -32,6 +32,7 @@ SERVER its tests spawn.
 | `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
+| `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -40,7 +41,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other thirteen: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other fourteen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -111,6 +112,9 @@ tests/
     wordless.test.maxon                     a `.maxon` first argument IS `run` - the shebang door
     missing-path.test.maxon                 a path naming nothing is refused at both doors
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
+  console-write/
+    console-write-imports.test.maxon        which console API an emitted x64-windows image imports
+    fixtures/hello/main.maxon.fixture       stored name only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers
@@ -410,3 +414,38 @@ directory under `temp/run/`), and it keeps rule 5: one spawning `test`, one file
 the exception and spawns nothing — it holds the two guards that are about the corpus rather than about the
 driver: every fixture directory is one the harness's roster names and every name in that roster is a
 directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.
+
+## `console-write/` — which console API an emitted x64-windows image imports
+
+One case, and its subject is a program the compiler WROTE rather than one it ran. A Windows console
+decodes what a program writes, and the two ways to make it decode UTF-8 differ in what they touch:
+switching the console's OUTPUT CODE PAGE mutates a shared object the program does not own, outlives the
+process on a console the process did not create, and answers nothing when the stream is a pipe or a
+file; probing each standard stream with `GetConsoleMode` and writing UTF-16 through `WriteConsoleW`
+touches only the streams this program holds. The case gates the second and pins the first as absent.
+
+⭐⭐ **THE ANSWER IS IN THE BYTES, WHICH IS THE ONLY PLACE IT IS.** A PE's idata name table holds every
+imported name as plain ASCII, exactly once, so `File.readBinary` plus `Array.contains(sequence)` answers
+"does this program call `WriteConsoleW`" without running it and without a console to run it on. Nothing
+observable from OUTSIDE a running program distinguishes the two routes — the text arrives either way
+until an encoding or a redirection makes it not — and a `specs` case is a program that cannot see how it
+was built.
+
+⭐ **THE TARGET IS PINNED, NOT INHERITED.** The build names `--target=x64-windows` and spells `.exe` into
+its own `-o`, because the entry stub under test is that target's. A case taking the host's default would
+assert a Windows-only fact about a Mach-O or an ELF on every other host.
+
+⛔ **THE ABSENCE IS ASSERTED BESIDE THE TWO PRESENCES**, and it is the half that would otherwise rot: a
+write path that reaches `WriteConsoleW` while the stub ALSO still switches the code page satisfies every
+positive demand and keeps the process-wide side effect the change exists to remove.
+
+⛔ **THE IMPLEMENTATION MEANS ARE NOT PINNED.** `MultiByteToWideChar` is one way to obtain UTF-16 and is
+not the behaviour; naming it would forbid an encoder written in Maxon that is just as correct.
+
+⚠ **ALL THREE NAMES ARE REPORTED BY ONE RUN.** An assertion per name stops at the first disagreement and
+hides the rest behind it, and the rest are what say whether the change landed halfway — so the case
+collects its findings and fails once, listing every one. Its own red output is what proves the search
+works in both directions: a name that IS imported is found, and one that is not is not.
+
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
+directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.

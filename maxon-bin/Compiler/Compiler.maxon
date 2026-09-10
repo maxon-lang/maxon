@@ -1106,6 +1106,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		declaredGlobals.push(entry)
 	end 'each'
 
+	// The x64-Windows write path's three console-probe cells — one per standard stream, holding what the
+	// probe answered (`X64Runtime.x64WindowsRuntimeGlobals`). ⚠ **NO OUTER BIT TEST**, for its neighbours'
+	// reason: the answer is the TARGET alone, and it is asked where it is stated. There is no usage bit that
+	// would gate it more tightly — every x64-Windows binary carries the writer, because a program that never
+	// prints still panics.
+	for entry in x64WindowsRuntimeGlobals(project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+
 	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
 	// `.data` layout is unchanged — only a pipe-reading program lays them out.
 	if usage.usesIocp 'ioGlobals'

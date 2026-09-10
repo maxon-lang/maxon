@@ -148,16 +148,21 @@ __managed_set
 The `mrt_` band, from the other side of `isRuntimeFunction`'s two prefixes: the entry
 stub every program has and no fragment has ever shown.
 
-⭐⭐ **THE FIRST THING IT DOES IS TELL THE CONSOLE WHAT ENCODING THIS PROGRAM SPEAKS** — `mov ecx, 65001`
-then the `SetConsoleOutputCP` import, ahead of `mrt_runtime_init` and therefore ahead of every writer in
-the process, the fault handler included. A Maxon program emits UTF-8 and a Windows console decodes what
-reaches it with its OWN output code page, so without this line every non-ASCII byte `print`, `printError`
-and the panic path put on a console is read with the wrong table.
+⭐⭐ **THE FIRST THING IT DOES IS INSTALL THE FAULT HANDLER** — `mrt_runtime_init`, ahead of any user code,
+so a division that traps before `main` has run still reaches a diagnostic. The stub touches the CONSOLE not
+at all: encoding is decided per WRITE, inside `mrt_write_stream`, which asks each standard stream whether
+its handle is a console and converts to UTF-16 for the ones that are. Nothing process-wide is set, so a
+program that never writes to a console changes nothing about the one it was launched from.
 
-⚠ **NOTHING ELSE IN THE SUITE CAN SEE IT, WHICH IS WHY IT IS PINNED HERE.** Every case's output is
-CAPTURED — a pipe, never a console — and this call changes how a console READS bytes, never which bytes
-are written. So a run's stdout is byte-identical whether the call is there or not, and this golden is the
-only thing standing between the language and losing it silently.
+⚠ **THE STUB IS PINNED HERE BECAUSE NOTHING ELSE IN THE SUITE RENDERS IT** — every fragment withholds the
+emitted runtime unless a case names it, and this case is the one that does.
+
+⛔⛔ **AND THE CONSOLE ROAD ITSELF IS PINNED BY NOTHING, HERE OR ANYWHERE.** Every case's output is CAPTURED
+— a pipe, never a console — so every suite run takes the NOT-A-CONSOLE road from end to end, and a case
+could not ask which road it took in any event: a program cannot see which API carried its own writes. Which
+MECHANISM an image was built with is answerable from the image's bytes and is gated in
+`tests/console-write/`; whether the conversion is CORRECT is covered by hand against a real console, and by
+nothing automated. Do not read a green suite as evidence about it.
 
 ```maxon
 function main() returns ExitCode

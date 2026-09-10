@@ -254,9 +254,14 @@ end 'MultiMSharing'
 // `seed` defaults to 0 because the zero image IS the initial state for almost every slot (see
 // `gtRuntimeGlobals`); the two worker counters are the exception and say so by passing one.
 //
+// `valueType` defaults to a machine word because almost every runtime slot holds one — a pointer, a count,
+// a lock word. A slot that holds LESS says so, and the width is not cosmetic: `GlobalDataTable.layOut`
+// orders `.data` by storage size descending, so a narrower runtime slot lands behind every user global of
+// every width instead of displacing the ones narrower than a word.
+//
 // ⚠ **THE `usage`/`--debugstream` GATES STAY AT THE CALL SITES.** Whether a slot is laid out at all is a
 // question about the PROGRAM; this door answers a question about the SLOT.
-export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, seed ParsedInt = 0)
+export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, seed ParsedInt = 0, valueType StdType = StdType.i64)
 	match sharing 'classified'
 		atomicStep or
 			underSchedLock or
@@ -266,7 +271,7 @@ export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sh
 		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
-	out.push(DataSectionEntry.create(String.from(label), valueType: StdType.i64, value: seed))
+	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed))
 end 'pushRuntimeGlobal'
 
 // One machine word — the stride of the `P*` array `__sched_procs` points at, the width of every scalar field
