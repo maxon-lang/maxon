@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+### Added
+
+- **Install** in the compiler-not-found prompt runs Maxon's one-line installer for your account, on
+  every platform, and starts the language server when it finishes. Its output is in the Maxon
+  Language Server output channel.
+- The extension finds a compiler installed by the install script in `~/.maxon/bin` (or
+  `$MAXON_INSTALL/bin`) even when VS Code was started without your shell's `PATH`.
+
+### Fixed
+
+- Diagnostics, hover and completion work with an installed compiler. The language server runs from a
+  copy of the compiler in the extension's storage, and that copy now finds the standard library.
+
 ## 0.1.0
 
 The first published release, alongside Maxon 0.1.0.
@@ -19,6 +34,5 @@ The extension needs a `maxon` compiler; it looks in this order:
 3. This workspace's own build at `maxon-bin/.maxon/`, so a contributor with a built tree needs no
    configuration.
 
-If none of those finds one, the extension offers to install it rather than reporting a dead end: on
-Windows it runs `winget install --id MaxonLang.Maxon -e` in a visible terminal, and on every platform
-**Locate…** lets you pick a compiler you already have.
+If none of those finds one, the extension offers **Locate…** to pick a compiler you already have,
+rather than reporting a dead end.

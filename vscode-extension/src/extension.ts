@@ -149,12 +149,12 @@ function sleep(ms: number): Promise<void> {
  * Retries a few times since the old LSP process may not have fully exited yet.
  */
 async function copyToLsp(maxonPath: string, storageDir: string): Promise<string> {
-	// ⛔ THE COPY GOES TO THE EXTENSION'S OWN STORAGE, NEVER BESIDE THE COMPILER. An installed Maxon
-	// lives somewhere the user cannot write — the per-machine MSI puts it under Program Files — so
-	// copying next to it fails five times and gives up, and the language server never starts. Global
-	// storage is writable by definition, and it preserves the reason the copy exists at all: not
-	// holding the compiler binary open while a build wants to replace it.
+	// ⛔ THE COPY GOES TO THE EXTENSION'S OWN STORAGE, NEVER BESIDE THE COMPILER. The compiler may live
+	// somewhere the user cannot write — a Homebrew prefix, a directory an administrator unpacked — and
+	// global storage is writable by definition. It keeps the reason the copy exists at all: not holding
+	// the compiler binary open while a build wants to replace it.
 	await fs.promises.mkdir(storageDir, { recursive: true });
+	await linkStdlib(maxonPath, storageDir);
 	const lspPath = path.join(storageDir, lspBinaryName);
 	for (let attempt = 0; attempt < 5; attempt++) {
 		try {
@@ -177,12 +177,72 @@ async function copyToLsp(maxonPath: string, storageDir: string): Promise<string>
 }
 
 /**
+ * Give the LSP copy the standard library its original reads.
+ *
+ * ⛔ WITHOUT THIS THE LANGUAGE SERVER HAS NO STANDARD LIBRARY AND SAYS NOTHING. The compiler finds
+ * `stdlib/` by walking up from its OWN executable, and the copy lives in global storage, where nothing
+ * above it holds one — so every document is `unavailable` and no diagnostic is ever published. A
+ * `stdlib` link beside the copy, pointing at the original's, is the first thing that walk finds.
+ * A junction on Windows, which needs no privilege; a directory symlink elsewhere.
+ */
+async function linkStdlib(maxonPath: string, storageDir: string): Promise<void> {
+	const target = await stdlibFor(maxonPath);
+	if (!target) {
+		log(`No stdlib/ above ${maxonPath}; the language server will report nothing`);
+		return;
+	}
+
+	const link = path.join(storageDir, 'stdlib');
+	let existing: fs.Stats | undefined;
+	try {
+		existing = await fs.promises.lstat(link);
+	} catch {
+		existing = undefined;
+	}
+
+	if (existing) {
+		// ⛔ Only a link is ever replaced. Anything else in that place is left alone and reported.
+		if (!existing.isSymbolicLink()) {
+			log(`${link} exists and is not a link; leaving it`);
+			return;
+		}
+		if (path.resolve(storageDir, await fs.promises.readlink(link)) === path.resolve(target)) {
+			return;
+		}
+		await fs.promises.unlink(link);
+	}
+
+	await fs.promises.symlink(target, link, isWindows ? 'junction' : 'dir');
+	log(`Linked ${link} -> ${target}`);
+}
+
+/** The `stdlib/` the compiler at `exe` reads: the nearest one above it, found the way the compiler finds it. */
+async function stdlibFor(exe: string): Promise<string> {
+	let dir = path.dirname(await fs.promises.realpath(exe));
+	for (;;) {
+		const candidate = path.join(dir, 'stdlib');
+		try {
+			if ((await fs.promises.stat(candidate)).isDirectory()) {
+				return candidate;
+			}
+		} catch {
+			// Not here; keep walking up.
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return '';
+		}
+		dir = parent;
+	}
+}
+
+/**
  * Where the compiler is, in the order a reader would look.
  *
- * ⭐⭐ THE SETTING, THEN `PATH`, THEN THIS WORKSPACE'S OWN BUILD. That order is the whole fix: the
- * previous one knew only two paths inside this repository, so a user who installed the extension from
- * the marketplace and the compiler from winget matched neither — the compiler sat in
- * `C:\Program Files\Maxon` and the extension reported it could not find `bin/`.
+ * ⭐⭐ THE SETTING, THEN `PATH`, THEN THE INSTALL SCRIPT'S DIRECTORY, THEN THIS WORKSPACE'S OWN BUILD.
+ * The install directory is searched directly because a VS Code started from the dock or the Start menu
+ * does not see the PATH a shell profile sets, and the install script's PATH change reaches only
+ * processes started after it.
  *
  * ⚠ The dev fallback is `maxon-bin/.maxon/`, which is where `maxon build` writes. A contributor with a
  * built tree is found with nothing configured, which is what keeps them out of the install flow.
@@ -203,6 +263,12 @@ async function findCompiler(ctx: vscode.ExtensionContext): Promise<string> {
 	if (onPath) {
 		log(`Using compiler from PATH: ${onPath}`);
 		return onPath;
+	}
+
+	const installed = path.join(installRoot(), 'bin', binaryName);
+	if (await isExecutable(installed)) {
+		log(`Using installed compiler: ${installed}`);
+		return installed;
 	}
 
 	const candidates: string[] = [];
@@ -231,6 +297,11 @@ async function isExecutable(candidate: string): Promise<boolean> {
 	}
 }
 
+/** Where the install scripts put Maxon: `MAXON_INSTALL`, else `~/.maxon`. */
+function installRoot(): string {
+	return process.env.MAXON_INSTALL || path.join(os.homedir(), '.maxon');
+}
+
 /** `maxon` on PATH, or '' — asked of the OS rather than by walking PATH ourselves. */
 async function findOnPath(): Promise<string> {
 	const probe = isWindows ? 'where' : 'which';
@@ -249,9 +320,9 @@ async function findOnPath(): Promise<string> {
 /**
  * No compiler anywhere: offer to get one, rather than reporting a dead end.
  *
- * ⚠ THE WINGET RUN GOES IN A VISIBLE TERMINAL, DELIBERATELY. The MSI is per-machine, so Windows
- * raises a UAC prompt — behind a hidden process that is an install which appears to hang, and in
- * front of the user it is a prompt they were expecting.
+ * ⭐ INSTALL RUNS THE SAME ONE-LINE INSTALLER A PERSON WOULD, for this user, so there is no
+ * administrator prompt and nothing to click through. Its output goes to the Maxon output channel, and
+ * success is judged by finding the compiler afterwards, in the install directory `findCompiler` searches.
  */
 async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	const Install = 'Install';
@@ -259,23 +330,24 @@ async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	const choice = await vscode.window.showErrorMessage(
 		'Maxon compiler not found. The extension needs it for diagnostics, completion and formatting.',
 		{ modal: true },
-		...(isWindows ? [Install, Locate] : [Locate])
+		Install,
+		Locate
 	);
 
 	if (choice === Install) {
-		const term = vscode.window.createTerminal('Install Maxon');
-		term.show();
-		term.sendText('winget install --id MaxonLang.Maxon -e');
-		await vscode.window.showInformationMessage(
-			'Installing Maxon in the terminal. Accept the Windows prompt, then choose Continue.',
-			{ modal: true },
-			'Continue'
+		const ok = await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: 'Installing Maxon…' },
+			() => runInstaller()
 		);
 		const found = await findCompiler(ctx);
 		if (found) {
 			return found;
 		}
-		vscode.window.showWarningMessage('Still no compiler found. If the install succeeded, open a new window so PATH is re-read.');
+		vscode.window.showErrorMessage(
+			ok
+				? 'The Maxon installer finished, but no compiler was found. See the Maxon Language Server output.'
+				: 'The Maxon installer failed. See the Maxon Language Server output, or install from https://maxon.dev/install.'
+		);
 		return '';
 	}
 
@@ -294,6 +366,46 @@ async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	}
 
 	return '';
+}
+
+const INSTALL_SH = 'https://maxon.dev/install.sh';
+const INSTALL_PS1 = 'https://maxon.dev/install.ps1';
+
+/** Run the platform's install script, streaming its output to the log. True when it reports success. */
+async function runInstaller(): Promise<boolean> {
+	if (isWindows) {
+		// The script-block form, because `irm | iex` leaves the exit code at 0 whatever happened.
+		const command = `& ([scriptblock]::Create((irm ${INSTALL_PS1}))); exit $LASTEXITCODE`;
+		return (await runLogged('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command])) === 0;
+	}
+
+	// Fetched first and piped second, so a failed download is a failure rather than an empty script
+	// that `sh` runs successfully.
+	const script = await new Promise<string>(resolve => {
+		cp.execFile('curl', ['--proto', '=https', '--tlsv1.2', '-fsSL', INSTALL_SH], { maxBuffer: 1 << 20 }, (err, stdout) => {
+			if (err) {
+				log(`Could not download ${INSTALL_SH}: ${err.message}`);
+				resolve('');
+				return;
+			}
+			resolve(stdout);
+		});
+	});
+	return script !== '' && (await runLogged('/bin/sh', ['-s'], script)) === 0;
+}
+
+function runLogged(command: string, args: string[], stdin?: string): Promise<number> {
+	return new Promise(resolve => {
+		const child = cp.spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+		child.stdout.on('data', chunk => log(String(chunk).trimEnd()));
+		child.stderr.on('data', chunk => log(String(chunk).trimEnd()));
+		child.on('error', err => {
+			log(`Could not run ${command}: ${err.message}`);
+			resolve(-1);
+		});
+		child.on('close', code => resolve(code ?? -1));
+		child.stdin.end(stdin ?? '');
+	});
 }
 
 /**

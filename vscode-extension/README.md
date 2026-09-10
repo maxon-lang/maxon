@@ -5,29 +5,47 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 ## Features
 - Syntax highlighting for `.maxon` files using a TextMate grammar
 - **Test file support**: Full language support for `.test` fragment files (only the Maxon code portion)
-- Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) when the `maxon-lsp` server is available
+- Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: Format your Maxon code with customizable indentation settings
 - **Compiler Explorer**: View MIR (intermediate representation) and x86-64 assembly output for your code
 - **Spec Test Explorer**: Discover and run spec tests from `specs/*.md` in VS Code's Test Explorer, against the Maxon compiler
 
-Note: LSP features are provided by the embedded Maxon Language Server in the compiler. This extension acts as an LSP client and will only enable advanced language features once the maxon compiler binary (`maxon` or `maxon.exe`) is built and accessible.
+The language features come from the Maxon compiler itself, which serves the Language Server
+Protocol (`maxon lsp-server`). This extension is its client.
 
 ## Requirements
 - Visual Studio Code 1.75.0 or later
-- Node.js and npm for development tools (TypeScript compilation and testing)
-- The Maxon compiler executable (`maxon` or `maxon.exe`), built by the repository's `scripts/build.sh` into `maxon-bin/.maxon/` and copied into the repository `bin` folder, where this extension looks for it. The compiler includes an embedded LSP server accessed via the `lsp-server` command.
+- The Maxon compiler. If the extension cannot find one it offers to install it, using the same
+  one-line installer as [maxon.dev/install](https://maxon.dev/install).
 
 ## Installation
 
-### From source (recommended for developers)
-1. Build the compiler (it embeds the LSP server) and stage it where the extension looks:
+Install **Maxon** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
+or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client).
 
-```bash
-# From the repository root
-scripts/build.sh
-cp maxon-bin/.maxon/maxon.exe bin/maxon.exe   # drop the .exe on non-Windows
-```
+### Finding the compiler
+
+The extension looks in this order:
+
+1. The `maxon.serverPath` setting, if you set one.
+2. `maxon` on your `PATH`.
+3. `~/.maxon/bin` (`%USERPROFILE%\.maxon\bin` on Windows), or `$MAXON_INSTALL/bin` — where the install
+   script puts it. Searched directly, because a VS Code started from the dock or the Start menu may not
+   see your shell's `PATH`.
+4. This workspace's own build at `maxon-bin/.maxon/`, so a contributor with a built tree needs no
+   configuration.
+
+If none of those finds one, it offers **Install**, which runs the installer for your account, and
+**Locate…**, which lets you pick a compiler you already have.
+
+The language server runs from a copy of the compiler in the extension's storage, so a build is never
+blocked by the server holding the compiler open. A `stdlib` link beside the copy points at the
+original's standard library.
+
+### From source (for working on the extension)
+1. Build the compiler in the repository root (see the repository README); the extension finds
+   `maxon-bin/.maxon/maxon` in the workspace.
 
 2. Install extension dependencies and compile the extension:
 
@@ -44,16 +62,10 @@ npm run package       # creates a .vsix file
 npm run install-extension
 ```
 
-### Marketplace (future)
-If/when published, the extension will be installable from the VS Code Marketplace.
-
 ## Usage
 - Open a `.maxon` file in VS Code. If the LSP server binary is available and runs correctly, you should get diagnostics, code completion, and basic navigation features.
 - Open a `.test` file (language test fragments) and get full LSP support for the Maxon code portion (before the `---` separator).
 - If you only want syntax highlighting, no LSP server is required.
-
-### Server location
-The extension launches the embedded LSP server by running `maxon.exe lsp-server`. It looks for the compiler in the workspace's `bin/` directory first, then falls back to `../bin/maxon.exe` relative to the extension runtime. Copy the compiler executable into one of those locations, or adjust the extension source in `src/extension.ts`.
 
 ## Development
 - Use the `watch` script during development to compile TypeScript and auto-emit changes:
@@ -212,8 +224,8 @@ Licensed under either of:
 at your option.
 
 ## Notes and Troubleshooting
-- If the language server fails to start, check that the compiler binary is built and staged where the extension looks: the workspace's `bin/` directory, or `../bin/maxon.exe` relative to the extension path.
-- When packaging for non-Windows platforms, make sure the server binary does not have `.exe` and the extension's `src/extension.ts` points at the correct filename.
+- If the language server fails to start, the **Maxon Language Server** output channel says which compiler
+  it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
 - For LSP server issues, the embedded server code is in `maxon-bin/Compiler/Lsp/`.
 
 ---
