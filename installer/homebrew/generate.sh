@@ -110,7 +110,7 @@ EOF
       typealias ExitCode = int(0 to 255)
 
       function main() returns ExitCode
-      \tprint("hello\n")
+      \tprint("hello\\n")
       \treturn 0
       end 'main'
     MAXON
