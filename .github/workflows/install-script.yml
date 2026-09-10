@@ -1,0 +1,129 @@
+# Run `website/public/install.sh` the way a user does, on every platform it serves, against the latest
+# published release.
+#
+# ⭐ THE SCRIPT IS WHAT A NEW USER RUNS FIRST, AND NOTHING ELSE EXERCISES IT. It is served as a static
+# file, so a broken one ships with the next website deploy and is found by the first person who tries
+# it. `release.yml`'s `publish` job starts this once a release is live, so a release that the script
+# cannot install is found by CI rather than by a user.
+#
+# ⚠ IT IS FED ON STDIN, AS `curl … | sh` FEEDS IT, and run by each runner's own `/bin/sh` — dash on
+# Ubuntu, bash in POSIX mode on macOS — so a bashism fails here rather than on someone's machine.
+
+name: install-script
+
+on:
+  push:
+    branches: [main]
+    paths: ['website/public/install.sh', '.github/workflows/install-script.yml']
+  pull_request:
+    paths: ['website/public/install.sh', '.github/workflows/install-script.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck --shell=sh website/public/install.sh
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: arm64-macos
+            shell: zsh
+          - runner: ubuntu-latest
+            target: x64-linux
+            shell: bash
+          - runner: ubuntu-24.04-arm
+            target: arm64-linux
+            shell: bash
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # ⚠ THE RUNNER'S OWN PATH MAY ALREADY HOLD ~/.local/bin, which would skip the profile edit and let
+      # every PATH check pass on the runner's say-so. The install and the new shell get the system
+      # directories only, so `maxon` is found through the profile or not at all.
+      SYSTEM_PATH: /usr/bin:/bin:/usr/sbin:/sbin
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install, as `curl | sh` would
+        run: |
+          set -euo pipefail
+          env PATH="$SYSTEM_PATH" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh
+
+      - name: The installed compiler is the latest release
+        run: |
+          set -euo pipefail
+          latest="$(gh release view --json tagName --jq .tagName)"
+          reported="$("$HOME/.local/bin/maxon" version)"
+          echo "$reported"
+          case "$reported" in
+            "maxon ${latest#v} "*) ;;
+            *) echo "::error::expected ${latest#v}, the latest release"; exit 1 ;;
+          esac
+
+      # A new terminal is where the user meets the PATH edit, so the check runs in a new interactive
+      # shell of the kind the profile was written for.
+      - name: A new ${{ matrix.shell }} finds `maxon` by name
+        run: env -i HOME="$HOME" TERM=dumb PATH="$SYSTEM_PATH" "$(command -v ${{ matrix.shell }})" -ic 'command -v maxon && maxon version'
+
+      # The compiler finds stdlib/ by walking up from its own executable. Run through the link, from a
+      # directory with no checkout above it, this is the case a user is in.
+      - name: It compiles and runs a program outside any checkout
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cp "$HOME/.local/share/maxon/examples/hello.maxon" "$work/"
+          cd "$work"
+          "$HOME/.local/bin/maxon" build hello.maxon -o hello
+          [ "$(./hello)" = "Hello, world!" ]
+
+      - name: A download is not quarantined, so Gatekeeper does not stop it
+        if: runner.os == 'macOS'
+        run: |
+          if xattr -p com.apple.quarantine "$HOME/.local/share/maxon/maxon" 2>/dev/null; then
+            echo "::error::the installed compiler carries com.apple.quarantine"
+            exit 1
+          fi
+
+      - name: Running it again replaces the install and writes the profile line once
+        run: |
+          set -euo pipefail
+          env PATH="$SYSTEM_PATH" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh
+          case "${{ matrix.shell }}" in
+            zsh)  profile="$HOME/.zshrc" ;;
+            bash) profile="$HOME/.bashrc" ;;
+          esac
+          count="$(grep -c 'Added by the Maxon installer' "$profile")"
+          [ "$count" = 1 ] || { echo "::error::$profile has $count installer lines"; exit 1; }
+
+      # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE. The real archive is
+      # served from a mirror whose SHA256SUMS names another hash; the install must refuse and leave the
+      # existing one in place.
+      - name: A checksum mismatch installs nothing
+        run: |
+          set -euo pipefail
+          version="$(gh release view --json tagName --jq .tagName)"
+          version="${version#v}"
+          asset="maxon-$version-${{ matrix.target }}.tar.gz"
+          mirror="$(mktemp -d)"
+          mkdir -p "$mirror/v$version"
+          gh release download "v$version" --pattern "$asset" --dir "$mirror/v$version"
+          printf '%064d  %s\n' 0 "$asset" > "$mirror/v$version/SHA256SUMS"
+          before="$(readlink "$HOME/.local/bin/maxon"; "$HOME/.local/bin/maxon" version)"
+          if MAXON_DOWNLOAD_BASE="file://$mirror" sh -s -- --version "$version" < website/public/install.sh; then
+            echo "::error::a tampered SHA256SUMS was accepted"
+            exit 1
+          fi
+          after="$(readlink "$HOME/.local/bin/maxon"; "$HOME/.local/bin/maxon" version)"
+          [ "$before" = "$after" ] || { echo "::error::the failed install changed the existing one"; exit 1; }

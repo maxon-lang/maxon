@@ -72,13 +72,13 @@ place of the checkout's own.
 Maxon's tests are organized as **spec files**: each language feature has a single source of
 truth in the `specs/` directory that holds the feature's documentation *and* its executable
 test cases together. When you change behavior, update or add the relevant spec, and make sure
-`bin/maxon spec-test` passes before opening a pull request.
+`./maxon-bin/.maxon/maxon spec-test` passes before opening a pull request.
 
 ## Pull requests
 
 - Open an issue first for anything beyond a small fix, so the design can be agreed on.
 - Keep changes focused — one logical change per pull request.
-- Make sure the compiler builds cleanly and `bin/maxon spec-test` passes.
+- Make sure the compiler builds cleanly and `./maxon-bin/.maxon/maxon spec-test` passes.
 - Match the style of the surrounding code; Maxon favors explicit, readable code over clever or
   terse code, in the compiler as much as in the language.
 

@@ -31,54 +31,61 @@ winget install MaxonLang.Maxon
 Or download the `.msi` from the [latest release](https://github.com/maxon-lang/maxon/releases/latest)
 and run it. It installs to `C:\Program Files\Maxon` and adds that directory to your PATH.
 
-The installer is not code-signed yet, so SmartScreen warns on first run: choose **More info**, then
-**Run anyway**.
+The installer is code-signed, so Windows runs it without a SmartScreen prompt.
 
   </TabItem>
   <TabItem label="macOS">
 
 ```bash
-brew install maxon-lang/tap/maxon
+curl -fsSL https://maxon.dev/install.sh | sh
 ```
 
-Homebrew puts `maxon` on your PATH straight away and clears the quarantine attribute, so there is no
-Gatekeeper warning to click through.
+The script downloads the release for your Mac, checks it against the release's published checksums,
+unpacks it into `~/.local/share/maxon` and links `~/.local/bin/maxon` to it, adding `~/.local/bin` to
+your PATH in your shell profile if it is not there already. Open a new terminal, or run the `export`
+line it prints, and `maxon` is ready. Run it again to upgrade. Nothing it downloads is quarantined, so
+there is no Gatekeeper warning to click through. [Read the script](/install.sh) before you run it, if
+you like.
 
-The tap prefix is required and cannot be shortened: a bare `brew install maxon` resolves to Maxon
-Computer's Cinema 4D installer, which is a different product that happens to share the name.
+Pass options after `sh -s --`: `--version 0.1.0` installs a particular release, and
+`--no-modify-path` leaves your shell profile alone.
 
-**Without Homebrew**, download the archive for your platform from the
-[latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere
-permanent, and add that directory to your PATH.
+**With Homebrew**, `brew install maxon-lang/tap/maxon` works too. The tap prefix is required and cannot
+be shortened: a bare `brew install maxon` resolves to Maxon Computer's Cinema 4D installer, which is a
+different product that happens to share the name.
+
+**By hand**, download the archive from the
+[latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere permanent,
+and add that directory to your PATH. A browser download is quarantined by Gatekeeper whatever is
+inside it, so clear that once:
 
 ```bash
 tar -xzf maxon-*-arm64-macos.tar.gz
 cd maxon-*-arm64-macos
-export PATH="$PWD:$PATH"
-maxon version
-```
-
-A downloaded archive is quarantined by Gatekeeper whatever is inside it. Clear it once:
-
-```bash
 xattr -d com.apple.quarantine ./maxon
+export PATH="$PWD:$PATH"
 ```
 
   </TabItem>
   <TabItem label="Linux">
 
-Download the archive for your platform from the
+```bash
+curl -fsSL https://maxon.dev/install.sh | sh
+```
+
+The same script as on macOS: it picks the x64 or arm64 build, checks it against the release's
+published checksums, unpacks it into `~/.local/share/maxon` and links `~/.local/bin/maxon` to it. The
+builds are static and need no libc, so any reasonably current distribution will do.
+
+**By hand**, download the archive from the
 [latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere
-permanent, and add that directory to your PATH.
+permanent, and add that directory to your PATH:
 
 ```bash
 tar -xzf maxon-*-x64-linux.tar.gz
 cd maxon-*-x64-linux
 export PATH="$PWD:$PATH"
-maxon version
 ```
-
-The builds are static and need no libc, so any reasonably current distribution will do.
 
   </TabItem>
 </Tabs>
@@ -93,9 +100,9 @@ as it is.
 
 ```bash
 maxon version
-maxon build examples/hello.maxon
-./examples/hello
 ```
+
+Then write and run [your first program](/docs/getting-started/first-program/).
 
 ## Building from source
 
@@ -110,12 +117,18 @@ Install a release first, as above, then:
 git clone https://github.com/maxon-lang/maxon.git
 cd maxon
 
-mkdir -p .bootstrap && cp "$(which maxon)" .bootstrap/maxon   # the seed
-maxon build                                                    # build the compiler with it
+mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/   # the seed
+scripts/build-from-seed.sh                                     # build the compiler with it, twice
 maxon-bin/.maxon/maxon spec-test                               # run the suite
 ```
 
-`maxon build` with no path runs the repository's own [build manifest](/docs/language/build-system/).
+The seed builds the compiler, and that compiler then rebuilds itself: the compiler emits its runtime
+into everything it builds, itself included, so only the second build carries this tree's runtime.
+Afterwards, `maxon-bin/.maxon/maxon build maxon-bin` rebuilds it through the repository's own
+[build manifest](/docs/language/build-system/).
+
+Build this tree with the compiler inside it, never the `maxon` on your PATH: that one would compile the
+repository against its own release's standard library, and succeed.
 
 :::caution[Seed with the binary alone]
 Copy the `maxon` **binary** into `.bootstrap/`, not the unpacked archive. The compiler resolves

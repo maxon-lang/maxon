@@ -21,7 +21,9 @@ end 'main'
 The return value becomes the process exit code. Compile and run it:
 
 ```bash
-bin/maxon build hello.maxon
+maxon build hello.maxon -o hello
+./hello
+echo $?
 ```
 
 ## Adding a ranged type

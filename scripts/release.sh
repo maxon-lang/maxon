@@ -28,6 +28,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+. scripts/lib/msi.sh
 
 DIST="dist"
 mode=""
@@ -281,8 +282,8 @@ EOF
 			cat >> "$out" <<'EOF'
 ## Windows: SmartScreen
 
-This build is not code-signed, so SmartScreen will warn the first time you run it. Choose
-**More info** then **Run anyway**. Signing is planned; until then the checksum published beside this
+The `maxon.exe` in this archive is not code-signed — the `.msi` installer is — so SmartScreen may warn
+the first time you run it. Choose **More info** then **Run anyway**. The checksum published beside this
 archive is what tells you the file is the one that was built.
 
 ⚠ Do not build your own projects from INSIDE the install directory. The compiler takes a lock at the
@@ -290,24 +291,6 @@ root of the tree it is compiling, and a directory you do not own is one it canno
 EOF
 			;;
 	esac
-}
-
-# Does this MSI carry an Authenticode signature?
-#
-# ⭐ ASKED OF THE FILE, NEVER OF THE PIPELINE THAT PRODUCED IT. The notes tell a reader whether to
-# expect a SmartScreen prompt, and a release cut where signing happened to be off would otherwise
-# promise a signature that is not there — a wrong reassurance is worse than the warning it replaced.
-#
-# An MSI is an OLE compound file whose signature lives in a stream named `\5DigitalSignature`, and
-# stream names are stored UTF-16LE in its directory. Dropping the NUL bytes makes that name findable
-# with `grep`, which is the whole reason for the `tr`: `--publish` runs on Linux, where `signtool`
-# does not exist and asking Windows is not an option.
-#
-# ⛔ `grep -c`, NEVER `grep -q`. `-q` closes the pipe at the first match, `tr` then fails writing into
-# it, and under `pipefail` that failure is the pipeline's answer: a signed file reported as unsigned.
-# MEASURED: v0.1.1's notes said both that the installer was signed and that it was not.
-msi_is_signed() {
-	tr -d '\0' < "$1" | grep -ac 'DigitalSignature' >/dev/null
 }
 
 # Release notes: how to install, and what each asset is for.
@@ -360,22 +343,16 @@ write_default_notes() {
 			echo
 			echo
 		fi
-		if ls "$DIST"/*arm64-macos.tar.gz >/dev/null 2>&1; then
-			echo "**macOS**"
+		if ls "$DIST"/*-macos.tar.gz >/dev/null 2>&1 || ls "$DIST"/*-linux.tar.gz >/dev/null 2>&1; then
+			echo "**macOS and Linux**"
 			echo
 			echo '```'
-			echo "brew install maxon-lang/tap/maxon"
+			echo "curl -fsSL https://maxon.dev/install.sh | sh"
 			echo '```'
 			echo
-			echo "Homebrew puts \`maxon\` on your PATH immediately and clears the quarantine attribute."
-			echo "If you download the archive instead, run \`xattr -d com.apple.quarantine ./maxon\` once."
-			echo
-		fi
-		if ls "$DIST"/*-linux.tar.gz >/dev/null 2>&1; then
-			echo "**Linux**"
-			echo
-			echo "Extract the archive for your architecture and put that directory on your PATH."
-			echo "The binary is statically linked and makes raw syscalls, so there is nothing else to install."
+			echo "The script downloads the archive for your machine, checks it against \`SHA256SUMS\`, and puts"
+			echo "\`maxon\` on your PATH. On macOS, \`brew install maxon-lang/tap/maxon\` works too. If you download"
+			echo "an archive by hand on macOS, run \`xattr -d com.apple.quarantine ./maxon\` once."
 			echo
 		fi
 

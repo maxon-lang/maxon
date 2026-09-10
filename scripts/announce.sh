@@ -81,8 +81,8 @@ $body
 ## Download
 
 \`\`\`
-winget install MaxonLang.Maxon          # Windows
-brew install maxon-lang/tap/maxon       # macOS
+winget install MaxonLang.Maxon                  # Windows
+curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
 \`\`\`
 
 Elsewhere, take the archive for your platform from the

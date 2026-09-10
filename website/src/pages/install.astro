@@ -1,6 +1,7 @@
 ---
 import MarketingLayout from '../layouts/MarketingLayout.astro';
 import PlatformTabs from '../components/PlatformTabs.astro';
+import { INSTALL_SCRIPT } from '../install';
 import { RELEASE_VERSION } from '../version';
 
 // Prebuilt downloads are published as GitHub Release assets on the compiler repo.
@@ -56,16 +57,12 @@ const installCommands = [
   {
     id: 'macos',
     label: 'macOS',
-    lines: ['brew install maxon-lang/tap/maxon', 'maxon version'],
+    lines: [INSTALL_SCRIPT, 'maxon version'],
   },
   {
     id: 'linux',
     label: 'Linux',
-    lines: [
-      `tar -xzf maxon-${version}-x64-linux.tar.gz`,
-      `export PATH="$PWD/maxon-${version}-x64-linux:$PATH"`,
-      'maxon version',
-    ],
+    lines: [INSTALL_SCRIPT, 'maxon version'],
   },
 ];
 
@@ -98,10 +95,20 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
     </div>
 
     <p class="mt-4 text-sm text-slate-400">
-      On macOS the tap prefix is required and cannot be shortened — a bare{' '}
+      On macOS and Linux the script downloads the release for your machine, checks it against the
+      release's published checksums, unpacks it into{' '}
+      <code class="font-mono text-brand-300">~/.local/share/maxon</code> and links{' '}
+      <code class="font-mono text-brand-300">~/.local/bin/maxon</code> to it, adding that directory to
+      your <code class="font-mono text-brand-300">PATH</code> if it is not there already. Run it again
+      to upgrade. Nothing it downloads is quarantined, so there is no Gatekeeper warning.{' '}
+      <a class="text-brand-300 hover:text-brand" href="/install.sh">Read the script</a>.
+    </p>
+
+    <p class="mt-3 text-sm text-slate-400">
+      With Homebrew, <code class="font-mono text-brand-300">brew install maxon-lang/tap/maxon</code>{' '}
+      works too. The tap prefix is required — a bare{' '}
       <code class="font-mono text-brand-300">brew install maxon</code> resolves to Maxon Computer's
-      Cinema 4D installer, a different product that happens to share the name. Homebrew also clears
-      the quarantine attribute a downloaded archive earns, so there is no Gatekeeper warning.
+      Cinema 4D installer, a different product that happens to share the name.
     </p>
 
     <!-- Download -->
@@ -113,7 +120,9 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
             Prebuilt binaries for {version}. On Windows, run the installer. Everywhere else, unpack
             the archive and put that directory on your{' '}
             <code class="font-mono text-brand-300">PATH</code> — the compiler finds its standard
-            library beside itself, so keep the two together.
+            library beside itself, so keep the two together. On macOS, a browser download is
+            quarantined: clear it once with{' '}
+            <code class="font-mono text-brand-300">xattr -d com.apple.quarantine maxon</code>.
           </p>
           <div class="mt-5 grid gap-4 sm:grid-cols-2">
             {downloads.map((d) => (
@@ -175,8 +184,8 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
     <!-- Clone & build -->
     <h3 class="mt-8 text-xl font-bold text-white">2. Clone and build</h3>
     <p class="mt-3 text-slate-300">
-      Put a released compiler in <code class="font-mono text-brand-300">.bootstrap/</code> to seed the
-      build, then <code class="font-mono text-brand-300">maxon build</code> compiles the tree with it.
+      Put your installed compiler in <code class="font-mono text-brand-300">.bootstrap/</code> as the
+      seed. It builds the compiler, which then rebuilds itself so that its own runtime is this tree's.
     </p>
     <div class="mt-4 overflow-hidden rounded-xl border border-ink-700 bg-ink-950/80">
       <div class="flex items-center gap-2 border-b border-ink-700 px-4 py-2.5">
@@ -189,11 +198,11 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
 <span class="text-brand-300">git</span> clone https://github.com/maxon-lang/maxon.git
 <span class="text-brand-300">cd</span> maxon
 
-<span class="text-slate-500"># seed with a released compiler — the BINARY alone</span>
-<span class="text-brand-300">mkdir</span> -p .bootstrap &amp;&amp; <span class="text-brand-300">cp</span> "$(which maxon)" .bootstrap/maxon
+<span class="text-slate-500"># seed with the installed compiler — the BINARY alone</span>
+<span class="text-brand-300">mkdir</span> -p .bootstrap &amp;&amp; <span class="text-brand-300">cp</span> "$(command -v maxon)" .bootstrap/
 
-<span class="text-slate-500"># build the compiler with it</span>
-<span class="text-brand-300">maxon</span> build</pre>
+<span class="text-slate-500"># build the compiler with it, twice</span>
+<span class="text-brand-300">scripts/build-from-seed.sh</span></pre>
     </div>
 
     <p class="mt-4 text-sm text-slate-400">
@@ -201,7 +210,8 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
       <code class="font-mono text-brand-300">.bootstrap/</code>, not the unpacked archive: the compiler
       finds <code class="font-mono text-brand-300">stdlib/</code> by walking up from its own
       executable, so a released standard library left beside the seed would be compiled in place of
-      the checkout's own — and the build would succeed.
+      the checkout's own — and the build would succeed. For the same reason, build this tree with the
+      compiler inside it, never the <code class="font-mono text-brand-300">maxon</code> on your PATH.
     </p>
 
     <!-- Verify -->
@@ -217,10 +227,10 @@ const assetUrl = (asset: string) => `${RELEASES}/download/v${version}/${asset}`;
         <span class="ml-2 font-mono text-xs text-slate-500">terminal</span>
       </div>
       <pre class="overflow-x-auto p-4 font-mono text-sm leading-relaxed text-slate-300"><span class="text-slate-500"># compile and run an example</span>
-<span class="text-brand-300">bin/maxon</span> build examples/spectral-norm.maxon
+<span class="text-brand-300">maxon-bin/.maxon/maxon</span> build examples/spectral-norm.maxon
 
 <span class="text-slate-500"># run the full spec-test suite</span>
-<span class="text-brand-300">bin/maxon</span> spec-test</pre>
+<span class="text-brand-300">maxon-bin/.maxon/maxon</span> spec-test</pre>
     </div>
     <p class="mt-4 text-sm text-slate-400">
       The compiler produces a native executable next to your source file

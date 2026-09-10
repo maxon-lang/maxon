@@ -21,6 +21,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo_root"
+. scripts/lib/msi.sh
 
 DIST="dist"
 OUT="$DIST/winget"
@@ -53,6 +54,14 @@ upgrade_code="$(grep -oE 'UpgradeCode="\{[^}]+\}"' "$decompiled" | head -1 | sed
 [ -n "$product_code" ] && [ -n "$upgrade_code" ] || { echo "winget: $msi carries no ProductCode/UpgradeCode" >&2; exit 1; }
 
 url="https://github.com/$REPO/releases/download/v$version/$(basename "$msi")"
+
+unsigned_note=""
+if ! msi_is_signed "$msi"; then
+	unsigned_note="
+
+  This installer is not code-signed, so Windows SmartScreen warns on first run. Choose More info, then
+  Run anyway. The SHA256 published beside the installer is what confirms the file is the one built."
+fi
 
 mkdir -p "$OUT"
 
@@ -106,10 +115,7 @@ ShortDescription: A systems language whose compiler is written in itself.
 Description: |-
   Maxon is a systems language whose compiler is written in Maxon. It has a native backend and emits
   standalone PE, ELF, Mach-O and WebAssembly executables with no external runtime, no LLVM and no
-  garbage collector, and it reproduces itself exactly: two successive self-compiles are byte-identical.
-
-  This installer is not code-signed, so Windows SmartScreen warns on first run. Choose More info, then
-  Run anyway. The SHA256 published beside the installer is what confirms the file is the one built.
+  garbage collector, and it reproduces itself exactly: two successive self-compiles are byte-identical.${unsigned_note}
 Tags:
   - compiler
   - language
