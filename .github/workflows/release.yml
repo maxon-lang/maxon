@@ -56,7 +56,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.ref.outputs.publish == 'yes'
         with:
           fetch-depth: 0
@@ -102,7 +102,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ⛔ THE SEED IS THE BINARY ALONE. A release archive ships its own `stdlib/`, and the compiler
       # resolves `stdlib/` by walking UP from its own executable — so an archive unpacked whole would
@@ -167,7 +167,7 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/release.sh --package
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: steps.seed.outputs.seeded == 'yes'
         with:
           name: maxon-${{ matrix.target }}
@@ -179,7 +179,7 @@ jobs:
       # without this the only record of which cases went red dies with the runner.
       - name: Keep the suite log when it fails
         if: failure() && steps.seed.outputs.seeded == 'yes'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: spec-test-log-${{ matrix.target }}
           path: dist/spec-test-*.log
@@ -208,9 +208,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: maxon-x64-windows
           path: dist
@@ -291,7 +291,7 @@ jobs:
         run: |
           echo "::warning title=Unsigned installer::AZURE_SIGNING_ENDPOINT is not set, so the MSI was not signed. SmartScreen will warn on first run, and winget submission validation may refuse it."
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: maxon-msi
           path: dist/*.msi
@@ -307,9 +307,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: staged
 
