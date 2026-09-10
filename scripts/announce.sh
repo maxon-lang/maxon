@@ -103,9 +103,8 @@ EOF
 # reader arrives with when they are deciding whether to upgrade. Both are renderings of the same
 # `CHANGELOG.md`, so neither can drift from what shipped.
 #
-# ⚠ THE SOURCE FILE'S OWN HEADER IS DROPPED AND REPLACED. `CHANGELOG.md` opens with a note to whoever
-# writes the next entry — where the reference listing is, where the release order is written down —
-# which is addressed to a contributor and means nothing to a reader of the website.
+# ⚠ THE SOURCE FILE'S OWN HEADER IS DROPPED AND REPLACED, so the page can say where the downloads and
+# the install instructions are — which the changelog itself deliberately never does.
 changelog_page() {
 	cat <<EOF
 ---

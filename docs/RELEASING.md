@@ -269,7 +269,12 @@ itself. Generating the entry and then correcting it means rewriting seventeen li
 which is hand-writing with extra ceremony.
 
 Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Added` / `### Changed` / `### Fixed` /
-`### Removed` beneath it. Write it at the cut, with the whole release in view, so related changes are
+`### Removed` beneath it.
+
+⛔ **It states what changed and never how to do anything** — no commands, no install steps, no usage
+warnings. Those live in the release notes' Install section and each archive's `INSTALL.md`, which
+already carry them; an instruction in a changelog is read months later and is either stale or
+duplicated. Write it at the cut, with the whole release in view, so related changes are
 described together rather than as one bullet each.
 
 ```bash
