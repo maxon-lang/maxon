@@ -302,8 +302,12 @@ EOF
 # stream names are stored UTF-16LE in its directory. Dropping the NUL bytes makes that name findable
 # with `grep`, which is the whole reason for the `tr`: `--publish` runs on Linux, where `signtool`
 # does not exist and asking Windows is not an option.
+#
+# ⛔ `grep -c`, NEVER `grep -q`. `-q` closes the pipe at the first match, `tr` then fails writing into
+# it, and under `pipefail` that failure is the pipeline's answer: a signed file reported as unsigned.
+# MEASURED: v0.1.1's notes said both that the installer was signed and that it was not.
 msi_is_signed() {
-	tr -d '\0' < "$1" | grep -aq 'DigitalSignature'
+	tr -d '\0' < "$1" | grep -ac 'DigitalSignature' >/dev/null
 }
 
 # Release notes: how to install, and what each asset is for.

@@ -376,9 +376,10 @@ builds the site from there. A fix committed after the tag is a fix nothing ships
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
 `ubuntu-24.04-arm`, builds and **natively suite-tests** each target, builds the MSI from the
-x64-windows job's own artifact, and publishes. Publishing fires `release: published`, which is what
-updates Homebrew, the VS Code extension and maxon.dev — so the download links go live only once the
-downloads exist.
+x64-windows job's own artifact, and publishes. The `publish` job then starts the workflows that
+update Homebrew, the VS Code extension and maxon.dev, at the tag — so the download links go live only
+once the downloads exist. ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no
+`release: published`, and on v0.1.1 none of the three ran.
 
 ### 5. Submit to winget
 

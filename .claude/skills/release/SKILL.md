@@ -27,8 +27,8 @@ gh workflow run release.yml --ref release/X.Y.Z
 ```
 
 ⚠ **Say plainly which gates have never fired in anger.** As of v0.1.0, the `publish` job has never
-run at all — v0.1.0 was published by hand — and `guard`'s changelog and extension checks, and the
-website deploy on `release: published`, are all newer than it.
+run at all — v0.1.0 was published by hand — and `guard`'s changelog and extension checks run only on
+a tag, so no rehearsal reaches them.
 
 ## 1 · Cut the branch
 
@@ -84,8 +84,9 @@ git push origin release/X.Y.Z vX.Y.Z
 ## 5 · Watch it
 
 `release.yml` builds and natively suite-tests four targets, builds the MSI from the x64-windows job's
-own artifact, signs it, and publishes. Publishing fires `release: published`, which updates Homebrew,
-the VS Code extension and maxon.dev — so the download links go live only once the downloads exist.
+own artifact, signs it, and publishes, then starts the Homebrew, VS Code extension and maxon.dev
+workflows at the tag — so the download links go live only once the downloads exist. Check all three
+actually ran: a release created with `GITHUB_TOKEN` fires no `release: published`.
 
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.

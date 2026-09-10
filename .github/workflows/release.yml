@@ -290,6 +290,9 @@ jobs:
     # built and tested everything, which is the whole point of rehearsing one — and stops here.
     if: needs.package.outputs.seeded == 'yes' && needs.guard.outputs.publish == 'yes'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     defaults:
       run:
         shell: bash
@@ -340,3 +343,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/release.sh --publish "${GITHUB_REF_NAME}"
+
+      # ⛔ **A RELEASE THIS JOB CREATES FIRES NO `release: published`.** GitHub starts no workflow from
+      # an event `GITHUB_TOKEN` caused, `workflow_dispatch` excepted — MEASURED on v0.1.1: published,
+      # and the website, Homebrew and extension workflows never ran. So this job starts them, at the
+      # tag, which is where each reads its version and its tree. Their own `release: published`
+      # trigger is for a release published by hand, which does fire it.
+      - name: Start what a published release updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in website.yml homebrew.yml vscode-extension.yml; do
+            gh workflow run "$workflow" --ref "$GITHUB_REF_NAME"
+          done

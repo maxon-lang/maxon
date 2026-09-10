@@ -9,8 +9,8 @@ project layout; this doc covers running and evolving the site.
 
 - **Host:** Cloudflare Pages, project `maxon-dev`.
 - **Deploy = a published release.** `.github/workflows/website.yml` builds this directory and
-  deploys it with `wrangler` on `release: published` — once `release.yml` has built, tested and
-  uploaded every asset. ⭐ **The site describes the released compiler**, so it ships when the
+  deploys it with `wrangler` when `release.yml`'s `publish` job starts it — once every asset is
+  built, tested and uploaded. ⭐ **The site describes the released compiler**, so it ships when the
   compiler does: its download links carry the version and its docs teach one build's syntax, and
   deploying `main` continuously would publish instructions for something nobody can download yet.
 - **Between releases, nothing deploys automatically.** Run the workflow by hand
