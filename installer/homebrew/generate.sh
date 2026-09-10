@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #
-# Generate the Homebrew formula for a built release, into dist/homebrew/.
+# Generate the Homebrew formula for a built release, into dist/homebrew/: arm64 macOS, x64 and arm64 Linux.
 #
-# ⭐ HOMEBREW IS WHAT MAKES MAXON IMMEDIATELY USABLE ON macOS. `brew install` links the binary into
-# `/opt/homebrew/bin` (Apple silicon) or `/usr/local/bin` (Intel), both already on PATH — so `maxon`
-# works in the shell that ran the install, with no PATH edit and no new terminal. Homebrew also strips
-# the quarantine attribute, so the Gatekeeper warning a downloaded archive earns does not appear.
+# ⭐ HOMEBREW MAKES MAXON USABLE IN THE SHELL THAT INSTALLED IT. `brew install` links the binary into
+# Homebrew's `bin` — `/opt/homebrew/bin` on macOS, `/home/linuxbrew/.linuxbrew/bin` on Linux — which is
+# already on PATH, so there is no PATH edit and no new terminal. On macOS it also strips the quarantine
+# attribute, so the Gatekeeper warning a downloaded archive earns does not appear.
 #
 # ⛔ THE BINARY IS LINKED INTO `bin` AS A SYMLINK, AND THAT IS SAFE — MEASURED, NOT ASSUMED. The
 # compiler finds `stdlib/` by walking UP from its own executable, so a symlink whose directory has no
 # `stdlib/` beside it would break every compile if the walk started at the LINK. It does not:
-# `Process.executablePath()` resolves the link, and a `maxon` reached through a symlink on PATH
-# compiles correctly against the stdlib in its real prefix. Verified on macOS before this file existed.
+# `Process.executablePath()` resolves the link (`/proc/self/exe` on Linux), and a `maxon` reached through
+# a symlink on PATH compiles against the stdlib in its real prefix. `homebrew.yml` tests exactly that on
+# every platform before a formula is published.
 #
 # ⛔ THE TAP PREFIX IS REQUIRED, NOT A CONVENTION — `brew install maxon` INSTALLS SOMETHING ELSE.
 # `maxon` in homebrew-cask is **Maxon App**, Maxon Computer's Cinema 4D / ZBrush installer, and a bare
@@ -39,23 +40,28 @@ DIST="dist"
 OUT="$DIST/homebrew"
 REPO="maxon-lang/maxon"
 
-arm_archive="$(find "$DIST" -maxdepth 1 -type f -name 'maxon-*-arm64-macos.tar.gz' | head -n1 || true)"
-[ -n "$arm_archive" ] || { echo "homebrew: no arm64-macos archive in $DIST — run scripts/release.sh --package first" >&2; exit 1; }
+# One archive per platform the formula serves. Intel Macs have no build, so the formula refuses them
+# on macOS rather than naming a download that does not exist.
+archive_for() {
+	local found
+	found="$(find "$DIST" -maxdepth 1 -type f -name "maxon-*-$1.tar.gz" | head -n1 || true)"
+	[ -n "$found" ] || { echo "homebrew: no $1 archive in $DIST — download the release's archives first" >&2; exit 1; }
+	echo "$found"
+}
 
-base="$(basename "$arm_archive" .tar.gz)"
+macos_archive="$(archive_for arm64-macos)"
+linux_x64_archive="$(archive_for x64-linux)"
+linux_arm_archive="$(archive_for arm64-linux)"
+
 version="${1:-}"
 if [ -z "$version" ]; then
-	version="${base#maxon-}"
+	version="$(basename "$macos_archive" .tar.gz)"
+	version="${version#maxon-}"
 	version="${version%-arm64-macos}"
 fi
 
-arm_sha="$(sha256sum "$arm_archive" | cut -d' ' -f1)"
-
-# ⚠ THE INTEL ARCHIVE IS OPTIONAL AND ITS ABSENCE IS STATED, NOT PAPERED OVER. There is no x64-macos
-# target today, so the formula covers Apple silicon and says nothing about Intel rather than claiming a
-# bottle that does not exist — a formula that fails to download is worse than one that declines to
-# install.
-x64_archive="$(find "$DIST" -maxdepth 1 -type f -name 'maxon-*-x64-macos.tar.gz' | head -n1 || true)"
+url_of() { echo "https://github.com/$REPO/releases/download/v$version/$(basename "$1")"; }
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 
 mkdir -p "$OUT"
 formula="$OUT/maxon.rb"
@@ -69,32 +75,24 @@ class Maxon < Formula
   version "$version"
   license any_of: ["MIT", "Apache-2.0"]
 
-EOF
-
-	if [ -n "$x64_archive" ]; then
-		x64_sha="$(sha256sum "$x64_archive" | cut -d' ' -f1)"
-		cat <<EOF
   on_macos do
-    on_arm do
-      url "https://github.com/$REPO/releases/download/v$version/$(basename "$arm_archive")"
-      sha256 "$arm_sha"
-    end
+    depends_on arch: :arm64
+    url "$(url_of "$macos_archive")"
+    sha256 "$(sha_of "$macos_archive")"
+  end
+
+  on_linux do
     on_intel do
-      url "https://github.com/$REPO/releases/download/v$version/$(basename "$x64_archive")"
-      sha256 "$x64_sha"
+      url "$(url_of "$linux_x64_archive")"
+      sha256 "$(sha_of "$linux_x64_archive")"
+    end
+    on_arm do
+      url "$(url_of "$linux_arm_archive")"
+      sha256 "$(sha_of "$linux_arm_archive")"
     end
   end
 
 EOF
-	else
-		cat <<EOF
-  # Apple silicon only: there is no x64-macos target yet.
-  depends_on arch: :arm64
-  url "https://github.com/$REPO/releases/download/v$version/$(basename "$arm_archive")"
-  sha256 "$arm_sha"
-
-EOF
-	fi
 
 	cat <<'EOF'
   def install
@@ -111,7 +109,7 @@ EOF
       typealias ExitCode = int(0 to 255)
 
       function main() returns ExitCode
-      \tprint("hello\\n")
+      \tprint("hello\n")
       \treturn 0
       end 'main'
     MAXON
@@ -125,9 +123,9 @@ EOF
 } > "$formula"
 
 echo "homebrew: wrote $formula for $version"
-echo "  arm64-macos: $(basename "$arm_archive")"
-echo "  sha256:      $arm_sha"
-[ -n "$x64_archive" ] && echo "  x64-macos:   $(basename "$x64_archive")"
+echo "  arm64-macos: $(basename "$macos_archive")"
+echo "  x64-linux:   $(basename "$linux_x64_archive")"
+echo "  arm64-linux: $(basename "$linux_arm_archive")"
 echo
 echo "⚠ The release must be live before the formula resolves. To publish it:"
 echo "    commit this file to maxon-lang/homebrew-tap as Formula/maxon.rb"

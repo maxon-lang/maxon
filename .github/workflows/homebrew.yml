@@ -1,12 +1,16 @@
 # Update the Homebrew tap when a release is published — started by `release.yml`'s `publish` job, or
-# by `release: published` for a release published by hand.
+# by `release: published` for a release published by hand. A change to the generator or this file runs
+# everything but the push, against the latest release.
 #
 # ⭐ THE FORMULA IS GENERATED FROM THE PUBLISHED ASSETS, NOT FROM THE TREE. It carries the SHA256 of
-# the archive people will actually download, so it is computed from the file the release serves rather
-# than from a local build that merely ought to match it.
+# the archives people will actually download, so it is computed from the files the release serves,
+# checked against the release's own SHA256SUMS, rather than from a local build that merely ought to match.
+#
+# ⭐ IT IS INSTALLED AND `brew test`ed ON EVERY PLATFORM IT NAMES BEFORE IT IS PUSHED. The tap is what
+# `brew install maxon-lang/tap/maxon` resolves, so a formula that fails there fails for every user at once.
 #
 # ⚠ IT PUSHES TO ANOTHER REPOSITORY, WHICH `GITHUB_TOKEN` CANNOT DO. `secrets.TAP_TOKEN` must be a PAT
-# with write access to `maxon-lang/homebrew-tap`. Without it the job SKIPS with a warning rather than
+# with write access to `maxon-lang/homebrew-tap`. Without it the push SKIPS with a warning rather than
 # failing the release: a red mark on every release until someone adds a secret teaches people to
 # ignore red marks.
 
@@ -20,16 +24,25 @@ on:
       version:
         description: 'Version to publish (without the leading v); empty takes it from the tag the run is on'
         required: false
+  push:
+    branches: [main]
+    paths: ['installer/homebrew/**', '.github/workflows/homebrew.yml']
+  pull_request:
+    paths: ['installer/homebrew/**', '.github/workflows/homebrew.yml']
 
 permissions:
   contents: read
 
 jobs:
-  tap:
+  formula:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     defaults:
       run:
         shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
 
@@ -41,38 +54,110 @@ jobs:
           set -euo pipefail
           if [ -n "$REQUESTED_VERSION" ]; then
             version="$REQUESTED_VERSION"
-          else
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(gh release view --json tagName --jq .tagName)"
+            version="${version#v}"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "publishing formula for $version"
+          echo "formula for $version"
 
       # The generator reads the archives out of dist/, exactly as it does locally — one implementation
       # of "how a formula is built", not a second copy living in this file.
-      - name: Fetch the macOS archive
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Fetch the archives and check them against the release's SHA256SUMS
         run: |
           set -euo pipefail
           mkdir -p dist
-          gh release download "v${{ steps.v.outputs.version }}" --pattern '*arm64-macos.tar.gz' --dir dist
-          ls -la dist/
+          for target in arm64-macos x64-linux arm64-linux; do
+            gh release download "v${{ steps.v.outputs.version }}" --pattern "*$target.tar.gz" --dir dist
+          done
+          gh release download "v${{ steps.v.outputs.version }}" --pattern SHA256SUMS --dir dist
+          cd dist && sha256sum -c --ignore-missing SHA256SUMS
 
       - name: Generate the formula
         run: ./installer/homebrew/generate.sh "${{ steps.v.outputs.version }}"
 
+      - uses: actions/upload-artifact@v6
+        with:
+          name: formula
+          path: dist/homebrew/maxon.rb
+          if-no-files-found: error
+
+  test:
+    needs: formula
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: formula
+
+      # ⚠ Only the x64 Ubuntu image ships Homebrew; the arm64 one gets it the way a user would.
+      - name: Put Homebrew on PATH
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+              NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+          fi
+
+      # A local tap holds the generated formula, so this tests the file about to be pushed rather than
+      # whatever the real tap holds today.
+      - name: Audit it from a local tap
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git local/maxon
+          cp maxon.rb "$(brew --repository)/Library/Taps/local/homebrew-maxon/Formula/maxon.rb"
+          brew style local/maxon/maxon
+          brew audit --strict local/maxon/maxon
+
+      - name: Install it, run its test, and compile outside Homebrew's prefix
+        run: |
+          set -euo pipefail
+          brew install local/maxon/maxon
+          brew test local/maxon/maxon
+          maxon version
+          work="$(mktemp -d)"
+          cp "$(brew --prefix local/maxon/maxon)/libexec/examples/hello.maxon" "$work/"
+          cd "$work"
+          maxon build hello.maxon -o hello
+          [ "$(./hello)" = "Hello, world!" ]
+
+  publish:
+    needs: [formula, test]
+    # A change to the generator is tested here and published by the next release, never by the push.
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: formula
+
       - name: Push it to the tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ needs.formula.outputs.version }}
         run: |
           set -euo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::warning::no TAP_TOKEN secret — skipping. Commit dist/homebrew/maxon.rb to maxon-lang/homebrew-tap as Formula/maxon.rb by hand."
+            echo "::warning::no TAP_TOKEN secret — skipping. Commit the formula artifact to maxon-lang/homebrew-tap as Formula/maxon.rb by hand."
             exit 0
           fi
           git clone --quiet "https://x-access-token:${TAP_TOKEN}@github.com/maxon-lang/homebrew-tap.git" tap
           mkdir -p tap/Formula
-          cp dist/homebrew/maxon.rb tap/Formula/maxon.rb
+          cp maxon.rb tap/Formula/maxon.rb
           cd tap
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -82,6 +167,6 @@ jobs:
             exit 0
           fi
           git add Formula/maxon.rb
-          git commit -m "maxon ${{ steps.v.outputs.version }}"
+          git commit -m "maxon $VERSION"
           git push
-          echo "pushed maxon ${{ steps.v.outputs.version }} to the tap"
+          echo "pushed maxon $VERSION to the tap"

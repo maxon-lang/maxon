@@ -163,7 +163,7 @@ rebuilds.
 
 | | |
 |---|---|
-| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, committed to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
+| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, for arm64 macOS and x64/arm64 Linux. `homebrew.yml` installs and `brew test`s it on all three before committing it to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
 | **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. |
 
 ---
@@ -285,10 +285,11 @@ the release notes and the maxon.dev post take their text from `CHANGELOG.md` the
 builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
-`ubuntu-24.04-arm`, builds and **natively suite-tests** each target, and publishes. The `publish` job then starts the workflows that
-update Homebrew, the VS Code extension, maxon.dev and the install-script check, at the tag — so the download links go live only
-once the downloads exist. ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no
-`release: published`, and on v0.1.1 none of the three ran.
+`ubuntu-24.04-arm`, builds and **natively suite-tests** each target, and publishes. The `publish` job
+then starts the workflows that update Homebrew, the VS Code extension, maxon.dev and the
+install-script check, at the tag — so the download links go live only once the downloads exist.
+⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no `release: published`,
+and on v0.1.1 none of them ran.
 
 ⛔ **Last, it deletes `release/X.Y.Z`.** The tag is the record of what was built and published, and the
 **Release tags** ruleset (Settings → Rules → Rulesets) makes every `v*` tag immutable — it cannot be
@@ -328,7 +329,7 @@ Re-download from the release page — not the local `dist/` copy, which is the t
   executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
   above either the compiler or the source.
 - Both install scripts on a clean machine, then `maxon version` in a new terminal.
-- `brew install maxon-lang/tap/maxon`, then `maxon version` in the same shell — Homebrew's symlink
-  is the point, and the compiler resolves it.
+- `brew install maxon-lang/tap/maxon` on macOS and on Linux, then `maxon version` in the same shell —
+  Homebrew's symlink is the point, and the compiler resolves it.
 - Install the published VS Code extension on a machine with **no** compiler, and confirm the
   not-found flow offers to install one rather than dead-ending.
