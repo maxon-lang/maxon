@@ -4986,6 +4986,11 @@ error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROW
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-clone -->
+<!-- procs: 1 -->
+⚠ **`procs: 1` IS WHAT MAKES THE `stdout` ORDER TRUE.** `keep` is sent and not awaited, so at one proc it runs at
+the exit drain, after the caller's line; with a second M it runs concurrently and either order is correct.
+MEASURED unpinned: red once in a full suite, green 6/6 alone.
+
 ⭐⭐ **THE CURE THE REFUSALS NAME FIRST, AND IT DID NOT WORK UNTIL THE FRESH-RETURN CLAIM CLOSED OVER A
 HOP.** `String.clone`'s body is `return sliceBytes(…)` — a call to a function that IS fresh by
 `Parser.noteFreshReturnShape`'s record-literal criterion — so the claim died one frame short and
@@ -5033,6 +5038,11 @@ kept hello (1)
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation -->
+<!-- procs: 1 -->
+⚠ **`procs: 1` IS WHAT MAKES THE `stdout` ORDER TRUE.** `keep` is sent and not awaited, so at one proc it runs at
+the exit drain, after the caller's line; with a second M it runs concurrently and either order is correct.
+MEASURED unpinned: red once in a full suite, green 6/6 alone.
+
 ⭐⭐ **THE CURE THE TWO REFUSALS ABOVE NAME, AND THE CASE THAT SAYS IT IS REACHABLE.** A refusal that teaches
 a spelling the next diagnostic also refuses leaves an author with nothing to write, which is what a rule
 without this case would be. An interpolation ALLOCATES: the record it builds is this frame's, nothing else
