@@ -77,8 +77,10 @@ class Maxon < Formula
 
   on_macos do
     depends_on arch: :arm64
-    url "$(url_of "$macos_archive")"
-    sha256 "$(sha_of "$macos_archive")"
+    on_arm do
+      url "$(url_of "$macos_archive")"
+      sha256 "$(sha_of "$macos_archive")"
+    end
   end
 
   on_linux do
