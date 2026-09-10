@@ -277,9 +277,11 @@ type RowCompaction
 
 	export static function of(funcIndices FuncIndexArray, reached BoolArray, newIndexOfOld FuncIndexArray, table String) returns RowCompaction
 		var oldRows = OpIndexArray.create()
+
 		for read in 0 upto funcIndices.count() 'each'
 			let f = try funcIndices.get(read) otherwise panic("{table}.remapFunctionIndices: funcIndices.get OOB at {read}")
 			let isLive = try reached.get(f) otherwise panic("{table}.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the table's key space and `module.functions` are the same positional numbering (see appendFrom)")
+
 			if not isLive 'droppedFunc'
 				continue
 			end 'droppedFunc'
@@ -288,6 +290,7 @@ type RowCompaction
 			try funcIndices.set(oldRows.count(), value: newFunc) otherwise panic("{table}.remapFunctionIndices: funcIndices.set OOB at {oldRows.count()}")
 			oldRows.push(read)
 		end 'each'
+
 		funcIndices.resize(oldRows.count())
 		return Self{oldRows: oldRows}
 	end 'of'
@@ -307,6 +310,7 @@ function compactValueIds(column ValueIdArray, rows RowCompaction)
 	for write in 0 upto rows.count() 'each'
 		try column.set(write, value: try column.get(rows.oldRowOf(write)) otherwise panic("compactValueIds: column.get OOB at {rows.oldRowOf(write)}")) otherwise panic("compactValueIds: column.set OOB at {write}")
 	end 'each'
+
 	column.resize(rows.count())
 end 'compactValueIds'
 
@@ -314,6 +318,7 @@ function compactOpIndices(column OpIndexArray, rows RowCompaction)
 	for write in 0 upto rows.count() 'each'
 		try column.set(write, value: try column.get(rows.oldRowOf(write)) otherwise panic("compactOpIndices: column.get OOB at {rows.oldRowOf(write)}")) otherwise panic("compactOpIndices: column.set OOB at {write}")
 	end 'each'
+
 	column.resize(rows.count())
 end 'compactOpIndices'
 
@@ -321,6 +326,7 @@ function compactByteOffsets(column ByteOffsetArray, rows RowCompaction)
 	for write in 0 upto rows.count() 'each'
 		try column.set(write, value: try column.get(rows.oldRowOf(write)) otherwise panic("compactByteOffsets: column.get OOB at {rows.oldRowOf(write)}")) otherwise panic("compactByteOffsets: column.set OOB at {write}")
 	end 'each'
+
 	column.resize(rows.count())
 end 'compactByteOffsets'
 
@@ -328,6 +334,7 @@ function compactLineNumbers(column LineNumberArray, rows RowCompaction)
 	for write in 0 upto rows.count() 'each'
 		try column.set(write, value: try column.get(rows.oldRowOf(write)) otherwise panic("compactLineNumbers: column.get OOB at {rows.oldRowOf(write)}")) otherwise panic("compactLineNumbers: column.set OOB at {write}")
 	end 'each'
+
 	column.resize(rows.count())
 end 'compactLineNumbers'
 
@@ -335,6 +342,7 @@ function compactColumnNumbers(column ColumnNumberArray, rows RowCompaction)
 	for write in 0 upto rows.count() 'each'
 		try column.set(write, value: try column.get(rows.oldRowOf(write)) otherwise panic("compactColumnNumbers: column.get OOB at {rows.oldRowOf(write)}")) otherwise panic("compactColumnNumbers: column.set OOB at {write}")
 	end 'each'
+
 	column.resize(rows.count())
 end 'compactColumnNumbers'
 
@@ -352,6 +360,7 @@ export type ValueOriginTable
 	// op-origin columns so `Project.valueOrigins` answers BOTH "which op defined value v"
 	// and "where was parameter v declared" from one table. See ParamOriginTable.
 	var paramOrigins as ParamOriginTable
+
 	// DERIVED ids — the values a Std pass mints as stand-ins for values that have an origin: an inlined
 	// site's expansion (its slow arm's re-issued call, its fast arm's loads and compares), a versioned
 	// loop's copy of every value the loop defines, a threaded compare. Each row files the id RANGE
@@ -413,15 +422,19 @@ export type ValueOriginTable
 	export function derivationOf(funcIndex FuncIndex, valueId ValueId) returns ValueDerivation
 		for i in 0 upto self.derivedFuncIndices.count() 'each'
 			let f = try self.derivedFuncIndices.get(i) otherwise panic("ValueOriginTable.derivationOf: derivedFuncIndices.get OOB at {i}")
+
 			if f != funcIndex 'otherFunc'
 				continue
 			end 'otherFunc'
+
 			let first = try self.derivedFirstIds.get(i) otherwise panic("ValueOriginTable.derivationOf: derivedFirstIds.get OOB at {i}")
 			let bound = try self.derivedEndIds.get(i) otherwise panic("ValueOriginTable.derivationOf: derivedEndIds.get OOB at {i}")
+
 			if valueId >= first and valueId < bound 'match'
 				return ValueDerivation.source(try self.derivedSourceIds.get(i) otherwise panic("ValueOriginTable.derivationOf: derivedSourceIds.get OOB at {i}"))
 			end 'match'
 		end 'each'
+
 		return ValueDerivation.none
 	end 'derivationOf'
 
@@ -574,6 +587,7 @@ export type ValueOriginTable
 			let bound = try self.derivedEndIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRows: derivedEndIds.get OOB at row {row}")
 			let sourceId = try self.derivedSourceIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRows: derivedSourceIds.get OOB at row {row}")
 			let clonedSource = try subst.get(sourceId) otherwise continue
+
 			for v in first upto bound 'eachId'
 				let cloned = try subst.get(v) otherwise continue
 				self.recordDerived(toFunc, valueId: cloned, sourceId: clonedSource)
@@ -592,6 +606,7 @@ export type ValueOriginTable
 		// The parameter sub-table merges with the SAME function offset (its ValueIds and spans
 		// pass through verbatim), in lockstep with the op-origin fold above.
 		self.paramOrigins.appendFrom(source.paramOrigins, funcOffset: funcOffset)
+
 		for i in 0 upto source.derivedFuncIndices.count() 'eachDerived'
 			let f = try source.derivedFuncIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: derivedFuncIndices.get OOB at {i}")
 			let first = try source.derivedFirstIds.get(i) otherwise panic("ValueOriginTable.appendFrom: derivedFirstIds.get OOB at {i}")
@@ -654,17 +669,21 @@ end 'FunctionRowCsr'
 function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, funcCount FuncIndex) returns FunctionRowCsr
 	var rowStarts = OpIndexArray.create()
 	rowStarts.resize(funcCount + 1)
+
 	for i in 0 upto funcIndices.count() 'countEach'
 		let f = try funcIndices.get(i) otherwise panic("indexRowsByFunction: funcIndices.get OOB at {i}")
+
 		if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
 			continue
 		end 'notWanted'
+
 		let at = f + 1
 		let prior = try rowStarts.get(at) otherwise panic("indexRowsByFunction: row {i} names function index {f}, which is outside the {funcCount}-function module this index was asked for")
 		try rowStarts.set(at, value: prior + 1) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {at}")
 	end 'countEach'
 
 	var total = 0 as OpIndex
+
 	for f in 0 upto funcCount + 1 'prefixSum'
 		total = total + (try rowStarts.get(f) otherwise panic("indexRowsByFunction: rowStarts.get OOB at {f}"))
 		try rowStarts.set(f, value: total) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {f}")
@@ -674,14 +693,18 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 	rows.resize(total)
 	var cursor = OpIndexArray.create()
 	cursor.resize(funcCount)
+
 	for f in 0 upto funcCount 'seedCursor'
 		try cursor.set(f, value: try rowStarts.get(f) otherwise panic("indexRowsByFunction: rowStarts.get OOB at {f}")) otherwise panic("indexRowsByFunction: cursor.set OOB at {f}")
 	end 'seedCursor'
+
 	for i in 0 upto funcIndices.count() 'scatterEach'
 		let f = try funcIndices.get(i) otherwise panic("indexRowsByFunction: funcIndices.get OOB at {i}")
+
 		if not isSelectedFunction(selected, funcIndex: f) 'notWanted'
 			continue
 		end 'notWanted'
+
 		let at = try cursor.get(f) otherwise panic("indexRowsByFunction: cursor.get OOB at {f}")
 		try rows.set(at, value: i) otherwise panic("indexRowsByFunction: rows.set OOB at {at}")
 		try cursor.set(f, value: at + 1) otherwise panic("indexRowsByFunction: cursor.set OOB at {f}")

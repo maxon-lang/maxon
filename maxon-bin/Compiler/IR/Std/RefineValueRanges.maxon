@@ -122,16 +122,22 @@ let ForcedRoundAllowance = 2 as FixpointRound
 enum UnboundedReason
 	// A binary op or block arg whose type is not `i64`/`u64`.
 	narrowType
+
 	// A unary op, or a const whose type is neither a 64-bit word, an unsigned narrow int nor i1.
 	unmodelledOp
+
 	// An operand of an arithmetic op that nothing this pass models defines.
 	unmodelledOperand
+
 	// `add`/`sub`/`mul` with a corner outside the signed range.
 	mayWrap
+
 	// An unsigned compare with an operand not proven within `[0, i64.max]`.
 	unsignedOutsideSignedRange
+
 	// A compare whose intervals decide nothing.
 	undecidedCompare
+
 	// A function that reached `WideningRoundCap`.
 	forcedByRoundCap
 end 'UnboundedReason'
@@ -165,6 +171,7 @@ end 'constIsItsWord'
 type Interval
 	export var lo as ParsedInt
 	export var hi as ParsedInt
+
 	// `v ≤ U(base) + symOffset` when `symBasePlusOne` names a base.
 	export var symBasePlusOne as ValueId
 	export var symOffset as ParsedInt
@@ -352,6 +359,7 @@ type RangeScratch
 	export var computed as BoolArray
 	export var modelled as BoolArray
 	export var defPosition as BlockPositionColumn
+
 	// The refinement trail: what a narrowing overwrote, restored in reverse on leaving the subtree.
 	export var trailValue as ValueIdArray
 	export var trailLo as ParsedIntArray
@@ -359,14 +367,17 @@ type RangeScratch
 	export var trailSymBasePlusOne as ValueIdArray
 	export var trailSymOffset as ParsedIntArray
 	export var trailComputed as BoolArray
+
 	// The walk, and per open block: the trail height on entry, and whether entering it opened a dead
 	// subtree. `deadDepth` counts the open dead subtrees, so any block under one is dead.
 	export var walk as StdDominatorWalk
 	export var walkTrailMark as TrailMarkColumn
 	export var walkOpenedDead as BoolArray
 	export var deadDepth as TallyCount = 0
+
 	// Per block position: whether the round found it dead — read for its edges by the joins.
 	export var blockDead as BoolArray
+
 	// Set by `narrow` when an intersection comes out empty; read once per block entry.
 	export var entryIsDead = false
 	export var decisions as CompareDecisionArray
@@ -380,10 +391,13 @@ type RangeScratch
 	export var result as Interval
 	export var incoming as Interval
 	export var reasons as OrdinalTally
+
 	// The function under analysis, for the column panics.
 	export var funcName as ByteArray
+
 	// Decisions a symbolic bound made, for the whole module.
 	export var symbolicDecisions as TallyCount = 0
+
 	// The round in progress: whether any interval or dead flag moved, whether block args are forced to
 	// the whole range, and the tallies of which only the last round's reading is kept.
 	export var changed = false
@@ -456,6 +470,7 @@ type RangeScratch
 	function writeDef(valueId ValueId, interval Interval)
 		if self.isComputed(valueId) 'hasPrevious'
 			self.readComputedInterval(valueId, into: self.incoming)
+
 			if self.incoming.sameAs(interval) 'unchanged'
 				return
 			end 'unchanged'
@@ -469,6 +484,7 @@ type RangeScratch
 	// written it.
 	function readForRefinement(valueId ValueId) returns bool
 		let wasComputed = self.isComputed(valueId)
+
 		if wasComputed 'hasABound'
 			self.readComputedInterval(valueId, into: self.incoming)
 		end 'hasABound' else 'unbounded'
@@ -624,6 +640,7 @@ function refineValueRangesInFunc(module StdModule, func IrFunction, scratch Rang
 
 	var round = 0 as FixpointRound
 	var stable = false
+
 	while not stable 'untilStable'
 		round = round + 1
 
@@ -698,6 +715,7 @@ function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch
 
 		for arg in block.blockArgs 'eachArg'
 			scratch.recordDefPosition(arg.valueId, position: position)
+
 			if wordTyped(arg.argType) 'wordArg'
 				scratch.markModelled(arg.valueId)
 			end 'wordArg' else 'narrowArg'
@@ -714,6 +732,7 @@ function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch
 				// Exactly the ops `evaluateArithOp` writes: every compare, and the word-typed binary ops.
 				if scratch.arith.isComparison() or scratch.arith.isComparisonImm() 'compare'
 					scratch.markModelled(scratch.arith.resultId)
+
 					if wordTyped(scratch.arith.operandType) 'orderable'
 						anyCompare = true
 					end 'orderable'
@@ -736,6 +755,7 @@ function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch
 			end 'arithmetic'
 
 			classifyFoldableDef(op, def: scratch.def)
+
 			if not scratch.def.isConstDef() 'notAConst'
 				continue
 			end 'notAConst'
@@ -761,11 +781,13 @@ end 'prepareFunction'
 // symbolic bound names most often.
 function recordOpDefPositions(op StdOp, position BlockRefIndex, scratch RangeScratch)
 	stdOpDefinedValue(op, def: scratch.defined)
+
 	if scratch.defined.definesNothing() 'noDef'
 		return
 	end 'noDef'
 
 	scratch.recordDefPosition(scratch.defined.first, position: position)
+
 	if scratch.defined.definesPair() 'twoDefs'
 		scratch.recordDefPosition(scratch.defined.second, position: position)
 	end 'twoDefs'
@@ -795,6 +817,7 @@ function enterBlock(module StdModule, func IrFunction, analysis RangeFunction, p
 	end 'live'
 
 	scratch.walkOpenedDead.push(scratch.entryIsDead)
+
 	if scratch.entryIsDead 'opensADeadSubtree'
 		scratch.deadDepth = scratch.deadDepth + 1
 	end 'opensADeadSubtree'
@@ -811,6 +834,7 @@ function enterBlock(module StdModule, func IrFunction, analysis RangeFunction, p
 
 	for opIdx in block.opRefs 'eachOp'
 		classifyArithOperands(module.getOp(opIdx), operands: scratch.arith)
+
 		if scratch.arith.isArithmetic() 'arithmetic'
 			evaluateArithOp(opIdx, scratch: scratch)
 		end 'arithmetic'
@@ -822,6 +846,7 @@ function leaveBlock(scratch RangeScratch)
 	scratch.restoreTrailTo(mark)
 
 	let openedDead = try scratch.walkOpenedDead.pop() otherwise panic("refineValueRanges: walkOpenedDead.pop on a non-empty walk failed")
+
 	if openedDead 'closesADeadSubtree'
 		scratch.deadDepth = scratch.deadDepth - 1
 	end 'closesADeadSubtree'
@@ -1105,6 +1130,7 @@ function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunc
 			end 'elsewhere'
 
 			edgesIn = edgesIn + 1
+
 			if scratch.isBlockDead(predPosition) 'deadThisRound'
 				continue
 			end 'deadThisRound'
@@ -1121,6 +1147,7 @@ function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunc
 			end 'notWritten'
 
 			scratch.readComputedInterval(incomingId, into: scratch.incoming)
+
 			if any 'joinIn'
 				scratch.result.joinWith(scratch.incoming)
 			end 'joinIn' else 'first'
@@ -1169,6 +1196,7 @@ function evaluateArithOp(opIdx OpIndex, scratch RangeScratch)
 		bitAnd then andIntervals(scratch)
 		shr then shiftRightIntervals(scratch, logical: false)
 		shrLogical then shiftRightIntervals(scratch, logical: true)
+
 		// A left shift and the `or`/`xor` of two intervals have no bound cheaper than the whole range;
 		// the three float-only opcodes and the high multiply are not integers this pass computes with.
 		bitOr or
@@ -1253,6 +1281,7 @@ function andIntervals(scratch RangeScratch)
 	end 'eitherMayBeNegative'
 
 	var high = i64.max
+
 	if scratch.left.isNonNegative() 'boundedByLeft'
 		high = scratch.left.hi
 	end 'boundedByLeft'

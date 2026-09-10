@@ -498,6 +498,7 @@ end 'readsInRegion'
 union ValueSource
 	// A function parameter — its declaration span (from `ParamOriginTable`).
 	param(range SourceRange)
+
 	// A compiler-minted stand-in — a splitter's reload or rematerialized constant, or a Std pass's
 	// derived id — the ORIGINAL value it derives from, chased recursively (its source may itself be
 	// derived, or a phi/param/op).
@@ -521,10 +522,12 @@ function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, li
 		found(range) then return ValueSource.param(range)
 		none then break 'param'
 	end 'param'
+
 	match lineage.sourceOf(valueId) 'reload'
 		source(sourceId) then return ValueSource.derived(sourceId)
 		none then break 'reload'
 	end 'reload'
+
 	match project.valueOrigins.derivationOf(funcIndex, valueId: valueId) 'derived'
 		source(sourceId) then return ValueSource.derived(sourceId)
 		none then break 'derived'

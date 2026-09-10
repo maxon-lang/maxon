@@ -3575,6 +3575,7 @@ end 'classifyLoadOperands'
 // a sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
 module type StdStoreOperands
 	var store as bool
+
 	// The ADDRESS the store writes through, and the field displacement from it.
 	export var addrId as ValueId
 	export var offset as ByteOffset
@@ -3735,15 +3736,19 @@ end 'StdCallShape'
 module type StdCallOperands
 	var shape as StdCallShape
 	export var resultId as ValueId
+
 	// `throwingCall` only.
 	export var errorFlagId as ValueId
+
 	// The callee's name, COPIED into a column this record owns: a `match` binding is immutable and a
 	// mutable field may not alias one, so the bytes are refilled per call rather than aliased.
 	export var callee as ByteArray
 	export var argCount as ParamCount
+
 	// The first argument — meaningful only when `argCount` is non-zero. It is what a callee-effect
 	// table keys on: every runtime entry that takes a record takes it first.
 	export var firstArg as ValueId
+
 	// The second — meaningful only when `argCount` is at least two. The element accessors take the
 	// index there, which is what a bound-relating reader looks up.
 	export var secondArg as ValueId
@@ -3782,6 +3787,7 @@ module type StdCallOperands
 		self.callee.clear()
 		self.callee.append(name)
 		self.argCount = arguments.count()
+
 		if self.argCount != 0 'hasArguments'
 			self.firstArg = try arguments.get(0) otherwise panic("StdCallOperands.takeCallee: arguments.get(0) failed on a non-empty argument list")
 		end 'hasArguments'
@@ -3926,11 +3932,13 @@ export type StdValueDefs
 
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: def)
+
 			if def.definesNothing() 'noDef'
 				continue
 			end 'noDef'
 
 			defs.record(def.first, opIdx: opIdx)
+
 			if def.definesPair() 'twoDefs'
 				defs.record(def.second, opIdx: opIdx)
 			end 'twoDefs'
@@ -4527,19 +4535,23 @@ end 'collectStdOpUses'
 export function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
 	var def = StdDefinedValues.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
 
 		for arg in block.blockArgs 'eachArg'
 			maxId = maxValueId(maxId, other: arg.valueId)
 		end 'eachArg'
+
 		for opIdx in block.opRefs 'eachOp'
 			maxId = maxDefinedIdAfter(module, opIdx: opIdx, maxId: maxId, def: def)
 		end 'eachOp'
+
 		if block.hasTerminatorOp() 'terminated'
 			maxId = maxDefinedIdAfter(module, opIdx: block.terminatorIndex(), maxId: maxId, def: def)
 		end 'terminated'
 	end 'eachBlock'
+
 	return maxId + 1
 end 'nextFreeValueId'
 
@@ -4563,8 +4575,10 @@ end 'maxValueId'
 module enum StdDefinedValueKind
 	// A terminator, a store or an effect op.
 	none
+
 	// `first` is the one value defined.
 	one
+
 	// `first` AND `second`: `tryCall`/`witnessTryCall` write a result and an error flag. Reported by the
 	// result alone, `nextFreeValueId` can hand out the flag's id. WHICH of the two is higher is not a
 	// rule: one emission site spells `errorFlagId = resultId + 1`, others take both from the parser's
@@ -4644,11 +4658,13 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		errorReturn or
 			osExit then def.recordNone()
 		osAllocPages(resultId, _) then def.recordOne(resultId)
+
 		// W35: a stream write DEFINES the byte count the OS reports — it used to define nothing, back when
 		// its one consumer was a void `print`.
 		osWriteStdout(resultId, _, _) then def.recordOne(resultId)
 		funcAddr(resultId, _) then def.recordOne(resultId)
 		callIndirect(resultId, _, _, _, _) then def.recordOne(resultId)
+
 		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
 		osWaitHandle(resultId, _, _) then def.recordOne(resultId)
@@ -4659,14 +4675,18 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			osProcessExitCode or
 			osWaitHandles or
 			osCloseHandle then def.recordNone()
+
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
 		osFreePages then def.recordNone()
+
 		// The jump table defines no value — a terminator branches, it does not produce a result.
 		switch then def.recordNone()
+
 		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
 		// throwing form defines that result AND an error flag, and reports BOTH — see `StdDefinedValueKind.pair`.
 		witnessCall(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
+
 		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
 		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
 		osPipeCreate then def.recordNone()
@@ -4681,16 +4701,21 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osProcessSpawnInherit then def.recordNone()
 		osCancelIo then def.recordNone()
 		osGetPid(resultId) then def.recordOne(resultId)
+
 		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound then def.recordNone()
 		osWriteFile(resultId, _, _, _, _) then def.recordOne(resultId)
+
 		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
 		osReadWallClock then def.recordNone()
+
 		// R4.1: the file OPEN captures `CreateFileA`'s HANDLE out of RAX, so unlike the two reads above it
 		// DOES define a value — the direct-return shape, not the out-param one.
 		osFileOpenRead(resultId, _) then def.recordOne(resultId)
+
 		// The close defines NOTHING — `CloseHandle`'s BOOL is ignored, so there is no result to capture.
 		osFileClose then def.recordNone()
+
 		// R4.2. Split exactly as R4.1's pair is: the five ops whose Win32 entry point answers in RAX — a
 		// BOOL verdict or a search HANDLE — capture it; `osFileFindClose` discards `FindClose`'s BOOL for
 		// the reason `osFileClose` discards `CloseHandle`'s. The 64-bit answers of `osReadFile`/`osFileSize`
@@ -4711,6 +4736,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
 		osFileFindFirst(resultId, _, _) then def.recordOne(resultId)
 		osFileFindClose then def.recordNone()
+
 		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
 		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
 		// attribute mask. None has a void twin, so none takes `none`.
@@ -4718,28 +4744,35 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osDirCreate(resultId, _) then def.recordOne(resultId)
 		osDirCurrentPath(resultId, _, _) then def.recordOne(resultId)
 		osFileAttributes(resultId, _) then def.recordOne(resultId)
+
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue then def.recordNone()
 		osCommandLine(resultId) then def.recordOne(resultId)
+
 		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
 		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
 		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
 		osStdHandle(resultId, _) then def.recordOne(resultId)
 		osExecutablePath(resultId, _, _) then def.recordOne(resultId)
+
 		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
 		osWriteStderr(resultId, _, _) then def.recordOne(resultId)
+
 		// A promoted record's address is a def like `globalAddr`'s.
 		stackRecordAddr(resultId, _) then def.recordOne(resultId)
+
 		// O3: each of the three defines the OS answer it captures from RAX.
 		osOpenNamedSegment(resultId, _, _, _) then def.recordOne(resultId)
 		osMapNamedSegment(resultId, _, _) then def.recordOne(resultId)
 		osTickCountMs(resultId) then def.recordOne(resultId)
+
 		// The four attached-subprocess host primitives: the two whose Win32 entry point answers in RAX capture
 		// it; the two whose BOOL is ignored define nothing, exactly as `osCloseHandle` does.
 		osHandleSetInherit then def.recordNone()
 		osPipePeek(resultId, _, _) then def.recordOne(resultId)
 		osEnvRead(resultId, _, _, _) then def.recordOne(resultId)
 		osProcessTerminate then def.recordNone()
+
 		// The eight socket host primitives: the six whose ws2_32 entry point answers in RAX capture it; the two
 		// whose answer is discarded define nothing, exactly as `osCloseHandle` does.
 		osSocketStartup(resultId, _) then def.recordOne(resultId)
@@ -4751,22 +4784,28 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketClose then def.recordNone()
 		osCpuCount(resultId) then def.recordOne(resultId)
+
 		// The thread-CPU read defines nothing — its answer lands in the caller's out-param word, exactly as
 		// the wall-clock read's does.
 		osThreadCpuTicks then def.recordNone()
+
 		// F1a: the decommit defines no value. `VirtualFree`'s BOOL is discarded exactly as `osFreePages`
 		// discards it — a failed decommit leaves a caller nothing to do.
 		osDecommitPages then def.recordNone()
+
 		// F1b: a fill defines no value — it is a store, and a store answers nothing.
 		memFill then def.recordNone()
+
 		// F1c: both DO define one, and the definition is what makes the failure checkable — see the ops.
 		osCommitPages(resultId, _, _) then def.recordOne(resultId)
 		osReservePages(resultId, _) then def.recordOne(resultId)
+
 		// F2: all three define their result — the CAS its SUCCESS BOOLEAN, the RMW the PRIOR value, the token
 		// the identity word. The two atomics carry OPPOSITE conventions; see each op for which and why.
 		atomicCas(resultId, _, _, _) then def.recordOne(resultId)
 		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
 		currentThreadToken(resultId) then def.recordOne(resultId)
+
 		// G1: the two READING ops define their answer (the slot index, the stored word); the two WRITING ones
 		// define nothing — `tlsSetValue` publishes into the OS thread's slot and `osSetEvent` into a kernel
 		// object, exactly as `osLockEnter`/`osLockLeave` do.
@@ -4775,6 +4814,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		tlsSlotLoad(resultId, _) then def.recordOne(resultId)
 		osSetEvent then def.recordNone()
 		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
+
 		// G3: the ordered load defines the word it read; the ordered store defines nothing — `loadIndirect`
 		// and `storeIndirect` exactly.
 		loadAcquire(resultId, _, _, _) then def.recordOne(resultId)
@@ -5233,9 +5273,11 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		// A return DEFINES nothing and names no block: the splice replaces it with a branch to the
 		// continuation rather than cloning it, and it reaches here only through a body op scan.
 		ret then return op
+
 		// A `param` is never copied: a splice maps a parameter to its argument, and a loop copy never
 		// holds the entry block.
 		param then panic("remapStdOpForClone: a `param` op reached the cloner — a splice maps a parameter to its argument instead of copying it, and a loop copy never holds the entry block")
+
 		// The two direct calls are cloned by `unswitchInvariantGuards`' loop copy; `scanLeafBody`
 		// refuses a callee holding either.
 		call(resultId, callee, args) then return StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: args)
@@ -5446,9 +5488,11 @@ module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 
 	var rewritten = block
 	var newEdges = BranchEdgeArray.create()
+
 	for edge in rewritten.branchEdges 'eachEdge'
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
 	end 'eachEdge'
+
 	rewritten.branchEdges = newEdges
 end 'substituteEdgeArgsInBlock'
 
@@ -5492,6 +5536,7 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 	end 'nothingDoomed'
 
 	var def = StdDefinedValues.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("removeOpsDefining: blockRef from func.blockRefs not in module.blocks")
 
@@ -5767,8 +5812,10 @@ end 'StdBranchShape'
 
 module type StdBranchOperands
 	var shape as StdBranchShape
+
 	// `branch` only.
 	export var targetBlockId as BlockId
+
 	// `condBranch` only.
 	export var condId as ValueId
 	export var thenBlockId as BlockId

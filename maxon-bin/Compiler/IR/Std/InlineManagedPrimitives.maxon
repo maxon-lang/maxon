@@ -243,10 +243,12 @@ end 'BoundedLoad'
 // Expand every inlinable `__ManagedMemory` primitive call in the module.
 export function inlineManagedPrimitives(project Project, module StdModule)
 	var expanded = 0 as InlinedSiteCount
+
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerivedRange`).
 	for funcIndex in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("inlineManagedPrimitives: functions.get OOB at {funcIndex}")
+
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `lowerMaxonToStd` skip on, stated the same way. Here it is purely cost:
 		// this pass registers no `.rdata` and so cannot move a golden through `nextStringId` the way those
@@ -277,9 +279,11 @@ type PrimitiveInliner
 	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, the only pass between
 	// the write and this read.
 	let strides as StdOpElementStrideMap
+
 	// The sites in that key space whose element owes no drop, written by the same door and read by the
 	// two checked expanders off the same op index.
 	let trivialElements as StdOpTrivialElementSiteSet
+
 	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
 	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
 	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
@@ -289,6 +293,7 @@ type PrimitiveInliner
 	// three chain columns, and for the same measured reason.
 	var ids as ValueMinter
 	var seeded as bool
+
 	// The id the minter was seeded at — the first id of the site whose expansion seeded it.
 	var seedFloor as ValueId
 	var funcIndex as FuncIndex
@@ -422,6 +427,7 @@ type PrimitiveInliner
 				osWriteStdout or
 				rdataAddr then break 'op'
 			tryCall(resultId, errorFlagId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId))
+
 			// ⚠ Extended past `osThreadCpuTicks` when the allocator rung appended seven ops (memFill, the
 			// reserve/commit/decommit family, and the atomics). None is a CALL, so none can be a managed
 			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
@@ -539,6 +545,7 @@ type PrimitiveInliner
 			none gives self.expandPlainCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 			flag(flagId) gives self.expandThrowingCall(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: flagId)
 		end 'shape'
+
 		self.fileMintedSince(before, wasSeeded: wasSeeded, resultId: resultId)
 		return next
 	end 'expandFiled'
@@ -610,6 +617,7 @@ type PrimitiveInliner
 		// whether to expand. The other two expanders keep the bound and the ownership gates under every plan,
 		// so they always carve a frame and always have somewhere for a refusal to go.
 		let plan = self.stridePlanFor(self.opIndexAt(blockRef, pos: pos))
+
 		match plan 'plan'
 			runtimeFork then break 'plan'
 			singleArm(stride) then return self.expandUncheckedGetUnguarded(blockRef, pos: pos, arr: arr, index: index, resultId: resultId, stride: stride)
@@ -617,6 +625,7 @@ type PrimitiveInliner
 		end 'plan'
 
 		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
 		end 'eachArm'
@@ -671,14 +680,17 @@ type PrimitiveInliner
 	function expandCheckedGet(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
+
 		// Both site facts are read off the op index BEFORE the carve moves the call.
 		let site = self.opIndexAt(blockRef, pos: pos)
 		let plan = self.stridePlanFor(site)
+
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
 
 		let trivialElement = self.trivialElements.contains(site)
+
 		// The fast arm reads every element; the slow arm is an index out of range or an empty managed slot.
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
@@ -708,6 +720,7 @@ type PrimitiveInliner
 		for arm in arms 'eachArm'
 			self.emitBoundedLoadArm(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, slow: frame.slow, loaded: loaded)
 		end 'eachArm'
+
 		self.emitCheckedGetTail(loaded, arr: arr, value: value, frame: frame, trivialElement: trivialElement)
 
 		return self.finish(frame.carve)
@@ -798,13 +811,16 @@ type PrimitiveInliner
 		let value = argAt(args, index: 2, callee: callee)
 		let site = self.opIndexAt(blockRef, pos: pos)
 		let plan = self.stridePlanFor(site)
+
 		if everyArmIsDead(plan) 'noSingleOpArmSurvives'
 			return blockRef
 		end 'noSingleOpArmSurvives'
 
 		let trivialElement = self.trivialElements.contains(site)
+
 		// A managed element's every `set` takes the slow arm (`emitStoreArm`), which is then the common path.
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement))
+
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame, trivialElement: trivialElement)
 		end 'eachArm'

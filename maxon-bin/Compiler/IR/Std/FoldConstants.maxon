@@ -112,8 +112,10 @@
 // fold nothing.
 export function foldConstants(module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "foldConstants: {module.funcCount()} function(s)")
+
 	// ONE terminator record for the whole module, refilled per block — see `StdBranchOperands`.
 	var branch = StdBranchOperands.create()
+
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
@@ -638,6 +640,7 @@ module function foldConstantBranches(module StdModule, func IrFunction, constMap
 		// Read through `getOp`, which ends the borrow of `module` before `foldCondBranch` writes it.
 		let termIdx = block.terminatorIndex()
 		classifyBranch(module.getOp(termIdx), out: branch)
+
 		if not branch.isCondBranch() 'noConditionToKnow'
 			continue
 		end 'noConditionToKnow'

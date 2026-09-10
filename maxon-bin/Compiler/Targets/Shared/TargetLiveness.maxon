@@ -1000,8 +1000,10 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	var maxPressure = zeroClassRow()
 	var demand = zeroClassRow()
+
 	// The cold blocks' runs, walked once here and read by the sweep below and by everything after it.
 	let coldRuns = ColdRunTable.build(module, topo: cfg.topo, buf: sweep.buf, opFacts: opFacts)
+
 	for i in 0 upto numBlocks 'eachBlock'
 		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, runs: coldRuns.of(i), live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
 		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts)
@@ -2323,6 +2325,7 @@ export type UseIndex
 	// hence it dominates every reload of `f` placed at one of `f`'s uses.
 	var slotResident as BoolArray
 	var spillSlot as SpillSlotArray
+
 	// Appears as an operand — def OR use — of an op, a phi or an edge in a block ON THE HOT PATH of a
 	// loop: at loop depth > 0 and not cold (`blockIsOffTheHotPath`).
 	var touchesHotLoop as BoolArray
@@ -2895,6 +2898,7 @@ function indexBlockArgDefs(index UseIndex, cfg FuncCfg, block IrBlock, blockLoca
 	for arg in block.blockArgs 'eachPhi'
 		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
 			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
+
 			if onHotPath 'insideHotLoop'
 				index.setTouchesHotLoop(arg.valueId)
 			end 'insideHotLoop'
@@ -2971,9 +2975,11 @@ function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLoc
 			end 'notRecorded'
 
 			index.setEdgePassed(argId)
+
 			if onHotPath 'insideHotLoop'
 				index.setTouchesHotLoop(argId)
 			end 'insideHotLoop'
+
 			if index.blockHasEdgeUseOf(argId, blockLocal: blockLocal) 'dedupe'
 				continue
 			end 'dedupe'
@@ -3443,6 +3449,7 @@ export type PressureSweepScratch
 	export var liveByClass as RegCountColumn
 	export var opPressure as RegCountColumn
 	export var blockMax as RegCountColumn
+
 	// The cold block being swept, when the block is one (`ColdRunSweep`).
 	export var coldRun as ColdRunSweep
 
@@ -3578,13 +3585,16 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
+
 	if block.heat == BlockHeat.cold 'coldBlock'
 		scratch.coldRun.beginBlock(wordsPerRow)
 	end 'coldBlock'
+
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let pos = ordered.count() - 1 - ri
 		let opIdx = try ordered.get(pos) otherwise panic("sweepBlockPressure: ordered.get OOB")
 		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as BlockOpPos, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
+
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxRegCount(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -3980,6 +3990,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 	if clobberMask != 0 'hasClobber'
 		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
+
 	if heat == BlockHeat.cold 'coldBlock'
 		match runs.runAt(pos) 'run'
 			none then break 'run'
@@ -3996,6 +4007,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 	// it must avoid implicitUses ∪ implicitDefs = {RAX, RDX}. This mask is 0 for every op
 	// without implicit registers, so the loop is a no-op except at `idiv`.
 	let implicitTouch = operandImplicitTouchOf(op, opFacts: opFacts)
+
 	if implicitTouch != 0 'hasImplicit'
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
@@ -4026,6 +4038,7 @@ end 'stepBackwardOverOp'
 // `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
 export function opClobberMask(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
+
 	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
 		return 0
 	end 'bracketedNotConfined'
@@ -4051,6 +4064,7 @@ end 'rawClobberMask'
 // every consistency assert reads that; only its effect on confinement is decided here.
 export function confiningImplicitDefsOf(op TargetOp, heat BlockHeat, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
+
 	if heat == BlockHeat.cold and coldRunOpKind(op, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'bracketedNotConfined'
 		return 0
 	end 'bracketedNotConfined'
@@ -4079,15 +4093,19 @@ export function coldRunOpKind(op TargetOp, buf OperandList, opFacts OpVariantFac
 	if isCaptureMove(op) 'capture'
 		return ColdRunOpKind.capture
 	end 'capture'
+
 	if definesAVirtual(buf) 'ownValue'
 		return ColdRunOpKind.none
 	end 'ownValue'
+
 	if opFacts.isCallOf(op) 'call'
 		return ColdRunOpKind.call
 	end 'call'
+
 	if rawClobberMask(op, buf: buf, opFacts: opFacts) != 0 'clobber'
 		return ColdRunOpKind.clobber
 	end 'clobber'
+
 	if opFacts.slotRoleOf(op) == OpSlotRole.spillStore 'store'
 		return ColdRunOpKind.store
 	end 'store'
@@ -4101,6 +4119,7 @@ function definesAVirtual(buf OperandList) returns bool
 			return true
 		end 'virtualDef'
 	end 'each'
+
 	return false
 end 'definesAVirtual'
 
@@ -4140,9 +4159,11 @@ function walkKindOf(kind ColdRunOpKind, lastKind ColdRunOpKind, block IrBlock, p
 	if kind != ColdRunOpKind.store 'notAStore'
 		return kind
 	end 'notAStore'
+
 	if lastKind == ColdRunOpKind.clobber or lastKind == ColdRunOpKind.call 'nothingToStore'
 		panic("ColdBlockRuns.rebuild: the spill store at position {pos} of cold block '{String.from(block.label)}' directly follows a clobber or a call, which defines no virtual it could read")
 	end 'nothingToStore'
+
 	return ColdRunOpKind.store if closesACallGroup(lastKind) else ColdRunOpKind.none
 end 'walkKindOf'
 
@@ -4186,10 +4207,12 @@ export type ColdBlockRuns
 		self.last.clear()
 
 		var lastKind = ColdRunOpKind.none
+
 		for pos in 0 upto count 'eachOp'
 			let op = try module.ops.get(try block.opRefs.get(pos) otherwise panic("ColdBlockRuns.rebuild: opRefs.get OOB at {pos}")) otherwise panic("ColdBlockRuns.rebuild: op at position {pos} of '{String.from(block.label)}' not in module.ops")
 			targetOpOperands(op, buf: buf)
 			let kind = walkKindOf(coldRunOpKind(op, buf: buf, opFacts: opFacts), lastKind: lastKind, block: block, pos: pos)
+
 			match kind 'k'
 				none then break 'k'
 				capture then self.requireCaptureAdjacent(lastKind, block: block, pos: pos)
@@ -4197,15 +4220,18 @@ export type ColdBlockRuns
 				clobber or
 					call then self.openRunIfClosed(lastKind, pos: pos)
 			end 'k'
+
 			if kind != ColdRunOpKind.none 'inARun'
 				self.extendOpenRun(pos)
 			end 'inARun'
+
 			lastKind = kind
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
 			let terminator = try module.ops.get(block.terminatorIndex()) otherwise panic("ColdBlockRuns.rebuild: terminator of '{String.from(block.label)}' not in module.ops")
 			targetOpOperands(terminator, buf: buf)
+
 			if coldRunOpKind(terminator, buf: buf, opFacts: opFacts) != ColdRunOpKind.none 'aRunOpTerminates'
 				panic("ColdBlockRuns.rebuild: the terminator of cold block '{String.from(block.label)}' is a run op — a terminator reads or writes no register a bracket could save, so every consumer of the runs takes it for `none`")
 			end 'aRunOpTerminates'
@@ -4244,8 +4270,10 @@ export type ColdRunTable
 	export static function build(module TargetModule, topo FuncTopology, buf OperandList, opFacts OpVariantFacts) returns ColdRunTable
 		var blocks = ColdBlockRunsArray.create()
 		let noRuns = ColdBlockRuns.create()
+
 		for local in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: local)
+
 			if block.heat == BlockHeat.cold 'cold'
 				var runs = ColdBlockRuns.create()
 				runs.rebuild(module, block: block, buf: buf, opFacts: opFacts)
@@ -4254,6 +4282,7 @@ export type ColdRunTable
 				blocks.push(noRuns)
 			end 'notCold'
 		end 'eachBlock'
+
 		return Self{blocks: blocks}
 	end 'build'
 
@@ -4264,6 +4293,7 @@ export type ColdRunTable
 	// Re-walk one block after a split moved its positions; a block that is not cold has nothing to walk.
 	export function rebuildBlock(module TargetModule, topo FuncTopology, local CfgIndex, buf OperandList, opFacts OpVariantFacts)
 		let block = blockAt(module, topo: topo, local: local)
+
 		if block.heat != BlockHeat.cold 'notCold'
 			return
 		end 'notCold'
@@ -4282,14 +4312,17 @@ export function firstPreMoveBefore(module TargetModule, block IrBlock, pos Block
 	end 'pastTheBody'
 
 	let kind = coldRunKindAt(module, block: block, pos: pos, buf: buf, opFacts: opFacts)
+
 	if kind != ColdRunOpKind.clobber and kind != ColdRunOpKind.call 'notInAGroup'
 		return pos
 	end 'notInAGroup'
 
 	var first = pos
+
 	while first > 0 and coldRunKindAt(module, block: block, pos: first - 1, buf: buf, opFacts: opFacts) == ColdRunOpKind.clobber 'extend'
 		first = first - 1
 	end 'extend'
+
 	return first
 end 'firstPreMoveBefore'
 
@@ -4299,19 +4332,24 @@ end 'firstPreMoveBefore'
 // across that call — confined to the callee-saved half, exactly what the split was to relieve.
 export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos BlockOpPos, buf OperandList, opFacts OpVariantFacts) returns BlockOpPos
 	let count = block.opRefs.count()
+
 	if pos >= count 'pastTheBody'
 		return pos
 	end 'pastTheBody'
 
 	var at = pos
+
 	while at < count 'toTheCall'
 		let kind = coldRunKindAt(module, block: block, pos: at, buf: buf, opFacts: opFacts)
+
 		if kind == ColdRunOpKind.call 'theGroupsCall'
 			return at
 		end 'theGroupsCall'
+
 		if kind != ColdRunOpKind.clobber 'notAGroup'
 			return count if at == pos else at
 		end 'notAGroup'
+
 		at = at + 1
 	end 'toTheCall'
 
@@ -4339,6 +4377,7 @@ end 'captureAt'
 // run's last op first and empties it there.
 export type ColdRunSweep
 	var readLater as BitWordArray
+
 	// Whether `readLater` holds a bit, so a block start clears it only when there is something to clear.
 	var readLaterHeld as bool
 
@@ -4369,6 +4408,7 @@ export type ColdRunSweep
 		end 'theRunsLastOp'
 
 		let raw = rawClobberMask(op, buf: buf, opFacts: opFacts)
+
 		if raw != 0 'clobbers'
 			applyForbiddenWithin(liveRow, within: self.readLater, forbidden: forbidden, buf: buf, clobberMask: raw, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 		end 'clobbers'
@@ -4691,6 +4731,7 @@ end 'applyForbidden'
 // confines only the values read later in the run (`ColdRunSweep`).
 function applyForbiddenWithin(liveRow BitWordArray, within BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
 	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
+
 	for v in liveBuf 'eachTarget'
 		if bitsetTest(within, base: 0, bit: v as BitIndex) 'readLater'
 			forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
@@ -4703,6 +4744,7 @@ function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, cl
 	if operandDefinesValue(buf, v: v) 'ownDef'
 		return
 	end 'ownDef'
+
 	let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
 	try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
 end 'forbidLiveValue'
@@ -4839,6 +4881,7 @@ export type OpVariantFacts
 	var implicitUses as RegMaskColumn
 	var slotRole as OpSlotRoleColumn
 	var isCall as BoolArray
+
 	// Has this variant been seen? A parallel flag rather than an out-of-band value in the columns
 	// above: 0 is a legitimate implicit mask (every op but a call and `idiv` has one), so no mask can
 	// mean "not derived yet".
@@ -4884,6 +4927,7 @@ export type OpVariantFacts
 		let variant = op.ordinal as TargetOpVariant
 
 		let derived = try self.known.get(variant) otherwise panic("OpVariantFacts.learn: known.get OOB at variant {variant} — `create` sizes every column to the whole union")
+
 		if derived 'alreadyDerived'
 			if VerifyOpVariantFacts 'checkAgainstTheOpItself'
 				self.verifyAgainst(op, variant: variant)
@@ -4907,6 +4951,7 @@ export type OpVariantFacts
 		requireMaskUnchanged(try self.implicitUses.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitUses.get OOB at variant {variant}"), reread: op.rawValue.implicitUses, field: "implicitUses", variant: variant)
 
 		let memoCall = try self.isCall.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: isCall.get OOB at variant {variant}")
+
 		if memoCall != op.rawValue.isCall 'callDiverged'
 			panic("OpVariantFacts: variant {variant} memoized isCall {memoCall} but this op reads {op.rawValue.isCall} — the memo's premise is that a variant's metadata is a property of the CASE, and it is not")
 		end 'callDiverged'

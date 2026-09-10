@@ -328,6 +328,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			end 'flagCaptureHandled'
 
 			let atSeq = seq + pos
+
 			// ⚠⚠ **THE PAIR IS SETTLED AND EMITTED BEFORE THE OP IS BOUND, AND THE ORDER IS THE WHOLE POINT.**
 			// An op read out of `module.ops` is a BORROW of `module` (E3070), the sequencer PUSHES its moves
 			// onto that same array, and a borrow's liveness is its last use in SOURCE order — so a single
@@ -349,13 +350,16 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 			prevWasCall = colored.rawValue.isCall
+
 			// A run's saves go before its first op whether or not that op is emitted: a dropped self-move
 			// (`mov rdx, rdx` for an argument already in place) still opens the run it begins.
 			owesReloads = spliceBracketSavesBefore(module, brackets: brackets, seq: atSeq, owesReloads: owesReloads, newRefs: newRefs)
+
 			if not isPhysicalSelfMove(colored) 'emitted'
 				spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: atSeq, newRefs: newRefs)
 				newRefs.push(opIdx)
 			end 'emitted'
+
 			owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, lastSeq: atSeq, lastPos: pos, owesReloads: owesReloads, newRefs: newRefs)
 		end 'eachOp'
 
@@ -363,6 +367,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		if owesReloads 'runLeftOpen'
 			panic("colorAndDropSelfMoves: block '{String.from(block.label)}' ends with a cold run's reloads still owed — the plan's reload sequence lies past the block's body, so the colorer's run and the rewrite's numbering have drifted")
 		end 'runLeftOpen'
+
 		block.opRefs = newRefs
 		seq = seq + bodyCount
 
@@ -429,6 +434,7 @@ function appendBracketHalf(module TargetModule, brackets ColdCallBracketPlan, ha
 			save gives TargetOp.storeSlotReg(slot, srcReg: reg)
 			reload gives TargetOp.loadRegSlot(reg, slot: slot)
 		end 'h'
+
 		appendAllocatorOp(module, op: op, newRefs: newRefs)
 	end 'eachRegister'
 end 'appendBracketHalf'
@@ -1028,6 +1034,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 	var predRefs = BlockRefArray.create()
 	var succIds = BlockIdArray.create()
 	var heats = BlockHeatArray.create()
+
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		if topo.succ.degree(predLocal) <= 1 'singleSucc'
 			continue
@@ -1041,6 +1048,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target
 			if topo.pred.degree(succLocal as CsrIndex) > 1 'critical'
 				predRefs.push(try topo.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
 				succIds.push(edge.targetBlockId)
+
 				// The split block runs exactly when the edge is taken, which is only when both ends run.
 				heats.push(colderHeat(predBlock.heat, b: blockAt(module, topo: topo, local: succLocal).heat))
 			end 'critical'

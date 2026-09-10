@@ -760,6 +760,7 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount() as FuncIndex)
 	var stats = InlineLeafStats.create()
 	var def = StdDefinedValues.create()
+
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
@@ -812,6 +813,7 @@ type LeafInliner
 	var sitePositions as BlockOpPosArray
 	var siteCallees as FuncIndexArray
 	var siteBuffersSeeded as bool
+
 	// The clone check's sink, shared by every function's splices: this type is constructed per function.
 	var def as StdDefinedValues
 
@@ -1406,6 +1408,7 @@ type LeafInliner
 			if guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
 				continue
 			end 'insideADeclinedCascade'
+
 			if self.blockHoldsAPanic(calleeBlock) 'panicBlock'
 				blocks.hasPanicBlock = true
 				try blocks.isPanic.set(calleeBlock.id, value: true) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
@@ -1473,6 +1476,7 @@ type LeafInliner
 		// where the inlined body would have panicked, so it is cold.
 		let slow = self.module.addBlock(self.func, label: InlineSlowLabel, heat: BlockHeat.cold)
 		let slowResult = self.valueIds().mint()
+
 		// The re-issued call's result stands in for the site's own.
 		self.project.valueOrigins.recordDerived(self.funcIndex, valueId: slowResult, sourceId: resultId)
 		self.module.appendOp(slow, op: StdOp.call(slowResult, callee: callee, args: args))
@@ -1572,6 +1576,7 @@ type LeafInliner
 			// mutates it — which the self-compile refuses (`cannot mutate 'module' via 'appendOp' while it
 			// is borrowed`).
 			let op = self.module.getOp(opIdx)
+
 			if leafOpRole(op) == LeafOpRole.parameter 'parameterOp'
 				assertParamOpMatchesConvention(op, calleeFunc: calleeFunc)
 				continue
@@ -1597,6 +1602,7 @@ type LeafInliner
 		end 'oplessTerminator'
 
 		let term = self.module.getOp(calleeBlock.terminatorIndex())
+
 		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
 		// walk left the cursor on this block's LAST op, which is a different statement.
 		self.module.spans.current = self.module.spans.at(calleeBlock.terminatorIndex())
@@ -1784,6 +1790,7 @@ type LeafInliner
 	function blockHoldsAPanic(block IrBlock) returns bool
 		for opIdx in block.opRefs 'eachOp'
 			let op = self.module.getOp(opIdx)
+
 			if leafOpRole(op) == LeafOpRole.panicking 'panics'
 				return true
 			end 'panics'

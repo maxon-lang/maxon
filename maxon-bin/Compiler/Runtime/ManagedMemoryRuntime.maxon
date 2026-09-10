@@ -2874,6 +2874,7 @@ export enum ManagedHeaderEffect
 	// `buildManagedCount`, `buildManagedCapacity`, `buildManagedElementSize`, `buildManagedFirst` and
 	// `buildManagedByteAt`. None stores to the record, and `emitLoadElemAndOkReturn` writes nothing.
 	writesNothing
+
 	// An in-place element writer: `buildManagedSet`, `buildManagedMemSet`, `buildManagedSetByte`,
 	// `buildManagedFill` and `buildManagedMemSwap`. Each writes `buffer@0`, `capacity@16`, `parent@32`
 	// and the buffer's refcount word ONLY through `__managed_cow_detach` (`emitCowDetach`, or the
@@ -2886,6 +2887,7 @@ export enum ManagedHeaderEffect
 	// of the rejected value (`emitDestroyRejectedElement`) or the overwritten occupant
 	// (`emitDestroyRangeIfManaged`) — only when `element_destroy@40` is non-zero.
 	detachesUnlessOwnedUnshared
+
 	// Everything else: an entry that grows, shrinks, shares or releases the buffer (`push`, `resize`,
 	// `slice`, `clone`, `retain`, `decref`, …), the cursor entries, and every callee this runtime does
 	// not own.
@@ -2898,11 +2900,14 @@ end 'ManagedHeaderEffect'
 enum ManagedCalleeRole
 	// `__managed_get`: a pure read that returns without an error only when its index is below `length@8`.
 	boundedRead
+
 	// The other pure reads.
 	pureRead
+
 	// `__managed_set`: an in-place writer that returns without an error only when its index is below
 	// `length@8`.
 	boundedWriter
+
 	// The other in-place writers.
 	inPlaceWriter
 	other
@@ -2960,12 +2965,16 @@ end 'managedCalleeSucceedsOnlyInBounds'
 export enum ManagedGuardKind
 	// `emitBufferNotOwned`: `capacity@16 < 0`.
 	bufferNotOwned
+
 	// `InlineManagedPrimitives.emitStoreArm`'s null test: `buffer@0 == NoBufferAllocated`.
 	bufferUnallocated
+
 	// `emitIsSharedAllocation` over `buffer@0`: the buffer's refcount word is non-zero.
 	bufferShared
+
 	// `emitElementIsManaged`: `element_destroy@40 != TrivialElementDestroy`, which is 0.
 	elementManaged
+
 	// `emitIndexOutOfRange`: `index >=u length@8`, or `>=u capacity@16` for the buffer surface's write —
 	// or, for a constant index `K` once `foldConstOperands` has swapped it into the immediate and
 	// flipped the predicate, `length@8 <=u K`.
@@ -2974,8 +2983,10 @@ end 'ManagedGuardKind'
 
 export type ManagedGuardOperands
 	export var kind as ManagedGuardKind
+
 	// The record every kind tests a field of.
 	export var record as ValueId
+
 	// `indexOutOfRange` only: whether the index is a value, and which — a constant index is not a value —
 	// and the field the limit was loaded from, `length@8` or `capacity@16`.
 	export var indexIsVariable as bool

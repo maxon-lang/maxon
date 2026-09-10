@@ -94,6 +94,7 @@ type ThreadScratch
 	export var candidates as ThreadCandidateArray
 	export var arith as StdArithOperands
 	export var branch as StdBranchOperands
+
 	// One count per `ThreadRefusal`, for the whole module.
 	export var refusals as OrdinalTally
 
@@ -126,8 +127,10 @@ type ThreadCandidate
 	export var blockRef as BlockRef
 	export var blockId as BlockId
 	export var compareOpIdx as OpIndex
+
 	// The compare's result, read only by the terminator.
 	export var condId as ValueId
+
 	// The block arg the compare tests, and its slot.
 	export var testedArg as ValueId
 	export var testedSlot as ArgSlot
@@ -137,6 +140,7 @@ type ThreadCandidate
 	export var thenBlockId as BlockId
 	export var elseBlockId as BlockId
 	export var admitted = false
+
 	// Filled by `admit`: the target every constant-passing predecessor decides (X), its position, and
 	// the other target (Y).
 	export var keptTarget as BlockId = 0
@@ -153,6 +157,7 @@ typealias ThreadCandidateArray = Array with ThreadCandidate
 // Thread one function. Returns how many join blocks it rewrote.
 function threadConstantBranchesInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, scratch ThreadScratch) returns ThreadedSiteCount
 	collectThreadCandidates(module, func: func, scratch: scratch)
+
 	if scratch.candidates.count() == 0 'noCandidate'
 		// The common case, and the only cost most functions pay: one op read per block.
 		return 0
@@ -166,8 +171,10 @@ function threadConstantBranchesInFunc(module StdModule, func IrFunction, funcInd
 	argSlot.resize(bound)
 
 	var admittedCount = 0 as ThreadedSiteCount
+
 	for index in 0 upto scratch.candidates.count() 'eachCandidate'
 		var candidate = try scratch.candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
+
 		if admit(module, func: func, analysis: analysis, candidate: candidate) 'admitted'
 			candidate.admitted = true
 			admittedCount = admittedCount + 1
@@ -200,11 +207,13 @@ function collectThreadCandidates(module StdModule, func IrFunction, scratch Thre
 
 		let compareOpIdx = try block.opRefs.get(0) otherwise panic("threadConstantBranches: opRefs.get(0) on a one-op block")
 		classifyArithOperands(module.getOp(compareOpIdx), operands: scratch.arith)
+
 		if not scratch.arith.isComparisonImm() 'notACompare'
 			continue
 		end 'notACompare'
 
 		classifyBranch(module.getOp(block.terminatorIndex()), out: scratch.branch)
+
 		if not scratch.branch.isCondBranch() 'notACondBranch'
 			continue
 		end 'notACondBranch'
@@ -223,6 +232,7 @@ function pushIfBranchOnTheCompare(candidates ThreadCandidateArray, block IrBlock
 
 	for slot in 0 upto block.blockArgs.count() 'eachArg'
 		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
+
 		if arg.valueId == operands.lhs 'testsThisArg'
 			candidates.push(ThreadCandidate.create(position, blockRef: blockRef, blockId: block.id, compareOpIdx: compareOpIdx, condId: condId, testedArg: operands.lhs, testedSlot: slot, imm: operands.imm, pred: operands.pred, operandType: operands.operandType, thenBlockId: thenBlockId, elseBlockId: elseBlockId))
 			return
@@ -239,6 +249,7 @@ type FunctionAnalysis
 	export var stamps as DominatorStamps
 	export var valueUses as StdValueUseSet
 	export var positionById as BlockIndexById
+
 	// The pass's refusal tally and terminator record, aliased in from `ThreadScratch`: every clause
 	// that refuses, and every predecessor read, already holds this record.
 	export var refusals as OrdinalTally
@@ -280,6 +291,7 @@ function admit(module StdModule, func IrFunction, analysis FunctionAnalysis, can
 	// "X has one predecessor" implies "C dominates X" only for a non-entry X: the entry has no predecessor
 	// at all and dominates everything, so it is refused before the degree is read.
 	candidate.keptPosition = analysis.positionOf(candidate.keptTarget)
+
 	if candidate.keptPosition == StdEntryBlockPosition or analysis.tree.pred.degree(candidate.keptPosition as CsrIndex) != 1 'keptTargetHasAnotherWayIn'
 		return refuse(candidate, reason: ThreadRefusal.keptTargetHasAnotherWayIn, analysis: analysis)
 	end 'keptTargetHasAnotherWayIn'
@@ -310,11 +322,13 @@ function decideTargetFromPredecessors(module StdModule, func IrFunction, analysi
 		end 'notABranchPredecessor'
 
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
+
 		if not analysis.constMap.contains(incoming) 'runtimeValue'
 			continue
 		end 'runtimeValue'
 
 		var target = candidate.thenBlockId
+
 		match evaluateIntCompare(candidate.pred, lhs: analysis.constMap.constantOf(incoming), rhs: candidate.imm as ParsedInt, operandType: candidate.operandType) 'verdict'
 			folded(payload) then target = candidate.thenBlockId if payload != ConditionIsFalse else candidate.elseBlockId
 			notFoldable then return refuse(candidate, reason: ThreadRefusal.unsignedCompare, analysis: analysis)
@@ -344,6 +358,7 @@ function predecessorBranchesOnlyTo(module StdModule, pred IrBlock, targetId Bloc
 	end 'notOneBranch'
 
 	let edge = try pred.branchEdges.get(0) otherwise panic("threadConstantBranches: branchEdges.get(0) on a one-edge block")
+
 	if edge.targetBlockId != targetId 'edgeElsewhere'
 		return false
 	end 'edgeElsewhere'
@@ -363,6 +378,7 @@ end 'soleEdge'
 // slot. Both are what the read walk and the edge substitution look up per value, in O(1).
 function recordBlockArgOwner(module StdModule, candidate ThreadCandidate, index CandidateIndex, argOwner ValueIdArray, argSlot ValueIdArray)
 	let block = module.getBlock(candidate.blockRef)
+
 	for slot in 0 upto block.blockArgs.count() 'eachArg'
 		let arg = try block.blockArgs.get(slot) otherwise panic("threadConstantBranches: blockArgs.get OOB at {slot}")
 		try argOwner.set(arg.valueId, value: index + 1) otherwise panic("threadConstantBranches: block arg {arg.valueId} is outside the block-arg id space")
@@ -389,6 +405,7 @@ end 'isOwnedByACandidate'
 // asked `isOwnedByACandidate` first, and no index answers for "none" that is not some candidate's.
 function candidateOwning(valueId ValueId, argOwner ValueIdArray) returns CandidateIndex
 	let ownerPlusOne = try argOwner.get(valueId) otherwise panic("threadConstantBranches: argOwner.get OOB at {valueId}")
+
 	if ownerPlusOne == UnownedBlockArg 'unowned'
 		panic("threadConstantBranches: block arg {valueId} is owned by no admitted candidate — ask `isOwnedByACandidate` first")
 	end 'unowned'
@@ -470,6 +487,7 @@ function applyAdmitted(module StdModule, func IrFunction, funcIndex FuncIndex, o
 
 	for index in 0 upto candidates.count() 'eachCandidate'
 		let candidate = try candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
+
 		if not candidate.admitted 'refused'
 			continue
 		end 'refused'
@@ -564,9 +582,11 @@ function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandi
 
 	var edges = BranchEdgeArray.create()
 	edges.push(BranchEdge.create(candidate.blockId, argIds: argsToJoin))
+
 	if droppedTakesArgs 'droppedTakesArgs'
 		edges.push(BranchEdge.create(candidate.droppedTarget, argIds: substituteJoinArgs(argsToDropped, incoming: argsToJoin, index: index, argOwner: argOwner, argSlot: argSlot)))
 	end 'droppedTakesArgs'
+
 	predBlock.branchEdges = edges
 end 'duplicateTestInto'
 
@@ -599,6 +619,7 @@ function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCan
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
+
 		for arg in block.blockArgs 'eachArg'
 			setFlag(kept, v: arg.valueId)
 		end 'eachArg'
@@ -611,6 +632,7 @@ function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCan
 	end 'eachCandidate'
 
 	let dropped = dropBlockArgs(module, func: func, refByBlockId: refByBlockId, kept: kept)
+
 	if dropped != applied as ValueId 'countDisagrees'
 		panic("threadConstantBranches: rewrote {applied} join(s) in '{String.from(func.name)}' but dropped {dropped} block arg(s) — a tested slot was not the only one unmarked, or was dropped twice")
 	end 'countDisagrees'

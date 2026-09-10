@@ -427,21 +427,25 @@ export enum CompilePhase
 	// `--no-debug-info` pays this nothing at all, and a row that folded it into the executable write
 	// could not show that.
 	writeDebugInfo
+
 	// The join-block branch threading (`threadConstantBranches`). Its OWN row rather than a slice of
 	// `foldConstOperands`, which it runs immediately after: the operand fold's cost tracks the number of
 	// const OPERANDS, and this one's tracks the number of JOIN BLOCKS whose only content is a compare on
 	// one of their own arguments.
 	threadConstantBranches
+
 	// The value-range refinement (`refineValueRanges`). Its OWN row rather than a slice of
 	// `threadConstantBranches`, which it runs immediately after: that pass's cost tracks the number of
 	// JOIN BLOCKS testing their own argument, and this one's tracks the number of ARITHMETIC ops and
 	// block args per function times the rounds its loops take to converge.
 	refineValueRanges
+
 	// The loop versioning (`unswitchInvariantGuards`). Its OWN row rather than a slice of
 	// `loopInvariantCodeMotion`, which it runs immediately after: LICM's cost tracks the number of
 	// loops, and this one's tracks the number of loops holding a managed call — most hold none and pay
 	// one op read — times the size of each loop it copies.
 	unswitchInvariantGuards
+
 	// The second value-range refinement (`refineVersionedRanges`), over the versioned loops. Its OWN
 	// row rather than a second billing of `refineValueRanges`: the two runs see different shapes, and a
 	// reader of the table must be able to tell what the second one costs on its own.

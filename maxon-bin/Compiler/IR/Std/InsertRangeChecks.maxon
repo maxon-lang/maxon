@@ -217,10 +217,12 @@ end 'ParamAliasLookup'
 // without touching their blocks.
 export function insertRangeChecks(project Project, module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
+
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerived`).
 	for funcIndex in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("insertRangeChecks: functions.get OOB at {funcIndex}")
+
 		// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED, AND THE REASON IS NOT MERELY
 		// WASTED WORK — IT IS THE LOADER'S BYTE-NEUTRALITY INVARIANT (P1.8 Slice E).** Dead-function
 		// elimination drops such a function before the back end, so its guard blocks never reach isel; but
@@ -646,6 +648,7 @@ type RangeCheckEmitter
 	function requireGuardHeadHoldsOnlyParams(site GuardSite)
 		for pos in 0 upto site.position 'eachPrefixOp'
 			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
+
 			match self.module.getOp(opIdx) 'op'
 				const or
 					binOp or
@@ -1669,6 +1672,7 @@ end 'splitBlockInPlace'
 // `splitChainEnd` reaches this directly because it places the ops itself.
 function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
 	var headBlock = head
+
 	// The tail runs exactly when the head does.
 	var ok = module.addBlock(func, label: label, heat: headBlock.heat)
 

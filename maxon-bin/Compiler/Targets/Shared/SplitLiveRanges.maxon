@@ -235,6 +235,7 @@ export type SplitLineage
 				return ValueDerivation.source(try self.sourceIds.get(i) otherwise panic("SplitLineage.sourceOf: sourceIds.get OOB at {i}"))
 			end 'match'
 		end 'each'
+
 		return ValueDerivation.none
 	end 'sourceOf'
 end 'SplitLineage'
@@ -1290,6 +1291,7 @@ export type PressureIndex
 		try self.holdsOp.set(slot, value: true) otherwise panic("PressureIndex.seatOp: holdsOp.set OOB at slot {slot}")
 		try self.opAt.set(slot, value: opIdx) otherwise panic("PressureIndex.seatOp: opAt.set OOB at slot {slot}")
 		try self.nodeClobber.set(self.leafNodeOf(slot), value: opClobberMask(op, heat: heat, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
+
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
 				try self.defSlot.set(operandValueId(o), value: slot) otherwise panic("PressureIndex.seatOp: value {operandValueId(o)} is defined at slot {slot} but is outside the index's value space")
@@ -1817,6 +1819,7 @@ export type PressureIndex
 
 				let slot = self.evenSlot(b, pos: forwardPos)
 				self.seatOp(slot, op: op, opIdx: opIdx, heat: block.heat, opFacts: liveness.opFacts, buf: buf)
+
 				for classOrdinal in 0 upto RegClassCount 'eachClass'
 					let class = regClassAt(classOrdinal)
 					self.setDelta(slot, class: class, value: (classRowGet(liveByClass, class: class) as PressureDelta) - (classRowGet(before, class: class) as PressureDelta))
@@ -1900,6 +1903,7 @@ export type PressureIndex
 			if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 				continue
 			end 'notAnOp'
+
 			self.reseat(module, oldSlot: oldSlot, newSlot: first + ((j + 1) as PressureSlot) * stride, opIdx: scratch.opAtSlot(oldSlot), heat: heat, opFacts: opFacts, scratch: scratch)
 			j = j + 1
 		end 'eachMove'
@@ -1943,6 +1947,7 @@ export type PressureIndex
 				if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 					continue
 				end 'notAnOp'
+
 				self.reseat(module, oldSlot: oldSlot, newSlot: self.evenSlot(b, pos: pos), opIdx: scratch.opAtSlot(oldSlot), heat: heat, opFacts: opFacts, scratch: scratch)
 				pos = pos + 1
 			end 'eachOldSlot'
@@ -2580,6 +2585,7 @@ function liveAcrossClobbersIn(module TargetModule, liveness LivenessResult, pres
 	end 'liveAcrossNothingHere'
 
 	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
+
 	if block.heat == BlockHeat.cold 'coldBlock'
 		return coldRunClobbersFor(module, liveness: liveness, pressure: pressure, w: w, block: block, blockLocal: blockLocal, span: span, buf: buf)
 	end 'coldBlock'
@@ -2593,11 +2599,14 @@ end 'liveAcrossClobbersIn'
 function coldRunClobbersFor(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, block IrBlock, blockLocal CfgIndex, span LiveAcrossSpan, buf OperandList) returns RegMask
 	let runs = liveness.coldRuns.of(blockLocal)
 	var mask = 0 as RegMask
+
 	for id in 0 upto runs.runCount() 'eachRun'
 		let first = runs.firstOf(id)
 		let lastRead = lastReadWithin(liveness.useIndex, w: w, block: block, blockLocal: blockLocal, from: first, to: runs.lastOf(id))
+
 		for k in first upto lastRead 'eachClobberBeforeTheRead'
 			let slot = pressure.slotOfPosition(blockLocal, pos: k)
+
 			if slot < span.lo or slot > span.hi 'notLiveAcrossIt'
 				continue
 			end 'notLiveAcrossIt'
@@ -2616,18 +2625,22 @@ end 'coldRunClobbersFor'
 function lastReadWithin(index UseIndex, w ValueId, block IrBlock, blockLocal CfgIndex, from BlockOpPos, to BlockOpPos) returns BlockOpPos
 	var lastRead = from
 	let useSites = index.useCount(w)
+
 	if useSites == 0 'neverUsed'
 		return lastRead
 	end 'neverUsed'
 
 	var record = index.firstUseOf(w)
+
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op 'anOpUseHere'
 			let position = usePositionIn(index, block: block, record: record)
+
 			if position > lastRead and position <= to 'laterInTheRun'
 				lastRead = position
 			end 'laterInTheRun'
 		end 'anOpUseHere'
+
 		record = index.nextUseOf(record)
 	end 'eachUse'
 
@@ -2833,9 +2846,11 @@ type SplitScratch
 	// WHERE THE SPLIT IN FLIGHT CUTS — one object per FUNCTION, re-pointed at each cut. See
 	// `SplitAnchor`, and `PeakRank` for the discipline it follows.
 	export var anchor as SplitAnchor
+
 	// How many candidates `unrelievableAtPeak` excluded at the last `chooseVictim` — named by the
 	// splitter-bug panic, which otherwise could not tell an excluded value from a refused one.
 	export var unrelievableAtLastPeak as EventCount
+
 	// Has this FUNCTION left full-pool mode? Set from the whole-function analysis and flipped at most
 	// once, by `refreshPeak`, which is where the whole story lives. Like `ReachCache`'s rows and unlike
 	// every buffer above, it CARRIES ACROSS splits — it is a fact about the function, not scratch.
@@ -3005,8 +3020,10 @@ export type SplitDriver
 		// The victim of the previous iteration, named by the runaway panic: which value a stuck driver re-picks
 		// is the first fact a reader needs.
 		var lastVictim = 0 as ValueId
+
 		// The last victim as it was CHOSEN — its reads and its forbid before its own split rewrote them.
 		var lastVictimAsChosen = ""
+
 		while peak.found 'relieve'
 			if iterations >= iterationBound 'runaway'
 				let peakBlock = blockAt(module, topo: funcLiveness.cfg.topo, local: peak.blockLocal)
@@ -3072,6 +3089,7 @@ export type SplitDriver
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
 			let victim = try victimAtPeak(choice, refusal: refusal, func: func, hasAuthor: hasAuthor, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage, scratch: work)
 			lastVictim = victim
+
 			if iterations == iterationBound 'theLastIterationBeforeThePanic'
 				lastVictimAsChosen = "uses at {useSeqsDescription(module, liveness: funcLiveness, valueId: victim)}, forbid {funcLiveness.forbiddenOf(victim)}, scope {choiceScopeName(choice)}"
 			end 'theLastIterationBeforeThePanic'
@@ -3721,6 +3739,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	// The split's op insertions and its one possible removal, spliced into their blocks — plus the
 	// sequence repair, the op count, and the blocks that took an edit.
 	scratch.edits.commit(module, topo: topo, index: index, dirty: dirty, pressure: scratch.pressure, relayout: scratch.relayout, opFacts: liveness.opFacts, buf: scratch.sweep.buf)
+
 	// The splice moved positions in every dirty block; a cold one's runs are stated in positions.
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		liveness.coldRuns.rebuildBlock(module, topo: topo, local: dirty.at(k), buf: scratch.sweep.buf, opFacts: liveness.opFacts)
@@ -3802,6 +3821,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 
 	// The three things the dirty-block sweep used to produce, each restated against what actually moved.
 	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands)
+
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
 		rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: f, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands)
 	end 'eachFresh'
@@ -4066,6 +4086,7 @@ end 'choiceScopeName'
 // sequences (`seqAt`), which are the coordinates the peak is stated in.
 function defSeqDescription(module TargetModule, liveness LivenessResult, valueId ValueId) returns String
 	let index = liveness.useIndex
+
 	match index.defKindOf(valueId) 'kind'
 		none then return "no def"
 		phiDef then return "block {index.defBlockOf(valueId)} entry"
@@ -4077,18 +4098,22 @@ function useSeqsDescription(module TargetModule, liveness LivenessResult, valueI
 	let index = liveness.useIndex
 	var out = StringBuilder.create()
 	let useSites = index.useCount(valueId)
+
 	if useSites == 0 'neverUsed'
 		return "nothing"
 	end 'neverUsed'
 
 	var record = index.firstUseOf(valueId)
+
 	for _ in 0 upto useSites 'eachUse'
 		match index.useKindAt(record) 'kind'
 			edge then out.append("{index.useSeqAt(record)}(edge) ")
 			op then out.append("{index.useSeqAt(record)}({opShapeDescription(module, opIdx: index.useOpAt(record), buf: OperandList.create(), opFacts: liveness.opFacts)}) ")
 		end 'kind'
+
 		record = index.nextUseOf(record)
 	end 'eachUse'
+
 	return out.build()
 end 'useSeqsDescription'
 
@@ -4104,6 +4129,7 @@ end 'opShapeDescription'
 // refusal path only, so it walks every block.
 function peakCrossesAColdRun(liveness LivenessResult, peak PressurePeak) returns bool
 	let topo = liveness.cfg.topo
+
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		if liveness.coldRuns.of(local).runCount() == 0 'noRunHere'
 			continue
@@ -4347,6 +4373,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 
 	if not wantFullPool 'fullPoolOffTheIndex'
 		offerIndexedFullPoolPeak(module, liveness: liveness, pool: pool, pressure: scratch.pressure, best: best, blockLocal: blockLocal, buf: scratch.sweep.buf)
+
 		if not wantConfined 'nothingLeftToWalkFor'
 			// Neither half needs the walk, which is the whole point: in FULL-POOL mode a dirty block's rank
 			// is a handful of node reads, not a pass over its ops.
@@ -4968,16 +4995,19 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		if bitsetTest(usedAtPeak, base: 0, bit: v as BitIndex) 'consumedHere'
 			continue
 		end 'consumedHere'
+
 		if index.useCount(v) == 0 'nothingToRewrite'
 			// A value nothing reads is relieved by no split: there is no use to move to memory. It can only
 			// be in a live row through a spill store of its own that a later split rewrote around, and a
 			// resident value would otherwise be taken by tier 4 unconditionally — for ever.
 			continue
 		end 'nothingToRewrite'
+
 		if unrelievableAtPeak(module, index: index, topo: topo, valueId: v, anchor: anchor, fullPool: not peak.clobberOnly, buf: scratch.splitOperands, opFacts: liveness.opFacts) 'noSplitKillsItHere'
 			scratch.unrelievableAtLastPeak = scratch.unrelievableAtLastPeak + 1
 			continue
 		end 'noSplitKillsItHere'
+
 		if liveness.classOf(v) != peak.witnessClass 'otherFile'
 			// A value of the OTHER file can never relieve this overflow: spilling it frees a register no
 			// confined value here is able to take, so the peak survives, the potential Φ does not fall,
@@ -5161,27 +5191,33 @@ end 'defPointPressure'
 // Offered anyway, such a value is re-picked for ever; it is excluded like a value the peak op reads.
 function unrelievableAtPeak(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, anchor SplitAnchor, fullPool bool, buf OperandList, opFacts OpVariantFacts) returns bool
 	let block = blockAt(module, topo: topo, local: anchor.blockLocal)
+
 	if index.defKindOf(valueId) == ValueDefKind.opDef and index.defBlockOf(valueId) == anchor.blockLocal 'definedInThePeaksBlock'
 		let defPos = positionInBlock(block, opIdx: index.requireDefOp(valueId))
 		let storePos = storePositionOf(module, index: index, block: block, blockLocal: anchor.blockLocal, valueId: valueId, defPos: defPos, opFacts: opFacts)
+
 		if seqAt(anchor.blockLocal, pos: defPos) < anchor.seq and anchor.seq <= seqAt(anchor.blockLocal, pos: storePos) 'storeKeepsItLive'
 			return true
 		end 'storeKeepsItLive'
 	end 'definedInThePeaksBlock'
 
 	let useSites = index.useCount(valueId)
+
 	if useSites == 0 or not fullPool 'nothingToReloadOrARegisterToSpare'
 		return false
 	end 'nothingToReloadOrARegisterToSpare'
 
 	var record = index.firstUseOf(valueId)
+
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == anchor.blockLocal and index.useKindAt(record) == UseKind.op and index.useSeqAt(record) > anchor.seq 'readAfterThePeakHere'
 			let reloadPos = firstPreMoveBefore(module, block: block, pos: opUseReloadPosition(index, block: block, record: record), buf: buf, opFacts: opFacts)
+
 			if seqAt(anchor.blockLocal, pos: reloadPos) <= anchor.seq 'reloadWouldSpanThePeak'
 				return true
 			end 'reloadWouldSpanThePeak'
 		end 'readAfterThePeakHere'
+
 		record = index.nextUseOf(record)
 	end 'eachUse'
 
@@ -5193,10 +5229,12 @@ end 'unrelievableAtPeak'
 function storePositionOf(module TargetModule, index UseIndex, block IrBlock, blockLocal CfgIndex, valueId ValueId, defPos BlockOpPos, opFacts OpVariantFacts) returns BlockOpPos
 	let useSites = index.useCount(valueId)
 	var record = index.firstUseOf(valueId)
+
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op and useIsSpillStore(module, index: index, record: record, opFacts: opFacts) 'itsStore'
 			return usePositionIn(index, block: block, record: record)
 		end 'itsStore'
+
 		record = index.nextUseOf(record)
 	end 'eachUse'
 
@@ -5229,6 +5267,7 @@ function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak Pressur
 	end 'eachOperand'
 
 	let block = blockAt(module, topo: liveness.cfg.topo, local: peak.blockLocal)
+
 	if block.hasTerminatorOp() and block.terminatorIndex() == peak.peakOpIdx 'atTheTerminator'
 		for edge in block.branchEdges 'eachEdge'
 			for argId in edge.argIds 'eachArg'
@@ -5236,6 +5275,7 @@ function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak Pressur
 			end 'eachArg'
 		end 'eachEdge'
 	end 'atTheTerminator'
+
 	return row
 end 'usesAtPeakOp'
 
@@ -6074,12 +6114,14 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 
 			let blockLocal = index.useBlockAt(record)
 			insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement, edits: edits, buf: buf, opFacts: liveness.opFacts)
+
 			// The reload id derives from the value it reloads — record it so a reload id in an
 			// E5001 blocking set chases back to that value's source origin (see SplitLineage).
 			lineage.record(freshId, sourceId: valueId)
 
 			let runStart = j
 			let runBound = reloadRunBoundOf(module, index: index, cfg: cfg, record: record, blockLocal: blockLocal, buf: buf, opFacts: liveness.opFacts)
+
 			while j < useSites and useContinuesRun(scratch.runStarts, useOrdinal: j, runStart: runStart) and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) and useWithinRunBound(index, cfg: cfg, module: module, record: record, blockLocal: blockLocal, bound: runBound) 'sameRun'
 				match index.useKindAt(record) 'kind'
 					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf, opFacts: liveness.opFacts)
@@ -6232,6 +6274,7 @@ function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, v
 
 			for scan in firstBetween upto pos 'between'
 				let scanned = try block.opRefs.get(scan) otherwise panic("markRunStarts: opRefs.get OOB at {scan} of block {blockLocal}, scanning between uses {k - 1} and {k} of value {valueId}")
+
 				if opStrandsClass(module, opIdx: scanned, heat: block.heat, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
 					try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
 					break
@@ -6328,6 +6371,7 @@ function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRe
 	let blockLocal = index.useBlockAt(useRecord)
 	assertPlacementLegal(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
+
 	// An OP use takes the reload immediately before it — or before the first pre-move of the call group
 	// the use belongs to, so no reload lands among a call's pre-moves (`firstPreMoveBefore`). An EDGE use
 	// means the block has no op use in this run at all (op uses precede the edge use in the index), so the
@@ -7128,6 +7172,7 @@ function assertPlacementLegal(module TargetModule, cfg FuncCfg, blockLocal CfgIn
 	end 'p'
 
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+
 	if not blockIsOffTheHotPath(cfg, blockLocal: blockLocal, heat: block.heat) 'onAHotPath'
 		panic("assertPlacementLegal: a COLD {what.name} for value {valueId} would land in block local {blockLocal} ('{String.from(block.label)}', {block.heat.name}) at loop depth {try cfg.loopDepth.get(blockLocal) otherwise panic("assertPlacementLegal: loopDepth.get OOB")} — a cold spill relieves a FULL-pool overflow and must lie off every loop's hot path. (A fixed-register point's FORCED spill is the placement that IS allowed on a hot path; it goes through SpillPlacement.forced.)")
 	end 'onAHotPath'
@@ -7369,6 +7414,7 @@ function verifyUseIndex(index UseIndex, fresh UseIndex, name String, iterations 
 		if not sameSpillSlot(index.spillSlotOf(v), b: fresh.spillSlotOf(v)) 'spillSlot'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v}'s spill slot disagrees with a full rebuild's — a later relief would reload out of the wrong slot")
 		end 'spillSlot'
+
 		if index.defAndUsesOffTheHotPath(v) != fresh.defAndUsesOffTheHotPath(v) 'touchesHotLoop'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about touching a loop's hot path — `isColdSpillable` reads it")
 		end 'touchesHotLoop'

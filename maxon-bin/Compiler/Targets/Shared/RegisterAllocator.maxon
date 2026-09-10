@@ -264,15 +264,18 @@ end 'ReuseCopyPlan'
 export type ColdCallBracketPlan
 	var saveSeqs as OpSeqArray
 	var reloadSeqs as OpSeqArray
+
 	// CSR over `regs`/`slots`: bracket k's entries are `[ends[k-1], ends[k])`, the first's from 0.
 	var ends as ColumnLengthColumn
 	var regs as RegNumColumn
 	var slots as SpillSlotArray
+
 	// The save slot each register was given this pass, indexed by `RegNum` and meaningful only where
 	// `regHasSlot` holds; both are empty until the pass's first mint.
 	var slotOfReg as SpillSlotArray
 	var regHasSlot as BoolArray
 	var nextSlot as SpillSlot
+
 	// The rewrite's position in `saveSeqs`: the bracket at `cursor - 1` is the one last taken.
 	var cursor as ColumnLength
 
@@ -302,6 +305,7 @@ export type ColdCallBracketPlan
 		if self.saveSeqs.count() > 0 and saveSeq <= (try self.reloadSeqs.get(self.reloadSeqs.count() - 1) otherwise panic("ColdCallBracketPlan.record: reloadSeqs.get OOB on the entry just counted")) 'outOfOrder'
 			panic("ColdCallBracketPlan.record: a run starting at sequence {saveSeq} inside or before the run last recorded — the colorer records runs in layout order and they never overlap")
 		end 'outOfOrder'
+
 		if reloadSeq < saveSeq 'inverted'
 			panic("ColdCallBracketPlan.record: a run whose reload sequence {reloadSeq} precedes its save sequence {saveSeq}")
 		end 'inverted'
@@ -309,12 +313,14 @@ export type ColdCallBracketPlan
 		self.saveSeqs.push(saveSeq)
 		self.reloadSeqs.push(reloadSeq)
 		var remaining = held
+
 		while remaining != 0 'eachHeldRegister'
 			let regNum = regMaskLowest(remaining)
 			self.regs.push(regNum)
 			self.slots.push(self.slotFor(regNum))
 			remaining = regMaskRemove(remaining, regNum: regNum)
 		end 'eachHeldRegister'
+
 		self.ends.push(self.regs.count() as ColumnLength)
 	end 'record'
 
@@ -325,6 +331,7 @@ export type ColdCallBracketPlan
 		end 'firstMintOfThisPass'
 
 		let minted = try self.regHasSlot.get(regNum) otherwise panic("ColdCallBracketPlan.slotFor: regHasSlot.get OOB at register {regNum}")
+
 		if minted 'alreadyHasASlot'
 			return try self.slotOfReg.get(regNum) otherwise panic("ColdCallBracketPlan.slotFor: slotOfReg.get OOB at register {regNum}")
 		end 'alreadyHasASlot'
@@ -349,6 +356,7 @@ export type ColdCallBracketPlan
 		end 'pastTheLastBracket'
 
 		let next = try self.saveSeqs.get(self.cursor) otherwise panic("ColdCallBracketPlan.takeAt: saveSeqs.get OOB at cursor {self.cursor}")
+
 		if next != seq 'notThisOp'
 			return false
 		end 'notThisOp'
@@ -457,9 +465,11 @@ module type RegAllocCounters
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
+
 	// Full-pool peaks relieved by the forced bracket because their values reach a cold run
 	// (`SplitDriver.relievePressure`'s `forcedRatherThanRefused`).
 	export var forcedInsteadOfRefused as EventCount
+
 	// Values the COLORER could not place, split by one of the two cures. THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure - every value they
 	// relieve sat at a point Hall calls FEASIBLE - so both are counted beside `forcedSpills` rather than
@@ -534,9 +544,11 @@ export type RegAllocStats
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
+
 	// Full-pool peaks relieved by the forced bracket because their values reach a cold run
 	// (`SplitDriver.relievePressure`'s `forcedRatherThanRefused`).
 	export var forcedInsteadOfRefused as EventCount
+
 	// Values the COLORER could not place, split by one of the two cures. ⭐⭐ THE TWO CURES ARE COUNTED
 	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure — every value they
 	// relieve sat at a point Hall calls FEASIBLE — so both are counted beside `forcedSpills` rather than
@@ -560,6 +572,7 @@ export type RegAllocStats
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
 		end 'eachClass'
+
 		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, forcedInsteadOfRefused: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
@@ -1318,6 +1331,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by the rewrite, which splices them. Populated during coloring.
 	var reuseCopies = ReuseCopyPlan.create()
+
 	// The save/reload brackets around calls in cold blocks — planned by the colorer, spliced by the
 	// rewrite, sized into the frame below.
 	var brackets = ColdCallBracketPlan.create()
@@ -2036,12 +2050,15 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
 
 		let runs = liveness.coldRuns.of(local)
+
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
+
 			match runs.runAt(pos as BlockOpPos) 'run'
 				none then break 'run'
 				run(id) then recordColdRunBracketIfFirst(module, ordered: ordered, runs: runs, id: id, pos: pos as BlockOpPos, blockBaseSeq: blockBaseSeq, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, brackets: brackets, buf: buf)
 			end 'run'
+
 			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, callerSaved: callerSaved, counters: counters, buf: buf, reuseCopies: reuseCopies, stuck: stuck)
 		end 'eachOp'
 
@@ -2064,6 +2081,7 @@ function recordColdRunBracketIfFirst(module TargetModule, ordered OpIndexArray, 
 	let last = runs.lastOf(id)
 	var held = 0 as RegMask
 	var dead = 0 as RegMask
+
 	for k in pos upto last + 1 'eachRunOp'
 		let op = try module.ops.get(try ordered.get(k) otherwise panic("recordColdRunBracketIfFirst: ordered.get OOB at {k}")) otherwise panic("recordColdRunBracketIfFirst: op at position {k} not in module.ops")
 		targetOpOperands(op, buf: buf)
