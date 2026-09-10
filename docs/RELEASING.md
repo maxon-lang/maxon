@@ -387,11 +387,22 @@ once the downloads exist. ⚠ It has to start them itself: a release created wit
 wingetcreate update MaxonLang.Maxon --version 0.1.1 --urls <msi-url> --submit
 ```
 
+⚠ **Until `MaxonLang.Maxon` is merged into `microsoft/winget-pkgs`, `update` has nothing to update.**
+The new-package PR is [microsoft/winget-pkgs#431736](https://github.com/microsoft/winget-pkgs/pull/431736),
+opened for 0.1.0 and retargeted to 0.1.1 when 0.1.0's unsigned installer failed the Defender scan. Until
+it merges, a new release REPLACES the version directory on that PR's branch with
+`installer/winget/generate.sh`'s output rather than opening a second new-package PR.
+
 ### 6. Merge the branch back, then lock it
 
 ```bash
 git checkout main && git merge --ff-only release/0.1.1 && git push origin main
 ```
+
+⚠ **If `main` has moved since the branch was cut, merge with `--no-ff`; never rebase.** A merge keeps
+the tag an ancestor of `main`, so `changelog.sh --commits-since` starts after it. Rebased copies carry
+other ids, and the next release's listing would offer this one's changes again as new. Build the merge
+and run the suite before pushing it — it combines runtime work nobody has tested together.
 
 The changelog entry, the website material and any fixes made while preparing all belong on `main` —
 without this they exist only on a branch nobody builds from again.

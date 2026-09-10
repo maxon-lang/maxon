@@ -104,6 +104,14 @@ built and published; a later commit on it would describe a release that never ex
 ⚠ The merge back is not optional — the changelog entry and the website material exist only on that
 branch until it happens.
 
+⚠ **`main` moved? Merge with `--no-ff`, never rebase**, and build and suite-test the merge before
+pushing it. A merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next
+release's `--commits-since`.
+
+⚠ **Until `MaxonLang.Maxon` is merged into winget-pkgs, `update` fails** — replace the version directory
+on the open new-package PR (microsoft/winget-pkgs#431736) with `installer/winget/generate.sh`'s output
+instead. See `docs/RELEASING.md`.
+
 ## What this skill may not do
 
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
