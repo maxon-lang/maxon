@@ -170,19 +170,23 @@ export let MboxAbandonName = b"__mbox_abandon"
 // ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
 // is.** There is no program that wants a mailbox without the green-thread substrate under it: `__svc_spawn`
 // calls `__gt_spawn_green` and every wake goes through `__sched_publish_locked`. And there is no bit of its
-// own to gate it with, for `SlabRuntime.SlabScavengeName`'s stated reason — these six functions gate
-// nothing (no import, no `.data` slot, no per-allocation maintenance), and `DeadFunctionElimination` drops
-// all six from every program that never spawns a service, because the only edge into them is the
-// `funcAddr`/`call` pair `LowerMaxonToStd.lowerServiceSpawn` emits.
-export function installMailboxRuntime(module StdModule)
+// own to gate it with, for `SlabRuntime.SlabScavengeName`'s stated reason — these functions gate nothing
+// (no import, no `.data` slot, no per-allocation maintenance), and `DeadFunctionElimination` drops them all
+// from every program that never spawns a service, because the only edge into them is the `funcAddr`/`call`
+// pair `LowerMaxonToStd.lowerServiceSpawn` emits.
+//
+// ⚠ **`rawFree` IS THE FREE DOOR PAIRED WITH `__slab_alloc`** (`MmRuntime.rawSlabFreeCallee`): the mailbox
+// and every envelope come from the counted `__slab_alloc`, so in a build that reads the raw columns they
+// must go back through `__mm_raw_free`, or `mmRawAllocLive` credits every message ever sent and debits none.
+export function installMailboxRuntime(module StdModule, rawFree ByteArray)
 	buildSvcSpawn(module)
 	buildMboxSend(module)
-	buildMboxRecv(module)
+	buildMboxRecv(module, rawFree: rawFree)
 	buildMboxClose(module)
 	buildMboxHandleCloneBox(module)
 	buildMboxHandleRetainBox(module)
-	buildMboxHandleDropBox(module)
-	buildMboxServiceExit(module)
+	buildMboxHandleDropBox(module, rawFree: rawFree)
+	buildMboxServiceExit(module, rawFree: rawFree)
 	buildMboxAbandon(module)
 end 'installMailboxRuntime'
 
@@ -352,7 +356,7 @@ function buildMboxSend(module StdModule)
 end 'buildMboxSend'
 
 // `__mbox_recv(mbox) -> box | 0`. See `MboxRecvName`.
-function buildMboxRecv(module StdModule)
+function buildMboxRecv(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -387,9 +391,9 @@ function buildMboxRecv(module StdModule)
 	module.setTerminator(clearTail, op: StdOp.branch(popped.id))
 
 	// The envelope is freed OUTSIDE the lock: it is unreachable from the mailbox the instant `head` was
-	// re-pointed, so nothing else can be looking at it, and `__slab_free` has a lock of its own.
+	// re-pointed, so nothing else can be looking at it, and the slab's free has a lock of its own.
 	emitSchedLockLeave(module, block: popped, ids: ids)
-	module.appendOp(popped, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(head)))
+	module.appendOp(popped, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(head)))
 	module.setTerminator(popped, op: StdOp.ret(box))
 
 	// ⭐ **THE `closed` READ IS INSIDE THE SAME CRITICAL SECTION THE HEAD READ WAS**, which is what makes
@@ -498,7 +502,7 @@ end 'buildMboxHandleRetainBox'
 // writes the record, so the reference this frame holds has to outlive it — which is exactly what `refs`
 // counts. So: step `handles` and close if this was the last namer; only THEN step `refs` and free if this
 // was the last owner.
-function buildMboxHandleDropBox(module StdModule)
+function buildMboxHandleDropBox(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -523,7 +527,7 @@ function buildMboxHandleDropBox(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: releaseRef, prior: priorRefs, ids: ids)
 	module.setTerminator(releaseRef, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(mbox)))
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// The handle BOX itself is an ordinary managed record with a trivial destructor, so it goes back through
@@ -553,7 +557,7 @@ end 'buildMboxHandleDropBox'
 //
 // ⚠ `emitLoadCurrentGt`'s precondition — the scheduler is initialized — is satisfied by construction and not
 // by convention: this function's only caller is a body RUNNING on a green thread the scheduler created.
-function buildMboxServiceExit(module StdModule)
+function buildMboxServiceExit(module StdModule, rawFree ByteArray)
 	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -576,7 +580,7 @@ function buildMboxServiceExit(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(mbox)))
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// A service stopped by its LAST HANDLE DROP never received a pill, so the slot is the slab's zero and

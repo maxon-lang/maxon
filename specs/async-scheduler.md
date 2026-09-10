@@ -500,3 +500,91 @@ typealias Real = float(f64.min to f64.max)
 ```exitcode
 0
 ```
+
+<!-- test: async-scheduler.gt-recycle-a-reclaimed-struct-serves-the-next-spawn -->
+**A GREEN-THREAD STRUCT IS NEVER HANDED BACK TO THE ALLOCATOR WHILE THE SCHEDULER RUNS.** Go keeps its `g`
+records type-stable — freed onto a per-P list and reused, never returned to the heap — because the scheduler
+reads and writes them without holding their owner's lock: sysmon poisons a running thread's stack guard,
+a signal handler reads the interrupted thread's record. Here the reader that outlives its thread is
+`awaitAny` over a promise already awaited (`await-any.md`), and a record handed back to the slab would let
+that read land in whatever the slab gave the memory to next.
+
+Two hundred spawn-and-await rounds, one after another: the first spawn has nothing to reuse, and each of the
+other 199 takes the record the round before it gave back. `__Builtins.schedGtRecycleCount()` counts the
+spawns a free list served.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function square(n Integer) returns Integer
+	Runtime.yield()
+	return n * n
+end 'square'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 200 'rounds'
+		let p = async square(i)
+		sum = sum + await p
+		i = i + 1
+	end 'rounds'
+	print("sum={sum} recycled={__Builtins.schedGtRecycleCount()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+sum=2646700 recycled=199
+```
+```exitcode
+0
+```
+
+<!-- test: async-scheduler.gt-recycle-a-batch-overflows-to-the-global-list-and-comes-back -->
+**THE PER-PROCESSOR LIST HOLDS FEWER THAN 64, AND WHAT IT SHEDS IS NOT LOST.** A hundred threads are all
+outstanding before any is awaited, so no spawn in the first wave can reuse anything, and all hundred records
+are given back together. Each time the processor's own list reaches 64 it moves half of itself to the global
+list (Go's `gfput`); the second wave then drains the local list and refills from the global one (Go's
+`gfget`). Every one of its hundred spawns is served from a list, so a record stranded on the global list, or
+one freed at the overflow instead of moved, reads below 100.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function twice(n Integer) returns Integer
+	Runtime.yield()
+	return n + n
+end 'twice'
+
+function wave(base Integer) returns Integer
+	var ps = IntPromiseArray.create()
+	var i = 0
+	while i < 100 'spawnEach'
+		ps.push(async twice(base + i))
+		i = i + 1
+	end 'spawnEach'
+	var sum = 0
+	var k = 0
+	while k < 100 'awaitEach'
+		let p = try ps.get(k) otherwise panic("ps.get OOB at {k} — bounded by the pushes above")
+		sum = sum + await p
+		k = k + 1
+	end 'awaitEach'
+	return sum
+end 'wave'
+
+function main() returns ExitCode
+	let first = wave(0)
+	let afterFirst = __Builtins.schedGtRecycleCount()
+	let second = wave(1000)
+	let afterSecond = __Builtins.schedGtRecycleCount()
+	print("first={first} second={second} wave1={afterFirst} wave2={afterSecond - afterFirst}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+first=9900 second=209900 wave1=0 wave2=100
+```
+```exitcode
+0
+```

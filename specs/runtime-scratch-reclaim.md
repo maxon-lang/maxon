@@ -14,16 +14,17 @@ regions the language cannot name: a GT struct, a mutable command line, a `STARTU
 `PROCESS_INFORMATION`, an overlapped read buffer. They take them from `__slab_alloc` directly —
 they carry no box header and no refcount, so `__mm_alloc_count` cannot see them.
 
-⭐⭐ **UNTIL S3 THEY WERE NEVER GIVEN BACK, AND EACH SITE HAD INVENTED ITS OWN WAY TO COPE.** The
-GT struct had a private `.data` LIFO it was pushed onto and popped off; the subprocess scratch was
-three fixed buffers allocated once at scheduler init and reused under a "no two calls' scratch can
-coexist" argument; the read probe simply allocated ~4.2 KB per call and abandoned it. All three
-existed for ONE reason, and every one of them said so in its own comment: `__slab_alloc` was a bump
-cursor with no free path. It has one now (`slab-allocator.md`), so all three are the same call.
+⭐⭐ **THE PER-CALL SCRATCH GOES BACK TO THE ALLOCATOR; THE GT STRUCT DOES NOT.** The subprocess
+runner's command line, `STARTUPINFOA` and `PROCESS_INFORMATION`, and the read probe's ~4.2 KB, each
+belong to one call, and each goes back through the slab's free path (`slab-allocator.md`) the moment
+that call is done with it — so a program that runs N children or reads N pipes holds none of it
+afterwards. A GT struct is the one region that is never given back: a reclaimed struct goes onto
+its processor's free list and serves the next spawn, so GT records are type-stable.
+`spawn-await-loop-is-bounded` below carries that case.
 
 **What these cases can actually observe.** Nothing in the language names a slab slot, so each case
-below reads the RAW traffic columns (`builtins-mm-counters.md`) around a window of runtime work and
-asks two questions that only a reclaiming runtime answers together:
+below reads the RAW traffic columns (`builtins-mm-counters.md`) around a window of runtime work. The
+two scratch cases ask two questions that only a reclaiming runtime answers together:
 
 | Question | Column | A runtime that never frees |
 |---|---|---|
@@ -34,6 +35,9 @@ Both halves are needed. `live` alone would pass against a runtime that allocated
 window (the pre-S3 subprocess path, whose scratch was allocated once at init), and `total` alone
 would pass against the pre-S3 read probe, which allocated freely and released nothing.
 
+The GT-struct case asks the recycling runtime's pair instead: the window took nothing from the
+allocator at all, and left nothing live.
+
 ⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` and `__io_init` take GT0, the timer store,
 the process store and the completion port's lock the first time any of this is touched, and those
 regions are genuinely process-lifetime. Measuring across them would credit the window with
@@ -41,7 +45,8 @@ allocations that are *supposed* to still be live. The warm-up call is what makes
 only per-call work.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the
-one statement of it.** Every case here parks a green thread, so all of them are x64-windows only.
+one statement of it.** The two scratch cases park a green thread on a child process or a pipe, so
+they are x64-windows only; the GT-struct case runs on every lane with green threads.
 
 ## Tests
 
@@ -95,7 +100,8 @@ about the code — that a call writes and consumes its scratch inside a window w
 which is exactly the argument the read probe could not make and so did not use. With a free path
 each call takes its own and hands it back, and no two calls can share anything.
 
-The spawn is measured too: a GT struct is one of the regions the window takes and returns.
+The two spawns in the window take their GT structs from the free list the warm-up filled, so every
+region the window counts is the runner's own scratch.
 ```maxon
 function child() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
@@ -131,14 +137,24 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: runtime-scratch-reclaim.spawn-await-loop-is-bounded -->
-**THE GT STRUCT ITSELF.** A spawn takes a `GtStructSize` region and an await gives it back. Before
-S3 the giving-back was a push onto a private `.data` LIFO, which bounded a spawn/await loop's
-memory but bounded it in a pool nothing else in the program could ever draw on: 40 finished green
-threads held 40 structs' worth of address space against the day a 41st spawn wanted one. Now they
-go back to the span they came from, where any allocation of any size class can have them.
+**THE GT STRUCT ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
+thread's struct on its processor's free list (Go's `gfput`), and `__gt_spawn` takes the next one
+from there, zeroed, before it asks the allocator (Go's `gfget`). The records are TYPE-STABLE, as Go's
+`g` records are: a read through a handle whose thread is gone — `awaitAny` over a promise already
+awaited (`await-any.md`) — lands in a GT record rather than in whatever the slab gave that memory to
+next.
 
-Eight spawn/await pairs after a warm-up: `total` moves by at least one region per spawn, `live`
-does not move at all beyond the slack a single allocation would take.
+⭐ **THE MEMORY IS STILL BOUNDED.** A processor's list holds fewer than 64: a put that reaches 64
+moves the surplus to one global list until 32 remain, and an empty list refills from the global one
+before a spawn cuts a fresh struct. Every struct on a list was live at some moment, and a fresh one
+is cut only when the spawning processor's list and the global list are both empty, so the lists hold
+at most the program's peak concurrent population plus fewer than 64 per processor — Go's bound for
+its `gFree` lists. A loop that spawns and awaits one thread at a time cycles ONE struct.
+
+Eight spawn/await pairs after a warm-up whose struct is already on the list: every spawn is served
+by the free list (`schedGtRecycleCount()` grows by exactly 8), none asks the allocator
+(`mmRawAllocTotal` does not move — a green thread's stack is `osAllocPages`, which the raw columns do
+not count), and nothing is left live (`mmRawAllocLive` does not move).
 ```maxon
 function work(n Integer) returns Integer
 	__Builtins.parallelBoundary()
@@ -154,6 +170,7 @@ function main() returns ExitCode
 	var acc = spawnAndAwait(0)
 	let totalBefore = __Builtins.mmRawAllocTotal()
 	let liveBefore = __Builtins.mmRawAllocLive()
+	let recycledBefore = __Builtins.schedGtRecycleCount()
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
@@ -164,16 +181,17 @@ function main() returns ExitCode
 	acc = spawnAndAwait(acc)
 	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
 	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
 	var score = 0
 	if acc == 9 'everyThreadRanExactlyOnce'
 		score = score + 1
 	end 'everyThreadRanExactlyOnce'
-	if totalGrew >= 8 'eachSpawnTookAStruct'
+	if totalGrew == 0 and recycled == 8 'everySpawnReusedAStruct'
 		score = score + 2
-	end 'eachSpawnTookAStruct'
-	if liveGrew <= 1 'andEachAwaitGaveItBack'
+	end 'everySpawnReusedAStruct'
+	if liveGrew == 0 'andNothingWasLeftLive'
 		score = score + 4
-	end 'andEachAwaitGaveItBack'
+	end 'andNothingWasLeftLive'
 	return score as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)

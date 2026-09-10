@@ -1,0 +1,36 @@
+// Test: from-literal-initializer
+let path = FilePath from "test.txt"
+
+function main() returns ExitCode
+	print(path.toString())
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __data_path@0 = i64 0
+  __data_CharacterSet.cachedWhitespacesAndNewlines@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_path
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl FilePath.toString
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,25 @@
+// Test: cycle-through-an-interface
+typealias Small = int(0 to 255)
+
+interface Backref
+	function tag() returns Small
+end 'Backref'
+
+type Cell
+	export var back as Backref
+end 'Cell'
+
+type Holder implements Backref
+	export var cell as Cell
+
+	export function tag() returns Small
+		return 1
+	end 'tag'
+end 'Holder'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E4014: <fragment>:8:6: type 'Cell' contains a reference cycle (via Cell → back: Backref → Holder → cell: Cell); recursive type references are not allowed

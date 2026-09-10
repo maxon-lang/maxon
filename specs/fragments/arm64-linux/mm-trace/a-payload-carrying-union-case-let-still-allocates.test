@@ -1,0 +1,141 @@
+// Test: a-payload-carrying-union-case-let-still-allocates
+typealias Tally = int(0 to 100)
+
+union Slot
+	empty
+	filled(n Tally)
+end 'Slot'
+
+let NoSlot = Slot.empty
+let SevenSlot = Slot.filled(7)
+
+function tallyOf(s Slot) returns Tally
+	return match s 'kind'
+		empty gives 0
+		filled(n) gives n
+	end 'kind'
+end 'tallyOf'
+
+function main() returns ExitCode
+	if tallyOf(NoSlot) != 0 'anEmptyCaseCarriesNothing'
+		return 1
+	end 'anEmptyCaseCarriesNothing'
+
+	return tallyOf(SevenSlot) as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __data_SevenSlot@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_envp@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __ds_base@48 = i64 0
+  __ds_buf_size@56 = i64 0
+  __ds_buf_mask@64 = i64 0
+  __ds_start_ts@72 = i64 0
+  __ds_lock@80 = i64 0
+  __mm_alloc_id@88 = i64 0
+}
+
+func @tallyOf {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-payload-carrying-union-case-let-still-allocates.test:13: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __struct_rec_0
+  __il_body#4:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext#8
+  matcharm#5:
+    arm64.movImm x1, 0
+    arm64.b matchcont#9
+  matchnext#8:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#7
+  matcharm#6:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+  matchcont#9:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow#12
+  __rc_chk#11:
+    arm64.cmp x1, 100
+    arm64.b.le __rc_ok#10
+  __il_slow#12:
+    arm64.bl tallyOf
+    arm64.b __il_cont#3
+  __rc_ok#10:
+    arm64.movRegReg x0, x1
+  __il_cont#3:
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont
+  anEmptyCaseCarriesNothing:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaGlobal x0, __data_SevenSlot
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext#18
+  matcharm#15:
+    arm64.movImm x1, 0
+    arm64.b matchcont#19
+  matchnext#18:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#17
+  matcharm#16:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+  matchcont#19:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow#22
+  __rc_chk#21:
+    arm64.cmp x1, 100
+    arm64.b.le __rc_ok#20
+  __il_slow#22:
+    arm64.bl tallyOf
+    arm64.b __il_cont#13
+  __rc_ok#20:
+    arm64.movRegReg x0, x1
+  __il_cont#13:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead#17:
+  matchdead#7:
+}

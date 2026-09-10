@@ -293,28 +293,24 @@ let MmAllocTotalLabel = b"__mm_alloc_total"
 let MmAllocBytesLabel = b"__mm_alloc_bytes"
 let MmRawAllocBytesLabel = b"__mm_raw_alloc_bytes"
 
-// ⭐⭐ **TWO SLOTS, BECAUSE SINCE S3 A COUNTED CALLER FREES — AND THIS IS THE DAY THE ONE-SLOT READING
-// NAMED IN ADVANCE.** Until S3 both raw readers loaded `MmRawAllocCountLabel`, on the stated grounds that
-// the population these columns credit released nothing: the only caller that freed a slab slot was
-// `__mm_free`, whose boxes come from the UNCOUNTED twin `__slab_alloc_box`. S3 retired the three
-// hand-rolled reuse mechanisms the green-thread runtime had grown while `__slab_alloc` had no free path
-// (a `.data` LIFO of GT structs, three init-time subprocess scratch buffers, and a read probe that simply
-// abandoned ~4.2 KB per call), so a GT struct, a `STARTUPINFOA` and an overlapped read buffer now go back
-// through `__mm_raw_free`. The credited population therefore shrinks, and a live count over it is no
-// longer the cumulative count.
+// ⭐⭐ **TWO SLOTS, BECAUSE A COUNTED CALLER FREES.** The green-thread runtime's per-call scratch — a
+// `STARTUPINFOA`, a mutable command line, an overlapped read buffer — comes from the counted `__slab_alloc`
+// and goes back through `__mm_raw_free`, so the credited population shrinks and a live count over it is not
+// the cumulative count. (A GT struct is credited once and never freed: it is recycled through the scheduler's
+// free lists — `SchedRuntime.GtFreePutName`.)
 //
 // `MmRawAllocCountLabel` is CUMULATIVE and only ever rises; `MmRawLiveCountLabel` rises with it and falls
 // on every counted free.
 //
-// ⭐⭐ **AND THERE IS STILL NO `__slab_free_box`, WHICH IS WHY THE DEBIT LIVES IN A DOOR OF THIS FILE'S
-// OWN.** A twin exists to DIFFER, and the alloc pair differ in exactly one thing (`countRaw`), which is
-// why `buildSlabAllocEntry` takes it as a build-time parameter and there is one body for two doors. The
-// slab's free side still has nothing to differ IN — `__slab_free` routes a slot to its span or a mapping
-// to the OS, identically for a box and for a GT struct — so splitting it would be a byte-for-byte copy
-// under a second name. What differs is not the FREE, it is the BOOKKEEPING, and the bookkeeping is this
-// file's (`MmRawAllocBytesLabel` and the six readers are here for the same reason). So the counted door
-// is `__mm_raw_free`, one level ABOVE the slab: it debits and delegates, and `__mm_free` goes on calling
-// `__slab_free` with no compensating arithmetic on the free path of every box in the language.
+// ⭐⭐ **AND THERE IS NO `__slab_free_box`, WHICH IS WHY THE DEBIT LIVES IN A DOOR OF THIS FILE'S OWN.** A
+// twin exists to DIFFER, and the alloc pair differ in exactly one thing (`countRaw`), which is why
+// `buildSlabAllocEntry` takes it as a build-time parameter and there is one body for two doors. The slab's
+// free side has nothing to differ IN — `__slab_free` routes a slot to its span or a mapping to the OS,
+// identically for a box and for runtime scratch — so splitting it would be a byte-for-byte copy under a
+// second name. What differs is the BOOKKEEPING, and the bookkeeping is this file's (`MmRawAllocBytesLabel`
+// and the six readers are here for the same reason). So the counted door is `__mm_raw_free`, one level
+// ABOVE the slab: it debits and delegates, and `__mm_free` goes on calling `__slab_free` with no
+// compensating arithmetic on the free path of every box in the language.
 let MmRawAllocCountLabel = b"__mm_raw_alloc_count"
 let MmRawLiveCountLabel = b"__mm_raw_live_count"
 
@@ -1179,20 +1175,17 @@ end 'emitGlobalAccumulate'
 
 // ⭐⭐ **`record.field += delta`, ANSWERING THE COUNT AS IT STOOD BEFORE — `emitGlobalAccumulate`'s twin, one
 // STORAGE CLASS over.** That one steps a `.data` word reached through `globalAddr`; this one steps a word
-// inside a record the caller already holds a pointer to, which is what every PER-PROCESSOR counter is
-// (`SchedRuntime.POffStealCount`, `POffRetakeCount`, `POffRemoteFreeCount` — the three
-// `__Builtins.schedStealCount()` / `schedRetakeCount()` / `slabRemoteFreeCount()` sum). Its contract is that
-// one's in every respect a caller can observe: `multiM` has no default, and BOTH arms answer the PRIOR value
-// so no caller has to know which arm it got.
+// inside a record the caller already holds a pointer to, which is what every PER-PROCESSOR counter is (the
+// `SchedRuntime.POff*Count` words `buildSchedPerProcSum` sums). Its contract is that one's in every respect a
+// caller can observe: `multiM` has no default, and BOTH arms answer the PRIOR value so no caller has to know
+// which arm it got.
 //
-// ⛔⛔ **IT EXISTS BECAUSE THOSE THREE SPELLED THE SEQUENCE OUT THREE TIMES AND DISAGREED ON THE ONE THING
-// THAT MATTERS.** Two are single-writer — a P counts its own steals, sysmon is the only party that retakes —
-// and stepped with a plain load/add/store; the third is MPSC by construction and stepped with an
-// `atomicRmw`. The choice was made by writing a different sequence of ops at each site, so a fourth per-P
-// counter's author picks a flavour by copying whichever neighbour they happened to read. ⚠ **The wrong copy
-// does not fail loudly**: a plain step on a contended word LOSES COUNTS and answers a number that is merely
-// too small — which is precisely the lost update EC8 measured as exit 101 on the `.data` counter this
-// function's twin guards. ⇒ the sequence is written once; the DECISION stays an argument every caller states.
+// ⛔⛔ **THE SEQUENCE IS WRITTEN ONCE AND THE DECISION STAYS AN ARGUMENT EVERY CALLER STATES.** Most per-P
+// counters are single-writer — a P counts its own steals, sysmon is the only party that retakes — and take the
+// plain load/add/store; the remote-free count is MPSC by construction and takes an `atomicRmw`. ⚠ **The
+// wrong choice does not fail loudly**: a plain step on a contended word LOSES COUNTS and answers a number
+// that is merely too small, so the choice is never made by copying whichever neighbour a caller happened to
+// read.
 export function emitFieldAccumulate(module StdModule, block IrBlock, record ValueId, offset ByteOffset, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
 	if not multiM 'soleWriter'
 		let current = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)

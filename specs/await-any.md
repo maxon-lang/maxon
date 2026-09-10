@@ -135,12 +135,11 @@ reserved `__Builtins.` space to remove.
 `__gt_await_any` is the green-thread scheduler. It is named on the `greenThreads` facility's roster beside
 `__gt_sleep` and `__gt_resched`, so a program that calls it on a target whose row denies that facility reads
 **E3104 at the call's own span**, naming the runtime entry — never a panic from inside a backend.
-`error.rejected-on-wasm` pins that attribution. Two lanes provide it: x64-windows, and arm64-macOS since its
-scheduler landed.
+`error.rejected-on-wasm` pins that attribution. All four native lanes provide it; wasm32-wasi does not.
 
 The two front-end cases (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no
-marker. `over-service-replies` keeps the narrow marker for a reason of its OWN: it spawns a SERVICE, and
-`__svc_spawn` is refused on every lane but x64-windows whatever the scheduler under it provides.
+marker. Neither does `over-service-replies`: a service runs on every lane with a green-thread substrate,
+and wasm32-wasi refuses `__svc_spawn` with the same E3104, which the harness counts as a SKIP.
 
 ## Tests
 

@@ -5935,6 +5935,16 @@ let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedRetakeCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread structs a free list served instead of the
+// allocator.** It answers the sum of every processor's recycle counter, so a program can observe that a
+// reclaimed GT struct really came back to the next spawn rather than going to the slab. The surface is
+// invented here on the argumentless-integer shape the family already has; `SchedRuntime.GtFreePutName`
+// owns why the structs are recycled and `SchedRuntime.SchedGtRecycleCountName` what the count costs.
+let BuiltinsSchedGtRecycleCountName = b"__Builtins.schedGtRecycleCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedGtRecycleCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.slabRemoteFreeCount()` — THE ALLOCATOR'S ONE OUTCOME QUERY, and the only way a program
 // can observe that a box was freed on a machine other than the one that allocated it.** It answers the sum of
 // every processor's remote-free counter, which is 0 on the one-processor default and rises the moment a
@@ -82996,6 +83006,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedRetakeCountName) 'schedRetakeCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedRetakeCount'
+
+			// The GT-struct recycle count: the steal count's shape exactly — an `int` answer, no arguments,
+			// nothing to own — and it sets `usesGt` for the same reason. See `SchedRuntime.SchedGtRecycleCountName`.
+			if callee.equals(BuiltinsSchedGtRecycleCountName) 'schedGtRecycleCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGtRecycleCountName, runtimeName: SchedGtRecycleCountName, arity: SchedGtRecycleCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedGtRecycleCount'
 
 			// ⭐ **THE ALLOCATOR'S OUTCOME QUERY**, whose shape is the two scheduler counts' exactly: an `int`
 			// answer, no arguments, nothing to own, and — like both of them — it sets `usesGt`, because the

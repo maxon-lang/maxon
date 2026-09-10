@@ -1,0 +1,203 @@
+// Test: runtime-scratch-reclaim.spawn-await-loop-is-bounded
+function work(n Integer) returns Integer
+	__Builtins.parallelBoundary()
+	return n + 1
+end 'work'
+
+function spawnAndAwait(seed Integer) returns Integer
+	let p = async work(seed)
+	return await p
+end 'spawnAndAwait'
+
+function main() returns ExitCode
+	var acc = spawnAndAwait(0)
+	let totalBefore = __Builtins.mmRawAllocTotal()
+	let liveBefore = __Builtins.mmRawAllocLive()
+	let recycledBefore = __Builtins.schedGtRecycleCount()
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	acc = spawnAndAwait(acc)
+	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	var score = 0
+	if acc == 9 'everyThreadRanExactlyOnce'
+		score = score + 1
+	end 'everyThreadRanExactlyOnce'
+	if totalGrew == 0 and recycled == 8 'everySpawnReusedAStruct'
+		score = score + 2
+	end 'everySpawnReusedAStruct'
+	if liveGrew == 0 'andNothingWasLeftLive'
+		score = score + 4
+	end 'andNothingWasLeftLive'
+	return score as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_timer_seq@96 = i64 0
+  __gt_trace_counter@104 = i64 0
+  __gt_proc_count@112 = i64 0
+  __gt_proc_handles_base@120 = i64 0
+  __gt_proc_gts_base@128 = i64 0
+  __gt_proc_wait_snapshot@136 = i64 0
+  __gt_proc_poller@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __sched_progress@160 = i64 0
+  __sched_active_workers@168 = i64 1
+  __sched_max_active_workers@176 = i64 1
+  __sched_tls_index@184 = i64 0
+  __sched_tls_teb_offset@192 = i64 0
+  __sched_procs@200 = i64 0
+  __sched_allm@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __gt_gfree_head@232 = i64 0
+  __sched_num_procs@240 = i64 0
+  __sched_shutdown_flag@248 = i64 0
+  __sched_lock@256 = i64 0
+  __sched_nmspinning@264 = i64 0
+  __sched_parked_drivers@272 = i64 0
+  __sched_sysmon_started@280 = i64 0
+  __mrt_errno@288 = i64 0
+  __mrt_envp@296 = i64 0
+  __mrt_tls_next_key@304 = i64 0
+  __slab_arena_list@312 = i64 0
+  __slab_arena_map_l1@320 = i64 0
+  __slab_state@328 = i64 0
+}
+
+func @work {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl __parallel_boundary
+    arm64.add x0, x19, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @spawnAndAwait {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl spawnAndAwait
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_raw_alloc_total
+    arm64.movRegReg x20, x0
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.movRegReg x21, x0
+    arm64.bl __sched_gt_recycle_count
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.bl spawnAndAwait
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_raw_alloc_total
+    arm64.sub x20, x0, x20
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.sub x21, x0, x21
+    arm64.bl __sched_gt_recycle_count
+    arm64.sub x0, x0, x22
+    arm64.movImm x1, 0
+    arm64.cmp x19, 9
+    arm64.b.ne ifcont#2
+  everyThreadRanExactlyOnce:
+    arm64.movImm x1, 1
+  ifcont#2:
+    arm64.cmp x20, 0
+    arm64.movImm x2, 0
+    arm64.b.ne critsplit#13
+  andrhs:
+    arm64.cmp x0, 8
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit#13:
+    arm64.movRegReg x0, x2
+  scmerge:
+    arm64.cbz x0, critsplit#14
+  everySpawnReusedAStruct:
+    arm64.add x0, x1, 2
+    arm64.b ifcont#6
+  critsplit#14:
+    arm64.movRegReg x0, x1
+  ifcont#6:
+    arm64.cmp x21, 0
+    arm64.b.ne ifcont#8
+  andNothingWasLeftLive:
+    arm64.add x0, x0, 4
+  ifcont#8:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at runtime-scratch-reclaim.spawn-await-loop-is-bounded.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,77 @@
+// Test: mod-overflow-premise-enforced-at-the-callee-entry
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
+end 'remainder'
+
+function main() returns ExitCode
+	bad = ident(-1)
+	return remainder(i64.min, d: bad) as ExitCode
+end 'main'
+var bad = 0
+---
+ExitCode: 1
+---
+data {
+  __data_bad@0 = i64 0
+}
+
+func @remainder {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, -2
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at mod-overflow-premise-enforced-at-the-callee-entry.test:9: Range check failed: value outside typealias 'BelowMinusOne'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x1, -2
+    arm64.b.le __rc_ok#3
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at mod-overflow-premise-enforced-at-the-callee-entry.test:9: Range check failed: value outside typealias 'BelowMinusOne'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#3:
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 18446744073709551615
+  __il_cont:
+    arm64.leaGlobal x1, __data_bad
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 9223372036854775808
+    arm64.leaGlobal x1, __data_bad
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.bl remainder
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at mod-overflow-premise-enforced-at-the-callee-entry.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

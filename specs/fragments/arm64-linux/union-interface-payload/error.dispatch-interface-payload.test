@@ -1,0 +1,37 @@
+// Test: error.dispatch-interface-payload
+typealias Vol = int(0 to 1000)
+
+interface Speaker
+	function volume() returns Vol
+end 'Speaker'
+
+type Quiet implements Speaker
+	export var tag as Vol
+
+	static function create() returns Quiet
+		return Self{tag: 0}
+	end 'create'
+
+	function volume() returns Vol
+		return 3
+	end 'volume'
+end 'Quiet'
+
+union Sound
+	live(who Speaker)
+	silent
+end 'Sound'
+
+function speak(s Sound) returns Vol
+	return match s 'm'
+		live(who) gives who.volume()
+		silent gives 0
+	end 'm'
+end 'speak'
+
+function main() returns ExitCode
+	return speak(Sound.live(Quiet.create()))
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:11: Unsupported: a union case payload declared at the interface type 'Speaker' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a payload slot is one machine word, and unlike a struct field it cannot widen — every case of a union shares one slot region. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument

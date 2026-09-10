@@ -1,0 +1,24 @@
+// Test: factory-self-assign-loop-only-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+type LoopOnly
+	export var value as Integer
+
+	export static function make(limit Integer) returns Self
+		var i = 0
+		while i < limit 'loop'
+			self.value = i
+			i = i + 1
+		end 'loop'
+		return Self{}
+	end 'make'
+end 'LoopOnly'
+
+function main() returns ExitCode
+	let l = LoopOnly.make(1)
+	return l.value
+end 'main'
+---
+CompilerError:
+error E3086: <fragment>:14:14: field 'value' of type 'LoopOnly' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths

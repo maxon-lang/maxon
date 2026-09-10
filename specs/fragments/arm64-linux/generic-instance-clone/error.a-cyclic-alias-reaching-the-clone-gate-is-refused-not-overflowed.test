@@ -1,0 +1,27 @@
+// Test: error.a-cyclic-alias-reaching-the-clone-gate-is-refused-not-overflowed
+typealias Integer = int(i64.min to i64.max)
+typealias Cyc = Array with Cyc
+
+type Holder uses T
+	typealias TArr = Array with T
+	var items as TArr
+
+	export static function create() returns Self
+		return Self{items: TArr.create()}
+	end 'create'
+
+	export function all() returns TArr
+		return self.items.clone()
+	end 'all'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	var h = IntHolder.create()
+	let c = h.all()
+	return c.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2012: <fragment>:3:28: Circular typealias dependency: Cyc

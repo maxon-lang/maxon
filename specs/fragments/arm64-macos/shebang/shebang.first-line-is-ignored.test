@@ -1,0 +1,19 @@
+// Test: shebang.first-line-is-ignored
+// --- file: main.maxon
+#!/usr/bin/env maxon
+function main() returns ExitCode
+	print("ran\n")
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1  ; "ran\x0a"
+    arm64.bl print
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

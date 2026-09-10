@@ -191,29 +191,25 @@ export enum MultiMSharing
 	// triple, the process store's count — cannot be made indivisible by an atomic, because what must be
 	// indivisible is not a word.
 	//
-	// ⭐⭐ **THE EXCEPTION IS EXPLICIT AND IT IS NARROW: AN UNLOCKED READ THAT ONLY PICKS AN ARM, WHERE BOTH
-	// ARMS ARE CORRECT WHATEVER IT ANSWERS.** This clause is not a softening — the class text used to say
-	// *"every read"* flatly, and this file falsified it in four places, which is the one failure mode a
-	// classification has: a rule its own file breaks stops being read as a rule. What makes these reads
-	// sound is that a stale answer costs a wasted look or a skipped look, never a wrong value: whatever a
-	// peek decides, the LOCKED dequeue behind it is what actually takes a thread, and it answers 0 to a racer
-	// exactly as it would to an empty queue.
+	// ⭐⭐ **THE EXCEPTION IS EXPLICIT AND NARROW: AN UNLOCKED READ THAT ONLY PICKS AN ARM, WHERE BOTH ARMS ARE
+	// CORRECT WHATEVER IT ANSWERS.** A stale answer costs a wasted look or a skipped look, never a wrong value:
+	// whatever a peek decides, the LOCKED operation behind it is what actually takes something, and it answers
+	// "nothing" to a racer exactly as it would to an empty list.
 	//
 	// ⛔ **THE SITES ARE NAMED, BECAUSE AN EXCEPTION NOBODY CAN ENUMERATE IS A LOOPHOLE.** Four read
-	// `__gt_run_queue_head` — all four now through the one door `emitSchedGlobalQueueIs`, so the exception is
-	// a property of ONE function rather than of four copies — and all four are in `SchedRuntime`: `emitSchedAnyRunnable`'s global-tier peek
-	// (reached from `__gt_resched`'s yield, which chooses between handing the P over and polling, and — since
-	// MC1 — from `buildSchedWorkerLoop`'s `wrecheck`, which chooses whether to wake a second M);
-	// `__sched_find_runnable`'s 61-schedule fairness peek (`frfairpeek`); and its global-batch peek
-	// (`frglobalpeek`).
+	// `__gt_run_queue_head`, all through the one door `emitSchedGlobalQueueIs` and all in `SchedRuntime`:
+	// `emitSchedAnyRunnable`'s global-tier peek (reached from `__gt_resched`'s yield, which chooses between
+	// handing the P over and polling, and from `buildSchedWorkerLoop`'s `wrecheck`, which chooses whether to
+	// wake a second M); `__sched_find_runnable`'s 61-schedule fairness peek (`frfairpeek`); and its
+	// global-batch peek (`frglobalpeek`). One reads `__gt_gfree_head`: `__gt_free_get`'s refill peek
+	// (`gfrefillpeek`), which chooses between taking the lock to refill and falling back to the slab.
 	//
-	// ⭐⭐ **AND THREE WALK `__sched_allm` UNLOCKED, WHOSE ARGUMENT IS A DIFFERENT ONE AND IS THEREFORE WRITTEN
-	// DOWN SEPARATELY**: `__sched_stop_workers`'s join walk, `__sched_wake_parked_drivers` and
-	// `__sched_retake`. They are not arm-picks — they are WALKS, and a stale answer is not what makes them
-	// safe. What makes them safe is that the list is APPEND-ONLY over never-freed structs and that
-	// `emitSchedListPushLocked` publishes a node's link BEFORE the head, so a walker can never reach a node
-	// whose link is unwritten. `SchedAllMLabel` carries it in full. The census (`__sched_any_executing`)
-	// walks the same list under the lock.
+	// ⭐⭐ **AND THREE WALK `__sched_allm` UNLOCKED, WHOSE ARGUMENT IS A DIFFERENT ONE**: `__sched_stop_workers`'s
+	// join walk, `__sched_wake_parked_drivers` and `__sched_retake`. They are WALKS, and a stale answer is not
+	// what makes them safe: the list is APPEND-ONLY over never-freed structs and `emitSchedListPushLocked`
+	// publishes a node's link BEFORE the head, so a walker can never reach a node whose link is unwritten.
+	// `SchedAllMLabel` carries it in full. The census (`__sched_any_executing`) walks the same list under the
+	// lock.
 	//
 	// A further site is not covered by any of this: it needs its own argument at its own line, or the lock.
 	underSchedLock
@@ -943,9 +939,10 @@ let POffPendingWaiter = 0x50 as ByteOffset
 // slot therefore waits for its consumer AND its safety mechanism, which are the same rung.
 let POffRunnext = 0x58 as ByteOffset
 
-// The per-P GT-struct free list (Go's per-P reuse). ⚠ RESERVED AND UNUSED: `__gt_spawn` takes its struct
-// from `__slab_alloc`, whose zeroing contract answers the recycling trap a private free list has to answer
-// by hand (`GtRuntime.buildGtSpawn` carries that history).
+// ⭐ **THIS P's GT-STRUCT FREE LIST — Go's `p.gFree`, a LIFO threaded through `GtRuntime.GtOffNext`.**
+// `__gt_free_put` pushes a reclaimed struct here and `__gt_free_get` pops one for the next spawn; see
+// `GtFreePutName` for why a struct is never handed back to the slab. Plain loads and stores: only the M
+// holding this P touches either word, and neither door contains an op a retake can interrupt.
 let POffFreeListHead = 0x60 as ByteOffset
 let POffFreeListLen = 0x68 as ByteOffset
 
@@ -1134,6 +1131,11 @@ let POffPendingPark = POffRemoteFreeCount + (PointerSlotBytes as ByteOffset)
 // porting the masks would have been two words maintained beside facts that already answer for them.
 let POffPidleNext = POffPendingPark + (PointerSlotBytes as ByteOffset)
 
+// ⭐ **HOW MANY GT STRUCTS THIS P's FREE LISTS HAVE SERVED — the reading `__Builtins.schedGtRecycleCount()`
+// sums.** Stepped by `__gt_free_get` on every allocation a list answered, owner-written like `schedTick`, and
+// a per-P word for `POffStealCount`'s reason.
+let POffGtRecycleCount = POffPidleNext + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`). FIXED
 // rather than grown: the overflow has somewhere to go (the global queue), so a full ring is a routing
 // decision and never an error, and a growable ring would need a lock on the one path this whole design
@@ -1154,7 +1156,7 @@ let RunqIndexMask = RunqSlots - 1
 // would be the same fact converted four times.
 let RunqHalfSlots = RunqSlots shr 1
 
-let POffRunqBase = POffPidleNext + (PointerSlotBytes as ByteOffset)
+let POffRunqBase = POffGtRecycleCount + (PointerSlotBytes as ByteOffset)
 
 // The portable header, the inline GT, the tail scalars and the ring. See the layout header.
 //
@@ -1197,6 +1199,14 @@ let StealRounds = 4 as ParsedInt
 // some for its peers, and the peers then steal from it. The 61-schedule check is the fairness mechanism that
 // actually matters here, and it is present.
 let GlobalBatchMax = RunqHalfSlots
+
+// ⭐ **A P's GT-STRUCT FREE LIST HOLDS FEWER THAN `GtFreeLocalHigh`, AND ONE BATCH IS `GtFreeLocalLow`** — Go's
+// `gfput`/`gfget` numbers (`proc.go:5517`/`:5559`). A put that reaches the high mark moves structs to the global
+// list until the local one is back at the low mark; a get that finds the local list empty moves up to the low
+// mark back. The gap between the two is what keeps a spawn/reclaim rhythm near either mark from taking
+// `__sched_lock` on every struct.
+let GtFreeLocalHigh = 64 as ParsedInt
+let GtFreeLocalLow = 32 as ParsedInt
 
 // ==========================================================================
 // The `.data` slots
@@ -1290,6 +1300,15 @@ let SchedMidleLabel = b"__sched_midle"
 // green-thread program in the corpus a `.data` slot nothing reads. ⇒ **the day a reader arrives (a `sysmon`
 // deciding whether to retake a P is the likely one), the count is added HERE, with that reader.**
 let SchedPidleLabel = b"__sched_pidle"
+
+// ⭐⭐ **THE GLOBAL GT-STRUCT FREE LIST — Go's `sched.gFree`, threaded through `GtRuntime.GtOffNext`.** Where a
+// P's own list sheds a batch when it is full, where a P-less reclaim puts its struct, and where an empty P
+// list refills from. `emitSchedListPushLocked`/`emitSchedListPopLocked` are its doors, under `__sched_lock`.
+//
+// ⚠ **IT HAS NO COUNT BESIDE IT, FOR `sched.npidle`'s REASON ABOVE.** Go's `sched.gFree.n` serves readers
+// this runtime does not have; every question asked here — *"is there anything to refill from"* — is the head
+// against 0, and a transfer is bounded by the local list's length rather than by this one's.
+let SchedGtFreeHeadLabel = b"__gt_gfree_head"
 
 // ⭐ **HOW MANY Ps EXIST — the bound every scan walks, and the ceiling on live Ms.** TWO words
 // (`__sched_num_procs` beside `__sched_max_procs`) are needed only where a P can be retired without
@@ -1690,31 +1709,53 @@ export let SchedStealCountName = b"__sched_steal_count"
 // per-P word, and a second copy of that loop is one fact written twice.
 export let SchedRetakeCountName = b"__sched_retake_count"
 
-// ⭐⭐ **THE THREE PER-P COUNTER SUMS, AS ONE BAND — the roster that says "asking this question IS asking
-// for the scheduler".** They are `buildSchedPerProcSum`'s three names (below): one body, one walk of
-// `__sched_procs`, three field offsets. Two facts follow from that shared body and BOTH are asked through
-// here, so the membership is written down once:
+// ⭐ `__sched_gt_recycle_count() -> i64` — the sum of every P's `POffGtRecycleCount`, and the floor of
+// `__Builtins.schedGtRecycleCount()`: how many GT structs a free list served instead of the slab. The fourth
+// `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
+export let SchedGtRecycleCountName = b"__sched_gt_recycle_count"
+
+// ⭐⭐⭐ **`__gt_free_put(gt)` — Go's `gfput`: a reclaimed GT struct goes onto a free list, NEVER back to the
+// slab.** Its only caller is `__gt_reclaim`. A struct's memory is a GT record for the life of the process
+// (TYPE-STABLE, as Go's `g` records are), so a read through a handle whose thread is gone — `awaitAny` or
+// `gtIsComplete` over a promise already awaited (`GtRuntime.GtAnyCompletedName`) — lands in a GT record,
+// never in whatever the slab gave the memory to next or in a span the scavenger has decommitted. And a spawn
+// that finds a struct on its own P's list takes no allocator call at all.
+//
+// It pushes onto the current P's list; at `GtFreeLocalHigh` it moves structs to the global list until
+// `GtFreeLocalLow` remain. An OS thread with no M, or an M holding no P, has no list of its own and pushes
+// straight onto the global one.
+//
+// ⚠ **IT TAKES `__sched_lock` AND CALLS NOTHING WHILE HOLDING IT**, so it adds no lock order: `__gt_reclaim`
+// is never reached with that lock held (`GtRuntime.GtRunnerDoneName`), and the hold covers list links only.
+export let GtFreePutName = b"__gt_free_put"
+
+// ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a GT struct is taken
+// through**, by `__gt_spawn` and `__gt_cell_alloc` alike. It pops the current P's list, refilling up to
+// `GtFreeLocalLow` from the global list when the local one is empty, and falls back to
+// `__slab_alloc(GtStructSize)` when both are.
+//
+// ⛔ **A RECYCLED STRUCT IS ZEROED OVER THE WHOLE `GtStructSize` BEFORE IT IS HANDED OUT**, which is the
+// contract a fresh slab slot already carries: every "no releaser", "never ran", "no teardown ticket" and
+// "empty coroutine queue" reading in `GtRuntime` is the struct's zero, so a recycled one that kept its
+// previous tenant's words would release that tenant's arguments and answer that tenant's questions.
+export let GtFreeGetName = b"__gt_free_get"
+
+// ⭐⭐ **THE PER-P COUNTER SUMS, AS ONE BAND — the roster that says "asking this question IS asking for the
+// scheduler".** They are `buildSchedPerProcSum`'s names (below): one body, one walk of `__sched_procs`, one
+// field offset each. Two facts follow from that shared body and BOTH are asked through here, so the
+// membership is written down once:
 //
 //   • `RuntimeUsage.recordCallUsage` routes them to `recordGtUsage` — there is nothing to walk without
 //     `__sched_init_procs`, so the question installs the machinery it is about.
 //   • `TargetFacilities.calleeHostFacility` routes them to `HostFacility.greenThreads` — that machinery is
-//     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104).
+//     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104) rather than
+//     reach an install that has no TLS slot to emit.
 //
-// ⛔ **THE SECOND HALF WAS MISSING AND A LEGAL PROGRAM PANICKED THE COMPILER.** MEASURED 2026-09-02, a
-// four-line `__Builtins.schedRetakeCount()` program: `panic at SchedRuntime.maxon:2060: tlsSlotArrayBase:
-// wasi has no per-OS-thread slot this scheduler` on `--target=wasm32-wasi`, and `panic at
-// StdToX64Conversion.maxon:3704: lowerTlsSetValue: TlsSetValue is x64-windows only` on `--target=x64-linux`
-// — the scheduler install trampling a lane with no TLS substrate, naming a runtime emitter rather than the
-// call the user wrote. It is `TargetFacilities`' own standing warning made real: the `usesGt` half of a
-// callee's requirement and the E3104 half are ONE fact, and a name that declares only the first opens
-// exactly the door `__gt_await_any` was named individually to close.
-//
-// ⚠ **IT IS A NAME TEST OVER THREE NAMES AND NOT A PREFIX TEST**, for `isSchedRuntimeCallee`'s measured
-// reason one file over: the `__sched_` band also holds scheduler INTERNALS a program never writes, and the
-// third member does not wear that prefix at all — it is a `__slab_` name, because the number it reports is
+// ⚠ **IT IS A NAME TEST AND NOT A PREFIX TEST**: the `__sched_` band also holds scheduler INTERNALS a program
+// never writes (`isSchedRuntimeCallee`), and one member is a `__slab_` name, because the number it reports is
 // the ALLOCATOR's (see `SlabRuntime.SlabRemoteFreeCountName`).
 export function isSchedPerProcSumCallee(callee ByteArray) returns bool
-	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName)
+	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName)
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
@@ -1807,25 +1848,17 @@ export function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinte
 	return m
 end 'emitLoadCurrentM'
 
-// ⭐⭐⭐ **THE GUARDED WALK TO A USABLE M — THE OFFSET TEST, THE SLOT LOAD, THE M TEST — AND ITS ARMS ARE
-// COUNTED HERE ONCE.** Three callers make this walk, and each used to spell it out for itself:
-// `emitLoadCurrentGtAndProcIdOrZero` tested the offset and the M, `__sched_runq_put` tested the M and
-// SILENTLY SKIPPED THE OFFSET, and `SlabRuntime.emitSlabCurrentP` tested both again in its own vocabulary.
-// Three walks, each individually correct, with nothing making them agree — and the day `handoffp` introduces
-// a DETACHED M, whoever adds that condition has to find every one of them by memory. The one they miss is a
-// WRONG ANSWER rather than a compile error.
-//
-// ⚠ **`__sched_runq_put` GAINED THE OFFSET TEST HERE, AND ITS ABSENCE WAS A DIFFERENCE NOBODY HAD WRITTEN
-// DOWN.** That caller runs only after `__gt_init`, so the arm is unreachable today; unreachable is not the
-// same as absent, and without the test the walk would have dereferenced `gs:[0]` — `NT_TIB.ExceptionList`, a
-// NON-NULL pointer — as though it were an M. A walk correct only under a precondition its two siblings do
-// not share is the next reader's trap, not an optimization.
+// ⭐⭐⭐ **THE GUARDED WALK TO A USABLE M — THE OFFSET TEST, THE SLOT LOAD, THE M TEST — WRITTEN ONCE.** Every
+// walk to the current M that cannot promise the scheduler exists and this OS thread has an M comes through
+// here, so a new way to have no usable M (a DETACHED M, say) is added in one place. A walk that spelled the
+// tests out for itself and missed one would be a WRONG ANSWER rather than a compile error — without the
+// offset test the slot load reads `gs:[0]`, `NT_TIB.ExceptionList`, a NON-NULL pointer, as though it were an M.
 //
 // ⭐ **THE BLOCKS ARE THE CALLER'S AND THE OPS ARE THIS FUNCTION'S.** Each caller creates and names its own
 // three blocks and hands them here to be filled, so an IR dump keeps that caller's vocabulary and the block
 // ORDER — which is the emitted layout — stays where the caller put it. It answers the M, live and non-null
-// in `haveMachine`; whatever arm that caller needs BEYOND this walk (`M->currentP`, and one day a detached
-// M) it adds there.
+// in `haveMachine`; whatever arm that caller needs BEYOND this walk it adds there, and the one several
+// callers need — *"and it holds a P"* — is `emitLoadCurrentPOrBail`.
 //
 // `bailValues` are the constants the bail edge carries, one per block arg of `bail` — minted fresh in
 // whichever block takes the arm, because a branch edge's arguments must be defined in the block that
@@ -1840,6 +1873,20 @@ export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset
 
 	return m
 end 'emitLoadCurrentMOrBail'
+
+// The P this OS thread's M holds, live and non-null in `haveProc`. `noProc` takes all three ways to have
+// none — no scheduler yet, an OS thread with no M (the IOCP completion thread), an M holding no processor —
+// because a caller that wants a processor's per-P state has none to use in any of them. The blocks are the
+// caller's, for `emitLoadCurrentMOrBail`'s reason.
+function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: ParsedIntArray.create(), ids: ids)
+
+	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
+	let none = emitConst(module, block: haveMachine, value: 0, ids: ids)
+	let pIsNone = emitCmp(module, block: haveMachine, a: p, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.condBranch(pIsNone, thenBlockId: noProc.id, elseBlockId: haveProc.id))
+	return p
+end 'emitLoadCurrentPOrBail'
 
 // Terminate `block` with *"`tested` is 0 → `bail`, otherwise `otherwise`"*, giving the bail edge this
 // block's own copy of each of its arguments.
@@ -1912,7 +1959,7 @@ end 'emitLoadCurrentGt'
 //
 // **THE THREE ZEROS ARE THREE DIFFERENT QUESTIONS AND ALL THREE MUST BE ASKED**, exactly as the
 // hand-assembled twin in `X64GtRuntime.emitLoadCurrentGtOrBail` states. The first two are not asked HERE —
-// they are `emitLoadCurrentMOrBail`'s, shared with the other two callers that make the same walk — and only
+// they are `emitLoadCurrentMOrBail`'s, shared with every caller that makes the same walk — and only
 // the third is this function's own:
 //   * a zero TEB OFFSET means `__sched_init_procs` has not run — and `gs:[0]` is `NT_TIB.ExceptionList`, a
 //     non-null pointer, so reading through it is a wild load rather than a null one.
@@ -2107,6 +2154,10 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		pushRuntimeGlobal(out, label: SchedAllMLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedMidleLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock)
+
+		// A fourth intrusive head, for the same reason. Its one unlocked read is `__gt_free_get`'s refill peek,
+		// enumerated under `MultiMSharing.underSchedLock`.
+		pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underSchedLock)
 	end 'procs'
 
 	// ⭐⭐ **THE THIRD GATE, AND IT IS THE ARRAY'S LENGTH WEARING A QUERY'S SECOND HAT.**
@@ -2167,15 +2218,20 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedFindRunnable(module)
 	buildSchedSweepDropped(module)
 
-	// The three per-P sums, from ONE body: they differ in the name they answer to and the field they read, and
-	// in nothing else. See `buildSchedPerProcSum`.
+	// The GT-struct doors: the one allocation and the one free every GT struct goes through.
+	buildGtFreePut(module)
+	buildGtFreeGet(module)
+
+	// The per-P sums, from ONE body: they differ in the name they answer to and the field they read, and in
+	// nothing else. See `buildSchedPerProcSum`.
 	//
-	// ⚠ The third answers to a `__slab_` name because the number is the ALLOCATOR's — see
+	// ⚠ One answers to a `__slab_` name because the number is the ALLOCATOR's — see
 	// `SlabRuntime.SlabRemoteFreeCountName` for why the counter is nonetheless a per-P word summed by this
 	// scheduler walk, and why that puts its body here rather than in `installSlabRuntime`.
 	buildSchedPerProcSum(module, name: SchedStealCountName, offset: POffStealCount)
 	buildSchedPerProcSum(module, name: SchedRetakeCountName, offset: POffRetakeCount)
 	buildSchedPerProcSum(module, name: SlabRemoteFreeCountName, offset: POffRemoteFreeCount)
+	buildSchedPerProcSum(module, name: SchedGtRecycleCountName, offset: POffGtRecycleCount)
 	buildSchedAnyExecuting(module)
 	buildSchedWorkerLoop(module)
 	buildSchedStartM(module)
@@ -2191,30 +2247,13 @@ export function installSchedRuntime(module StdModule, target Target)
 	// that emits its bracket inline calls neither, and two functions nothing reaches do not belong in its
 	// binary.
 	//
-	// ⚠ **`buildSchedPerProcSum` ABOVE IS DELIBERATELY *NOT* GATED ON `targetBracketsBlockingSyscalls`**, and
-	// that is the point of putting the retake and remote-free counters on per-P fields rather than behind the
-	// machinery that moves them: all three sums compile on every target THIS INSTALLER RUNS ON, reading a
-	// straight 0 where no monitor ever ran and where no free ever crossed a processor. A counter that exists
-	// only on the lane with a sysmon would be a worse divergence than a thread that idles.
-	//
-	// ⛔⛔ **THIS NOTE USED TO SAY "COMPILES AND ANSWERS ON *EVERY TARGET*", AND THAT IS FALSE — MEASURED
-	// 2026-09-02, ALL THREE COUNTERS, TWO LANES.** `installSchedRuntime` is reached from `usesGt`, and the
-	// three builtins that read these fields SET `usesGt` (`RuntimeUsage.recordCallUsage`), so a scalar program
-	// whose only concurrency contact is `__Builtins.schedStealCount()`, `schedRetakeCount()` or
-	// `slabRemoteFreeCount()` drags the whole P/M substrate in — which on a lane without it does not refuse,
-	// it PANICS THE COMPILER: `wasm32-wasi` dies in `buildSchedInitProcs` (*"tlsSlotArrayBase: wasi has no
-	// per-OS-thread slot"*) and `x64-linux` in `StdToX64Conversion.lowerTlsSetValue`. The three lanes that
-	// provide `HostFacility.greenThreads` — x64-windows, arm64-macOS and arm64-linux — build it.
-	// ⇒ **the honest claim is "every target the SCHEDULER compiles on"**.
-	//
-	// ✅ **AND THAT GAP IS CLOSED, IN THE SAME CHANGE THAT WROTE THE PARAGRAPH ABOVE.** The three names are on
-	// `TargetFacilities.calleeHostFacility` now, under `HostFacility.greenThreads`, beside `__gt_await_any` —
-	// the same substrate and the same argument — so a lane without the floor REFUSES with E3104 at the call's
-	// own span and never reaches this installer at all. The membership both ends read is
-	// `isSchedPerProcSumCallee`, and `buildSchedPerProcSum` will not build a sum that is off it.
-	// ⚠ The wasm refusal is pinned by
-	// `specs/builtins-cpu-parallel.md`'s `error.the-per-processor-counters-are-refused-off-their-substrate`;
-	// the x64-linux one was MEASURED and is not pinned by a case.
+	// ⚠ **`buildSchedPerProcSum` ABOVE IS DELIBERATELY *NOT* GATED ON `targetBracketsBlockingSyscalls`**: every
+	// sum compiles on every target the SCHEDULER compiles on, reading a straight 0 where no monitor ever ran and
+	// where no free ever crossed a processor. A counter that existed only on the lane with a sysmon would be a
+	// worse divergence than a thread that idles. A lane without the scheduler never reaches this installer for
+	// a sum: `isSchedPerProcSumCallee` puts every one of them under `HostFacility.greenThreads`, so the call is
+	// refused with E3104 at its own span (`specs/builtins-cpu-parallel.md`,
+	// `error.the-per-processor-counters-are-refused-off-their-substrate`).
 	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoff'
 		// `__sched_handoffp` is `__sched_retake`'s only caller of `__sched_startm`, `__sysmon` is
 		// `__sched_retake`'s only caller, and `__sched_syscall_regain` is the bracket's road back.
@@ -2259,27 +2298,26 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 end 'emitSchedLockLeave'
 
 // ==========================================================================
-// ⭐⭐⭐ THE THREE INTRUSIVE LISTS — ONE SHAPE, WRITTEN DOWN ONCE (W213-C2)
+// ⭐⭐⭐ THE `.data`-HEADED INTRUSIVE LISTS — ONE SHAPE, WRITTEN DOWN ONCE
 // ==========================================================================
 //
-// `__sched_allm`, `__sched_midle` and `__sched_pidle` are three heads over two structs, and all three are
-// the same four instructions: a LIFO push that stores the old head into the joining node's link, and a pop
-// that unlinks the head. **Three copies of that pair is the shape this codebase keeps finding as one fact
-// written down three times** — and the failure mode is specific rather than stylistic: a pop that forgets
-// to clear the departing node's link leaves a P or an M pointing at a list it is no longer on, which the
-// next push then splices back in. Parameterising on `(headLabel, linkOffset)` makes that impossible to get
-// right in two places and wrong in the third.
+// `__sched_allm`, `__sched_midle`, `__sched_pidle` and `__gt_gfree_head` are four heads over three structs
+// (M, P, GT), and all four are the same four instructions: a LIFO push that stores the old head into the
+// joining node's link, and a pop that unlinks the head. The failure mode of a copy is specific rather than
+// stylistic: a pop that forgets to clear the departing node's link leaves a node pointing at a list it is no
+// longer on, which the next push then splices back in. Parameterising on `(headLabel, linkOffset)` makes
+// that impossible to get right at one list and wrong at another.
 //
 // ⛔⛔ **EVERY CALL SITE HOLDS `__sched_lock` EXCEPT ONE THAT IS NAMED HERE, AND THE `Locked` IN BOTH NAMES
-// IS THE ONLY THING THAT CAN CARRY THE REQUIREMENT.** Nine sites: six pushes and three pops. ⚠ **THE
-// EXCEPTION IS `__sched_init_procs`'s BUILD LOOP**, which pushes every processor onto `__sched_pidle` with
-// no lock and argues its own exemption at the site on `sealedBeforeWorkers` grounds — bring-up is
-// single-threaded BY CONSTRUCTION, because that loop is what builds the array a worker could ever be
-// spawned onto. It is stated here as well as there because a rule with a silent exception is a rule the
-// next reader will not trust. Go asserts it (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput`
-// and `pidleget`); The compiler has no such assert to emit, and `osLockEnter` is a RECURSIVE CRITICAL_SECTION, so
-// getting it wrong produces no diagnostic anywhere — only a list that loses a node. The requirement travels
-// with the name for exactly the reason `emitSchedEnqueueLocked`'s does.
+// IS THE ONLY THING THAT CAN CARRY THE REQUIREMENT.** ⚠ **THE EXCEPTION IS `__sched_init_procs`'s BUILD
+// LOOP**, which pushes every processor onto `__sched_pidle` with no lock and argues its own exemption at
+// the site on `sealedBeforeWorkers` grounds — bring-up is single-threaded BY CONSTRUCTION, because that
+// loop is what builds the array a worker could ever be spawned onto. It is stated here as well as there
+// because a rule with a silent exception is a rule the next reader will not trust. Go asserts it
+// (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput` and `pidleget`); the
+// compiler has no such assert to emit, and `osLockEnter` is a RECURSIVE CRITICAL_SECTION, so getting it
+// wrong produces no diagnostic anywhere — only a list that loses a node. The requirement travels with the
+// name for exactly the reason `emitSchedEnqueueLocked`'s does.
 
 // Push `node` onto the LIFO whose head is `headLabel`, threading `linkOffset`. Two stores, in this order:
 // the node's link takes the old head before the head takes the node, so a walker that somehow read the head
@@ -3286,22 +3324,11 @@ function buildSchedRunqPut(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	// ⭐⭐ **THE THREE WAYS TO HAVE NO RING, AND ALL THREE REACH THE SAME ARM (W213-C1).** This is the one Std
-	// caller that can run on a thread with NO M at all — the IOCP completion loop, through
-	// `__sched_publish_locked` — so the shared walk's M test is what keeps the dereference below honest, and
-	// its offset test is what keeps this caller's walk the same walk as its two siblings' rather than a
-	// shorter one nobody wrote down. `M->currentP` is then tested here, on its own account: it is 0 for an M
-	// that holds no processor, which is the state a handoff produces and which this arm already answers
-	// correctly, because a thread with no ring of its own belongs on the global queue whichever of the three
-	// reasons put it there.
-	//
-	// ⚠ `globalOnly` carries no block args, so the two bail edges carry none either.
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: globalOnly, bailValues: ParsedIntArray.create(), ids: ids)
-
-	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
-	let machineZero = emitConst(module, block: haveMachine, value: 0, ids: ids)
-	let noProc = emitCmp(module, block: haveMachine, a: p, b: machineZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(noProc, thenBlockId: globalOnly.id, elseBlockId: retry.id))
+	// ⭐⭐ **THE THREE WAYS TO HAVE NO RING ALL REACH THE SAME ARM.** This caller really does run on a thread
+	// with NO M — the IOCP completion loop, through `__sched_publish_locked` — and an M holding no processor
+	// is the state a handoff produces; a thread with no ring of its own belongs on the global queue whichever
+	// of the three reasons put it there.
+	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: retry, noProc: globalOnly, ids: ids)
 
 	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a thread
 	// belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch grab is for. The
@@ -3833,11 +3860,10 @@ end 'buildSchedFindRunnable'
 // question of a thread it has ALREADY popped.
 //
 // **THE HAZARD, STATED SO IT IS NOT REDISCOVERED:** between the slot load and the deref a thief can take the
-// thread, run it to completion and have its awaiter hand the struct back to the slab. A stale READ was
-// harmless — a word that happened to look like the consumer ticket still lost the CAS, because the head had
-// moved — but S6's scavenger DECOMMITS (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`, which drops
-// the backing and keeps the reservation), so a concurrent `__Builtins.scavengeMemory()` that frees the last
-// chunk in that 64 KiB granule turns the deref into an access violation rather than a stale answer.
+// thread, run it to completion and have it reclaimed — and the next spawn can take the struct off a free list
+// and zero it. The struct is never handed back to the slab (`GtFreePutName`), so the deref cannot fault and a
+// stale answer still loses the CAS, because the head has moved; but it is a read of another thread's words,
+// which no other slot reader here makes and none needs to.
 //
 // ⭐⭐ **AND DELETING IT COSTS NOTHING, WHICH IS WHY IT IS A DELETION AND NOT A LOCK-FREE REWRITE.** Three
 // facts, each checkable at the code:
@@ -3890,46 +3916,181 @@ function buildSchedSweepDropped(module StdModule)
 end 'buildSchedSweepDropped'
 
 // ==========================================================================
-// `__sched_steal_count`, `__sched_retake_count` and `__slab_remote_free_count`
+// `__gt_free_put` and `__gt_free_get` — the GT-struct free lists
+// ==========================================================================
+
+// Push `gt` onto P `p`'s own free list and answer the list's new length.
+function emitGtFreeLocalPush(module StdModule, block IrBlock, p ValueId, gt ValueId, ids ValueMinter) returns ValueId
+	emitStoreField(module, block: block, record: gt, offset: GtOffNext, value: emitLoadField(module, block: block, record: p, offset: POffFreeListHead, ids: ids))
+	emitStoreField(module, block: block, record: p, offset: POffFreeListHead, value: gt)
+	let step = emitConst(module, block: block, value: OneMore, ids: ids)
+	let prior = emitFieldAccumulate(module, block: block, record: p, offset: POffFreeListLen, delta: step, multiM: false, ids: ids)
+	return emitBin(module, block: block, a: prior, b: step, opcode: StdBinOpcode.add, ids: ids)
+end 'emitGtFreeLocalPush'
+
+// Pop the head of P `p`'s own free list, which the caller has seen non-empty.
+function emitGtFreeLocalPop(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let head = emitLoadField(module, block: block, record: p, offset: POffFreeListHead, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffFreeListHead, value: emitLoadField(module, block: block, record: head, offset: GtOffNext, ids: ids))
+	let step = emitConst(module, block: block, value: OneFewer, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffFreeListLen, delta: step, multiM: false, ids: ids)
+	return head
+end 'emitGtFreeLocalPop'
+
+// See `GtFreePutName`.
+function buildGtFreePut(module StdModule)
+	var func = IrFunction.createFromStd(GtFreePutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var local = module.addBlock(func, label: b"gfplocal")
+	var shed = module.addBlock(func, label: b"gfpshed")
+	var shedHdr = module.addBlock(func, label: b"gfpshedhdr")
+	var shedBody = module.addBlock(func, label: b"gfpshedbody")
+	var shedDone = module.addBlock(func, label: b"gfpsheddone")
+	var globalOnly = module.addBlock(func, label: b"gfpglobal")
+	let doneBlock = module.addBlock(func, label: b"gfpdone")
+	var haveOffset = module.addBlock(func, label: b"gfoffset")
+	var haveMachine = module.addBlock(func, label: b"gfmachine")
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: local, noProc: globalOnly, ids: ids)
+
+	let localLen = emitGtFreeLocalPush(module, block: local, p: p, gt: gt, ids: ids)
+	let high = emitConst(module, block: local, value: GtFreeLocalHigh, ids: ids)
+	let full = emitCmp(module, block: local, a: localLen, b: high, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(local, op: StdOp.condBranch(full, thenBlockId: shed.id, elseBlockId: doneBlock.id))
+
+	// One acquire, on the edge that runs once: the lock COUNTS, so an acquire in the loop header would be
+	// taken once per struct against the one release at `gfpsheddone`.
+	emitSchedLockEnter(module, block: shed, ids: ids)
+	module.setTerminator(shed, op: StdOp.branch(shedHdr.id))
+
+	let remaining = emitLoadField(module, block: shedHdr, record: p, offset: POffFreeListLen, ids: ids)
+	let low = emitConst(module, block: shedHdr, value: GtFreeLocalLow, ids: ids)
+	let shedEnough = emitCmp(module, block: shedHdr, a: remaining, b: low, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(shedHdr, op: StdOp.condBranch(shedEnough, thenBlockId: shedDone.id, elseBlockId: shedBody.id))
+
+	let moving = emitGtFreeLocalPop(module, block: shedBody, p: p, ids: ids)
+	emitSchedListPushLocked(module, block: shedBody, headLabel: SchedGtFreeHeadLabel, linkOffset: GtOffNext, node: moving, ids: ids)
+	module.setTerminator(shedBody, op: StdOp.branch(shedHdr.id))
+
+	emitSchedLockLeave(module, block: shedDone, ids: ids)
+	module.setTerminator(shedDone, op: StdOp.branch(doneBlock.id))
+
+	emitSchedLockEnter(module, block: globalOnly, ids: ids)
+	emitSchedListPushLocked(module, block: globalOnly, headLabel: SchedGtFreeHeadLabel, linkOffset: GtOffNext, node: gt, ids: ids)
+	emitSchedLockLeave(module, block: globalOnly, ids: ids)
+	module.setTerminator(globalOnly, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtFreePut'
+
+// See `GtFreeGetName`.
+function buildGtFreeGet(module StdModule)
+	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var haveProc = module.addBlock(func, label: b"gfgproc")
+	var refillPeek = module.addBlock(func, label: b"gfrefillpeek")
+	var refill = module.addBlock(func, label: b"gfgrefill")
+	var refillHdr = module.addBlock(func, label: b"gfgrefillhdr")
+	var refillPop = module.addBlock(func, label: b"gfgrefillpop")
+	var refillPush = module.addBlock(func, label: b"gfgrefillpush")
+	var refillDone = module.addBlock(func, label: b"gfgrefilldone")
+	var recycle = module.addBlock(func, label: b"gfgrecycle")
+	var fresh = module.addBlock(func, label: b"gfgfresh")
+	var haveOffset = module.addBlock(func, label: b"gfoffset")
+	var haveMachine = module.addBlock(func, label: b"gfmachine")
+
+	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: haveProc, noProc: fresh, ids: ids)
+
+	let localLen = emitLoadField(module, block: haveProc, record: p, offset: POffFreeListLen, ids: ids)
+	let empty = emitConst(module, block: haveProc, value: 0, ids: ids)
+	let localEmpty = emitCmp(module, block: haveProc, a: localLen, b: empty, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveProc, op: StdOp.condBranch(localEmpty, thenBlockId: refillPeek.id, elseBlockId: recycle.id))
+
+	// The unlocked peek `MultiMSharing.underSchedLock` enumerates: a stale non-zero costs a lock that finds
+	// nothing, a stale zero costs one slab allocation, and the locked pop below is what actually takes.
+	let globalHead = emitLoadGlobalWord(module, block: refillPeek, label: SchedGtFreeHeadLabel, ids: ids)
+	let noGlobal = emitConst(module, block: refillPeek, value: 0, ids: ids)
+	let globalEmpty = emitCmp(module, block: refillPeek, a: globalHead, b: noGlobal, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(refillPeek, op: StdOp.condBranch(globalEmpty, thenBlockId: fresh.id, elseBlockId: refill.id))
+
+	emitSchedLockEnter(module, block: refill, ids: ids)
+	let noneMoved = emitConst(module, block: refill, value: 0, ids: ids)
+	let moved = ids.mint()
+	refillHdr.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
+	module.setTerminator(refill, op: StdOp.branch(refillHdr.id))
+	refill.branchEdges.push(BranchEdge.create(refillHdr.id, argIds: argsOf(noneMoved)))
+
+	let batch = emitConst(module, block: refillHdr, value: GtFreeLocalLow, ids: ids)
+	let batchMoved = emitCmp(module, block: refillHdr, a: moved, b: batch, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(refillHdr, op: StdOp.condBranch(batchMoved, thenBlockId: refillDone.id, elseBlockId: refillPop.id))
+
+	let popped = ids.mint()
+	var takenOrNone = emitSchedListPopLocked(module, func: func, cur: refillPop, headLabel: SchedGtFreeHeadLabel, linkOffset: GtOffNext, poppedId: popped, unlinkLabel: b"gfgunlink", mergeLabel: b"gfgpopped", ids: ids)
+	let noneLeft = emitConst(module, block: takenOrNone, value: 0, ids: ids)
+	let globalDrained = emitCmp(module, block: takenOrNone, a: popped, b: noneLeft, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(takenOrNone, op: StdOp.condBranch(globalDrained, thenBlockId: refillDone.id, elseBlockId: refillPush.id))
+
+	_ = emitGtFreeLocalPush(module, block: refillPush, p: p, gt: popped, ids: ids)
+	let moveStep = emitConst(module, block: refillPush, value: 1, ids: ids)
+	let nextMoved = emitBin(module, block: refillPush, a: moved, b: moveStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(refillPush, op: StdOp.branch(refillHdr.id))
+	refillPush.branchEdges.push(BranchEdge.create(refillHdr.id, argIds: argsOf(nextMoved)))
+
+	// A racer may have emptied the global list between the peek and the lock, so the local length — not the
+	// peek — decides whether there is anything to recycle.
+	emitSchedLockLeave(module, block: refillDone, ids: ids)
+	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: POffFreeListLen, ids: ids)
+	let stillEmpty = emitConst(module, block: refillDone, value: 0, ids: ids)
+	let nothingRefilled = emitCmp(module, block: refillDone, a: refilledLen, b: stillEmpty, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(refillDone, op: StdOp.condBranch(nothingRefilled, thenBlockId: fresh.id, elseBlockId: recycle.id))
+
+	let reused = emitGtFreeLocalPop(module, block: recycle, p: p, ids: ids)
+	let structBytes = emitConst(module, block: recycle, value: GtStructSize, ids: ids)
+	module.appendOp(recycle, op: StdOp.memFill(reused, byteCountId: structBytes, value: 0))
+	let recycledOne = emitConst(module, block: recycle, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: recycle, record: p, offset: POffGtRecycleCount, delta: recycledOne, multiM: false, ids: ids)
+	module.setTerminator(recycle, op: StdOp.ret(reused))
+
+	let freshBytes = emitConst(module, block: fresh, value: GtStructSize, ids: ids)
+	let allocated = ids.mint()
+	module.appendOp(fresh, op: StdOp.call(allocated, callee: SlabAllocName, args: argsOf(freshBytes)))
+	module.setTerminator(fresh, op: StdOp.ret(allocated))
+
+	module.functions.push(func)
+end 'buildGtFreeGet'
+
+// ==========================================================================
+// The per-P counter sums
 // ==========================================================================
 
 // ⭐⭐ **THE SUM OF ONE PER-P COUNTER OVER `__sched_procs`** — the floor of `__Builtins.schedStealCount()`
-// (`POffStealCount`), of `__Builtins.schedRetakeCount()` (`POffRetakeCount`) and of
-// `__Builtins.slabRemoteFreeCount()` (`POffRemoteFreeCount`). Between them they are the only ways a Maxon
-// program can observe that work stealing ever happened, that a processor was ever retaken from a machine
-// stuck in the kernel, and that a box was ever freed on a machine other than the one that allocated it —
-// which is what makes `multicore-stress/steal-torture.maxon`'s `steals > 0`, `sched-syscall-handoff`'s `retaken=yes`
-// and `slab-sharding`'s `ok=yes` assertions rather than hopes.
+// (`POffStealCount`), `schedRetakeCount()` (`POffRetakeCount`), `slabRemoteFreeCount()`
+// (`POffRemoteFreeCount`) and `schedGtRecycleCount()` (`POffGtRecycleCount`): the only ways a Maxon program
+// can observe that work stealing happened, that a processor was retaken from a machine stuck in the kernel,
+// that a box was freed on a machine other than the one that allocated it, and that a spawn reused a GT struct.
 //
-// ⚠ **IT SUMS RATHER THAN READING A GLOBAL, AND THAT IS THE `.data` RULE THIS RUNG IS ARRANGED AROUND.** A
-// `__sched_steal_count` word would appear in the `data {` section of every green-thread program's golden, so
-// counting is per-P (`POffStealCount`) and the summing happens here, once, in a function no program that
-// does not ask for it carries (`DeadFunctionElimination`).
+// ⚠ **IT SUMS RATHER THAN READING A GLOBAL, BECAUSE A `.data` WORD APPEARS IN THE `data {` SECTION OF EVERY
+// GREEN-THREAD PROGRAM's GOLDEN.** Counting is per-P and the summing happens here, in a function no program
+// that does not ask for it carries (`DeadFunctionElimination`).
 //
-// ⚠ **IT IS NOT AN ATOMIC READ AND DOES NOT NEED TO BE.** Each counter is one aligned word written by its
-// own P, so every value the walk reads is a value some P really wrote; what a concurrent steal costs is
-// FRESHNESS, not a torn number. A harness reads it after its work has finished, which is when it is exact.
+// ⚠ **THE READ IS NOT ATOMIC AND DOES NOT NEED TO BE**, even for `POffRemoteFreeCount`, whose WRITE is atomic
+// to serialise its many producers against each other. Each counter is one aligned word, so every value the
+// walk reads is one some writer really stored; a concurrent step costs FRESHNESS, not a torn number, and a
+// harness reads it after its work has finished, which is when it is exact.
 //
-// ⭐⭐ **THE BODY IS PARAMETERISED ON THE FIELD, BECAUSE `__sched_retake_count` (W213-C3) AND
-// `__slab_remote_free_count` ARE THE SAME WALK.** All three sum ONE per-P word over `__sched_procs`;
-// everything above — why the counter is per-P rather than `.data`, why the walk needs no null test, why the
-// read is not atomic — is true of all three, word for word. Three bodies would be that argument written
-// three times, and the copies are what rot.
-//
-// ⚠ **THE READ STAYS NON-ATOMIC EVEN THOUGH `POffRemoteFreeCount` IS *WRITTEN* ATOMICALLY**, and the two
-// facts are about different parties. The atomic on the write side serialises the MANY PRODUCERS crediting one
-// P against each other, without which counts are lost outright; this walk is a single reader taking a
-// snapshot, and what a concurrent credit costs it is FRESHNESS, not a torn number — an aligned word is read
-// whole on both lanes. A harness reads it after its work has finished, which is when it is exact.
-//
-// ⛔⛔ **THE ROSTER DRIFT GUARD, AND IT IS THE SAME ONE EVERY THROWING FAMILY CARRIES** (`ListRuntime`'s, whose
-// header states the shape). The three names below are written down TWICE — once as this function's three call
-// sites in `installSchedRuntime`, once as `isSchedPerProcSumCallee`'s three arms — and nothing but this line
-// makes the two agree. A fourth sum built here and left off that predicate gets `usesGt` from nobody, so
-// `installSchedRuntime` never runs, so the body this call just built is never installed and the program dies
-// at `resolveCallFixups: call to unknown function` — a compiler PANIC naming a symbol, in front of whoever
-// wrote the builtin. ⇒ it fails at INSTALL instead, naming the predicate to add the name to. Three name
-// compares per compile that has a scheduler at all.
+// ⛔⛔ **THE ROSTER DRIFT GUARD.** Every name is written down twice — once as a call site in
+// `installSchedRuntime`, once as an arm of `isSchedPerProcSumCallee` — and a sum built here and left off that
+// predicate gets `usesGt` from nobody, so its body is never installed and the program dies at
+// `resolveCallFixups: call to unknown function`. ⇒ it fails at INSTALL instead, naming the predicate.
 function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffset)
 	if not isSchedPerProcSumCallee(name) 'offRoster'
 		panic("buildSchedPerProcSum: '{String.from(name)}' is built as a per-P sum but is not on `isSchedPerProcSumCallee`'s roster — add it there, which is the ONE membership `RuntimeUsage.recordCallUsage` (install the scheduler) and `TargetFacilities.calleeHostFacility` (E3104 off its substrate) both read")

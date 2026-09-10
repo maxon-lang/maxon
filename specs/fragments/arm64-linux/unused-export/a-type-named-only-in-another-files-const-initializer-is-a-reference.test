@@ -1,0 +1,25 @@
+// Test: a-type-named-only-in-another-files-const-initializer-is-a-reference
+// --- file: api/width.maxon
+export typealias ColumnWidth = int(0 to 128)
+
+export function widen(v ColumnWidth) returns ColumnWidth
+	return v
+end 'widen'
+
+// --- file: app/main.maxon
+let PAD = 7 as ColumnWidth
+
+function main() returns ExitCode
+	return widen(PAD)
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

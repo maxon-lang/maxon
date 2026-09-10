@@ -1,0 +1,152 @@
+// Test: an-eight-byte-ranged-element-is-adopted-too
+typealias NonNeg = int(0 to i64.max)
+typealias NonNegArray = Array with NonNeg
+typealias Unsigned = int(0 to u64.max)
+typealias UnsignedArray = Array with Unsigned
+
+function total(xs NonNegArray) returns NonNeg
+	var t = 0 as NonNeg
+	for x in xs 'each'
+		t = t + x
+	end 'each'
+	return t
+end 'total'
+
+function size(ys UnsignedArray) returns Unsigned
+	return ys.count() as Unsigned
+end 'size'
+
+function main() returns ExitCode
+	let viaArgument = total([1, 2, 3]) as ExitCode
+	let viaHead = size(UnsignedArray from [1, 2, 3]) as ExitCode
+
+	return viaArgument + viaHead
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @total {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  forhdr:
+    arm64.cmp x2, x3
+    arm64.b.ge forexit
+  each:
+    arm64.loadRegBaseIndexScale.word64 x4, [x0 + x2*8 + 0]
+  __im_cont:
+    arm64.add x1, x1, x4
+  forstep:
+    arm64.add x2, x2, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x1, 0
+    arm64.b.ge __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:12: Range check failed: value outside typealias 'NonNeg'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x19
+    arm64.bl total
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x20, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.leaRdata x1, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 3
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 8
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x19, x1, 0
+  __il_cont:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x1, 255
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#4:
+    arm64.bl __managed_decref
+    arm64.add x0, x20, x19
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-eight-byte-ranged-element-is-adopted-too.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#7:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

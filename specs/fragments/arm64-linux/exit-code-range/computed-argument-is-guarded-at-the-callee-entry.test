@@ -1,0 +1,64 @@
+// Test: computed-argument-is-guarded-at-the-callee-entry
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function takes(code ExitCode) returns ExitCode
+  return code
+end 'takes'
+
+function main() returns ExitCode
+  base = opaque(0)
+  return takes(base - 5)
+end 'main'
+var base = 0
+---
+ExitCode: 1
+---
+data {
+  __data_base@0 = i64 0
+}
+
+func @takes {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at computed-argument-is-guarded-at-the-callee-entry.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __il_cont#2:
+    arm64.leaGlobal x1, __data_base
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_base
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 5
+  __il_body:
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __il_cont#1
+  __il_slow:
+    arm64.bl takes
+  __il_cont#1:
+    arm64.epilogue 16
+    arm64.ret
+}

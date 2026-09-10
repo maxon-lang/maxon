@@ -1,0 +1,55 @@
+// Test: factory-self-assign-straight-line
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value as Integer
+	export var version as Integer
+
+	export static function make(initial Integer) returns Self
+		self.value = initial
+		self.version = 1
+		return Self{}
+	end 'make'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.make(41)
+	return c.value + c.version
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 41
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at factory-self-assign-straight-line.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

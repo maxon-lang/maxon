@@ -63,8 +63,9 @@ can say whether a header-free BUFFER leaked:
 - **TRACKED.** An element buffer here is an ordinary `__mm_alloc` box with a header and a
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
-- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the green-thread stacks
-  and tables, the subprocess scratch buffers and the DebugStream ring. Those are genuinely
+- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the green-thread structs
+  and tables, the service mailboxes and their message envelopes, the subprocess scratch buffers and the
+  DebugStream ring. A green thread's STACK is not among them: it comes from `osAllocPages`. Those are genuinely
   header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
 
 ⇒ **A case that reads ONE layer is reading a runtime-internal fact; a case that reads the SUM is
@@ -81,21 +82,17 @@ to call in a build that reads the counters. `the-two-layers-are-disjoint` below 
 
 ⭐ **The layer split is a runtime's private business; the SUM is the number `PhaseProbe` reads.**
 
-### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers — since S3
+### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers
 
 They read two `.data` words. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive`
 rises with each credited allocation and FALLS when a counted `__slab_alloc` caller hands its region
-back. `__mm_alloc`'s boxes move neither column: they come from the UNCOUNTED twin `__slab_alloc_box`
-and are reported by the tracked layer instead, because the two layers must stay disjoint (see *The
-layers must be DISJOINT* above).
-
-⚠ **THEY WERE ONE WORD UNTIL S3, AND THE SPLIT IS THE DAY THE OLD READING PREDICTED.** The single
-slot was correct while the population the raw columns credit — the green-thread structs and tables,
-the subprocess scratch, the DebugStream ring — released nothing, so a live count over it *was* the
-cumulative count. S3 retired the three hand-rolled reuse mechanisms those callers had grown while
-`__slab_alloc` had no free path, and from that commit a counted caller frees. The bootstrap has
-answered 14 and 1 for the same program all along, because it has `mm_raw_free`;
-`raw-live-falls-below-raw-total` below is what now pins the compiler to the same shape.
+back through the counted free door, `__mm_raw_free`. Several callers do: the subprocess runner's and
+the read probe's per-call scratch, and a service's mailbox envelopes, each freed the moment its
+message is delivered. A GT struct is credited once and never handed back — the scheduler recycles it
+through its own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`).
+`__mm_alloc`'s boxes move neither column: they come from the UNCOUNTED twin `__slab_alloc_box` and
+are reported by the tracked layer instead, because the two layers must stay disjoint (see *The
+layers must be DISJOINT* above). `raw-live-falls-below-raw-total` below pins the two-number shape.
 
 ### They are maintained only in a build that READS them
 
@@ -306,10 +303,10 @@ end 'main'
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
 a plausible `0` hides. the compiler's header-free layer is reached by the green-thread runtime: spawning one
-green thread makes `__gt_init` and `__gt_spawn` take GT structs, stacks and tables from
+green thread makes `__gt_init` and `__gt_spawn` take GT structs and tables from
 `__slab_alloc`. Before the first spawn the columns are 0 — the scheduler installs lazily — and
 after it they are not. The third assertion separates the byte column from the count column: a handful
-of GT structs and stacks is thousands of BYTES, so the two deltas cannot be equal unless one of the
+of GT structs and the timer table is thousands of BYTES, so the two deltas cannot be equal unless one of the
 two intrinsics is wired to the other's slot.
 
 ✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, this case
@@ -346,40 +343,55 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
-**THE CASE THAT PINS the compiler's SLAB TO WHAT IT ACTUALLY IS — AND THE DAY IT PREDICTED HAS COME.** It
-used to assert `live == total`, on the grounds that the population the raw columns credit was
-disjoint from the population anything released. S3 ended that: the green-thread scheduler now hands
-its GT structs, its per-read scratch and its subprocess scratch back to `__slab_free`, so a
-spawn/await window credits the cumulative column and then gives the slot up. The two columns are two
-numbers.
+**THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
+`total`.** The caller is a service's MAILBOX. `__mbox_send` cuts one envelope per message from the
+counted `__slab_alloc`, and `__mbox_recv` hands it back through `__mm_raw_free` the moment it pops the
+message, before the handler runs — so once the reply has been awaited, the one envelope this program
+sent is credited to `total` and debited from `live`. Every other raw region the program touches — the
+scheduler's tables, the P and M structs, the GT structs, the mailbox itself — is still held when the
+counters are read, so the envelope is the only debit, and a runtime whose envelope did not come back
+through the counted door would read `live == total`. Mailboxes run on every lane with green threads,
+so the case needs no Windows-only scratch.
 
-It is asserted only where there is something to compare — after a spawn, so the count is non-zero —
+It is asserted only where there is something to compare — after the send, so the count is non-zero —
 because `0 < 0` is false and `0 == 0` was true, and neither says anything about a runtime that
 maintains no raw counter at all.
 
-✅ **RED BEFORE GREEN, MEASURED.** Against the pre-S3 compiler this case answers **3** (`total > 0`
-held, `live < total` did not) — a green-thread struct went onto a private `.data` free list rather
-than back to the allocator, so nothing the columns credit was ever released. ⚠ Under the older
-sabotage that removes the raw columns' maintenance entirely, the `total > 0` half fails instead, so
-the two halves fail for opposite reasons and neither can carry the case alone.
+✅ **RED BEFORE GREEN, MEASURED.** With the envelope freed through the plain `__slab_free` — a door the
+raw columns never see — this program reads `live == total` (30 and 30 at a 16-processor default)
+and answers **3**. Through
+`__mm_raw_free` it reads `live == total - 1` at one, two and four processors and at the machine's
+count. ⚠ Under the sabotage that removes the raw columns' maintenance entirely, the `total > 0` half
+fails instead, so the two halves fail for opposite reasons and neither can carry the case alone.
 ```maxon
-function work(n ExitCode) returns ExitCode
-	__Builtins.parallelBoundary()
-	return n + 1
-end 'work'
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function next(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'next'
+end 'Counter'
 
 function main() returns ExitCode
-	let p = async work(1)
-	let a = await p
+	let c = spawn Counter.create()
+	let a = try await c.next(1) otherwise 0
 	let total = __Builtins.mmRawAllocTotal()
 	let live = __Builtins.mmRawAllocLive()
 	var score = a
 	if total > 0 'somethingToCompare'
 		score = score + 1
 	end 'somethingToCompare'
-	if live < total 'theAwaitedStructWentBackToItsSpan'
+	if live < total 'theDeliveredEnvelopeWentBack'
 		score = score + 4
-	end 'theAwaitedStructWentBackToItsSpan'
+	end 'theDeliveredEnvelopeWentBack'
 	return score as ExitCode
 end 'main'
 ```
