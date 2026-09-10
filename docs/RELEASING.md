@@ -322,6 +322,10 @@ which is why the tap needs its own.
 
 A release happens on a **release branch**, and the tag is what turns it into one.
 
+⭐ **`scripts/release-preflight.sh <X.Y.Z>` asks every question the pipeline will ask**, before the
+one irreversible step. Run it before the tag in step 4. `/release` is the agent-facing form of this
+same procedure and links back here for every "why".
+
 ### 1. Cut the branch
 
 ```bash
