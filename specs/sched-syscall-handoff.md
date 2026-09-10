@@ -691,10 +691,12 @@ nobody searching is what every later publish takes for *"somebody is already loo
 
 ⇒ **The first half forces exactly one handoff.** A spinner that never yields holds one processor, the reader
 blocks in the kernel holding the other, and the sentinel it pinged sits in that processor's ring where only
-a retake can reach it. **The second half publishes work while `main` runs without yielding**, and watches
-the idle-processor count: a working gate starts a machine on the spare processor at once, so the count
-reaches 0; a gate the handoff broke wakes nobody, and a parked machine's timeout looks only at the global
-queue, so the work waits in `main`'s ring and the count stays at 1 for the whole watch.
+a retake can reach it. **The second half publishes work while `main` runs without yielding**, and watches the
+probe's reply with the non-blocking peek (`promise-peek.md`): a working gate starts a machine on the spare
+processor, which runs the probe while `main` is still watching; a gate the handoff broke wakes nobody, so the
+probe waits in `main`'s ring until `main` itself yields, and the reply is still unanswered when the watch ends.
+The reply is the witness rather than the idle-processor count, because a machine can take the spare
+processor, run the probe and release it again between two reads of the count.
 
 ⚠ **`woken=false` READS WITH `retaken=`**: only `retaken=yes woken=false` is the fault this case gates. On a
 single-processor host there is no spare processor to start, the count is 0 throughout, and the case passes
@@ -714,7 +716,8 @@ let claimMs = 200
 // Long enough for every machine to park once the first half is over.
 let settleMs = 300
 
-// A started machine takes the spare processor within microseconds; a parked one waits out its timeout.
+// A started machine runs the probe within microseconds, and the watch ends as soon as it has. A stranded probe
+// stays in `main`'s ring for the whole watch: a parked machine's timed re-look reads only the global queue.
 let watchMs = 400
 
 type Reader
@@ -807,9 +810,13 @@ function main() returns ExitCode
 	sleep(settleMs)
 	let probe = spawn Spinner.create()
 	let reply = probe.spin(1)
-	let lowest = lowestIdleOver(watchMs)
+	let watchStart = Clock.nowMs()
+	var answered = 0
+	while (Clock.elapsedMs(watchStart) as Integer) < watchMs and answered == 0 'watch'
+		answered = __Builtins.gtIsComplete(reply.inner)
+	end 'watch'
 	let p = try await reply otherwise 0
-	print("retaken={retaken} woken={lowest == 0} ran={n + s + p}\n")
+	print("retaken={retaken} woken={answered == 1} ran={n + s + p}\n")
 
 	return 0 as ExitCode
 end 'main'
@@ -820,6 +827,62 @@ S: sentinel ran
 R: read returned
 done sibling=1 read=5 blocked=yes
 retaken=yes woken=true ran=7
+```
+```exitcode
+0
+```
+
+<!-- test: a-blocking-kernel-call-on-main-hands-its-processor-off -->
+<!-- procs: 1 -->
+<!-- stdin: delayed -->
+**THE SAME READ, MADE BY `main` ITSELF.** `main` is a green thread like any other, so a kernel call it blocks
+in is bracketed like any other, and sysmon hands its one processor to a machine that runs the sentinel while
+the read is still in the kernel. `main` prints its ready line, sends the ping, and reads; the sentinel must
+print before the read returns. `blocked=` is the same self-attributing witness as the case above: `no` would
+mean the line was already in the pipe and the scheduler was never exercised.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let blockedThresholdMs = 500
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		print("S: sentinel ran\n")
+
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+function main() returns ExitCode
+	let sentinel = spawn Sentinel.create()
+	print("M: reading\n")
+	let tailReply = sentinel.ping()
+	let start = Clock.nowMs()
+	let line = try Console.stdin().readLine() otherwise ""
+	let waitedMs = Clock.elapsedMs(start)
+	print("M: read returned\n")
+
+	let tail = try await tailReply otherwise 0
+	var blocked = "no"
+	if waitedMs >= blockedThresholdMs 'blocked'
+		blocked = "yes"
+	end 'blocked'
+	print("done sibling={tail} read={line.count()} blocked={blocked}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+M: reading
+S: sentinel ran
+M: read returned
+done sibling=1 read=5 blocked=yes
 ```
 ```exitcode
 0

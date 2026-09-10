@@ -5363,6 +5363,153 @@ end 'main'
 survived
 ```
 
+<!-- test: a-service-that-keeps-a-coroutine-across-a-reply -->
+<!-- procs: 1 -->
+⭐⭐ **A SERVICE THAT OWNS AN UNFINISHED COROUTINE PARKS ON ITS MAILBOX LIKE ANY OTHER SERVICE.** `start`
+leaves `async work()` in the service's own state and replies, so between that reply and the next message the
+service waits on its mailbox still owning a coroutine that has not run. `main` then awaits `finish`.
+
+⛔ **A PARK THAT DROVE THE SCHEDULER HERE WOULD DEADLOCK.** A drive runs other green threads NESTED on the
+parked thread's stack, so the service's mailbox wait would run `main` on top of the service — and `main`,
+awaiting the `finish` reply only that service can send, would be waiting on the frame it is standing on.
+MEASURED with every green thread that owns a coroutine driving its park: **exit 92** (`schedulerDeadlock`) at one
+processor and at four. Only `main`, which no green thread can await, may drive its park; the service switches
+to its driver, and the program answers `1 + 1`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	sleep(1)
+	return 5
+end 'work'
+
+type Svc
+	var pending as IntPromiseArray
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create()}
+	end 'create'
+
+	export function start() returns Integer
+		self.pending.push(async work())
+		return 1
+	end 'start'
+
+	export function finish() returns Integer
+		return self.pending.count() as Integer
+	end 'finish'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let a = try await h.start() otherwise 0
+	let b = try await h.finish() otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-service-that-keeps-a-coroutine-across-a-reply.on-four-processors -->
+<!-- procs: 4 -->
+The same program on four processors, where the service and `main` may run on different machines — so the
+nesting cannot be read as an artifact of one machine running everything. It deadlocked here too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work() returns Integer
+	sleep(1)
+	return 5
+end 'work'
+
+type Svc
+	var pending as IntPromiseArray
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create()}
+	end 'create'
+
+	export function start() returns Integer
+		self.pending.push(async work())
+		return 1
+	end 'start'
+
+	export function finish() returns Integer
+		return self.pending.count() as Integer
+	end 'finish'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let a = try await h.start() otherwise 0
+	let b = try await h.finish() otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
+<!-- procs: 1 -->
+⛔⛔ **`main` NEVER ENTERS A RUN QUEUE, SO NO SERVICE's DRIVE CAN RUN IT.** `Middle.go` awaits `Slow.get`, and
+an await DRIVES: it runs whatever it takes off a run queue on `Middle`'s own stack. `main`'s `sleep(1)` ends
+while that drive is waiting out `Slow`'s `sleep(20)`; were `main` queued on its wake, the drive would take it
+and run it on top of `Middle`, and `main`'s `await r1` — a reply only `Middle` can send — would wait on the
+frame it stands on. MEASURED with `main` parking like any other green thread: **exit 92**
+(`schedulerDeadlock`) on one processor. `main` drives its own parks instead, and both replies arrive.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slow
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function get() returns Integer
+		sleep(20)
+		return 7
+	end 'get'
+end 'Slow'
+
+type Middle
+	var s as Slow.handle
+
+	static function create() returns Self
+		return Self{s: spawn Slow.create()}
+	end 'create'
+
+	export function go() returns Integer
+		let v = try await self.s.get() otherwise 0
+		return v
+	end 'go'
+end 'Middle'
+
+function main() returns ExitCode
+	let m = spawn Middle.create()
+	let r1 = m.go()
+	sleep(1)
+	let r2 = m.go()
+	let a = try await r1 otherwise 0
+	let b = try await r2 otherwise 0
+	print("a={a} b={b}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=7 b=7
+```
+
 <!-- test: an-unsent-message-that-calls-the-library-still-compiles -->
 **A MESSAGE NOBODY SENDS IS STILL REACHABLE, BECAUSE THE SERVICE LOOP DISPATCHES IT.** `spawn` makes the
 synthesized `Reader.__loop` live, and that loop's switch names every message the type exports, so `read` is

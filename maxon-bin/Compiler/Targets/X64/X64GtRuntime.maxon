@@ -238,9 +238,10 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// ⭐ SAVE the CURRENT NT_TIB stack bounds into `from`, so the TIB always describes the stack that is actually
 	// executing. Without this, the syscall shim's after-call restore (which sets the TIB to `currentGt`'s bounds)
 	// would leave the TIB describing the OUTGOING GT's stack after a switch, and the RESUMED GT's next kernel call
-	// would probe a TIB that does not contain its RSP and fault. This is also what SEEDS GT0's bounds: GT0 never
-	// runs the shim (its `stackBase == 0`), so the first switch AWAY from GT0 is the only place its real
-	// main-thread TIB bounds are captured. Uses rax as scratch — caller-saved and not read across a switch.
+	// would probe a TIB that does not contain its RSP and fault. This is also what SEEDS an M's scheduler
+	// context's bounds: it never runs the shim (its `stackBase == 0`), so the first switch AWAY from it is the
+	// only place its OS thread's real TIB bounds are captured. Uses rax as scratch — caller-saved and not read
+	// across a switch.
 	if x64OsProbesStackBounds(target.os) 'saveTheBounds'
 		emitSaveTibIntoGt(code, gtReg: GtSwitchFromReg, scratch: GtSwitchTibScratchReg)
 	end 'saveTheBounds'
@@ -341,12 +342,11 @@ end 'buildGtTrampolineChunk'
 
 // --- The Win32 syscall shim (P1.5-B1a′ slice 1) ---
 //
-// A green thread's kernel call runs on the single global 64 KB SYSTEM stack, not the GT's own small stack:
-// heavy Win32 calls (CreateProcessA, WriteFile) use deep stack and probe the Windows TIB, and would fault a
-// small GT stack. This slice keeps GT stacks at 1 MiB (kernel calls do not fault today), so it is TRANSPARENT
-// infrastructure whose correctness proof is "every spec stays green through it"; slice 2's 2 KB GT stacks are
-// what make the switch load-bearing. Emitted inline around EVERY `iatCall` of a GT module (the runtime gate
-// makes it a no-op off a GT stack), so a program that never touches the scheduler is unchanged.
+// A green thread's kernel call runs on its M's 64 KB SYSTEM stack, not the GT's own small stack: heavy
+// Win32 calls (CreateProcessA, WriteFile) use deep stack and probe the Windows TIB, and would overrun a
+// green thread's seed stack, which nothing grows for a frame the prologue guard never sees. Emitted inline
+// around EVERY `iatCall` of a GT module (the runtime gate makes it a no-op off a GT stack), so a program that
+// never touches the scheduler is unchanged.
 //
 // ⭐ WHY IT COPIES THE STACK ARGS instead of writing them AFTER the switch. The runtimes here are
 // builder-built Std, REGISTER-ALLOCATED, and both spills and outgoing args are addressed
@@ -982,6 +982,20 @@ end 'exitSyscallSlowFrameBytes'
 // callee may not touch.
 let ExitSyscallSavedResultDisp = ShadowSpaceBytes as Imm32
 
+// Branch to `bail` unless RSP lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a `stackBase`
+// of 0 bails too. Clobbers `gt` and `scratch`.
+function emitGtBailUnlessOnItsOwnStack(code ByteArray, fixups ChunkRel32FixupArray, gt X64Register, scratch X64Register, bail BlockId)
+	encodeLoadRegBaseDisp(code, destReg: scratch, base: gt, disp: GtOffStackBase as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: scratch, src: scratch, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: scratch, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.below, targetBlockId: bail)
+	encodeLoadRegBaseDisp(code, destReg: gt, base: gt, disp: GtOffStackSize as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: scratch, src: gt, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: scratch, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.aboveEqual, targetBlockId: bail)
+end 'emitGtBailUnlessOnItsOwnStack'
+
 // Emit an `iatCall`, wrapped in the system-stack shim iff the module carries the GT scheduler (see the header).
 export function emitGtGatedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex, usesGt bool)
 	if usesGt 'shim'
@@ -995,15 +1009,17 @@ end 'emitGtGatedIatCall'
 // 16-aligned at the `call` INDEPENDENTLY of the caller's alignment (it sets RSP = the page-aligned system-stack
 // top and reserves a frame chosen to land on 16). Disassembly of the CreateProcessA (6 stack args) path:
 //   lea rax,[rip+__sched_tls_teb_offset] ; mov rax,[rax] ; test rax,rax ; jz direct  (no scheduler → direct)
-//   mov rax,gs:[rax]              ; test rax,rax ; jz direct                   (this OS thread owns no P)
-//   mov r11,[rax+0x18]            ; test r11,r11 ; jz direct                   (no current GT)
-//   mov r11,[r11+0x18]            ; test r11,r11 ; jz direct                   (stackBase==0 → real OS stack)
-//   push r10 ; mov r10,rsp ; mov rax,[rax+0x70] ; mov rsp,rax                  (this P's OWN syscall stack)
+//   mov rax,gs:[rax]              ; test rax,rax ; jz direct                   (this OS thread is no M)
+//   mov r11,[rax+0x08]            ; test r11,r11 ; jz direct                   (no current GT)
+//   mov rax,[r11+0x18]            ; test rax,rax ; jz direct                   (stackBase==0 → real OS stack)
+//   cmp rsp,rax ; jb direct ; mov r11,[r11+0x20] ; add rax,r11 ; cmp rsp,rax ; jae direct  (RSP off the GT stack)
+//   lea rax,[rip+__sched_tls_teb_offset] ; mov rax,[rax] ; mov rax,gs:[rax]    (the M again)
+//   push r10 ; mov r10,rsp ; mov rax,[rax+0x10] ; mov rsp,rax                  (this M's OWN syscall stack)
 //   push r10 ; sub rsp,0x58                                                    (shadow 0x20 + 6 args 0x30 + pad 8)
 //   (mov r11,[r10+0x28+k*8] ; mov [rsp+0x20+k*8],r11) for k in 0..6            (6 args → [rsp+0x20..0x48])
 //   mov gs:[0x08],rax ; sub rax,0x10000 ; mov gs:[0x10],rax                    (repoint TIB at the system stack)
 //   call [CreateProcessA]
-//   lea r11,[rip+__sched_tls_teb_offset] ; mov r11,[r11] ; mov r11,gs:[r11] ; mov r11,[r11+0x18]
+//   lea r11,[rip+__sched_tls_teb_offset] ; mov r11,[r11] ; mov r11,gs:[r11] ; mov r11,[r11+0x08]
 //   mov rcx,[r11+0x90] ; mov gs:[0x08],rcx ; mov rcx,[r11+0x98] ; mov gs:[0x10],rcx   (restore TIB to this GT)
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
 //   direct: call [CreateProcessA]
@@ -1038,16 +1054,17 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	var shimFixups = ChunkRel32FixupArray.create()
 	var shimLabels = BlockOffsetTable.create()
 
-	// Guard: no M (no scheduler yet, or an OS thread that is not one), no current GT, or a context already on a
-	// real OS-thread stack (`stackBase == 0` — GT0 and every M's inline scheduler GT) → run the call directly.
+	// Guard: no M (no scheduler yet, or an OS thread that is not one), no current GT, or RSP not on the current
+	// GT's own stack → run the call directly. The last covers a context already on a real OS-thread stack
+	// (`stackBase == 0` — an M's inline scheduler GT) and a fault handler, which runs wherever the fault
+	// happened — the system stack included, where a switch to its TOP would overwrite the frames the handler
+	// returns into. See `Arm64GtRuntime.buildArm64DarwinLibcCallChunk` for the same test on the other lane.
 	//
-	// ⭐ **rax HOLDS THE M ACROSS THE GUARD**, because the system-stack top is read out of it AFTER the two
-	// pushes below and re-reading TLS there would spend the sequence twice. rax is caller-saved and the coming
-	// call clobbers it anyway, and nothing between here and the `mov rsp` reads it.
+	// rax is caller-saved and the coming call clobbers it anyway; it carries the M out of the guard, where the
+	// system-stack top is read out of it after the two pushes below.
 	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, mDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel, os: Os.windows)
-	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: GtOffStackBase as Imm32, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
-	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
+	emitGtBailUnlessOnItsOwnStack(code, fixups: shimFixups, gt: ShimGtReg, scratch: X64Register.rax, bail: ShimDirectLabel)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
 
 	// Switch RSP to THIS M's OWN system stack (G1 made it per-P, W213-C1 per-M;
 	// `SchedRuntime.MOffSystemStackSP` carries the silent interleaved corruption each move removes). r10 =
@@ -1122,7 +1139,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 
 	encodeJmp(code, rel32Fixups: shimFixups, targetBlockId: ShimDoneLabel)
 
-	// direct: the non-switched call (main thread / no scheduler).
+	// direct: the non-switched call (an M's scheduler context, or no M at all).
 	shimLabels.place(ShimDirectLabel, value: code.count())
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
@@ -1146,10 +1163,17 @@ end 'emitGtShimmedIatCall'
 // each interior link. Complete and sound — this is what frame-pointers-on-every-function was paid for. x64 does
 // NOT fix `gt.sp`/`gt.fp` (they are stale-but-overwritten on the next context switch; only arm64 would).
 //
-// ENTRY CONTRACT (from the prologue guard): r11 = the current GT, r10 = the system-stack top (both non-arg
-// scratch the guard loaded, so this chunk needs no `.data` of its own for them), rsp = the GT stack pointing at
-// the return address the guard's `call` pushed. Everything it saves goes on the SYSTEM stack, so the tiny GT
-// stack the guard is protecting never holds this frame, and it returns onto the RELOCATED (2x) stack.
+// ENTRY CONTRACT (from the prologue guard): r11 = the current GT, r10 = the system-stack top, r8 = the guard's
+// PROJECTED rsp (all three non-arg scratch the guard loaded, so this chunk needs no `.data` of its own for
+// them), rsp = the GT stack pointing at the return address the guard's `call` pushed. Everything it saves goes
+// on the SYSTEM stack, so the tiny GT stack the guard is protecting never holds this frame, and it returns onto
+// the RELOCATED stack.
+//
+// ⭐⭐ **IT GROWS UNTIL THE FRAME THAT ASKED FITS, AS GO'S `newstack` DOES.** The guard does not re-test after
+// the call returns, so one doubling is not enough for a frame larger than the stack's free half: that frame
+// would hang below the new stack's base, and its first spill would land in memory the thread does not own.
+// The projected rsp is what makes "fits" computable here — the new stack must hold everything above it plus the
+// guard height below it — and the guard already has it in a register.
 //
 // ⭐⭐ WHAT IT PRESERVES, AND WHY THAT SET AND NOT ANOTHER. The guard is emitted at offset 0 of the entry block
 // — BEFORE `push rbp` and before the `param` captures (X64Backend.emitFunctionChunk) — so when it `call`s here
@@ -1224,9 +1248,20 @@ let RbpAdjustSkipLabel = 0 as BlockId
 let GtMoreGtReg = X64Register.rbx  // the current GT (moved from r11 after the pushes)
 let GtMoreOldBaseReg = X64Register.r12  // old stack base
 let GtMoreOldSizeReg = X64Register.r13  // old stack size
-let GtMoreNewSizeReg = X64Register.r14  // new stack size = old * 2
-let GtMoreNewBaseReg = X64Register.r15  // new stack base (VirtualAlloc result)
+let GtMoreNewSizeReg = X64Register.r14  // new stack size = old * 2^k, the first that fits
+let GtMoreNewBaseReg = X64Register.r15  // the bytes the new stack must hold, then its base (the allocation result)
 let GtMoreOffsetReg = X64Register.rax  // the relocation offset = new_top - old_top
+
+// The guard's projected rsp — `__gt_morestack`'s third entry register. r8 is the internal ABI's primary RETURN
+// register and no argument's, so nothing is live in it at a function entry; the chunk saves and restores it
+// with the other twelve regardless, so the guarded function gets back exactly what it had.
+let GtMorestackProjectedRspReg = X64Register.r8
+
+// The growth loop's and the two refusals' targets, in the chunk's own GROW-LOCAL map: the refusals are placed
+// after the `ret`, so this map is resolved last, after every other local map has been.
+let GrowDoubleLabel = 0 as BlockId
+let GrowExhaustedLabel = 1 as BlockId
+let GrowRefusedLabel = 2 as BlockId
 
 // The string-copy opcodes `__gt_morestack`'s memcpy uses — `cld` (clear DF, so `movsb` ascends), then the
 // `rep movsb` pair (F3 prefix + A4). Nothing else in the compiler emits a string op, so they live here rather than in the
@@ -1235,10 +1270,11 @@ let OpcodeCld = 0xFC
 let OpcodeRepPrefix = 0xF3
 let OpcodeMovsb = 0xA4
 
-// `__gt_morestack` — grow the current GT's stack to 2x, copy the old stack to the TOP of the new one, rebase the
-// saved-rbp chain + the entry rsp by the relocation offset, update the GT struct + TIB, free the old stack, and
-// `ret` onto the new (larger) stack so the prologue guard that called us now passes. All of it runs on the system
-// stack (entered r10 = system-stack top), so the near-overflow GT stack never holds this frame.
+// `__gt_morestack` — grow the current GT's stack to the first doubling that fits the requesting frame, copy the
+// old stack to the TOP of the new one, rebase the saved-rbp chain + the entry rsp by the relocation offset, update
+// the GT struct + TIB, free the old stack, and `ret` onto the new (larger) stack so the frame whose guard called
+// us fits. All of it runs on the system stack (entered r10 = system-stack top), so the near-overflow GT stack
+// never holds this frame. A growth past `GtMaxStackBytes` and a refused allocation both end the process.
 function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -1311,14 +1347,31 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 		emitRepointTibToSystemStack(code, topReg: ShimGtRspReg)  // gs:[0x08] = top ; gs:[0x10] = top - size
 	end 'repointForTheKernelCalls'
 
-	// Step 4: r12 = old_base ; r13 = old_size ; r14 = new_size = old_size * 2.
+	// Step 4: r12 = old_base ; r13 = old_size ; r15 = need = old_top - projected + guard height ; r14 = old_size
+	// doubled until it holds `need`. A size past the ceiling is refused BEFORE anything is allocated — tested
+	// ahead of the fit, so the loop ends even on a `need` no stack could hold.
+	var growFixups = ChunkRel32FixupArray.create()
+	var growLabels = BlockOffsetTable.create()
 	encodeLoadRegBaseDisp(code, destReg: GtMoreOldBaseReg, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: GtMoreOldSizeReg, base: GtMoreGtReg, disp: GtOffStackSize as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: GtMoreOldBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewBaseReg, src: GtMoreOldSizeReg, wide: true)  // r15 = old_top
+	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: GtMoreNewBaseReg, src: GtMorestackProjectedRspReg, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: GtMoreNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)  // r15 = need
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewSizeReg, src: GtMoreOldSizeReg, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewSizeReg, wide: true)  // r14 += r14
 
-	// Step 5: new_base = <this OS's page source>(new_size) ; r15 = new_base.
+	growLabels.place(GrowDoubleLabel, value: code.count())
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewSizeReg, wide: true)  // r14 += r14
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: GtMoreNewSizeReg, imm: GtMaxStackBytes as Imm32)
+	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.above, targetBlockId: GrowExhaustedLabel)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewBaseReg, wide: true)  // new_size - need
+	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.below, targetBlockId: GrowDoubleLabel)
+
+	// Step 5: new_base = <this OS's page source>(new_size) ; r15 = new_base. A refusal is NULL from `VirtualAlloc`
+	// and a negative errno from a raw `mmap`, so the sign test catches both — `__slab_assert_os_alloc`'s test.
 	emitGtMorestackAllocate(code, iatRelocs: iatRelocs, os: target.os)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.lessEqual, targetBlockId: GrowRefusedLabel)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: X64Register.rax, wide: true)  // r15 = new_base
 
 	// Step 6: memcpy old → TOP of new. rdi = new_base + new_size - old_size (dst top), rsi = old_base, rcx = old_size.
@@ -1363,11 +1416,11 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	emitGtMorestackChainWalk(code)
 
 	// Step 9: update the GT struct + TIB for the new stack. stackBase = r15, stackSize = r14,
-	// stackGuard = new_base + margin, tib_base = new_top, tib_limit = new_base.
+	// stackGuard = new_base + guard height, tib_base = new_top, tib_limit = new_base.
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, srcReg: GtMoreNewBaseReg)
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackSize as Imm32, srcReg: GtMoreNewSizeReg)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: gtStackGuardMargin(target) as Imm32)  // rcx = new_base + margin
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: gtStackGuardHeight(target) as Imm32)  // rcx = new_base + guard height
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackGuard as Imm32, srcReg: X64Register.rcx)
 
 	if x64OsProbesStackBounds(target.os) 'republishTheBounds'
@@ -1412,6 +1465,14 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: MorestackFerrySkipBytes)  // add rsp, 8 (skip ferried slot)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)  // rsp = relocated GT rsp
 	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
+
+	// The two refusals. rsp is on the system stack, 16-aligned, with the TIB describing it (step 3) — every
+	// precondition the exit door has.
+	growLabels.place(GrowExhaustedLabel, value: code.count())
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord)
+	growLabels.place(GrowRefusedLabel, value: code.count())
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
+	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
 	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 end 'buildGtMorestackChunk'
@@ -1461,9 +1522,10 @@ end 'emitGtMorestackChainWalk'
 // very START of a guarded function's entry block — BEFORE `push rbp` — iff the module carries the GT scheduler,
 // the function is NOT a runtime (`__`/`mrt_`) function, and it reserves a frame. When the running GT's projected
 // rsp would dip below its stack guard, it calls `__gt_morestack` to grow+relocate first; otherwise it is a handful
-// of instructions that fall through. A no-op for GT0/main (stackGuard 0 ⇒ `jae` always taken) and off a GT
-// entirely (currentGt 0 ⇒ `jz` taken). Clobbers ONLY r10/r11 (volatile, non-arg), so the incoming argument
-// registers (rcx/rdx/rax/r9/rsi/rdi) are untouched, and `__gt_morestack` preserves everything.
+// of instructions that fall through. A no-op for an M's scheduler context (stackGuard 0 ⇒ `jae` always taken)
+// and off a GT entirely (currentGt 0 ⇒ `jz` taken). Clobbers ONLY r10/r11, and r8 on the cold path (all volatile, non-arg),
+// so the incoming argument registers (rcx/rdx/rax/r9/rsi/rdi) are untouched, and `__gt_morestack` preserves
+// everything. `mrt_panic` runs it too, after its own prologue (`X64Runtime.emitPanicStackGuard`).
 export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, os Os)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
@@ -1478,10 +1540,11 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	encodeCmpRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtReg, disp: GtOffStackGuard as Imm32)  // projected - stackGuard
 	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.aboveEqual, targetBlockId: GuardSkipLabel)
 
-	// Cold path: r10 = THIS M's system-stack top (the scratch stack `__gt_morestack` runs on), then grow.
-	// ⚠ The M is re-read rather than kept from the guard above, because r11 has since been repurposed to hold
-	// the current GT — which IS `__gt_morestack`'s entry contract and must not be disturbed — and the guard's
-	// hot path must not spend a second register to save a load on its cold one.
+	// Cold path: r8 = the projected rsp, r10 = THIS M's system-stack top (the scratch stack `__gt_morestack` runs
+	// on), then grow. ⚠ The M is re-read rather than kept from the guard above, because r11 has since been
+	// repurposed to hold the current GT — which IS `__gt_morestack`'s entry contract and must not be disturbed —
+	// and the guard's hot path must not spend a second register to save a load on its cold one.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMorestackProjectedRspReg, src: ShimGtRspReg, wide: true)
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg, os: os)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: MOffSystemStackSP as Imm32, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
@@ -1511,10 +1574,9 @@ end 'emitGtStackGuard'
 // reason other than the broken pipe that is a clean end of stream. Then — THE HANDSHAKE — it SPIN-WAITS on
 // `gt.ioParked == 1` (the reading GT
 // sets it only AFTER `status = waiting`, so this ordering guarantees the `status = ready` below lands AFTER the GT's
-// own waiting-write: no torn status, no lost wakeup). It sets `status = ready`; for a SPAWNED GT (`stackBase != 0`)
-// it re-enqueues under `__sched_lock` (the run queue's sole cross-thread mutation); a GT0 self-driver (`stackBase == 0`)
-// is left for its own drive loop to notice via `status`. Either way it `SetEvent`s `__io_done_event` to wake the
-// netpoll's `WaitForSingleObject`. `__gt_enqueue` is PURE MEMORY (no shim), so calling it from this thread is safe.
+// own waiting-write: no torn status, no lost wakeup). It sets `status = ready`, publishes the GT under `__sched_lock`,
+// and `SetEvent`s `__io_done_event` to wake a driver's netpoll `WaitForSingleObject`. The publish door is PURE
+// MEMORY (no shim), so calling it from this thread is safe.
 //
 // gt is spilled to a frame local (not a callee-saved register) and reloaded after each call, which
 // keeps the frame layout — and the 16-byte alignment at every `call` — trivial.
@@ -1527,11 +1589,9 @@ let IoLoopKeyLocalDisp = -0x10 as Imm32  // lpCompletionKey out-param (unused)
 let IoLoopOverlappedLocalDisp = -0x18 as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
 let IoLoopGtLocalDisp = -0x20 as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
 
-// ⭐ **THE WAKE DEBT `__sched_publish_locked` ANSWERED (SV1)** — 1 when a GREEN THREAD was published, so a
+// ⭐ **THE WAKE DEBT `__sched_publish_locked` ANSWERED** — 1 when a GREEN THREAD was published, so a
 // `__sched_wake_or_spawn` is owed after the release. It is a FRAME LOCAL rather than a register because
-// `LeaveCriticalSection` sits between the answer and its use and clobbers every volatile register, and
-// because the two paths into `signal` disagree about it: a GT0 self-driver publishes nothing. `loop_top`
-// zeroes it every iteration, so the second of those paths cannot read the first's answer.
+// `LeaveCriticalSection` sits between the answer and its use and clobbers every volatile register.
 //
 // ⚠ rbp-0x28 is rsp+0x28 in this 0x50 frame, one slot above the outgoing-argument region
 // (`win64OutgoingArgDisp(0)` = rsp+0x20, eight bytes wide), so it collides with nothing.
@@ -1543,7 +1603,6 @@ let IoLoopInfiniteTimeout = 0xFFFFFFFF  // INFINITE
 let IoLoopTopLabel = 0 as BlockId
 let IoLoopSpinLabel = 1 as BlockId
 let IoLoopSpunLabel = 2 as BlockId
-let IoLoopSignalLabel = 3 as BlockId
 let IoLoopExitLabel = 4 as BlockId
 let IoLoopAbandonedLabel = 5 as BlockId
 let IoLoopNoWakeLabel = 6 as BlockId
@@ -1577,11 +1636,9 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	// loop_top:
 	loopLabels.place(IoLoopTopLabel, value: code.count())
 
-	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64) and the wake-debt
-	// slot (only the publish path below writes it, and the GT0 arm reaches `signal` without going through it).
+	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64).
 	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, srcReg: X64Register.rax)
 
 	// GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped, INFINITE).
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoIocpLabel)
@@ -1674,21 +1731,14 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffStatus as Imm32, srcReg: X64Register.rcx)
 
-	// A GT0 self-driver (stackBase == 0) is NOT enqueued — its drive loop notices `status` — but IS signalled.
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
-
 	// Publish the re-readied thread on whichever queue its KIND belongs to, under the outer __sched_lock —
 	// which is exactly the lock `__sched_publish_locked` requires of its caller.
 	//
-	// ⭐ **IT WAS `__gt_enqueue` — THE GLOBAL QUEUE — UNTIL EC10, THEN `__gt_coro_enqueue`, AND SV1 MAKES IT
-	// THE ROUTING DOOR BECAUSE THE ANSWER STOPPED BEING KNOWABLE FROM HERE.** A parked reader was always a
-	// coroutine of one green thread while `async` was the only producer; a `spawn` makes it possibly a GREEN
-	// THREAD, whose owner is ITSELF — so `__gt_coro_enqueue` would append it to its own queue, where nothing
-	// but the thread itself could ever drain it. The door reads `owner == gt` and routes; for a green thread
-	// on this P-less OS thread that means the GLOBAL queue (`__sched_runq_put`'s `p == 0` arm), which is the
-	// tier a thread belongs to when no processor owns it.
+	// ⭐ **THE ROUTING DOOR, BECAUSE WHICH QUEUE IS NOT KNOWABLE FROM HERE.** A parked reader is a COROUTINE of
+	// one green thread or a GREEN THREAD itself, whose owner is ITSELF — `__gt_coro_enqueue` would append the
+	// latter to its own queue, where nothing but the thread itself could ever drain it. The door reads
+	// `owner == gt` and routes; for a green thread on this P-less OS thread that means the GLOBAL queue
+	// (`__sched_runq_put`'s `p == 0` arm), which is the tier a thread belongs to when no processor owns it.
 	//
 	// ⭐⭐ **AND ITS ANSWER IS THE WAKE DEBT, WHICH IS WHY THE RESULT IS SPILLED RATHER THAN DISCARDED.** A
 	// green thread published here may belong to a parked or absent worker M — this event wakes only the
@@ -1700,11 +1750,10 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeCallDirect(code, callFixups: callFixups, targetName: SchedPublishLockedName)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, srcReg: X64Register.r8)
 
-	// signal (normal): gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and
-	// knows the GT is queued rather than in flight — then Leave __sched_lock and SetEvent __io_done_event →
-	// loop_top. ⚠ It does NOT unlink: W212 removed that (a ring cannot be spliced) and the drop renounces the
-	// GT in place, leaving a tombstone the queue's popper reclaims. `emitGtIoCancelArm` carries the protocol.
-	loopLabels.place(IoLoopSignalLabel, value: code.count())
+	// gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and knows the GT is
+	// queued rather than in flight — then Leave __sched_lock and SetEvent __io_done_event → loop_top. ⚠ It
+	// does NOT unlink: a ring cannot be spliced, so the drop renounces the GT in place, leaving a tombstone the
+	// queue's popper reclaims. `emitGtIoCancelArm` carries the protocol.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
@@ -1732,7 +1781,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 
 	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __sched_lock, loop. No enqueue,
-	// no SetEvent — the drop arm spins on ioParked==3 on the main thread and owns the free.
+	// no SetEvent — the drop arm spins on ioParked==3 on the dropping thread and owns the free.
 	loopLabels.place(IoLoopAbandonedLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)

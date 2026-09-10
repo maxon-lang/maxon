@@ -315,7 +315,7 @@ export type X64RuntimeAsm
 		// is a claim about ITS entry contract that this shared builder cannot make on its behalf.
 		//
 		// ⚠ THE GUARD PAGE IS NOT THE ONLY CEILING. A chunk emitted for x64-windows is also un-guarded
-		// against a GREEN THREAD's 2 KB stack, which is a far tighter bound; `buildWriteStreamChunk`
+		// against a GREEN THREAD's few-kilobyte stack, which is a far tighter bound; `buildWriteStreamChunk`
 		// certifies itself against it, because the budget is a property of the CHAIN a chunk sits in and
 		// not of any one frame.
 		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
@@ -514,42 +514,37 @@ function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rb
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
 end 'emitFaultAddressesAndBacktrace'
 
-// Terminate the process with `PanicExitCode` — the LAST instruction of every terminal diagnostic in
-// this file, and the ONE thing about a panic that is still an OS question once the message and the
-// backtrace are printed. `route` is `x64OsCallKind`'s own answer, derived once in
-// `appendX64RuntimeChunks` and threaded down, so this file cannot grow a third opinion about which OSes
-// the x64 backend serves. The two fault chunks name their own route as a literal instead, and that is
-// not a second opinion: `buildFaultThunkChunk` is a VEH callback and `buildLinuxFaultHandlerChunk`
-// answers a `rt_sigaction` signal — each is one OS by its own content, not by a decision made elsewhere.
-//
-// Shared by all THREE terminal paths — the Windows fault thunk, the Linux fault handler, and the
-// OS-parametric `mrt_panic` — for `emitFaultAddressesAndBacktrace`'s reason: the first two had each
-// open-coded their two instructions, and `mrt_panic` becoming OS-parametric would have made that two
-// copies apiece. A panic's exit code and the register it travels in are one fact per OS.
+// Terminate the process with `exitCode` — the LAST instruction of every terminal path a hand-assembled
+// chunk takes: the three panic diagnostics here (`PanicExitCode`) and `__gt_morestack`'s two refusals (a
+// `RuntimeAbort` code). `route` is `x64OsCallKind`'s own answer, derived once by whoever holds the target
+// and threaded down, so no chunk grows a second opinion about which OSes the x64 backend serves. The two
+// fault chunks name their own route as a literal instead, and that is not a second opinion:
+// `buildFaultThunkChunk` is a VEH callback and `buildLinuxFaultHandlerChunk` answers a `rt_sigaction`
+// signal — each is one OS by its own content, not by a decision made elsewhere.
 //
 // ⚠ THE ARGUMENT REGISTER IS PART OF THE DOOR, NOT A DETAIL BESIDE IT. Win64 passes `ExitProcess`'s
 // code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
 // inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
 // same reason.
-function emitPanicProcessExit(asm X64RuntimeAsm, route X64OsCallKind)
+export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, route X64OsCallKind, exitCode MachineWord)
 	match route 'route'
-		importCall then emitWin64PanicProcessExit(asm)
-		syscall then emitLinuxPanicProcessExit(asm)
+		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, exitCode: exitCode)
+		syscall then encodeLinuxProcessExit(code, exitCode: exitCode)
 	end 'route'
-end 'emitPanicProcessExit'
+end 'encodeX64ProcessExit'
 
-// Windows: `ExitProcess(PanicExitCode)` through the IAT. Never returns, so nothing follows it.
-function emitWin64PanicProcessExit(asm X64RuntimeAsm)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
-	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
-end 'emitWin64PanicProcessExit'
+// Windows: `ExitProcess(exitCode)` through the IAT. Never returns, so nothing follows it.
+function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, exitCode MachineWord)
+	encodeMovRegImm32(code, dest: X64Register.rcx, value: exitCode)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+end 'encodeWin64ProcessExit'
 
-// Linux: `exit_group(PanicExitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
-// `X64LinuxRuntime.X64LinuxSyscallExitGroup` states — a panic ends the thread GROUP.
-function emitLinuxPanicProcessExit(asm X64RuntimeAsm)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallExitGroup)
-end 'emitLinuxPanicProcessExit'
+// Linux: `exit_group(exitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
+// `X64LinuxRuntime.X64LinuxSyscallExitGroup` states — a terminal path ends the thread GROUP.
+function encodeLinuxProcessExit(code ByteArray, exitCode MachineWord)
+	encodeMovRegImm32(code, dest: X64Register.rdi, value: exitCode)
+	encodeX64Syscall(code, number: X64LinuxSyscallExitGroup)
+end 'encodeLinuxProcessExit'
 
 // Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
 // offset) names code this image can symbolize, jumping to `rejectLabel` if not:
@@ -645,7 +640,7 @@ let UnguardedDiagnosticChainBytes = 544 + 56
 
 // ⛔⛔ **THE CEILING ON `ConsoleWideBufferUnits`, AND IT IS THE GREEN-THREAD STACK RATHER THAN THE GUARD
 // PAGE.** This chunk is emitted with no stack-guard check, so it spends the margin the guard leaves below
-// a green thread's 2 KB stack (`GtRuntime.gtStackGuardMargin`) — and it spends it AFTER the diagnostic
+// a green thread's stack (`GtRuntime.gtStackGuardMargin`) — and it spends it AFTER the diagnostic
 // chain above has. A buffer raised for throughput would otherwise overflow that stack silently, on the one
 // path where the symptom is a corrupted neighbouring green thread rather than a fault.
 //
@@ -656,7 +651,7 @@ function requireWriteStreamFitsGreenThreadStack(frameBytes StackSize, target Tar
 	let budget = gtStackGuardMargin(target) - UnguardedDiagnosticChainBytes
 
 	if footprint > budget 'overflowsGreenThreadStack'
-		panic("requireWriteStreamFitsGreenThreadStack: mrt_write_stream's frame is {footprint} bytes but the un-guarded chain leaves only {budget} of the {gtStackGuardMargin(target)}-byte green-thread guard margin — a green thread printing through it would run off its 2 KB stack with no fault. Lower ConsoleWideBufferUnits ({ConsoleWideBufferUnits} units cost {ConsoleWideBufferUnits * Utf16UnitBytes} bytes of frame), or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile against the >5% rule")
+		panic("requireWriteStreamFitsGreenThreadStack: mrt_write_stream's frame is {footprint} bytes but the un-guarded chain leaves only {budget} of the {gtStackGuardMargin(target)}-byte green-thread guard margin — a green thread printing through it would run off its stack with no fault. Lower ConsoleWideBufferUnits ({ConsoleWideBufferUnits} units cost {ConsoleWideBufferUnits * Utf16UnitBytes} bytes of frame), or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile against the >5% rule")
 	end 'overflowsGreenThreadStack'
 end 'requireWriteStreamFitsGreenThreadStack'
 
@@ -709,7 +704,7 @@ end 'emitWriteStreamRawWrite'
 
 // ⛔⛔ **EVERY IMPORT CALL HERE GOES THROUGH `emitGtGatedIatCall`, NOT `encodeIatCall`.** A hand-assembled
 // chunk is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's
-// `iatCall` is, so calling the IAT directly would run a Win32 call on a 2 KB green-thread stack and would
+// `iatCall` is, so calling the IAT directly would run a Win32 call on a few-kilobyte green-thread stack and would
 // delete the `blocking` syscall bracket from the hottest slot there is — every `print` from a green thread.
 function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	if ConsoleWideBufferUnits <= Utf8MaxContinuationBackoff 'bufferTooSmallToBackOff'
@@ -1364,7 +1359,7 @@ function buildFaultThunkChunk() returns FunctionCodeChunk
 
 	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
 	// onto, so a converted fault is terminal.
-	emitPanicProcessExit(asm, route: X64OsCallKind.importCall)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: X64OsCallKind.importCall, exitCode: PanicExitCode)
 
 	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
 	// reaches directly.
@@ -1432,8 +1427,11 @@ end 'buildRuntimeInitChunk'
 // neither of which this chunk reads across a call (the message in RCX is consumed by step (1) itself,
 // and step (3) re-loads RCX from RBP). It takes NO slots for the same reason: nothing is live across
 // the calls.
-function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool) returns FunctionCodeChunk
+//
+// ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `emitPanicStackGuard`.
+function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target) returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
+	emitPanicStackGuard(asm, usesGt: usesGt, target: target)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -1452,10 +1450,27 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool) returns Fun
 	emitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
 
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
-	emitPanicProcessExit(asm, route: exitRoute)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: exitRoute, exitCode: PanicExitCode)
 
 	return asm.finishFunction(PanicName)
 end 'buildPanicChunk'
+
+// ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM.** The
+// prologue guard vouches only for the frames between two guarded checkpoints; a `panic` reached five frames
+// down inside the `__gt_` runtime has already spent most of the margin, and the diagnostic chain under
+// `mrt_panic` needs up to a margin of its own. So `mrt_panic` runs the same guard every guarded function
+// runs, projecting one margin as its frame — `requireWriteStreamFitsGreenThreadStack` certifies that the
+// deepest un-guarded chain, x64-Windows' through `mrt_write_stream`, fits in one — and the grower relocates
+// the stack before a byte is printed. It sits after the prologue, which the guard allows: the grower rebases
+// the live rbp and every link above it, and this frame holds no stack address. Only a green-thread program has
+// the scheduler words the guard reads.
+function emitPanicStackGuard(asm X64RuntimeAsm, usesGt bool, target Target)
+	if not usesGt 'noGreenThreads'
+		return
+	end 'noGreenThreads'
+
+	emitGtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), os: target.os)
+end 'emitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`.** The entry stub's dump is the
 // only other one, and it is on a path a panic never takes: without this, a program that dies loses every
@@ -1579,16 +1594,49 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
 	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
-	emitPanicProcessExit(asm, route: X64OsCallKind.syscall)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: X64OsCallKind.syscall, exitCode: PanicExitCode)
 
 	return asm.finishFunction(FaultHandlerName)
 end 'buildLinuxFaultHandlerChunk'
 
+// __signal_stack_install (LINUX) — map this OS thread's alternate signal stack and register it, so the
+// `SA_ONSTACK` handler below runs there rather than on a green thread's stack. Called by `mrt_runtime_init` for
+// the main thread and by every worker machine as it is born (`SignalStackInstallName`), under the internal
+// ABI: no argument, and nothing it touches is callee-saved.
+//
+// ⚠ **A REFUSED `mmap` SKIPS THE REGISTRATION.** `sigaltstack` validates only the size and would accept a
+// negative errno as the base, making the first signal a kernel stack switch onto it; without the registration
+// the handler runs on the faulting stack, as it would with no `SA_ONSTACK` at all.
+function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(LinuxStackTSlots)
+	let done = asm.newLabel()
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(SignalStackBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: done)
+
+	// `stack_t` in the slots, ascending from the lowest — so its address is the deepest slot's.
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(LinuxStackTSlots - 1))
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSp, srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffFlags, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: LinuxStackTOffSize, srcReg: X64Register.rax)
+
+	// sigaltstack(&ss, NULL)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rsi, src: X64Register.rsi, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSigaltstack)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(SignalStackInstallName)
+end 'buildLinuxSignalStackInstallChunk'
+
 // mrt_runtime_init (LINUX) — registers the SIGFPE handler via rt_sigaction. `mrt_start` calls this before
 // `main`, so the first user instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
-// Builds a `struct sigaction` on the stack: the handler address, SA_SIGINFO (so the handler receives the
-// ucontext), a NULL restorer (the handler exits, so rt_sigreturn is never reached), and an empty mask —
-// then rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
+// It installs the main thread's signal stack FIRST — `SA_ONSTACK` is a promise that one exists, so the
+// handler is not made reachable before it does. Then it builds a `struct sigaction` on the stack: the handler
+// address, `X64LinuxSigactionFlags`, the mandatory restorer, and an empty mask — then
+// rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
 // slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
 function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
@@ -1596,6 +1644,8 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	let SlotRestorer = 1  // rbp-16 = sa_restorer (offset 16)
 	let SlotMask = 0  // rbp-8 = sa_mask (offset 24)
 	var asm = X64RuntimeAsm.beginFunction(4)
+
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: FaultHandlerName)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
@@ -1639,10 +1689,7 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Tar
 
 	match target.os 'os'
 		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
-
-		// ⚠ Linux needs no `usesGt`: every OS call in its half is a raw `syscall` instruction, which runs on
-		// whatever stack it is on and asks the scheduler nothing.
-		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 		macos or
 			wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
 	end 'os'
@@ -1653,16 +1700,17 @@ end 'appendX64RuntimeChunks'
 // under a green suite. Written once, a shared chunk cannot be present on one lane and absent from the
 // other, which closes the failure mode rather than one instance of it.
 //
-// `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)); every other byte
-// they assemble is identical on both lanes, either because the chunk is OS-neutral outright or because it
-// reaches the OS BY NAME through `mrt_write_cstr_stderr`, which each lane appends its own writer under.
+// `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)), besides the thread
+// pointer `mrt_panic`'s green-thread guard reads through; every other byte they assemble is identical on both
+// lanes, either because the chunk is OS-neutral outright or because it reaches the OS BY NAME through
+// `mrt_write_cstr_stderr`, which each lane appends its own writer under.
 //
 // ⚠ ORDER AMONG RUNTIME CHUNKS IS INERT and this function relies on it: they all lay out inside
 // `[mrt_start, __symtable)`, which is the only range `emitTextBoundsGuard` tests, and every reference
 // between them is a name resolved by the intra-`.text` call fixup rather than a distance. Verified by
 // running both suites and the panic probes across the reordering this function introduced.
-function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
-	chunks.push(buildPanicChunk(exitRoute, dumpCoverage: dumpCoverage))
+function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
+	chunks.push(buildPanicChunk(exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target))
 	chunks.push(buildFaultBacktraceChunk())
 	chunks.push(buildWalkFramesChunk())
 	chunks.push(buildPrintFrameChunk())
@@ -1674,23 +1722,28 @@ end 'appendX64SharedRuntimeChunks'
 // Everything else it needs comes from the shared appender above.
 //
 // ⚠ `usesGt` travels this far because `mrt_write_stream` calls the IAT by hand, and a hand-assembled call
-// is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's is.
+// is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's is — and
+// because `mrt_panic` guards its own stack on a green thread.
 function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildRuntimeInitChunk())
 	chunks.push(buildFaultThunkChunk())
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
-	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64WindowsRuntimeChunks'
 
-// The Linux-ONLY half: the rt_sigaction `runtime_init`, the sigreturn trampoline and the SIGFPE
-// `fault_handler`, over a `write`-syscall stderr writer published under the same
-// `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks call it
-// without knowing which lane they are on.
-function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool)
+// The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack install it and every worker machine
+// call, the sigreturn trampoline and the SIGFPE `fault_handler`, over a `write`-syscall stderr writer published
+// under the same `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks
+// call it without knowing which lane they are on.
+//
+// ⚠ Every OS call in this half is a raw `syscall` instruction, which runs on whatever stack it is on and asks
+// the scheduler nothing; `usesGt` reaches here for `mrt_panic`'s stack guard alone.
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildLinuxRuntimeInitChunk())
+	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk())
 	chunks.push(buildLinuxWriteStderrChunk())
-	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage)
+	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64LinuxRuntimeChunks'

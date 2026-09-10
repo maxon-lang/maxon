@@ -1200,13 +1200,10 @@ end 'buildDsEmitMm'
 // the trap `emitMmEvent`'s header records for `__ds_base` in an untraced build, one family over. A scalar
 // program HAS no green thread, so zero is again the true answer rather than a stand-in.
 //
-// ⛔⛔ **AND IT IS THE `OrZero` READ, NOT THE PLAIN ONE, BECAUSE THIS IS THE ONE READER THAT CANNOT PROMISE
-// THE SCHEDULER EXISTS.** Every reader inside `GtRuntime` is downstream of a lazy `__gt_init`; a log event is
-// not — a program may log before its first `async`, and the tracing harness is exactly the situation in which
-// it does. MEASURED when this used the plain read: a `--debugstream` green-thread program that logs one event
-// before its first `async`, under `maxon monitor`, went from exit 42 to a SEGMENTATION FAULT, because the
-// uninitialized TEB offset addresses `NT_TIB.ExceptionList` rather than a null TLS slot. The `.data` word this
-// replaced could not fail that way, which is why the discipline had never had to be written down.
+// ⛔⛔ **AND IT IS THE `OrZero` READ, NOT THE PLAIN ONE.** User code reaches a log event only after
+// `__gt_init`, but that is a fact about the ENTRY STUB, which this file cannot see — and the price of the plain
+// read's precondition failing is a wild load through `NT_TIB.ExceptionList`, MEASURED as a segfault under
+// `maxon monitor`, rather than a zero identity. Three branches buy the event its own guarantee.
 //
 // It returns the block to continue in, because the guarded read branches.
 function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, entryPtr ValueId, usesGt bool, ids ValueMinter) returns IrBlock

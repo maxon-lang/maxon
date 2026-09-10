@@ -4664,7 +4664,7 @@ end 'join'
 
 - **One owner** -- an `async` coroutine belongs to the green thread that created it, is driven only by that green thread, and never migrates to another OS thread
 - **Cooperative scheduling** -- context switches at `await` points, `sleep` calls, and I/O operations
-- **Growable stacks** -- 8KB initial (2KB for Maxon frames + a 6KB OS fault reserve), doubles when needed
+- **Growable stacks** -- every green thread, `main` included, starts on a 2KB stack (8KB on x64-Windows, which reserves 4KB of it for the OS's exception dispatch) that doubles until the frame asking fits, up to 1GB; past that the program aborts with exit 98
 - **Plain reference counting** -- because one green thread owns everything its coroutines touch, a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
 - **Fire-and-forget safe** -- unawaited coroutines are drained at program exit
 

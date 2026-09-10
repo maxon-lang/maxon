@@ -406,10 +406,11 @@ function buildMboxRecv(module StdModule, rawFree ByteArray)
 
 	module.setTerminator(drained, op: StdOp.ret(noEnvelope))
 
-	// ⭐⭐ **THE PARK IS DEFERRED AND THE LOCK IS ALREADY RELEASED — the two halves of this file's hard rule.**
-	// `emitGtPark` leaves a NOTE on the green thread and switches to its driver; `__gt_register_park`'s
-	// mailbox arm performs the registration afterwards, re-checking head and `closed` under the lock and
-	// UNDOING the park if either has changed. Between this release and that registration a sender can arrive,
+	// ⭐⭐ **THE REGISTRATION IS `__gt_register_park`'s AND THE LOCK IS ALREADY RELEASED — the two halves of this
+	// file's hard rule.** `emitGtPark` leaves a NOTE on the green thread and switches to its driver — a
+	// receiver is a service, never `main`, the one thread that drives its park — and `__gt_register_park`'s
+	// mailbox arm then performs the registration, re-checking head and `closed` under the lock and UNDOING the
+	// park if either has changed. Between this release and that registration a sender can arrive,
 	// find `parkedGt` still 0 and wake nobody — and the re-check is what notices. Resuming re-enters `attempt`,
 	// which takes the lock and asks again, so a spurious wake costs a loop iteration and nothing else.
 	emitGtPark(module, func: func, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
@@ -622,8 +623,8 @@ end 'buildMboxAbandon'
 //
 //   • **AN ENVELOPE ARRIVED, OR THE MAILBOX CLOSED, SINCE THE RECEIVE RELEASED THE LOCK.** The park is
 //     UNDONE: nothing will ever wake this thread, because the event it was waiting for has already happened
-//     and its waker found `parkedGt` still 0. The thread goes back to `ready` and is re-published if it had
-//     already switched away from its driver.
+//     and its waker found `parkedGt` still 0. The thread goes back to `ready` and is re-published, since it
+//     has already switched away to its driver.
 //   • **NEITHER.** The thread registers itself as the mailbox's `parkedGt` and goes `waiting`, which is what
 //     the next `__mbox_send` or `__mbox_close` will find.
 //
@@ -652,7 +653,6 @@ end 'buildMboxAbandon'
 export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBlock, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
 	var recheckClosed = module.addBlock(func, label: b"parkmboxclosed")
 	var undoPark = module.addBlock(func, label: b"parkmboxundo")
-	var republish = module.addBlock(func, label: b"parkmboxrepublish")
 	var registerWaiter = module.addBlock(func, label: b"parkmboxwait")
 	var cont = module.addBlock(func, label: b"parkmboxdone")
 
@@ -671,22 +671,12 @@ export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBl
 	module.setTerminator(registerWaiter, op: StdOp.branch(cont.id))
 	registerWaiter.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(zero)))
 
-	// ⭐ **WHETHER AN UNDONE PARK MUST BE RE-PUBLISHED IS THE PARK'S OWN QUESTION, asked of the same field the
-	// park branched on** — `buildGtRegisterPark`'s process-overflow arm states it in full, and the two answers
-	// are the same two: a DEFERRED park (`waiter != 0`) has already switched to its driver and is on no queue,
-	// so it must be published; an IMMEDIATE one is a P's inline scheduler GT three instructions from
-	// `__gt_drive_until(self, ready)`, which its `ready` status ends at once, and publishing it would put a
-	// P's own scheduler context on that P's ring.
+	// An undone park is re-published: the parker has already switched to its driver and is on no queue.
 	let readyStatus = emitConst(module, block: undoPark, value: GtStatusReady, ids: ids)
 	emitStoreField(module, block: undoPark, record: gt, offset: GtOffStatus, value: readyStatus)
-	let waiter = emitLoadField(module, block: undoPark, record: gt, offset: GtOffWaiter, ids: ids)
-	let selfDriving = emitCmp(module, block: undoPark, a: waiter, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(undoPark, op: StdOp.condBranch(selfDriving, thenBlockId: cont.id, elseBlockId: republish.id))
-	undoPark.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(zero)))
-
-	let published = emitSchedPublishLocked(module, block: republish, gt: gt, ids: ids)
-	module.setTerminator(republish, op: StdOp.branch(cont.id))
-	republish.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(published)))
+	let published = emitSchedPublishLocked(module, block: undoPark, gt: gt, ids: ids)
+	module.setTerminator(undoPark, op: StdOp.branch(cont.id))
+	undoPark.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(published)))
 
 	// The wake debt reaches the caller as `cont`'s block argument — the three roads in disagree about it, and
 	// only `__gt_register_park` knows where its own release is.

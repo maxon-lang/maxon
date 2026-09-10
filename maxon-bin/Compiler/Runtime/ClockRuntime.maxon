@@ -109,6 +109,7 @@ end 'isClockRuntimeCallee'
 // ⭐ **DOES THIS CALLEE ASK HOW MUCH CPU TIME THIS THREAD HAS USED?** The `__thread_`-only test, the exact
 // twin of the wall clock's above and narrow in the same way: `__thread_cpu_ticks` is a leaf that calls one
 // Win32 import and loads a word, so a phase-timing program carries neither the allocator nor the scheduler.
+// (With a scheduler already installed it also reads the running green thread's clock offset.)
 export function isThreadCpuRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ThreadCpuRuntimeCallPrefix)
 end 'isThreadCpuRuntimeCallee'
@@ -139,7 +140,7 @@ export function installClockRuntime(module StdModule, usage RuntimeUsage)
 	end 'wallClock'
 
 	if usage.usesThreadCpuTicks 'threadCpu'
-		buildThreadCpuTicks(module)
+		buildThreadCpuTicks(module, greenThreads: usage.usesGt)
 	end 'threadCpu'
 
 	if usage.usesUptimeClock 'uptime'
@@ -197,11 +198,16 @@ let CurrentThreadPseudoHandle = 0 - 2
 // header refuses. What a caller may do with two readings is SUBTRACT them, and a difference is meaningful
 // in either unit.
 //
+// ⭐⭐ **IN A GREEN-THREAD PROGRAM IT IS THE CALLING GREEN THREAD's CLOCK** — the counter plus the thread's own
+// offset (`GtRuntime.GtOffCpuOffset`), which its parks and yields keep continuous. Every caller there runs on
+// a green thread, and a spawned one can resume on another OS thread after any park; the bare counter would
+// then run backwards across it.
+//
 // ⚠ **THE RESULT IS NOT CLAMPED AND MUST NOT BE.** `__cpu_count` clamps because a processor count is a
 // DIVISOR for its callers, so a 0 escaping would be a division by zero; a tick count is only ever
 // subtracted from a later one. A thread that has just started legitimately reads a very small number, and a
 // floor imposed here would make the first bracket of a phase report a cost it did not have.
-function buildThreadCpuTicks(module StdModule)
+function buildThreadCpuTicks(module StdModule, greenThreads bool)
 	var func = IrFunction.createFromStd(ThreadCpuTicksName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -217,7 +223,12 @@ function buildThreadCpuTicks(module StdModule)
 	let currentThread = emitConst(module, block: entry, value: CurrentThreadPseudoHandle as ParsedInt, ids: ids)
 	module.appendOp(entry, op: StdOp.osThreadCpuTicks(currentThread, outPtrId: ticksAddr))
 	let ticks = emitLoadField(module, block: entry, record: ticksAddr, offset: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(ticks))
+
+	if not greenThreads 'theOsThreadIsTheCaller'
+		module.setTerminator(entry, op: StdOp.ret(ticks))
+	end 'theOsThreadIsTheCaller' else 'aGreenThreadIsTheCaller'
+		module.setTerminator(entry, op: StdOp.ret(emitBin(module, block: entry, a: ticks, b: emitLoadCurrentGtCpuOffset(module, block: entry, ids: ids), opcode: StdBinOpcode.add, ids: ids)))
+	end 'aGreenThreadIsTheCaller'
 
 	module.functions.push(func)
 end 'buildThreadCpuTicks'

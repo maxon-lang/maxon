@@ -286,6 +286,12 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// is decided — so a pruned root leaves a call with no callee rather than a program without a drain.
 	try markCompilerOwnedRoot(GtDrainAtExitName, project: project, index: index, reached: reached, worklist: worklist)
 
+	// ⭐ **THE ENTRY STUB's CALL INTO A GREEN-THREAD PROGRAM** — `__gt_run_main`, which `mrt_start` calls in
+	// place of `main` when the scheduler is installed, and nothing else calls. Rooted for `__gt_drain_at_exit`'s
+	// reason, and `main` needs nothing more: it is rooted as the entry, and the stub hands its address over
+	// through a thread entry that joins at the Target tier.
+	try markCompilerOwnedRoot(GtRunMainName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that

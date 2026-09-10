@@ -1557,7 +1557,7 @@ end 'arm64RelInstructions'
 // x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
 // SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
 // here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, shimmed bool)
+function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, greenThreads bool)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue or
@@ -1702,10 +1702,9 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64Fcsel(dest, ifTrue, ifFalse, cond) then emitArm64Rrr(code, opcode: Arm64OpFcselD or ((cond.rawValue as MachineWord) shl Arm64CondFieldShift), rd: arm64FpField(dest), rn: arm64FpField(ifTrue), rm: arm64FpField(ifFalse))
 		arm64FpLoadRdata(dest, label) then arm64EmitFpLoadRdata(code, rdataRelocs: rdataRelocs, dest: arm64FpField(dest), label: label)
 
-		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write). The same
-		// `arm64EmitImportCall` the hand-assembled entry stub uses for `_exit`, so a call inside a
-		// register-allocated function and one in the stub file the SAME relocation shape.
-		arm64ImportCall(slotIndex) then emitArm64GtGatedImportCall(code, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, slotIndex: slotIndex, shimmed: shimmed)
+		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write) — through the
+		// system-stack door in a green-thread program, the same door every hand-assembled chunk's call takes.
+		arm64ImportCall(slotIndex) then emitArm64GtGatedImportCall(code, callFixups: callFixups, iatRelocs: iatRelocs, slotIndex: slotIndex, greenThreads: greenThreads)
 
 		// The Linux raw supervisor call (`osExit`/`osWriteStdout`/`osAllocPages` on arm64-linux). The
 		// same `arm64EmitSyscall` the hand-assembled entry stub uses for `exit_group`, so a syscall
@@ -1807,7 +1806,7 @@ function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, br
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip1, label: tableLabel, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
 	emitArm64Insn(code, insn: Arm64OpLdrswRegLsl2 or (indexReg shl Arm64RmShift) or (Arm64Ip1 shl Arm64RnShift) or Arm64Ip0)
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64Ip1, rn: Arm64Ip1, rm: Arm64Ip0)
-	emitArm64Insn(code, insn: Arm64OpBr or (Arm64Ip1 shl Arm64RnShift))
+	arm64EmitBranchReg(code, reg: Arm64Ip1)
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'arm64EmitJumpTable'
 
@@ -2195,17 +2194,27 @@ export function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, t
 	emitArm64Insn(code, insn: Arm64OpBl)
 end 'arm64EmitBranchLink'
 
-// A GOT-indirect import call — the macOS twin of x64's `iatCall`. `adrp x16, <got page>; ldr x16,
-// [x16, <page off>]; blr x16` calls the libSystem import dyld bound into GOT slot `slotIndex`. The
-// Mach-O writer patches the ADRP+LDR pair against the resolved GOT-entry VA — it reads the pair at the
-// Relocation's `codeOffset` and `codeOffset + 4` — so the Relocation is filed AT the ADRP. x16 is the
-// IP scratch, free to clobber for the trampoline; the import reads its arguments from x0.. as usual.
+// A GOT-indirect import call — the macOS twin of x64's `iatCall`: the import's address into x16
+// (`arm64EmitLoadImportAddress`), then `blr x16`. x16 is the IP scratch, free to clobber; the import reads
+// its arguments from x0.. as usual.
 export function arm64EmitImportCall(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
+	arm64EmitLoadImportAddress(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+	arm64EmitBranchLinkReg(code, reg: Arm64Ip0)
+end 'arm64EmitImportCall'
+
+// `adrp x16, <got page>; ldr x16, [x16, <page off>]` — the address dyld bound into GOT slot `slotIndex`. The
+// Mach-O writer patches the ADRP+LDR pair against the resolved GOT-entry VA — it reads the pair at the
+// Relocation's `codeOffset` and `codeOffset + 4` — so the Relocation is filed AT the ADRP. EXPORTED for
+// `Arm64GtRuntime.arm64EmitLibcCall`, which hands the address to the system-stack door instead of calling it.
+export function arm64EmitLoadImportAddress(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
 	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	emitArm64Insn(code, insn: Arm64OpAdrp or Arm64Ip0)
 	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: Arm64Ip0, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
-	emitArm64Insn(code, insn: Arm64OpBlr or (Arm64Ip0 shl Arm64RnShift))
-end 'arm64EmitImportCall'
+end 'arm64EmitLoadImportAddress'
+
+// The register `arm64EmitLoadImportAddress` leaves the import's address in. EXPORTED for the door that
+// branches to it (`Arm64GtRuntime.buildArm64DarwinLibcCallChunk`).
+export let Arm64ImportAddressReg = Arm64Ip0
 
 // A raw Linux supervisor call: `movz x8, #number` then `svc #0`. The AArch64 Linux syscall ABI puts
 // the number in x8 and arguments in x0..x5 (which the isel pre-moved, exactly as it pre-moves a
@@ -2308,6 +2317,11 @@ end 'arm64EmitLoadFpSp'
 export function arm64EmitBranchLinkReg(code ByteArray, reg MachineWord)
 	emitArm64Insn(code, insn: Arm64OpBlr or (reg shl Arm64RnShift))
 end 'arm64EmitBranchLinkReg'
+
+// `BR Xn` — an indirect jump: the jump table's computed target, and the system-stack door's tail call.
+export function arm64EmitBranchReg(code ByteArray, reg MachineWord)
+	emitArm64Insn(code, insn: Arm64OpBr or (reg shl Arm64RnShift))
+end 'arm64EmitBranchReg'
 
 // `LDR Xt, [Xn, Xm]` — a 64-bit load at a REGISTER offset (option=LSL, S=0, so the index is unscaled bytes).
 // Darwin's TSD read indexes the thread pointer by a per-thread slot offset the program computed at run
@@ -2441,13 +2455,13 @@ function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg Target
 end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
-function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
+export function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
 	let imm7 = (-frameSize / 8) and Arm64PairImm7Mask
 	emitArm64Insn(code, insn: Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
 end 'arm64EmitStpPreIndex'
 
 // LDP x29, x30, [sp], #frameSize (post-indexed).
-function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
+export function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
 	let imm7 = (frameSize / 8) and Arm64PairImm7Mask
 	emitArm64Insn(code, insn: ((Arm64OpLdpPostX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp) as MachineWord))
 end 'arm64EmitLdpPostIndex'
@@ -2511,18 +2525,12 @@ end 'arm64EmitStackFree'
 // (`rdataRelocs`) and `leaFuncAddr` code→`.text`-function pairs (`funcAdrpRelocs`) are rebased by concat;
 // within-function block branches are resolved HERE, since a function's blocks are contiguous within its
 // one chunk.
-// ⭐ **`usesGt` DECIDES TWO INLINE INSERTIONS (MAC3), BOTH BELOW THE `TargetOp` TIER**, exactly as the x64
-// twin's does: the prologue STACK GUARD at a guarded function's entry, and the import-call STACK SHIM around
-// every `arm64ImportCall`. It is `RuntimeUsage.usesGt` — the bit `installGtRuntime` was gated on — read once
-// by the caller and never re-derived per function, so this stays O(1) per function.
-//
-// ⚠ **THIS BLOCK USED TO SAY "BOTH ARE macOS-ONLY, AND THE CALLER FOLDS THAT IN", AND L4 REMOVED THE FOLD.**
-// Its argument was that each reads this OS thread's slot through Darwin's TSD layout and *"an arm64-Linux
-// image has no libc to have written a thread pointer, so the sequence would read garbage rather than fail"*.
-// The second half is what changed: `mrt_host_tls_alloc` writes `TPIDR_EL0` on that lane, and the read is
-// routed by `arm64ThreadPointerSource` rather than assuming Darwin's register. So `greenThreads` is now the
-// `usesGt` bit alone — the SHIM is still macOS-only, but by construction rather than by this fold, because
-// only the import-call route emits an `arm64ImportCall` for it to wrap.
+// ⭐ **`usesGt` DECIDES TWO THINGS BELOW THE `TargetOp` TIER**, exactly as the x64 twin's does: the prologue
+// STACK GUARD at a guarded function's entry, and whether every `arm64ImportCall` goes through the
+// system-stack door (`Arm64GtRuntime.DarwinLibcCallName`). It is `RuntimeUsage.usesGt` — the bit
+// `installGtRuntime` was gated on — read once by the caller and never re-derived per function, so this stays
+// O(1) per function. The door is macOS-only by construction: only the import-call route emits an
+// `arm64ImportCall`, and the guard's thread-pointer read is routed per OS (`arm64ThreadPointerSource`).
 function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -2561,7 +2569,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		// ⭐ THE GREEN-THREAD STACK GUARD, at the very START of a guarded function's entry block — BEFORE the
 		// prologue — so a green thread whose stack would overflow grows and relocates it first. It is EXEMPT
 		// for the compiler's own scaffolding: the scheduler core must never trip the grower, and its own
-		// libSystem calls are already moved onto the P's system stack by the shim below. ⚠ The exemption is
+		// libSystem calls already run on the M's system stack through the door. ⚠ The exemption is
 		// asked of the FUNCTION's PROVENANCE and never of its name — `skipsGreenThreadStackGuard`'s header
 		// carries the measurement (a `__`-name test handed the guard to a user function declared in
 		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
@@ -2577,7 +2585,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 			end 'aRowMayOpenHere'
 
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
+			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
@@ -2586,7 +2594,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 			end 'aRowMayOpenAtTheTerminator'
 
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
+			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -2654,6 +2662,11 @@ end 'arm64PrologueFrameBytes'
 // `Arm64Runtime.arm64OsCallKind`).
 function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray)
 	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, os: os, entryFunction: entryFunction))
+
+	// Directly behind the stub — the layout `recordChunkSymbol` requires of the thread entry.
+	if drainGreenThreads 'mainIsAGreenThread'
+		chunks.push(buildArm64MainThreadEntryChunk(initGlobals, entryFunction: entryFunction))
+	end 'mainIsAGreenThread'
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -2694,7 +2707,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		let funcStart = code.count()
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
-		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
 
 		if captureSpans 'debugInfo'
 			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
@@ -2946,7 +2959,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// stub has to lead `.text`). Its four chunks and the `__symtable` concat appends after them are what
 	// make a violated range guard — or a user `panic("…")` — print its message and a symbolized
 	// backtrace on arm64 instead of exiting bare.
-	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, os: target.os, dumpCoverage: usage.usesCoverage)
+	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, dumpCoverage: usage.usesCoverage, greenThreads: usage.usesGt, target: target)
 
 	// The HARDWARE-FAULT path, on the lane that has one. It lays out after the panic runtime because
 	// every chunk in it calls that runtime's walker, frame printer and stderr writer BY NAME — order

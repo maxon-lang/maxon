@@ -919,7 +919,7 @@ end 'each'
 - Same semantics on every target; `wasm32-wasi` differs only in how it suspends (Binaryen Asyncify, no native stack switching)
 - Context switches at `await` points and I/O operations
 - Reference counting is plain, not atomic — one green thread owns everything its coroutines touch
-- Growable stacks (8KB initial (2KB for Maxon frames + a 6KB OS fault reserve), doubles as needed)
+- Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
 - Throwing async functions require `try await` (not plain `await`)
 - `async` target must yield (contain I/O or `await` points)
 - Unawaited green threads are drained at program exit

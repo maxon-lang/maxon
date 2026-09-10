@@ -1,0 +1,199 @@
+// Test: subprocess-bare-name-is-never-found-in-the-working-directory
+function main() returns ExitCode
+	let probe = try FilePath.from("maxon-cwd-shadow-probe") otherwise return 2
+	try File.writeText(probe, content: "#!/bin/sh\nexit 99\n", mode: FilePermission.executable) otherwise return 3
+
+	var refused = false
+	try Subprocess.run(Executable.name("maxon-cwd-shadow-probe"), arguments: StringArray.create()) otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then refused = true
+			spawnFailed or
+				timeout or
+				ioFailed or
+				inputTooLarge then refused = false
+		end 'kind'
+	end 'handler'
+	try File.delete(probe) otherwise return 4
+
+	if refused 'refused'
+		return 0
+	end 'refused'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_npidle@200 = i64 0
+  __sched_runq_size@208 = i64 0
+  __sched_mcount@216 = i64 0
+  __sched_num_procs@224 = i64 0
+  __sched_shutdown_flag@232 = i64 0
+  __sched_lock@240 = i64 0
+  __sched_nmspinning@248 = i64 0
+  __sched_needspinning@256 = i64 0
+  __sched_sysmon_started@264 = i64 0
+  __io_iocp@272 = i64 0
+  __io_done_event@280 = i64 0
+  __io_init_done@288 = i64 0
+  __io_pending@296 = i64 0
+  __io_pipe_seq@304 = i64 0
+  __subp_table@312 = i64 0
+  __subp_last_error@320 = i64 0
+  __slab_arena_list@328 = i64 0
+  __slab_arena_map_l1@336 = i64 0
+  __slab_state@344 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_28  ; "maxon-cwd-shadow-probe"
+    arm64.bl FilePath.from
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.leaRdata x1, __str_rec_29  ; "#!/bin/sh\x0aexit 99\x0a"
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl File.writeText
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movImm x20, 0
+    arm64.leaRdata x21, __str_rec_28  ; "maxon-cwd-shadow-probe"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x21
+    arm64.bl Subprocess.run
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#7:
+    arm64.movImm x20, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 4
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchdead
+  matcharm#8:
+    arm64.movImm x20, 0
+  matchcont:
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.b trycont
+  matchdead:
+  tryok#5:
+    arm64.bl __destruct_CollectedOutput
+  trycont:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x19
+    arm64.bl File.delete
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#13
+  tryerr#14:
+    arm64.movImm x20, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#13:
+    arm64.cbz x20, ifcont
+  refused:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -302,16 +302,17 @@ end 'main'
 
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
-a plausible `0` hides. the compiler's header-free layer is reached by the green-thread runtime: spawning one
-green thread makes `__gt_init` and `__gt_spawn` take GT structs and tables from
-`__slab_alloc`. Before the first spawn the columns are 0 — the scheduler installs lazily — and
-after it they are not. The third assertion separates the byte column from the count column: a handful
-of GT structs and the timer table is thousands of BYTES, so the two deltas cannot be equal unless one of the
+a plausible `0` hides. the compiler's header-free layer is reached by the green-thread runtime: `__gt_init`
+and `__gt_spawn` take the scheduler's tables and GT structs from `__slab_alloc`. `main` itself runs on a
+green thread, so by its first line the columns already count that scaffolding and are not 0; the `async`
+spawn then takes another GT struct, so they rise. The third assertion separates the byte column from the
+count column: a GT struct alone is hundreds of BYTES, so the two deltas cannot be equal unless one of the
 two intrinsics is wired to the other's slot.
 
-✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, this case
-went RED (exit **3** against the pinned 8 — only the `before == 0` half survived) and so did
-`raw-live-falls-below-raw-total` (exit **6** against 7), while every tracked-layer case stayed GREEN.
+✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, both delta
+halves of this case go RED, and so does `raw-live-falls-below-raw-total` (exit **6** against 7), while
+every tracked-layer case stays GREEN. The first half fails under that sabotage too: a column nothing
+maintains reads 0 at `main`'s first line.
 ```maxon
 function work(n ExitCode) returns ExitCode
 	__Builtins.parallelBoundary()
@@ -326,9 +327,9 @@ function main() returns ExitCode
 	let after = __Builtins.mmRawAllocTotal()
 	let bytesAfter = __Builtins.mmRawAllocBytes()
 	var score = a
-	if before == 0 'nothingRawBeforeTheScheduler'
+	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
-	end 'nothingRawBeforeTheScheduler'
+	end 'theSchedulerIsInstalledBeforeMain'
 	if after > before 'theSchedulerAllocatedRaw'
 		score = score + 2
 	end 'theSchedulerAllocatedRaw'

@@ -268,21 +268,20 @@ export type IrFunction
 	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
 	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
 	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
-	// false for the runtime's own scaffolding, `__module_init` and `__maxon_global_cleanup` among it: both run
-	// outside `main`, where there is no green thread to overflow. TRUE for the per-type CASCADES —
-	// `__destruct_<T>`, `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element
-	// thunks — which recurse once per LEVEL of the user's data graph. Their frame count is a property of the
-	// program's types and nothing in the runtime bounds it.
+	// false for the runtime's own scaffolding. TRUE for two families. The per-type CASCADES — `__destruct_<T>`,
+	// `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element thunks — recurse once
+	// per LEVEL of the user's data graph, so their frame count is a property of the program's types and nothing
+	// in the runtime bounds it. `__module_init` and `__maxon_global_cleanup` are the first and last frames on
+	// `main`'s green thread in a program with green threads (`BacktraceFormat.MainThreadEntryName`), where no
+	// guarded caller has projected any room for them.
 	//
-	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS AND ONE FIELD WAS
-	// ANSWERING BOTH.** `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band)
-	// withholds the green-thread stack guard, on the stated premise that *"the scheduler core must never
-	// trigger the grower, and their kernel calls are already shimmed onto the system stack"*. That premise
-	// holds for `__module_init` / `__maxon_global_cleanup`, which run OUTSIDE `main` where no green thread
-	// exists. The CASCADES do not satisfy it: they run INSIDE `main`, on a green thread, with real frames —
-	// which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
+	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS.**
+	// `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band) withholds the
+	// green-thread stack guard, on the premise that *"the scheduler core must never trigger the grower, and
+	// their kernel calls are already shimmed onto the system stack"*. Neither family satisfies it: both run on
+	// a green thread, with real frames — which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
 	// chain deep-moved to a service and released by `ServiceLoop.dropUnconsumedPayloads` SIGSEGVs 8/8 through
-	// 128 unguarded `__destruct_` frames on a 2 KB green-thread stack.
+	// 128 unguarded `__destruct_` frames on a green-thread stack.
 	//
 	// ⚠ **IT IS NOT EVERY `__`-BAND FRAME A GREEN THREAD RUNS, and the flat container walkers
 	// (`__managed_*`, `__list_*`, `__drop_existential`) DELIBERATELY stay exempt.** They are not recursive:

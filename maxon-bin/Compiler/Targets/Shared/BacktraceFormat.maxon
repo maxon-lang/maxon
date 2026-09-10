@@ -201,6 +201,45 @@ export let FaultHandlerName = b"mrt_fault_handler"
 export let FaultBacktraceName = b"mrt_fault_backtrace"
 export let WriteHexName = b"mrt_write_hex64"
 
+// ⭐⭐ **THE ALTERNATE SIGNAL STACK, ON A POSIX LANE WITH A FAULT HANDLER (`GtRuntime.FaultFrameHome`).** The
+// handler is registered `SA_ONSTACK`, so the kernel builds its frame here rather than on a green thread's
+// stack, which is a few kilobytes with no room for it. `sigaltstack` is PER THREAD, so the main thread's is
+// installed by `mrt_runtime_init` and each worker machine's as it is born (`SchedRuntime.buildSchedLoop`)
+// — one per OS thread that runs green threads. The name wears the `__` band because the Std tier calls it.
+// 32 KB is Go's `gsignal` stack: the kernel's signal frame — x86-64's with an AVX-512 XSAVE area, or
+// Darwin/arm64's with its NEON state — plus the diagnostic frames under it.
+export let SignalStackInstallName = b"__signal_stack_install"
+export let SignalStackBytes = 0x8000 as MachineWord
+
+// ⭐⭐ **THE MAIN GREEN THREAD's ENTRY — THE HALF OF `mrt_start` THAT RUNS ON `main`'s OWN STACK.** A program
+// with green threads runs `main` on one (`GtRuntime.GtRunMainName`): the trampoline calls this thunk, which
+// fills the managed globals, calls `main` and releases the globals exactly as the entry stub does in a program
+// without. It is laid out directly after `mrt_start` and claims NO `__symtable` entry, so a return address
+// inside it symbolizes as `mrt_start` — which is what keeps a panic in `main` printing `in main` then
+// `in mrt_start` on every lane. The trampoline enters it with a zero frame pointer and it never writes the
+// frame pointer, so the walk ends there just as it ends at `mrt_start`.
+export let MainThreadEntryName = b"mrt_main_entry"
+
+// Record `chunk`'s `__symtable` entry at `codeOffset` — unless it is the main thread's entry, which is
+// reported as the entry stub it follows (`MainThreadEntryName`), and which therefore must follow it: laid out
+// anywhere else, its frames would be named after whatever function preceded it.
+export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeChunk, codeOffset CodeOffset)
+	if not chunk.funcName.equals(MainThreadEntryName) 'ownSymbol'
+		symbols.push(DebugSymbol.create(chunk.funcName, codeOffset: codeOffset))
+		return
+	end 'ownSymbol'
+
+	if symbols.count() != 1 'notSecond'
+		panic("recordChunkSymbol: '{String.from(MainThreadEntryName)}' is laid out after {symbols.count()} symbols — it must directly follow '{String.from(EntryPointName)}', whose name its frames are reported under")
+	end 'notSecond'
+
+	let preceding = try symbols.get(0) otherwise panic("recordChunkSymbol: the one symbol counted above is at index 0")
+
+	if not preceding.name.equals(EntryPointName) 'notTheStubsTail'
+		panic("recordChunkSymbol: '{String.from(MainThreadEntryName)}' follows '{String.from(preceding.name)}' — it must directly follow '{String.from(EntryPointName)}', whose name its frames are reported under")
+	end 'notTheStubsTail'
+end 'recordChunkSymbol'
+
 // STDERR_FILENO is NOT here. It is `StdLoweringShared.StderrFd`, beside its stdout twin, because a
 // descriptor is a target-independent fact two mechanisms name — this file's writers and the Std tier's
 // `printError` — and one spelling is what keeps them from drifting. This file holds vocabulary only.

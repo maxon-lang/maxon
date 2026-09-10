@@ -607,12 +607,12 @@ end 'isSuppliedFunction'
 // `isRuntimeFunction` asks about PROVENANCE — "is this the compiler's own invariant machinery?" — and that
 // is the right question for the GOLDENS, which is its other reader. The guard asks about STACK BEHAVIOUR:
 // "can this frame overflow a green thread's stack?" The scheduler core must never trigger the grower and
-// its kernel calls are shimmed onto the system stack; `__module_init` and `__maxon_global_cleanup` run
-// outside `main`, where there is no green thread to overflow.
+// its kernel calls are shimmed onto the system stack.
 //
-// ⚠ One synthesized family satisfies `isRuntimeFunction` and neither of those reasons, so it carries the
-// guard: the per-type CASCADES, which recurse to the depth of the user's data graph.
-// `IrFunction.needsGreenThreadStackGuard` is where that is said, and carries the measurement.
+// ⚠ Two synthesized families satisfy `isRuntimeFunction` and not that reason, so they carry the guard: the
+// per-type CASCADES, which recurse to the depth of the user's data graph, and the managed globals' fill and
+// release, which open and close `main`'s green thread. `IrFunction.needsGreenThreadStackGuard` is where that
+// is said, and carries the measurement.
 export function skipsGreenThreadStackGuard(func IrFunction) returns bool
 	return isRuntimeFunction(func) and not func.needsGreenThreadStackGuard
 end 'skipsGreenThreadStackGuard'

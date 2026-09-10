@@ -226,12 +226,15 @@ let X64LinuxSyscallChdir = 80
 // `Targets/Shared/LinuxRuntime` beside `LinuxSigsetBytes`, which is the same case.
 export let X64LinuxSyscallRtSigaction = 13
 export let X64LinuxSyscallRtSigreturn = 15
+export let X64LinuxSyscallSigaltstack = 131
 
-// sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000).
+// sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000)
+// | SA_ONSTACK (0x08000000 — the handler runs on the thread's `SignalStackInstallName` stack, not on a green
+// thread's few kilobytes).
 // ⚠ x86-64 has NO kernel-provided signal trampoline, so SA_RESTORER + a valid `sa_restorer` are MANDATORY:
 // without them the kernel raises a KERNEL SIGSEGV building the signal return frame — BEFORE the handler
 // runs, and even for a handler that never returns (measured: strace showed SIGFPE then SI_KERNEL SIGSEGV).
-export let X64LinuxSigactionFlags = 0x04000004
+export let X64LinuxSigactionFlags = 0x0C000004
 
 // STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.

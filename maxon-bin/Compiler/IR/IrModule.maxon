@@ -121,10 +121,11 @@ export type IrModule uses Op
 	export var usesProcessSampling as bool = false
 
 	// ⭐ **DOES THIS MODULE ASK HOW MUCH CPU TIME ITS OWN THREAD HAS USED?** Set once by the driver from
-	// `RuntimeUsage.usesThreadCpuTicks`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
-	// IMPORT BAND, which is where `QueryThreadCycleTime` lives. `usesCpuCount`'s twin one producer over: the
-	// four bits answer one question between them (*does this image reference the imports at the end of
-	// `IatSlot`*), and the band is emitted when ANY of them says yes.
+	// `RuntimeUsage.usesThreadCpuTicks`, and read in two places — the PE writer's OPTIONAL TRAILING IMPORT
+	// BAND, which is where `QueryThreadCycleTime` lives, and the green-thread runtime, whose parks keep each
+	// thread's clock continuous only in a program that reads it (`GtRuntime.emitGtSwitchAway`).
+	// `usesCpuCount`'s twin one producer over: the four bits answer one question between them (*does this
+	// image reference the imports at the end of `IatSlot`*), and the band is emitted when ANY of them says yes.
 	//
 	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never times
 	// itself has a byte-identical import table.

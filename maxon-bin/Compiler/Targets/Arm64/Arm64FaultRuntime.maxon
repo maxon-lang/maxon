@@ -218,7 +218,7 @@ let DarwinSigstackOffFlags = 0x10 as MachineWord
 let DarwinSigstackBytes = 24 as StackSize
 
 // `SA_SIGINFO` gives the handler its third argument (the ucontext), which is the only thing that carries
-// the faulting PC. `SA_ONSTACK` switches the kernel to the alternate stack registered below.
+// the faulting PC. `SA_ONSTACK` switches the kernel to the thread's `__signal_stack_install` stack.
 // `SA_RESTART` resumes an interrupted slow system call rather than failing it — inert for a handler that
 // never returns, and part of the flag word installed here.
 let DarwinSaSiginfo = 0x40 as MachineWord
@@ -231,10 +231,6 @@ let DarwinSaRestart = 0x02 as MachineWord
 let DarwinSignalBus = 10 as Imm32
 let DarwinSignalSegv = 11 as Imm32
 let DarwinSignalFpe = 8 as Imm32
-
-// The alternate signal stack, 32 KB: room for the ~600-byte signal frame Darwin/arm64 pushes (its NEON
-// state alone is 528 bytes) plus the handful of diagnostic frames below it.
-let DarwinSigaltstackBytes = 0x8000 as MachineWord
 
 // The `oldact`/`oss` out-parameter, declined: this install reads back neither previous disposition.
 let DarwinDeclinePrevious = 0 as MachineWord
@@ -298,37 +294,30 @@ function buildArm64DarwinFaultHandlerChunk(globalData GlobalDataTable) returns F
 
 	// A converted fault is terminal — there is no `recover()` and nowhere to resume to — so the handler
 	// exits rather than returning to a faulting instruction the kernel would simply re-execute.
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PanicExitCode)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.exit)
-	arm64EmitBrk(asm.code)
+	arm64EmitProcessExit(asm, os: Os.macos, exitCode: PanicExitCode)
 
 	return asm.finishChunk(FaultHandlerName)
 end 'buildArm64DarwinFaultHandlerChunk'
 
-// mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE. `mrt_start` calls
-// it before `main`, so the very first instruction of user code is already covered.
-//
-// ⚠ **THE ALTERNATE STACK IS REGISTERED FIRST, AND THAT IS THE ONLY ORDER WITH NO WINDOW IN IT.**
-// `SA_ONSTACK` is a promise that a stack exists to switch to, so
-// making the handler reachable before providing one leaves an interval in which a fault would enter the
-// kernel's stack switch with nothing registered.
+// __signal_stack_install (DARWIN) — map this OS thread's alternate signal stack and register it, so the
+// `SA_ONSTACK` handler runs there rather than on a green thread's stack. Called by `mrt_runtime_init` for the
+// main thread and by every worker machine as it is born (`SignalStackInstallName`), under AAPCS64 with no
+// argument.
 //
 // ⚠ **A FAILED `mmap` SKIPS THE `sigaltstack` RATHER THAN REGISTERING ITS ANSWER.** `MAP_FAILED` is -1,
 // and `sigaltstack` validates only the SIZE — it would accept that address happily, and the first fault
 // would then be a kernel stack switch onto it.
 //
-// Slots: 0..2 = the `stack_t`, 3..5 = the `struct sigaction`.
-function buildArm64DarwinRuntimeInitChunk() returns FunctionCodeChunk
+// Slots: 0..2 = the `stack_t`.
+function buildArm64DarwinSignalStackInstallChunk() returns FunctionCodeChunk
 	let SlotSigstack = 0 as StackSize
-	let SlotSigaction = (DarwinSigstackBytes / SpillSlotBytes) as StackSize
-	let slots = SlotSigaction + (DarwinSigactionBytes / SpillSlotBytes) as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(slots)
+	var asm = Arm64RuntimeAsm.beginFunction((DarwinSigstackBytes / SpillSlotBytes) as StackSize)
 
-	let installHandler = asm.newLabel()
+	let done = asm.newLabel()
 
-	// mmap(NULL, DarwinSigaltstackBytes, RW, MAP_ANON|MAP_PRIVATE, -1, 0)
+	// mmap(NULL, SignalStackBytes, RW, MAP_ANON|MAP_PRIVATE, -1, 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSigaltstackBytes)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SignalStackBytes)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mmapAnonPrivateFlags(Os.macos))
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
@@ -338,11 +327,11 @@ function buildArm64DarwinRuntimeInitChunk() returns FunctionCodeChunk
 	// A mapped page is a positive userspace address, so one signed test rejects both `MAP_FAILED` and a
 	// zero answer.
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: installHandler)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: done)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigstack)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigstackOffSp)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSigaltstackBytes)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SignalStackBytes)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: DarwinSigstackOffSize)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x9, byteOffset: DarwinSigstackOffFlags)
@@ -352,7 +341,25 @@ function buildArm64DarwinRuntimeInitChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDeclinePrevious)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.sigaltstack)
 
-	asm.placeLabel(installHandler)
+	asm.placeLabel(done)
+	return asm.finishFunction(SignalStackInstallName)
+end 'buildArm64DarwinSignalStackInstallChunk'
+
+// mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE. `mrt_start` calls
+// it before `main`, so the very first instruction of user code is already covered.
+//
+// ⚠ **THE MAIN THREAD's ALTERNATE STACK IS REGISTERED FIRST, AND THAT IS THE ONLY ORDER WITH NO WINDOW IN
+// IT.** `SA_ONSTACK` is a promise that a stack exists to switch to, so making the handler reachable before
+// providing one leaves an interval in which a fault would enter the kernel's stack switch with nothing
+// registered.
+//
+// Slots: 0..2 = the `struct sigaction`.
+function buildArm64DarwinRuntimeInitChunk() returns FunctionCodeChunk
+	let SlotSigaction = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction((DarwinSigactionBytes / SpillSlotBytes) as StackSize)
+
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
+
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x9, byteOffset: DarwinSigactionOffTramp)
@@ -390,7 +397,7 @@ end 'arm64EmitDarwinSigactionCall'
 //
 // ⭐ INSTALLED UNCONDITIONALLY on the lane that has one, exactly as x64's is and for x64's reason: "can
 // this program fault" is not a question the encode phase can answer, and the cost is a few hundred bytes
-// of `.text` plus the 32 KB alternate stack the install maps.
+// of `.text` plus one `SignalStackBytes` alternate stack per thread that installs one.
 //
 // ⛔ **THE PER-OS HALF IS A `match`, NOT A FALL-THROUGH AFTER THE BOOLEAN GATE.** Flipping
 // `arm64OsInstallsFaultHandler`'s `linux` arm is the obvious first step of an arm64-Linux rung, and with
@@ -414,8 +421,10 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64WriteHexChunk())
 end 'appendArm64FaultRuntimeChunks'
 
-// macOS's two: the `sigaction`/`sigaltstack` install and the signal entry that reads Darwin's ucontext.
+// macOS's three: the `sigaction` install, the per-thread `sigaltstack` install it and every worker machine
+// call, and the signal entry that reads Darwin's ucontext.
 function appendArm64DarwinFaultChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable)
 	chunks.push(buildArm64DarwinRuntimeInitChunk())
+	chunks.push(buildArm64DarwinSignalStackInstallChunk())
 	chunks.push(buildArm64DarwinFaultHandlerChunk(globalData))
 end 'appendArm64DarwinFaultChunks'

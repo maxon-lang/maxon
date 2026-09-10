@@ -48,19 +48,9 @@
 //     nothing has referenced the case since. It is retired here rather than left, because this file
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
-// ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 98 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
-// W215's arena alignment, SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
-// carrying a kind nothing writes — SV2 took 94 for a promise naming a mailbox-parked thread, 95 went to
-// `schedulerIdledAProcessorHoldingWork`, 96 to `transferredRecordNotSole` and 97 to
-// `schedulerThreadExhaustion`) — 77 went
-// to `managedListNodeNotInThisChain`, 81 to
-// `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
-// the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
-// and 80 stay vacant for the reason this paragraph gives, and S5 took 89 and 90 for the SHARDED allocator's
-// two (`slabFreeOfParkedSpan`, `slabRemoteFreeSlotHasNoSpan`). Nothing here reserves a vacated number,
-// because reserving one would be this space defending against a claimant that no longer exists — the very
-// thing the paragraph above rejects.
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 102.** 76 and 80 are vacant and stay so:
+// reserving a vacated number would be this space defending against a claimant that no longer exists — the
+// very thing the paragraph above rejects.
 export enum RuntimeAbort
 	// `__managed_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
@@ -304,44 +294,14 @@ export enum RuntimeAbort
 	// work, by invariant rather than by hope.** Whoever wants to idle a processor that still holds work
 	// must hand it to a machine (`handoffp`) instead of parking it.
 	//
-	// ⭐⭐ **IT IS HERE BECAUSE ITS ABSENCE COST A WRONG ANSWER THAT THREE FULL SUITES DID NOT SEE.** W213-C2's
-	// first cut released a processor without draining its ring and narrowed the park's final look to the
-	// GLOBAL queue alone, on the written claim that this was *"provably the whole set a publish can strand"*.
-	// It was not: work published to a ring just before that ring's processor went idle was visible to nobody
-	// — no machine held the processor, and the global-only look could not see the ring — until something
-	// unrelated happened to wake a machine. **MEASURED: `awaitAny` returned the wrong completed index on
-	// 7.5% of runs at `MAXON_MAX_PROCS=16`** (`multicore-stress/awaitany-index-race.sh`), because by the time anything
-	// re-scanned, BOTH promises had completed and the scan correctly answered the lowest index. Not a
-	// premature read and not a recycled cell — a LATE one, which a version-stamped build ruled the other two
-	// out of over 560 runs.
-	//
-	// ⇒ **the drain is what SATISFIES it, and this is the guard that makes the invariant checkable.** A
+	// ⭐ **THE PARK's RING DRAIN IS WHAT SATISFIES IT, AND THIS IS WHAT MAKES THE INVARIANT CHECKABLE.** A
 	// COMPILER bug rather than a program's: no Maxon program can reach it except through a scheduler that
 	// idles a processor it should have handed off.
 	//
-	// ⭐⭐⭐ **AND IT EARNED ITS PLACE BY KILLING THE HYPOTHESIS THAT MOTIVATED IT, ON ITS FIRST OUTING.** The
-	// wrong answer above was diagnosed — confidently, and by two people — as *"a processor idled with work in
-	// its ring, invisible to a global-only final look"*. Removing the drain and leaving this assertion armed
-	// produced **ZERO aborts in 200 runs at `MAXON_MAX_PROCS=16`**, while the wrong answer went on happening
-	// at its usual rate: every release found `runqhead == runqtail`, so the diagnosed state never occurs and
-	// the drain fixed nothing. **An assertion that refutes its own author is worth more than one that never
-	// speaks**, and it is why this is permanent rather than a debugging aid retired once the drain landed.
-	//
-	// ✅ **THE ACTUAL CAUSE WAS FOUND AND FIXED AT W219, AND IT WAS PRE-EXISTING RATHER THAN THIS RUNG's.**
-	// This entry used to end *"the actual cause is elsewhere and is not closed: narrowed to `__gt_timer_check`
-	// run by a machine holding NO processor — removing that one call reads 200/200 clean where keeping it
-	// reads ~6-8% wrong"*. That narrowing was a TIMING correlation and not the mechanism: `__gt_drive_until`'s
-	// netpoll blocked its driver on `StdOp.osSleepMs` — a wait on no waitable object — so a promise answered
-	// on another machine was invisible until the interval expired, by which time the driver's own deadline had
-	// fired too and the scan answered the promise that finished SECOND. Deleting a timer-firing site moved the
-	// window; it did not close it. ⇒ **removing a call from `wpoll` is not a fix and must not be attempted as
-	// one.** `multicore-stress/README.md` owns W219's measurement, and `SchedRuntime.MOffParkedDriverOwner` is the cure.
-	//
-	// ⚠ **NONE OF THAT RETIRES THIS ABORT, AND THE PARAGRAPH ABOVE IS WHY.** The 200-run refutation still
-	// stands on its own terms — every release found `runqhead == runqtail` — so the drain at `wpark` remains a
-	// road nothing currently takes, kept because `pidleput`'s invariant has to be SATISFIED by somebody and
-	// `handoffp` is the road that will take it. This is what says so on the first run rather than the
-	// five-hundredth.
+	// ⚠ **A LATE `awaitAny` ANSWER IS NOT THIS.** A promise answered on another machine reads late when the
+	// driver waiting on it is not woken, and the cure for that is the interruptible driver park
+	// (`GtRuntime.GtOffParkedDriver`), never a change to what `wpoll` fires. `multicore-stress/README.md` owns
+	// the measurement.
 	schedulerIdledAProcessorHoldingWork = 95
 
 	// ⭐⭐ **`__mm_sole_box`: a record about to CROSS to another green thread has a second owner.** A send,
@@ -368,6 +328,31 @@ export enum RuntimeAbort
 	// ⚠ **NO SPEC REACHES IT**: it takes ten thousand simultaneously blocked machines. It is proved by lowering
 	// the limit, which a `procs: 4` service program then crosses on its third machine.
 	schedulerThreadExhaustion = 97
+
+	// ⛔ `__gt_morestack`: a green thread's stack would have to grow past `GtRuntime.GtMaxStackBytes` for
+	// the frame asking to fit — Go's `newstack` and its `throw("stack overflow")` past `maxstacksize`
+	// (`vendor/go/src/runtime/stack.go`). It is a runaway recursion in the PROGRAM, refused BEFORE the
+	// allocation, because the alternative is doubling until the address space runs out and failing
+	// somewhere unrelated to the cause.
+	//
+	// It aborts by number rather than through `osPanic` because `mrt_panic` opens with the green-thread stack
+	// guard: the refusal runs on the machine's system stack while the exhausted thread is still current, so
+	// that guard compares this stack pointer with the thread's guard word and can call `__gt_morestack` again
+	// — the grower re-entered on the stack it stands on.
+	greenThreadStackExhausted = 98
+
+	// ⛔ `__gt_morestack` and `__gt_spawn`: the OS REFUSED the pages for a green thread's stack. Unguarded,
+	// the grower copies the old stack to `<refused base> + size` and the spawn seeds its first frame there —
+	// a write through a failed allocation. A separate code from `greenThreadStackExhausted` (98), this
+	// registry's founding rule: a program recursing past the ceiling and a machine out of memory under a
+	// legal stack are two different faults — Go reports them as `stack overflow` and `out of memory`.
+	greenThreadStackAllocationFailed = 99
+
+	// ⛔ `__gt_run_main`: `main`'s green thread switched back to M0's scheduler context without having
+	// completed. Every park `main` takes drives and its yield never hands off (`GtRuntime.GtOffIsMainThread`),
+	// so its one road back is its completion; any other would hand the exit path an ExitCode nobody wrote. A
+	// COMPILER bug rather than a program's.
+	mainThreadSwitchedBackUnfinished = 100
 
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO

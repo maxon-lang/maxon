@@ -621,8 +621,9 @@ export type SynthesizedFunction
 		// `__maxon_global_cleanup` read as the compiler's own at `FunctionNameIndex.refuseDuplicateFunctionName`
 		// (so a `Builtins.maxon` declaration of one is E4015 against them, and a doubled install is a panic), at
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
-		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized())
+		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
+		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 

@@ -284,8 +284,11 @@ end 'buildArm64WalkFramesChunk'
 // It survives because x29 is callee-saved under AAPCS64 AND because every chunk here opens a frame
 // record that saves and restores it; it takes NO slots for the mirror reason, nothing being live
 // across the calls.
-function buildArm64PanicChunk(globalData GlobalDataTable, os Os, dumpCoverage bool) returns FunctionCodeChunk
+//
+// ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `arm64EmitPanicStackGuard`.
+function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
+	arm64EmitPanicStackGuard(asm, greenThreads: greenThreads, target: target)
 
 	// (1) The caller's message — already in x0.
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -302,14 +305,23 @@ function buildArm64PanicChunk(globalData GlobalDataTable, os Os, dumpCoverage bo
 	// (4) The counters, on an instrumented build only.
 	arm64EmitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
 
-	// (5) exit(PanicExitCode) — the one step with an OS in it — then a `brk` for the impossible
-	// fall-through, exactly as the entry stub guards its own exit.
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PanicExitCode)
-	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
-	arm64EmitBrk(asm.code)
+	// (5) exit(PanicExitCode) — the one step with an OS in it.
+	arm64EmitProcessExit(asm, os: target.os, exitCode: PanicExitCode)
 
 	return asm.finishChunk(PanicName)
 end 'buildArm64PanicChunk'
+
+// ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM** —
+// x64's `emitPanicStackGuard` carries the argument: the same prologue guard every guarded function runs,
+// projecting one margin for the diagnostic chain under `mrt_panic`, placed after the frame record, which the
+// grower rebases with every link above it. Only a green-thread program has the scheduler words it reads.
+function arm64EmitPanicStackGuard(asm Arm64RuntimeAsm, greenThreads bool, target Target)
+	if not greenThreads 'noGreenThreads'
+		return
+	end 'noGreenThreads'
+
+	emitArm64GtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), os: target.os)
+end 'arm64EmitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`** — x64's
 // `emitCoverageAbortDump`, and its header carries the whole argument: last on the sequence so the panic's
@@ -341,11 +353,11 @@ end 'arm64EmitCoverageAbortDump'
 // question "can control reach a panic" is not one the encode phase can answer cheaply or safely. It
 // costs a few hundred bytes of `.text` and four `.rdata` strings; a lane that answered it wrongly
 // costs an unresolved `bl`.
-export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, os Os, dumpCoverage bool)
-	chunks.push(buildArm64PanicChunk(globalData, os: os, dumpCoverage: dumpCoverage))
+export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target)
+	chunks.push(buildArm64PanicChunk(globalData, dumpCoverage: dumpCoverage, greenThreads: greenThreads, target: target))
 	chunks.push(buildArm64WalkFramesChunk())
 	chunks.push(buildArm64PrintFrameChunk(globalData))
-	chunks.push(buildArm64WriteStderrChunk(os))
+	chunks.push(buildArm64WriteStderrChunk(target.os))
 end 'appendArm64PanicRuntimeChunks'
 
 // `x0 = <a NUL-terminated constant>; bl mrt_panic` — a runtime abort naming its own reason. The message

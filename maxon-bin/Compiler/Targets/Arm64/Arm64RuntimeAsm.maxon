@@ -188,8 +188,9 @@ let NoOutgoingArgRegion = 0 as StackSize
 
 // The region a single 8-byte outgoing argument needs. It is the stack ALIGNMENT rather than a word,
 // because SP may not move by less: rounding 8 up gives 16, and the second word is padding the callee
-// never reads.
-let OneOutgoingArgWord = StackFrameAlignment as StackSize
+// never reads. EXPORTED for `Arm64GtRuntime.mrt_darwin_libc_call`, which carries this region across its stack
+// switch.
+export let OneOutgoingArgWord = StackFrameAlignment as StackSize
 
 // ==========================================================================
 // Shared emit fragments
@@ -351,13 +352,23 @@ end 'arm64EmitTextBoundsGuard'
 
 // The OS door every terminal step in this file goes through — the same one `StdToArm64Conversion`'s
 // `lowerOsExit` uses, so the panic runtime cannot grow a second opinion about which OSes this backend
-// serves or how each one is reached.
+// serves or how each one is reached. The macOS route is a libSystem call, so it takes the system-stack door.
 export function arm64EmitOsPrimitive(asm Arm64RuntimeAsm, os Os, importSlot OsImportSlot, syscallNumber MachineWord)
 	match arm64OsCallKind(os) 'route'
-		importCall then arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: osImportSlotIndex(importSlot))
+		importCall then arm64EmitLibcCall(asm.code, iatRelocs: asm.iatRelocs, callFixups: asm.callFixups, slotIndex: osImportSlotIndex(importSlot))
 		syscall then arm64EmitSyscall(asm.code, number: syscallNumber)
 	end 'route'
 end 'arm64EmitOsPrimitive'
+
+// ⭐ **END THE PROCESS WITH `exitCode`** — the last step of every terminal path a hand-assembled chunk takes:
+// the panic and fault diagnostics (`PanicExitCode`) and `__gt_morestack`'s two refusals (a `RuntimeAbort`
+// code). The `brk` stops an exit that returned — it does not — from running off the chunk into the next
+// function.
+export function arm64EmitProcessExit(asm Arm64RuntimeAsm, os Os, exitCode MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: exitCode)
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
+	arm64EmitBrk(asm.code)
+end 'arm64EmitProcessExit'
 
 // ==========================================================================
 // The POSIX host surfaces' shared fragments

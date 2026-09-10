@@ -79,9 +79,11 @@ end 'arm64ThreadPointerSource'
 //
 //   macOS:                                   Linux:
 //     bl   mrt_runtime_init
-//     [bl __module_init]                       [bl __module_init]
-//     bl   main                                bl   main
-//     [bl __maxon_global_cleanup]              [bl __maxon_global_cleanup]
+//     the program: `arm64EmitMainCall`, or     the program
+//       adrp+add x0, mrt_main_entry ;
+//       bl __gt_run_main
+//     [bl __gt_drain_at_exit]                  [bl __gt_drain_at_exit]
+//     [bl __mm_leak_check]                     [bl __mm_leak_check]
 //     [bl __cov_dump, x0 parked in x19]        [bl __cov_dump, x0 parked in x19]
 //     adrp x16, _exit@GOTPAGE                  movz x8, #94        ; __NR_exit_group
 //     ldr  x16, [x16, _exit@GOTOFF]            svc  #0
@@ -95,17 +97,16 @@ end 'arm64ThreadPointerSource'
 // the `brk #0` catches the impossible fall-through rather than letting execution run off into the next
 // function.
 //
-// ⚠ **THE SECOND HALF OF THAT ARGUMENT USED TO BE "the scalar core has no backtrace that would need
-// x29/x30 chained", AND SINCE A3n THERE IS ONE** (`Arm64PanicRuntime.buildArm64WalkFramesChunk`). The
-// stub stays frameless anyway, but for a DIFFERENT reason, and the difference matters to anyone editing
-// either side: `mrt_start` is never a LINK in the chain, only its last symbolized NAME. `main`'s own
-// frame record carries the return address INTO this stub at `[x29+8]`, which is what prints `in
-// mrt_start`; the walk then follows `[x29+0]`, which is whatever the loader left in x29 because this
-// stub never writes it. Two INDEPENDENT things stop it there, and neither is the chain: the walk's
-// TEXT GUARD rejects any return address outside `[mrt_start, __symtable)` (measured on macOS — dyld's
-// x29 is a live stack address, the load succeeds, and the address above it is not this image's code),
-// and a `cbz` catches a null frame pointer (Linux, where execve zeroes the GPRs). Give this stub a
-// frame record, or drop either guard, and the walk's termination changes.
+// ⚠ **THE PANIC BACKTRACE (`Arm64PanicRuntime.buildArm64WalkFramesChunk`) IS WHY IT STAYS FRAMELESS TOO.**
+// `mrt_start` is never a LINK in the chain, only its last symbolized NAME. `main`'s own frame record
+// carries the return address INTO this stub at `[x29+8]`, which is what prints `in mrt_start`; the walk
+// then follows `[x29+0]`, which is whatever the loader left in x29 because this stub never writes it. Two
+// INDEPENDENT things stop it there, and neither is the chain: the walk's TEXT GUARD rejects any return
+// address outside `[mrt_start, __symtable)` (measured on macOS — dyld's x29 is a live stack address, the
+// load succeeds, and the address above it is not this image's code), and a `cbz` catches a null frame
+// pointer (Linux, where execve zeroes the GPRs). Give this stub a frame record, or drop either guard, and
+// the walk's termination changes. When `main` is a green thread, `buildArm64MainThreadEntryChunk` ends the
+// same walk on the same line.
 //
 // argv is captured here, and where it is captured from is per-OS within arm64. dyld hands macOS
 // `mrt_start` argc/argv in x0/x1. The Linux kernel does not: it enters with argc at `[sp]`, argv at
@@ -126,6 +127,7 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
+	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 
 	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read (MAC7). It rides
 	// `usesCommandLine`, so a program that never asks for its arguments carries neither the capture nor
@@ -163,25 +165,15 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: DsInitName)
 	end 'debugStreamAttach'
 
-	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
-	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
-	// no argument and returns nothing, so there is nothing to move around it.
-	if initGlobals 'moduleInit'
-		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
-	end 'moduleInit'
-
-	// bl <entry> — filed as a CallFixup; concat resolves it to the entry's `.text` offset (mirrors x64's
-	// `callDirect(entryFunction)`). `entryFunction` is `Project.entryFunctionName`, already the `ByteArray`
-	// spelling the fixup matches a function's name against.
-	arm64EmitBranchLink(code, callFixups: callFixups, targetName: entryFunction)
-
-	// Release every managed global AFTER `main` and BEFORE the leak gate — a global released after the
-	// gate would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands
-	// it back in x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows
-	// through both with no move at all.
-	if initGlobals 'globalCleanup'
-		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
-	end 'globalCleanup'
+	// The program, with its ExitCode in x0 either way: `main` bracketed by the managed globals, or, with green
+	// threads, `__gt_run_main` handed the main thread's entry, which runs that same bracket on `main`'s own
+	// green thread — `BackendDispatch.appendProgramCall`'s two arms.
+	if drainGreenThreads 'mainIsAGreenThread'
+		arm64EmitLeaFuncAddr(code, funcAdrpRelocs: funcAdrpRelocs, dest: arm64RuntimeReg(Arm64Register.x0), funcName: MainThreadEntryName)
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtRunMainName)
+	end 'mainIsAGreenThread' else 'mainOnTheOsStack'
+		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, entryFunction: entryFunction)
+	end 'mainOnTheOsStack'
 
 	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (MAC3).**
 	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument, which
@@ -239,9 +231,9 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		arm64EmitMovGpr(code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x19))
 	end 'coverageDump'
 
-	// Terminate with the ExitCode already in x0. macOS records the `_exit` GOT slot as a Relocation
-	// the Mach-O writer patches (the twin of x64's `iatCall` → ExitProcess); Linux needs no
-	// relocation at all, which is the whole shape of this rung.
+	// Terminate with the ExitCode already in x0: `_exit` through its GOT slot on macOS, `exit_group` on
+	// Linux. The import is called directly rather than through the system-stack door because this stub runs
+	// on the process's own OS-thread stack.
 	match arm64OsCallKind(os) 'exitRoute'
 		importCall then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: osImportSlotIndex(OsImportSlot.exit))
 		syscall then arm64EmitSyscall(code, number: Arm64LinuxSyscallExitGroup)
@@ -251,8 +243,45 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	// the end of this chunk into the next function rather than trusting it never to return.
 	arm64EmitBrk(code)
 
-	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	var chunk = FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	chunk.funcAdrpRelocs = funcAdrpRelocs
+	return chunk
 end 'buildArm64EntryStubChunk'
+
+// `[bl __module_init]`, `bl main`, `[bl __maxon_global_cleanup]` — the program, wherever it runs: the entry
+// stub of a program without green threads, and the main thread's entry of a program with them.
+//
+// The managed globals are filled BEFORE user code (P1.7 slice 2a) — a `static` member's is filled on first
+// access instead (see `ModuleInit`) — and released AFTER it, before the leak gate, where a global still held
+// would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands it back in
+// x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows through with no move.
+function arm64EmitMainCall(code ByteArray, callFixups CallFixupArray, initGlobals bool, entryFunction ByteArray)
+	if initGlobals 'moduleInit'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
+	end 'moduleInit'
+
+	arm64EmitBranchLink(code, callFixups: callFixups, targetName: entryFunction)
+
+	if initGlobals 'globalCleanup'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
+	end 'globalCleanup'
+end 'arm64EmitMainCall'
+
+// The main thread's entry (`MainThreadEntryName`), the arm64 twin of `BackendDispatch.prependMainThreadEntry`:
+// `__gt_trampoline` calls it on `main`'s fresh green-thread stack, and it returns `main`'s ExitCode in x0 for
+// the trampoline to capture. It saves x30 because it calls, and it NEVER WRITES x29: the seed frame's zero
+// stays in place, so `main`'s saved x29 ends the walk right after the return address into this chunk — which
+// carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
+export function buildArm64MainThreadEntryChunk(initGlobals bool, entryFunction ByteArray) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginRawFunction()
+
+	arm64EmitStpPreIndex(asm.code, frameSize: Arm64FrameRecordBytes)
+	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, entryFunction: entryFunction)
+	arm64EmitLdpPostIndex(asm.code, frameSize: Arm64FrameRecordBytes)
+	arm64EmitRet(asm.code)
+
+	return asm.finishChunk(MainThreadEntryName)
+end 'buildArm64MainThreadEntryChunk'
 
 // ⭐ **STASH `argc` AND `argv` WHERE THE Std TIER CAN READ THEM.** Two `.data` words and two stores; the
 // only per-OS part is which two places the pair is read FROM.

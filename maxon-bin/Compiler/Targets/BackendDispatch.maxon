@@ -32,6 +32,10 @@
 // moment anything below it spills an XMM register (P1.0d.4 floats).
 let EntryStubFrameBytes = 0x20
 
+// The main thread's entry frame: the shadow space its callees may clobber plus one word of alignment. The
+// trampoline's `call` enters it at rsp ≡ 8 (mod 16) and it pushes nothing, so the odd 8 is its to add.
+let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
+
 // Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
 //
@@ -304,14 +308,21 @@ end 'refuseDuplicateChunkName'
 // carries neither call and its emitted stub is byte-identical to before that rung.
 //
 // `drainGreenThreads` is `RuntimeUsage.usesGt` — whether the green-thread scheduler was installed, and so
-// whether `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the
-// module for this file's own recorded reason: dead-function elimination takes installed functions back out,
-// so *"does the module still contain X"* is not a question about the runtime X belongs to.
+// whether `main` runs on a green thread (`__gt_run_main`, handed `MainThreadEntryName`) and
+// `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the module for
+// this file's own recorded reason: dead-function elimination takes installed functions back out, so *"does
+// the module still contain X"* is not a question about the runtime X belongs to.
 //
 // `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
 // stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
 // here; see that field.
 function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+	// Prepended BEFORE the stub, so the stub prepended below lands directly ahead of it — the layout
+	// `recordChunkSymbol` requires of the thread entry.
+	if drainGreenThreads 'mainIsAGreenThread'
+		prependMainThreadEntry(module, initGlobals: initGlobals, entryFunction: entryFunction)
+	end 'mainIsAGreenThread'
+
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
 
@@ -330,9 +341,11 @@ end 'augmentWithRuntime'
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
-//   [call __module_init]    fill every EAGER managed global's .data slot (P1.7 slice 2a)
-//   call main          main returns its ExitCode in R8 (custom ABI)
-//   [global cleanup]   mov rcx, r8 ; call __maxon_global_cleanup  -> the same code back in R8
+//   [ds attach]        call __ds_init
+//   the program        `appendProgramCall` — `main` bracketed by the managed globals, or, with green
+//                      threads, `lea rcx, mrt_main_entry ; call __gt_run_main`; its ExitCode in R8 either way
+//   [gt drain]         mov rcx, r8 ; call __gt_drain_at_exit  -> the same code back in R8
+//   [leak gate]        mov rcx, r8 ; call __mm_leak_check  -> adjusted code / 101 in R8
 //   [ds shutdown]      mov rbx, r8 ; call __ds_shutdown ; mov r8, rbx
 //   [coverage dump]    mov rcx, COMPLETED ; mov rbx, r8 ; call __cov_dump ; mov r8, rbx
 //   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
@@ -344,10 +357,12 @@ end 'augmentWithRuntime'
 // This stub is built AFTER `insertPrologueEpilogue`, so it does not inherit that pass's
 // frame and must lay its own. It builds the SAME frame that pass builds — `push rbp` /
 // `mov rbp, rsp` through the shared `framePointerSetupOp`, so the chain's defining
-// instruction is spelled in one place — because `mrt_start` is the frame the chain ENDS
-// at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
-// one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
-// saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
+// instruction is spelled in one place — because when `main` runs on the OS stack,
+// `mrt_start` is the frame the chain ENDS at: `main`'s saved rbp points here, and a walk
+// that arrives with no frame to read stops one frame short of the `in mrt_start` every
+// backtrace in the corpus expects. Its own saved rbp is whatever the loader left, and the
+// walk's `.text` bound is what discards it. When `main` is a green thread the same line
+// comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
 function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
@@ -362,9 +377,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	// silently drop exactly the allocations a program makes before `main`. Nothing is live across it —
 	// `main` has not run — so it is a bare call, `__module_init`'s shape.
 	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
-	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
-	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendProgramCall(module, block: block, initGlobals: initGlobals, greenThreads: drainGreenThreads, entryFunction: entryFunction)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 
 	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
@@ -395,6 +408,45 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 
 	prependFunction(module, func: func)
 end 'prependEntryStub'
+
+// ⭐⭐ **THE STUB'S CALL INTO THE PROGRAM, shared by both entry stubs.** Without green threads it is `main`
+// itself, between the managed globals' fill and their release. With them it is `__gt_run_main`, handed the
+// main thread's entry (`MainThreadEntryName`), which runs the same three on `main`'s own green thread and
+// returns `main`'s ExitCode in R8 once that thread has completed. Either way R8 carries the ExitCode on to the
+// exit path, which is the same after both.
+function appendProgramCall(module TargetModule, block IrBlock, initGlobals bool, greenThreads bool, entryFunction ByteArray)
+	if greenThreads 'mainIsAGreenThread'
+		module.appendOp(block, op: TargetOp.leaRegFunc(x64PhysReg(X64Register.rcx), funcName: MainThreadEntryName))
+		module.appendOp(block, op: TargetOp.callDirect(GtRunMainName))
+	end 'mainIsAGreenThread' else 'mainOnTheOsStack'
+		appendMainCall(module, block: block, initGlobals: initGlobals, entryFunction: entryFunction)
+	end 'mainOnTheOsStack'
+end 'appendProgramCall'
+
+// `[__module_init]`, `call main`, `[__maxon_global_cleanup]` — the program, wherever it runs: the entry stub
+// of a program without green threads, and the main thread's entry of a program with them.
+function appendMainCall(module TargetModule, block IrBlock, initGlobals bool, entryFunction ByteArray)
+	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
+	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
+	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+end 'appendMainCall'
+
+// The main thread's entry (`MainThreadEntryName`): `__gt_trampoline` calls it on `main`'s fresh green-thread
+// stack, and it returns `main`'s ExitCode in R8 for the trampoline to capture. It carries no symbol of its own,
+// so a return address inside it symbolizes as `mrt_start`, and it leaves the seed frame's zero rbp in place, so
+// `main`'s saved rbp ends the walk there — the same `in main` / `in mrt_start` a program without green threads
+// prints.
+function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunction ByteArray)
+	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var block = module.addBlock(func, label: b"entry")
+
+	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
+	appendMainCall(module, block: block, initGlobals: initGlobals, entryFunction: entryFunction)
+	module.appendOp(block, op: TargetOp.epilogue(MainThreadEntryFrameBytes))
+	module.setTerminator(block, op: TargetOp.ret)
+
+	prependFunction(module, func: func)
+end 'prependMainThreadEntry'
 
 // ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, shared by both entry stubs. `main` has
 // returned its ExitCode in R8; `__mm_leak_check` takes that code (arg 0 in RCX, custom Maxon ABI) and
@@ -443,11 +495,6 @@ function appendCallPreservingExitCode(module TargetModule, block IrBlock, callee
 	module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: x64PhysReg(X64Register.rbx)))
 end 'appendCallPreservingExitCode'
 
-// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — a `static`
-// member's is filled on first access instead (see `ModuleInit`) — shared by both entry
-// stubs, and the FIRST thing after the runtime init so a global is live for the whole of user code.
-// `__module_init` takes no argument and returns nothing; there is no live value to preserve across it
-// (`main` has not run), so it is a bare call. Emitted only for a program that has one (`initGlobals`).
 // The producer's two calls, emitted only into a `--debugstream` build — and they are NOT one shape, which
 // is why they are two functions rather than one taking a callee. The attach runs before `main` with nothing
 // live; the detach runs after it with the ExitCode in R8, and must park it.
@@ -463,14 +510,18 @@ function appendDebugStreamDetach(module TargetModule, block IrBlock, debugStream
 	end 'tracedBuild'
 end 'appendDebugStreamDetach'
 
+// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — a `static`
+// member's is filled on first access instead (see `ModuleInit`) — as the first thing `appendMainCall` runs,
+// so a global is live for the whole of user code. `__module_init` takes no argument and returns nothing, and
+// nothing is live across it, so it is a bare call. Emitted only for a program that has one (`initGlobals`).
 function appendModuleInitCall(module TargetModule, block IrBlock, initGlobals bool)
 	if initGlobals 'moduleInit'
 		module.appendOp(block, op: TargetOp.callDirect(ModuleInitName))
 	end 'moduleInit'
 end 'appendModuleInitCall'
 
-// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** (P1.7 slice 2a) — shared by both
-// entry stubs. The ORDER is the whole point: `__mm_leak_check` counts what is still allocated, so a global
+// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** (P1.7 slice 2a) — the last thing
+// `appendMainCall` runs. The ORDER is the whole point: `__mm_leak_check` counts what is still allocated, so a global
 // released after it would read as a leak (exit 101) and one never released would read as one too. That is
 // exactly the property `static-variables.md`'s `top-level-var-string-mutate-cross-function` gates.
 //
@@ -518,9 +569,8 @@ end 'appendExitCodePassThroughCall'
 //   [argv capture]      argc from [rsp] and the vector from rsp+8 into their two .data words
 //   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
 //   [call __ds_init]      attach the DebugStream producer to its ring (a --debugstream build only)
-//   [call __module_init]  fill every EAGER managed global's .data slot (P1.7 slice 2a)
-//   call main            main returns its ExitCode in R8 (custom ABI)
-//   [global cleanup]     mov rcx, r8 ; call __maxon_global_cleanup  ->  the same code back in R8
+//   the program          `appendProgramCall`, exactly as on Windows; its ExitCode in R8 either way
+//   [gt drain]           mov rcx, r8 ; call __gt_drain_at_exit  ->  the same code back in R8
 //   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
 //   [ds shutdown]        mov rbx, r8 ; call __ds_shutdown ; mov r8, rbx  — clears producer-alive
 //   [coverage dump]      mov rcx, COMPLETED ; mov rbx, r8 ; call __cov_dump ; mov r8, rbx
@@ -535,7 +585,8 @@ end 'appendExitCodePassThroughCall'
 // The compiler function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
 // the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
 // frame: the SIGFPE backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
-// this frameless stub left, so the trace is `in main` -> `in mrt_start` -> ends), there is no Win64
+// this frameless stub left, or a green thread's seed zero, so the trace is `in main` -> `in mrt_start`
+// -> ends), there is no Win64
 // shadow space to reserve (raw syscalls carry no imports, and the compiler functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
@@ -555,9 +606,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	// managed global's box belongs in the trace, and attaching after it would drop exactly the allocations a
 	// program makes before `main`. See `prependEntryStub`, whose bracket this mirrors.
 	appendDebugStreamAttach(module, block: block, debugStream: debugStream)
-	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
-	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
+	appendProgramCall(module, block: block, initGlobals: initGlobals, greenThreads: drainGreenThreads, entryFunction: entryFunction)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 

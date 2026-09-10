@@ -1,6 +1,6 @@
 // Arm64GtRuntime — the hand-assembled GREEN-THREAD backend code for AArch64 (MAC3), the arm64 twin of
 // `Targets/X64/X64GtRuntime`. Everything else in the scheduler is builder-built `StdModule`
-// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these four pieces cannot be, because each
+// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these five pieces cannot be, because each
 // names SP, a register PAIR fixed by an ABI list, or a frame no prologue built:
 //
 //   • `__gt_context_switch` — moves SP between two green threads' stacks and saves the physical
@@ -8,15 +8,14 @@
 //   • `__gt_trampoline` — entered by a `ret` into a frame nothing established.
 //   • `__gt_morestack` — runs on the M's system stack, which it switches to itself, and REWRITES the
 //     saved-x29 chain of the stack it has just copied.
-//   • the prologue STACK GUARD and the import-call STACK SHIM — emitted INLINE into ordinary compiled
-//     functions, below the `TargetOp` tier, exactly as their x64 twins are.
+//   • `mrt_darwin_libc_call` — the door every libSystem call takes onto the M's system stack.
+//   • the prologue STACK GUARD — emitted INLINE into ordinary compiled functions, below the `TargetOp`
+//     tier, exactly as its x64 twin is.
 //
 // ⭐⭐ **WHAT THIS FILE TOOK FROM x64 AND WHERE IT DEPARTS.** The ALGORITHMS are x64's, ported step for
 // step — the same saved-register contract, the same relocate-and-walk morestack, the same THREE-null gate
-// in front of the current-P read (the TLS slot, the P, and the P's current GT — see `THE THREE NULLS`
-// below, which is what the code asks; this line said "two-null" and was the header disagreeing with its
-// own file 290 lines down). Four things differ, and every one of them is an ISA fact rather than a
-// preference:
+// in front of the current-GT read (the TLS slot, the M, and the M's current GT — see `THE THREE NULLS`
+// below). Four things differ, and every one of them is an ISA fact rather than a preference:
 //
 //   1. **NO NT_TIB, ANYWHERE.** Half of x64's context switch and a third of its shim exist to keep
 //      `gs:[0x08]`/`gs:[0x10]` describing the stack that is actually executing, because a Win32 kernel
@@ -32,10 +31,10 @@
 //      function's own return address is already on the stack; here it is live in x30 and the prologue
 //      has not run. The cold path therefore opens a 16-byte cell for it — and that cell is why the
 //      projection below adds `Arm64GuardSaveBytes`.
-//   4. **THE SHIM COPIES NO STACK ARGUMENTS.** x64's shim exists partly to move a Win64 call's 5th+
-//      arguments onto the system stack. AAPCS64 passes eight in registers and every import this lane
-//      reaches takes at most six (`StdToArm64Conversion.stdOpOutgoingArgBytes` answers 0 for all of
-//      them), so the shim is a stack SWITCH and nothing else.
+//   4. **THE DOOR COPIES TWO STACK WORDS, NOT AN ARGUMENT AREA.** x64's shim moves a Win64 call's 5th+
+//      arguments onto the system stack. AAPCS64 passes eight in registers, so the only stack argument a
+//      libSystem call here takes is a VARIADIC one, and the door carries the caller's one 16-byte
+//      outgoing region across with the switch.
 //
 // ⭐ **THE CONTEXT SWITCH TAKES TWO ARGUMENTS AND TOUCHES NO `.data` AT ALL.** The Std-tier drivers own
 // the current-GT store (`GtRuntime.maxon:5137`, `:5165`) — the same property x64's switch has, and the
@@ -317,11 +316,10 @@ end 'buildArm64GtTrampolineChunk'
 // ==========================================================================
 
 // ⭐⭐ **`gtDest` = THE GREEN THREAD THIS OS THREAD IS RUNNING, BRANCHING TO `bail` IF THERE ISN'T ONE.**
-// Both Target-tier readers — the prologue stack guard and the import-call shim — need it, and since
-// W213-C1 it is `M->currentGt` (G1's `P->currentGt` before that, and a `.data` word before that). Writing
-// the sequence twice is exactly how the two would come to disagree about which of its nulls to test; the x64
-// file states the same argument for the same pair of callers, and the two lanes must not drift on which
-// struct the field lives in.
+// Both hand-assembled readers — the prologue stack guard and the system-stack door — need it, and it is
+// `M->currentGt`. Writing the sequence twice is exactly how the two would come to disagree about which of its
+// nulls to test; the x64 file states the same argument for its guard and shim, and the two lanes must not
+// drift on which struct the field lives in.
 //
 // **THE THREE NULLS, AND ALL THREE MUST BE ASKED:**
 //   * a ZERO SLOT OFFSET means `__sched_init_procs` has not run. On Windows the unchecked read would hand
@@ -368,7 +366,7 @@ function arm64LinuxEmitBailOnNullThreadPointer(asm Arm64RuntimeAsm, reg Arm64Reg
 	end 'os'
 end 'arm64LinuxEmitBailOnNullThreadPointer'
 
-// The M alone, with both of ITS nulls tested. Split from the function above because the shim needs the M
+// The M alone, with both of ITS nulls tested. Split from the function above because the door needs the M
 // AFTER it has the GT (it reads the M's system stack out of it), so the two answers cannot share one
 // register — and because the guard's cold path wants the M and nothing else.
 function emitArm64LoadCurrentMOrBail(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
@@ -399,9 +397,13 @@ end 'emitArm64LoadCurrentMOrBail'
 // old stack could still be read from (there are no TIB bounds beside them to notice first), the cost is
 // four instructions on a path that has just called `mmap`.
 //
-// ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this M's system-stack top, SP = the
-// GT stack pointing at the guard's saved-x30 cell, x30 = the return into the guard. Everything it saves goes
-// on the SYSTEM stack, so the near-overflow GT stack never holds this frame.
+// ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this M's system-stack top, x14 = the
+// guard's PROJECTED SP, SP = the GT stack pointing at the guard's saved-x30 cell, x30 = the return into the
+// guard. Everything it saves goes on the SYSTEM stack, so the near-overflow GT stack never holds this frame.
+//
+// ⭐⭐ **IT GROWS UNTIL THE FRAME THAT ASKED FITS, AND REFUSES PAST `GtMaxStackBytes` OR A REFUSED `mmap`** —
+// x64's `buildGtMorestackChunk` carries why, and the arithmetic is the same: the new stack must hold everything
+// above the projected SP plus the guard height below it.
 //
 // ⛔ **THIS LINE SAID "this P's" AND THE GUARD THAT FILLS x12 SAYS "this M's" — one contract, written twice,
 // disagreeing.** The producer is right: `emitArm64GtStackGuard`'s cold path loads `MOffSystemStackSP` out of
@@ -426,6 +428,11 @@ end 'emitArm64LoadCurrentMOrBail'
 let Arm64MorestackEntryGtReg = Arm64Register.x11
 let Arm64MorestackEntrySysTopReg = Arm64Register.x12
 
+// The projected SP rides a caller-saved non-argument register, so nothing is live in it at a function entry and
+// the register block need not save it. It is `Arm64MoreLinkReg` below under a second name: the growth sizing
+// consumes it before the copy loop first writes that register.
+let Arm64MorestackEntryProjectedSpReg = Arm64Register.x14
+
 // The chunk's persistent body registers — all callee-saved, so `mmap`/`munmap` preserve them, and all
 // inside the block saved above.
 let Arm64MoreGtReg = Arm64Register.x19
@@ -435,8 +442,8 @@ let Arm64MoreNewSizeReg = Arm64Register.x22
 let Arm64MoreNewBaseReg = Arm64Register.x23
 let Arm64MoreOffsetReg = Arm64Register.x24
 
-// The caller-saved temporaries the copy loop, the walk and the frame arithmetic run in. None is live across
-// a call in this chunk, and none is an argument register at the point it is used.
+// The caller-saved temporaries the growth sizing, the copy loop, the walk and the frame arithmetic run in. None
+// is live across a call in this chunk, and none is an argument register at the point it is used.
 let Arm64MoreTempA = Arm64Register.x9
 let Arm64MoreTempB = Arm64Register.x10
 let Arm64MoreWalkReg = Arm64Register.x13
@@ -478,6 +485,9 @@ end 'arm64MorestackFrameBytes'
 function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let frameBytes = arm64MorestackFrameBytes()
+	let doubling = asm.newLabel()
+	let exhausted = asm.newLabel()
+	let refused = asm.newLabel()
 
 	// Step 1: ferry the GT stack pointer and switch to the system stack.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MoreWalkReg))
@@ -489,12 +499,26 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	emitArm64MorestackRegisterBlock(asm, direction: Arm64GtBlockDirection.push)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreGtReg, src: Arm64MorestackEntryGtReg)
 
-	// Step 3: old_base, old_size, new_size = old_size * 2.
+	// Step 3: old_base, old_size; TempB = need = old_top - projected + guard height; TempA = the ceiling;
+	// new_size = old_size doubled until it holds `need`. The ceiling is tested ahead of the fit, so the loop ends
+	// even on a `need` no stack could hold, and a refusal comes BEFORE anything is allocated.
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase)
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreNewSizeReg, lhs: Arm64MoreOldSizeReg, rhs: Arm64MoreOldSizeReg)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreOldBaseReg, rhs: Arm64MoreOldSizeReg)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreTempB, rhs: Arm64MorestackEntryProjectedSpReg)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempB, base: Arm64MoreTempB, imm: gtStackGuardHeight(target) as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64MoreTempA, value: GtMaxStackBytes as MachineWord)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreNewSizeReg, src: Arm64MoreOldSizeReg)
 
-	// Step 4: new_base = mmap(NULL, new_size, RW, ANON|PRIVATE, -1, 0).
+	asm.placeLabel(doubling)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreNewSizeReg, lhs: Arm64MoreNewSizeReg, rhs: Arm64MoreNewSizeReg)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreNewSizeReg, rhs: Arm64MoreTempA)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hi, label: exhausted)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreNewSizeReg, rhs: Arm64MoreTempB)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: doubling)
+
+	// Step 4: new_base = mmap(NULL, new_size, RW, ANON|PRIVATE, -1, 0). A refusal is `MAP_FAILED` (-1) from
+	// libSystem and a negative errno from a raw `svc`, so one signed test catches both.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64MoreNewSizeReg)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
@@ -502,6 +526,8 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
 	arm64EmitOsPrimitive(asm, os: target.os, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64IntReturnReg, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: refused)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreNewBaseReg, src: Arm64IntReturnReg)
 
 	// Step 5: copy the old stack to the TOP of the new one, so every address moves by ONE offset.
@@ -522,7 +548,7 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 8: republish the GT's own view of its stack.
 	arm64EmitStoreWord64At(asm, src: Arm64MoreNewBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase)
 	arm64EmitStoreWord64At(asm, src: Arm64MoreNewSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempA, base: Arm64MoreNewBaseReg, imm: gtStackGuardMargin(target) as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempA, base: Arm64MoreNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)
 	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackGuard)
 	emitArm64MorestackRebaseField(asm, byteOffset: GtOffSp)
 	emitArm64MorestackRebaseField(asm, byteOffset: GtOffFp)
@@ -541,6 +567,12 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitStackFree(asm.code, amount: frameBytes)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreWalkReg))
 	arm64EmitRet(asm.code)
+
+	// The two refusals, on the system stack with SP 16-aligned by `arm64MorestackFrameBytes`.
+	asm.placeLabel(exhausted)
+	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord)
+	asm.placeLabel(refused)
+	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
 
 	return asm.finishChunk(GtMorestackName)
 end 'buildArm64GtMorestackChunk'
@@ -706,7 +738,8 @@ let Arm64GuardScratchReg = Arm64Register.x13
 // USER function of a green-thread module that reserves a frame. When the running green thread's projected
 // SP would dip below its stack guard, it grows and relocates the stack first; otherwise it is a handful of
 // instructions that fall through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab zero, so
-// the `hs` is always taken) and off a green thread entirely (the three null tests bail).
+// the `hs` is always taken) and off a green thread entirely (the three null tests bail). `mrt_panic` runs it
+// too, after its frame record (`Arm64PanicRuntime.arm64EmitPanicStackGuard`).
 //
 // ⚠ **IT PRESERVES x30 ITSELF**, which is the whole shape difference from x64's — see this file's header.
 //
@@ -731,9 +764,10 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	arm64EmitStackAlloc(asm.code, amount: Arm64GuardSaveBytes)
 	arm64GtStoreSp(asm, src: Arm64Register.x30, byteOffset: 0)
 
-	// x12 = this M's system-stack top, which IS `__gt_morestack`'s entry contract. The M is re-read rather
-	// than kept from the test above, because that register now holds the current GT — the OTHER half of the
-	// contract — and the hot path must not spend a register to save a load on the cold one.
+	// x14 = the projected SP and x12 = this M's system-stack top, which IS `__gt_morestack`'s entry contract.
+	// The M is re-read rather than kept from the test above, because that register now holds the current GT —
+	// the OTHER part of the contract — and the hot path must not spend a register to save a load on the cold one.
+	arm64EmitMovRuntimeReg(asm, dest: Arm64MorestackEntryProjectedSpReg, src: Arm64MorestackEntrySysTopReg)
 	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg, os: os)
 	arm64EmitLoadWord64At(asm, dest: Arm64MorestackEntrySysTopReg, base: Arm64MorestackEntrySysTopReg, byteOffset: MOffSystemStackSP)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
@@ -741,7 +775,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	arm64EmitStackFree(asm.code, amount: Arm64GuardSaveBytes)
 
 	asm.placeLabel(skip)
-	arm64AppendResolvedFragment(asm, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create())
+	arm64AppendResolvedFragment(asm, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs)
 end 'emitArm64GtStackGuard'
 
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take. Not a
@@ -758,93 +792,126 @@ function emitArm64LoadCurrentMOrBailless(asm Arm64RuntimeAsm, dest Arm64Register
 end 'emitArm64LoadCurrentMOrBailless'
 
 // ==========================================================================
-// The import-call stack SHIM
+// The system-stack door — where every libSystem call a green thread makes runs
 // ==========================================================================
 
-// ⭐⭐ **A GREEN THREAD'S libSystem CALL RUNS ON THE M's SYSTEM STACK, NOT ON ITS OWN 2 KB ONE**, and that
-// is the whole of what this shim does. A green thread's stack is a `GtStackSize` seed the relocating grower
-// doubles on demand; the grower is driven by the PROLOGUE GUARD, which sees only Maxon frames — a libSystem
-// frame is invisible to it, unbounded, and would simply run off the bottom.
+// ⭐⭐⭐ **`mrt_darwin_libc_call` — RUN A libSystem CALL ON THE M's SYSTEM STACK WHEN IT WOULD OTHERWISE RUN ON
+// A GREEN THREAD's OWN.** Go's `libcCall` → `asmcgocall`, which moves every Darwin libc call onto g0's stack. A
+// green thread's stack is a small seed the relocating grower doubles on demand, and the grower is driven by
+// the PROLOGUE GUARD, which sees only Maxon frames; a libSystem frame is invisible to it and unbounded —
+// `realpath` alone outgrows a seed. The caller loads the import's address into x16
+// (`arm64EmitLoadImportAddress`) and `bl`s here with the call's own arguments in place, and gets back the
+// callee's answer with every callee-saved register intact.
 //
-// ⚠ **ITS JUSTIFICATION IS NOT x64's, AND THE DIFFERENCE MATTERS TO ANYONE READING BOTH.** The Win64 shim
-// exists as much for the NT_TIB probe — a kernel call faults when RSP is outside `gs:[0x08]`/`gs:[0x10]` —
-// as for the stack depth, and it additionally COPIES the call's 5th+ arguments. Darwin probes nothing, and
-// AAPCS64 passes eight arguments in registers where every import this lane reaches takes at most six
-// (`stdOpOutgoingArgBytes` answers 0 for all of them). So this is the stack switch alone, and it is
-// load-bearing purely because 2 KB is not a `malloc` frame.
+// ⭐⭐ **ONE DOOR FOR COMPILED FUNCTIONS AND HAND-ASSEMBLED CHUNKS ALIKE** (`arm64EmitLibcCall`). A chunk is
+// entered by `bl`, not through an `arm64ImportCall`, so a switch emitted only around that op would leave every
+// `mrt_host_*` body calling libSystem on whatever stack it was entered on.
 //
-// ⚠ **NO NESTING.** The shim switches to this M's FIXED `systemStackSP`, reset at every entry rather than
-// bumped. That is sound because a libSystem call is a LEAF that never re-enters guarded Maxon code, and
-// because an OS THREAD runs one thing at a time — a blocked call parks the thread, so nothing else on that
-// M can reach a second shimmed call meanwhile. ⭐ **That sentence is why the region had to become the M's
-// (W213-C1): it is true of a THREAD unconditionally, where the P-owned version was true only while a P
-// could not be handed to a second thread mid-call.** It is x64's argument, and it is the same argument.
+// ⛔⛔ **IT SWITCHES ONLY WHEN SP IS INSIDE THE CURRENT GREEN THREAD's OWN STACK.** The switch sets SP to the
+// system stack's TOP, which is sound only when nothing is live there — true of a green thread's call, and
+// false for two callers that run with a green thread current and SP elsewhere: `__gt_morestack`, whose own
+// frame is on the system stack, and the fault handler, on the signal stack. Both take the direct road, as do
+// an M's scheduler context (`stackBase` 0, a real OS-thread stack) and a thread that is no M at all.
 //
-// ⚠ **A GT WHOSE `stackBase` IS ZERO TAKES THE DIRECT PATH.** That is an M's own inline scheduler context,
-// which runs on a real OS-thread stack and needs no switch — and switching it would put the scheduler's own
-// calls on the very stack a green thread might be parked on.
-export function emitArm64GtGatedImportCall(code ByteArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex, shimmed bool)
-	if not shimmed 'plain'
-		arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
-		return
-	end 'plain'
+// ⚠ **NO NESTING.** A libSystem call is a leaf that never re-enters Maxon code, and an OS thread runs one
+// thing at a time, so no second door call can reach the same system stack while this one is on it.
+//
+// ⚠ **THE CALLER's OUTGOING-ARGUMENT REGION CROSSES WITH IT.** A variadic argument travels on the stack, in the
+// region `Arm64RuntimeAsm.OneOutgoingArgWord` sizes (`beginVariadicCallerFunction`), so that region is copied
+// to the system stack before the call; for every other caller the copy is words the callee never reads.
+//
+// ⚠ **THE SWITCHED ROAD LAYS A FRAME RECORD** holding the caller's return address, so a backtrace taken inside
+// the callee walks through the door into its caller rather than skipping it.
+//
+// A program with no green threads has no system stack and no current-thread slot, so its door is the direct
+// road alone.
+let DarwinLibcCallName = b"mrt_darwin_libc_call"
 
+export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let direct = asm.newLabel()
-	let done = asm.newLabel()
 
-	// ⭐ **THE SHIM IS macOS-ONLY BY CONSTRUCTION, WHICH IS WHY IT NAMES A SOURCE RATHER THAN ASKING A
-	// TARGET.** It runs only for `TargetOp.arm64ImportCall`, and an import call is emitted only on the
-	// `importCall` route (`arm64OsCallKind`) — `ElfWriter` has no import-relocation consumer at all, so one on
-	// a Linux image would already be a binary that jumps into its own first `.text` page. Threading an `os`
-	// down here would be plumbing a question through the encoder, which deliberately takes no target.
-	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64ShimMReg, gtDest: Arm64ShimGtReg, scratch: Arm64ShimSpReg, bail: direct, os: Os.macos)
-	arm64EmitLoadWord64At(asm, dest: Arm64ShimGtReg, base: Arm64ShimGtReg, byteOffset: GtOffStackBase)
-	arm64EmitCbzTo(asm, reg: Arm64ShimGtReg, label: direct)
+	if greenThreads 'mayRunOnAGreenThread'
+		emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64DoorMReg, gtDest: Arm64DoorGtReg, scratch: Arm64DoorSpReg, bail: direct, os: Os.macos)
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorGtReg, byteOffset: GtOffStackBase)
+		arm64EmitCbzTo(asm, reg: Arm64DoorLowReg, label: direct)
+		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: direct)
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorHighReg, base: Arm64DoorGtReg, byteOffset: GtOffStackSize)
+		arm64EmitAddRuntimeReg(asm, dest: Arm64DoorLowReg, lhs: Arm64DoorLowReg, rhs: Arm64DoorHighReg)
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: direct)
 
-	arm64EmitLoadWord64At(asm, dest: Arm64ShimMReg, base: Arm64ShimMReg, byteOffset: MOffSystemStackSP)
-	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64ShimSpReg))
-	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64ShimMReg))
+		// The green thread's SP goes in the system stack's top pair — twice, because a pair is what keeps SP
+		// 16-aligned — and the frame record under it.
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorMReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP)
+		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorMReg))
+		arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorSpReg), rt2: arm64RuntimeReg(Arm64DoorSpReg))
+		arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
+		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64Register.x29))
 
-	// Park the green thread's SP in the system stack's own top cell — 16 bytes, so SP stays 16-aligned at
-	// the call. It is read back AFTER the call, because no register survives one.
-	arm64EmitStackAlloc(asm.code, amount: Arm64ShimSaveBytes)
-	arm64GtStoreSp(asm, src: Arm64ShimSpReg, byteOffset: 0)
-	arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: slotIndex)
-	arm64GtLoadSp(asm, dest: Arm64ShimSpReg, byteOffset: 0)
-	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64ShimSpReg))
-	arm64EmitBranchTo(asm, label: done)
+		// Pushed from the region's top pair down, so its lowest word lands at the new SP.
+		let outgoingPairs = OneOutgoingArgWord / Arm64GtPairBytes
 
+		for pair in 0 upto outgoingPairs 'copyOutgoingArgs'
+			let pairOffset = (outgoingPairs - 1 - pair) * Arm64GtPairBytes
+			arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorSpReg, byteOffset: pairOffset)
+			arm64EmitLoadWord64At(asm, dest: Arm64DoorHighReg, base: Arm64DoorSpReg, byteOffset: pairOffset + SpillSlotBytes)
+			arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorLowReg), rt2: arm64RuntimeReg(Arm64DoorHighReg))
+		end 'copyOutgoingArgs'
+
+		arm64EmitBranchLinkReg(asm.code, reg: Arm64ImportAddressReg)
+
+		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64Register.x29))
+		arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
+		arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorSpReg), rt2: arm64RuntimeReg(Arm64DoorLowReg))
+		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorSpReg))
+		arm64EmitRet(asm.code)
+	end 'mayRunOnAGreenThread'
+
+	// The direct road is a tail call: the callee returns straight to the caller through the untouched x30.
 	asm.placeLabel(direct)
-	arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: slotIndex)
+	arm64EmitBranchReg(asm.code, reg: Arm64ImportAddressReg)
 
-	asm.placeLabel(done)
-	arm64AppendResolvedFragment(asm, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	return asm.finishChunk(DarwinLibcCallName)
+end 'buildArm64DarwinLibcCallChunk'
+
+// The door's scratch — caller-saved, non-argument, and neither x16 (the callee's address) nor x9 (the
+// throwing-call error flag, which a call site close to a `tryCall` must not find borrowed). A call through the
+// door destroys them as any call destroys the caller-saved file (`TargetDialect.arm64ImportCall`'s
+// `implicitDefs`). The low/high pair is also the shuttle for the copied stack words.
+let Arm64DoorMReg = Arm64Register.x10
+let Arm64DoorGtReg = Arm64Register.x11
+let Arm64DoorSpReg = Arm64Register.x12
+let Arm64DoorLowReg = Arm64Register.x13
+let Arm64DoorHighReg = Arm64Register.x14
+
+// A libSystem call through the system-stack door: the import's address into x16, then `bl` the door. Every
+// libSystem call on arm64-macOS takes it, except a green-thread-free program's compiled calls and the entry
+// stub's `_exit`, which run only on OS-thread stacks.
+export function arm64EmitLibcCall(code ByteArray, iatRelocs RelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
+	arm64EmitLoadImportAddress(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+	arm64EmitBranchLink(code, callFixups: callFixups, targetName: DarwinLibcCallName)
+end 'arm64EmitLibcCall'
+
+// A compiled function's `arm64ImportCall`: through the door in a green-thread program, and direct in one with
+// no green threads, whose every stack is an OS thread's.
+export function emitArm64GtGatedImportCall(code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex, greenThreads bool)
+	if greenThreads 'throughTheDoor'
+		arm64EmitLibcCall(code, iatRelocs: iatRelocs, callFixups: callFixups, slotIndex: slotIndex)
+	end 'throughTheDoor' else 'direct'
+		arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+	end 'direct'
 end 'emitArm64GtGatedImportCall'
-
-// The shim's scratch. All three are caller-saved NON-argument registers, so the import's own x0..x7
-// arguments pass through untouched and the allocator — which already treats every caller-saved register as
-// destroyed by this op (`TargetDialect.arm64ImportCall`'s `implicitDefs`) — cannot see the use.
-//
-// ⚠ x9 is deliberately absent for `Arm64GtSwitchSpScratch`'s reason: it is the throwing-call error-flag
-// register, and an import call sits close enough to a `tryCall` in this backend's vocabulary that borrowing
-// it would be a trap for the next reader.
-let Arm64ShimMReg = Arm64Register.x10
-let Arm64ShimGtReg = Arm64Register.x11
-let Arm64ShimSpReg = Arm64Register.x12
-
-// One 16-byte cell on the system stack for the green thread's parked SP — 16 rather than 8 for
-// `Arm64GuardSaveBytes`' reason, which is AAPCS64's rather than this shim's.
-let Arm64ShimSaveBytes = 16 as StackSize
 
 // ⭐ Splice a finished `Arm64RuntimeAsm` FRAGMENT into an enclosing function's byte stream: resolve its own
 // branches against its own label map FIRST (so its ids never collide with the enclosing function's block
 // ids), then append its bytes and REBASE every fixup it filed by the offset it landed at.
 //
-// It is the arm64 twin of what x64's shim does inline with `resolveChunkRel32Fixups`, lifted into one
-// function because BOTH fragment emitters here — the guard and the shim — need it and a second copy of the
-// rebasing loop is a relocation pointing at the wrong instruction, which no gate can see.
-function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray)
+// It is the arm64 twin of what x64's shim does inline with `resolveChunkRel32Fixups`. Its one fragment is the
+// prologue stack guard's, which files calls and `.data` references and no import.
+function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray)
 	arm64ResolveBlockBranches(asm.code, blockOffsets: asm.labelOffsets, fixups: asm.branchFixups)
 
 	let base = code.count()
@@ -865,10 +932,6 @@ function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFi
 		rebased.rdataOffset = reloc.rdataOffset
 		rdataRelocs.push(rebased)
 	end 'rdata'
-
-	for reloc in asm.iatRelocs 'imports'
-		iatRelocs.push(Relocation.create(base + reloc.codeOffset, slotIndex: reloc.slotIndex))
-	end 'imports'
 end 'arm64AppendResolvedFragment'
 
 // ==========================================================================
