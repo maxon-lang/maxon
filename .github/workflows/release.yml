@@ -161,6 +161,26 @@ jobs:
           # suite step cannot find a compiler. `-o` is correct under both readings.
           "./$seed" build maxon-bin -o maxon-bin/.maxon/maxon
 
+          # ⛔⛔ **AND THEN THE COMPILER BUILDS ITSELF, OR WHAT SHIPS IS WRONG TWICE OVER.** The build
+          # above is `C1`, and it is not releasable:
+          #
+          #   * **IT REPORTS `dev`.** The seed reads `maxon-bin` as a PATH, so it never runs `build.maxon`
+          #     — which is where the version is derived from the ref and handed to `--define`. MEASURED
+          #     on the 0.1.1 rehearsal: the x64-windows archive came out as `maxon-dev-x64-windows` and the
+          #     MSI step refused it, having no version to read.
+          #   * **ITS OWN RUNTIME IS THE SEED'S.** `C1` emits the new runtime into what it builds, but the
+          #     runtime inside `C1` itself was emitted by the previous release. Shipping it would ship last
+          #     release's scheduler and console handling in this release's compiler.
+          #
+          # `C1` building `maxon-bin` by NAME runs the manifest and emits a runtime of its own, so `C2`
+          # carries both the version and the runtime this tag describes.
+          built="maxon-bin/.maxon/maxon"
+          if [ -f "$built.exe" ]; then
+            built="$built.exe"
+          fi
+          "./$built" build maxon-bin
+          "./$built" version
+
       # The suite runs inside --package, before the archive exists: a packaged compiler nobody ran is
       # a claim, and this is the step that makes it a fact.
       - name: Package (runs the suite first)
