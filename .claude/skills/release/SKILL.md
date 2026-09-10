@@ -91,22 +91,25 @@ actually ran: a release created with `GITHUB_TOKEN` fires no `release: published
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.
 
-## 6 · winget, then merge back and lock
+Last, `publish` deletes `release/X.Y.Z` — the tag is the record, and the **Release tags** ruleset makes
+every `v*` tag immutable. ⚠ If the branch has a commit past the tag, that step FAILS and leaves the
+branch: tell the user, since it is work nothing shipped.
+
+## 6 · winget, then merge the tag back
 
 ```bash
 wingetcreate update MaxonLang.Maxon --version X.Y.Z --urls <msi-url> --submit
-git checkout main && git merge --ff-only release/X.Y.Z && git push origin main
+git fetch origin --tags --prune
+git checkout main && git merge --no-ff vX.Y.Z && git push origin main
+git branch -d release/X.Y.Z
 ```
 
-⛔ **THEN LOCK THE RELEASE BRANCH** (GitHub → Settings → Branches). It is the record of what was
-built and published; a later commit on it would describe a release that never existed.
+⚠ The merge back is not optional — the changelog entry and the website material exist only at the
+tag until it happens. The branch is already gone, so the TAG is what is merged.
 
-⚠ The merge back is not optional — the changelog entry and the website material exist only on that
-branch until it happens.
-
-⚠ **`main` moved? Merge with `--no-ff`, never rebase**, and build and suite-test the merge before
-pushing it. A merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next
-release's `--commits-since`.
+⚠ **Merge, never rebase**, and if `main` moved, build and suite-test the merge before pushing it. A
+merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next release's
+`--commits-since`.
 
 ⚠ **Until `MaxonLang.Maxon` is merged into winget-pkgs, `update` fails** — replace the version directory
 on the open new-package PR (microsoft/winget-pkgs#431736) with `installer/winget/generate.sh`'s output

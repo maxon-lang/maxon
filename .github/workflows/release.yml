@@ -357,3 +357,25 @@ jobs:
           for workflow in website.yml homebrew.yml vscode-extension.yml; do
             gh workflow run "$workflow" --ref "$GITHUB_REF_NAME"
           done
+
+      # ⛔ **THE TAG IS THE RECORD OF WHAT SHIPPED, SO THE BRANCH IT WAS CUT ON GOES.** A later commit on
+      # `release/X.Y.Z` would describe a release that never existed, and `release.yml` would build and
+      # test it at the real version. The tag names the same commit and the `Release tags` ruleset makes
+      # every `v*` tag immutable, so deleting the branch loses nothing.
+      #
+      # ⚠ ONLY WHEN THE BRANCH TIP IS THE TAGGED COMMIT. A commit past the tag is work nothing shipped, and
+      # deleting the branch would strand it — so that fails loudly and leaves the branch for a person.
+      - name: Retire the release branch
+        run: |
+          set -euo pipefail
+          branch="release/${GITHUB_REF_NAME#v}"
+          tip="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          if [ -z "$tip" ]; then
+            echo "::notice::no $branch to retire"
+            exit 0
+          fi
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::error title=Release branch moved past the tag::$branch is at $tip but $GITHUB_REF_NAME is $GITHUB_SHA. Merge what is past the tag into main, then delete the branch by hand."
+            exit 1
+          fi
+          git push origin --delete "$branch"

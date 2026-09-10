@@ -381,6 +381,13 @@ update Homebrew, the VS Code extension and maxon.dev, at the tag — so the down
 once the downloads exist. ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no
 `release: published`, and on v0.1.1 none of the three ran.
 
+⛔ **Last, it deletes `release/X.Y.Z`.** The tag is the record of what was built and published, and the
+**Release tags** ruleset (Settings → Rules → Rulesets) makes every `v*` tag immutable — it cannot be
+moved or deleted, only created. A branch left behind is a place to push a commit describing a release
+that never existed, which `release.yml` would build and test at the real version; one that does not
+exist cannot take one. It is deleted only when its tip IS the tagged commit — a commit past the tag
+fails the step and leaves the branch for a person, since deleting it would strand work nothing shipped.
+
 ### 5. Submit to winget
 
 ```bash
@@ -393,23 +400,22 @@ opened for 0.1.0 and retargeted to 0.1.1 when 0.1.0's unsigned installer failed 
 it merges, a new release REPLACES the version directory on that PR's branch with
 `installer/winget/generate.sh`'s output rather than opening a second new-package PR.
 
-### 6. Merge the branch back, then lock it
+### 6. Merge the tag back
 
 ```bash
-git checkout main && git merge --ff-only release/0.1.1 && git push origin main
+git fetch origin --tags --prune
+git checkout main && git merge --no-ff v0.1.1 && git push origin main
+git branch -d release/0.1.1
 ```
 
-⚠ **If `main` has moved since the branch was cut, merge with `--no-ff`; never rebase.** A merge keeps
-the tag an ancestor of `main`, so `changelog.sh --commits-since` starts after it. Rebased copies carry
-other ids, and the next release's listing would offer this one's changes again as new. Build the merge
-and run the suite before pushing it — it combines runtime work nobody has tested together.
-
 The changelog entry, the website material and any fixes made while preparing all belong on `main` —
-without this they exist only on a branch nobody builds from again.
+without this they exist only at a tag nobody builds from again. The branch is gone by now (`publish`
+deleted it), so the TAG is what is merged; it names the same commit.
 
-⛔ **Then lock `release/0.1.1`** (GitHub → Settings → Branches, or a ruleset). It is the record of what
-was built and published; a later commit on it would describe a release that never existed, and
-`release.yml` would happily build and test one.
+⚠ **Merge, never rebase.** A merge keeps the tag an ancestor of `main`, so `changelog.sh
+--commits-since` starts after it. Rebased copies carry other ids, and the next release's listing would
+offer this one's changes again as new. If `main` has moved since the branch was cut, build the merge and
+run the suite before pushing it — it combines runtime work nobody has tested together.
 
 **For v0.1.0**, the same steps ran by hand: package each target on hardware of its own architecture,
 collect the archives into one `dist/`, build the MSI, then `--publish`.
