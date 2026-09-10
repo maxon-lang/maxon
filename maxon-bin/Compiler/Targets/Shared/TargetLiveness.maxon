@@ -977,12 +977,9 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 		panic("computeLivenessOn: '{String.from(func.name)}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
 	end 'cfgStale'
 
-	// The variant memo is the CALLER's — one per MODULE, made in `allocateRegisters` and threaded down.
-	// Its contents are a property of the DIALECT (which registers a `callDirect` clobbers, whether a
-	// `loadRegSlot` touches a slot), so a per-FUNCTION memo made every function re-derive the ~30 cases
-	// its own ops name and pay a handful of column reallocations to hold them. Every walk below shares
-	// this one, so a variant's facts are derived on the first op of that case the whole COMPILE meets and
-	// read from then on (see `OpVariantFacts`).
+	// The variant memo is the CALLER's — one per register-allocation worker, held for the whole compile,
+	// because its contents are a property of the DIALECT rather than of this function (see
+	// `OpVariantFacts`).
 	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount, opFacts: opFacts)
 	var marks = LivenessMarkScratch.create()
 	marks.begin(numBlocks)
@@ -1075,7 +1072,7 @@ end 'assertClassColumnCovers'
 // Unreachable blocks — a parser `dead` continuation with no predecessor — are not reached by
 // the DFS, so they are appended in their original relative order to preserve them (they still
 // hold ops that get emitted). Entry (local 0) is the DFS root, so it stays first (its prologue
-// must lead `.text`). Runs before the splitter in `allocateFunction`.
+// must lead `.text`). Runs before the splitter in `allocateFunctionCore`.
 //
 // RETURNS the reordered topology, which the splitter then completes into its `FuncCfg` — the
 // only pass between the two is nothing, so the skeleton this built is still exactly the
@@ -4400,10 +4397,10 @@ typealias TargetOpVariant = int(0 to u64.max)
 //
 // ⚠ IT IS KEYED BY THE VARIANT, NOT BY THE OP, AND THAT IS THE WHOLE DESIGN. Every fact here is
 // `op.rawValue.<field>` or a `match` over the op's case with no payload read — i.e. a pure function of
-// which CASE the op is. So the key is `op.ordinal`, the memo is the size of the union (112 cases today)
-// rather than the size of the program, and there is no staleness class to reason about: an op's case
-// cannot change (the splitter's `substituteValueInOp` rebuilds each op as the IDENTICAL case), and even
-// if one somehow did, the answer would be re-derived under its own key rather than served stale.
+// which CASE the op is. So the key is `op.ordinal`, the memo is the size of the union rather than the
+// size of the program, and there is no staleness class to reason about: an op's case cannot change (the
+// splitter's `substituteValueInOp` rebuilds each op as the IDENTICAL case), and even if one somehow did,
+// the answer would be re-derived under its own key rather than served stale.
 //
 // ⚠⚠ AN OP-KEYED CACHE WOULD HAVE BEEN THE WRONG SHAPE, and not by a little: `OpIndex` indexes
 // `module.ops`, which is the WHOLE MODULE's flat op array, while every buffer the allocator owns is
@@ -4415,22 +4412,18 @@ typealias TargetOpVariant = int(0 to u64.max)
 //
 // ⭐ WHY IT CANNOT COST MORE THAN NOT HAVING IT. The fill IS the computation the caller would have made
 // anyway — the first op of a given case pays exactly the derivation it always paid, and every later op
-// of that case pays an array read. There is no eager pass, no warm-up, and nothing to invalidate.
+// of that case pays an array read. There is no eager derivation, no warm-up, and nothing to invalidate.
 //
-// ⚠ IT IS BUILT PER FUNCTION AND ITS CONTENTS ARE PROGRAM-WIDE, which is a lifetime the allocator's
-// SHAPE imposes rather than one this type wants: `computeLivenessOn` is the first place both consumers
-// (the index build and the pressure sweep) can share one, and it is entered once per function. So every
-// function re-derives the ~30 cases its own ops name and pays a handful of column reallocations to hold
-// them. Hoisting it to the module — one memo for the whole compile, four allocations in total, each
-// case derived once ever — is a strictly better lifetime and needs the object created in
-// `allocateRegisters` and threaded through `allocateFunction`, i.e. a change in RegisterAllocator.maxon.
+// ⚠ THE COLUMNS ARE SIZED TO THE WHOLE UNION AT CREATION AND NEVER GROWN, WHICH KEEPS A COMPILE'S MEMORY
+// DETERMINISTIC. One memo lives per register-allocation worker for the whole compile, and which
+// functions a worker is handed depends on thread timing (`RegAllocPool` feeds whichever worker answers
+// first). A column grown to the highest variant seen so far would grow a timing-dependent number of
+// times to timing-dependent sizes, and `scale-test`'s exact memory columns would differ between two
+// compiles of one program. Sized once, a memo allocates the same whatever it is fed.
 //
-// WHAT IT REPLACES, and why it is worth a type: `op.rawValue.<field>` on a struct-backed union lowers
-// to a SELECT CHAIN over every case — `const`/`cmp`/`const`/`select` per case, and the chain is
-// branchless, so ALL of it runs on every read. At 112 cases that is ~450 instructions to
-// fetch one integer, and the allocator's hot walks fetch it at every op of every dirty block of every
-// split. (`opClobberMask` 7.7% / `opIsFixedRegisterPoint` 2.7% / `slotResidencyOf` 2.8% of a whole
-// compile, measured on `tests/ladders/genwidelive.sh 400 sum`.)
+// WHY IT IS WORTH A TYPE: `op.rawValue.<field>` on a struct-backed union lowers to a SELECT CHAIN over
+// every case — `const`/`cmp`/`const`/`select` per case, and the chain is branchless, so ALL of it runs on
+// every read — and the allocator's hot walks fetch it at every op of every dirty block of every split.
 export type OpVariantFacts
 	// Registers the variant WRITES without naming them as an explicit operand (a call's caller-saved
 	// set, an `idiv`'s RAX/RDX), and those it READS the same way (`ret`'s R8).
@@ -4444,24 +4437,30 @@ export type OpVariantFacts
 	var known as BoolArray
 
 	export static function create() returns OpVariantFacts
-		return Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), known: BoolArray.create()}
+		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), known: BoolArray.create()}
+		let variantCount = TargetOp.unionCases.allCases.count() as ElementIndex
+		facts.implicitDefs.growFilled(variantCount, value: 0)
+		facts.implicitUses.growFilled(variantCount, value: 0)
+		facts.slotRole.growFilled(variantCount, value: OpSlotRole.touchesNoSlot)
+		facts.known.growFilled(variantCount, value: false)
+		return facts
 	end 'create'
 
 	// Registers `op` clobbers implicitly — a call's caller-saved set, an `idiv`'s RAX/RDX; 0 for every
 	// other op.
 	export function implicitDefsOf(op TargetOp) returns RegMask
-		return try self.implicitDefs.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitDefsOf: implicitDefs.get OOB — `learn` grows every column to the variant it returns")
+		return try self.implicitDefs.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitDefsOf: implicitDefs.get OOB — `create` sizes every column to the whole union")
 	end 'implicitDefsOf'
 
 	// Registers `op` READS without naming them as an explicit operand — `ret`'s R8, an `idiv`'s
 	// RAX/RDX; 0 for every other op.
 	export function implicitUsesOf(op TargetOp) returns RegMask
-		return try self.implicitUses.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitUsesOf: implicitUses.get OOB — `learn` grows every column to the variant it returns")
+		return try self.implicitUses.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitUsesOf: implicitUses.get OOB — `create` sizes every column to the whole union")
 	end 'implicitUsesOf'
 
 	// What `op` does to a spill slot — see `OpSlotRole`.
 	export function slotRoleOf(op TargetOp) returns OpSlotRole
-		return try self.slotRole.get(self.learn(op)) otherwise panic("OpVariantFacts.slotRoleOf: slotRole.get OOB — `learn` grows every column to the variant it returns")
+		return try self.slotRole.get(self.learn(op)) otherwise panic("OpVariantFacts.slotRoleOf: slotRole.get OOB — `create` sizes every column to the whole union")
 	end 'slotRoleOf'
 
 	// `op`'s variant, with every column holding that variant's answers. The ONE derivation site, so a
@@ -4469,23 +4468,7 @@ export type OpVariantFacts
 	function learn(op TargetOp) returns TargetOpVariant
 		let variant = op.ordinal as TargetOpVariant
 
-		if variant >= self.known.count() 'aWiderVariantSpaceThanSeenSoFar'
-			// TIGHT, to the highest variant this function has actually met — not to a chunk covering the
-			// whole union. MEASURED both ways on the scale corpus's rung 0 (78 functions): growing in
-			// 128-slot chunks saves ~16 reallocations per function and costs ~2.6 KB per function,
-			// because a real function names only 30-40 of the 112 cases and the rest of the chunk is
-			// never read. It is a wash in allocations and a loss in bytes, so the columns stay tight.
-			//
-			// The reallocations it does cost are a per-FUNCTION term, and they exist only because this
-			// memo is built per function while its CONTENTS are a property of the DIALECT — see the type
-			// header's note on lifetime.
-			self.implicitDefs.growFilled(((variant + 1) as ElementIndex), value: 0)
-			self.implicitUses.growFilled(((variant + 1) as ElementIndex), value: 0)
-			self.slotRole.growFilled(((variant + 1) as ElementIndex), value: OpSlotRole.touchesNoSlot)
-			self.known.growFilled(((variant + 1) as ElementIndex), value: false)
-		end 'aWiderVariantSpaceThanSeenSoFar'
-
-		let derived = try self.known.get(variant) otherwise panic("OpVariantFacts.learn: known.get OOB at variant {variant}, which the growth above covers")
+		let derived = try self.known.get(variant) otherwise panic("OpVariantFacts.learn: known.get OOB at variant {variant} — `create` sizes every column to the whole union")
 
 		if derived 'alreadyDerived'
 			if VerifyOpVariantFacts 'checkAgainstTheOpItself'

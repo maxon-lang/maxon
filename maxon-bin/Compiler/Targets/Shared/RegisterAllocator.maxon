@@ -239,7 +239,7 @@ end 'ReuseCopyPlan'
 // `(unattributed)` row (see CompileTimings.regAllocRemainder), never as silence.
 //
 // Ordinals index a per-run array and are persisted nowhere, so this list may be
-// reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunction`,
+// reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunctionCore`,
 // which subtracts liveness back out of the splitter's wall).
 export enum RegAllocPhase
 	criticalEdges
@@ -1002,13 +1002,6 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// disconnected accounting of the same wall time.
 	var stats = project.timings.regAlloc
 
-	// ONE per-VARIANT op-facts memo for the WHOLE MODULE. Every fact in it is a property of the DIALECT —
-	// which registers a `callDirect` clobbers, whether a `loadRegSlot` touches a spill slot — so the
-	// natural lifetime is the compile, not the function. Built per function it re-derived the ~30 cases
-	// each function's own ops name and paid ~24 column reallocations to hold them, on EVERY function the
-	// allocator sees; built here each case is derived once ever and the columns are grown once.
-	var opFacts = OpVariantFacts.create()
-
 	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
 	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
@@ -1017,69 +1010,20 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	splitCriticalEdges(module, target: target)
 	addRegAllocDelta(project, phase: RegAllocPhase.criticalEdges, delta: edgeProbe.elapsed())
 
-	try allocateOnAWorkerPool(module, target: target, project: project, valueClasses: valueClasses, pool: pool, callerSaved: callerSaved, file: file, opFacts: opFacts, stats: stats)
+	try allocateOnAWorkerPool(module, target: target, project: project, valueClasses: valueClasses, pool: pool, callerSaved: callerSaved, file: file, stats: stats)
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
-
-// EVERY FUNCTION, ONE AFTER THE OTHER, ON THE THREAD THAT ASKED.
-//
-// THIS ARM EXISTS FOR THE SEED COMPILER AND FOR NOTHING ELSE. `spawn` is the compiler's own, so a binary the
-// BOOTSTRAP built cannot carry the pool; the seed's one job is to compile the compiler that can. A run
-// under `MAXON_MAX_PROCS=1` does NOT come here - it is the pool with one processor in it, which is what
-// makes the pinned and the default lane the same code path and their outputs comparable.
-//
-// Index-based (not `for func in ...`) because the loop index IS the function's Maxon-tier index:
-// function indices are 1:1 across Maxon -> Std -> Target, and `mrt_start` is prepended only AFTER this
-// pass, so `module.functions` here is the user functions in their Maxon declaration order. The E5001
-// diagnostic passes this index to `ValueOriginTable.lookup` to map a value back to its source op.
-function allocateOnThisThread(module TargetModule, project Project, valueClasses ValueClassColumns, pool RegMask, callerSaved RegMask, file RegisterFile, opFacts OpVariantFacts, stats RegAllocStats) throws CompileError
-	// Deliberately NOT the pool grammar `tests/parallel-compile/` pins: a seed really did allocate
-	// serially, and a line claiming "1 worker(s) over 1 processor(s)" would read as a scheduler pinned to
-	// one processor rather than as a compiler with no pool at all.
-	logDebug(LogCategory.codegen, message: function() gives "regalloc: no worker pool in a bootstrap-built compiler, {module.funcCount()} function(s)")
-
-	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		var func = try module.functions.get(funcIndex) otherwise panic("allocateOnThisThread: functions.get OOB at {funcIndex}")
-		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, callerSaved: callerSaved, file: file, valueClass: classColumnFor(valueClasses, module: module, funcIndex: funcIndex), opFacts: opFacts, stats: stats, project: project)
-	end 'eachFunc'
-end 'allocateOnThisThread'
-
-// This function's register-class column, with the count check both drivers ask.
-module function classColumnFor(valueClasses ValueClassColumns, module TargetModule, funcIndex FuncIndex) returns ValueClassColumn
-	return try valueClasses.get(funcIndex) otherwise panic("classColumnFor: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
-end 'classColumnFor'
-
-// The MAIN THREAD's half of one function's allocation - everything the core cannot do.
-//
-// Four things, and each is one a pool worker structurally may not touch: EXTRACT the unit and SPLICE its
-// result (both read and write the shared module), bill the sub-phase brackets to the compile's tables,
-// aggregate this function's figures into the module-wide report, and RENDER a register-pressure refusal,
-// which needs `project.opRanges` / `valueOrigins`.
-//
-// EVERY MODE RUNS EXTRACT -> ALLOCATE -> SPLICE, INCLUDING THIS SERIAL ONE. The emitted code is then one
-// function of the function ORDER and of nothing else - a pool of one and a pool of sixteen do the same
-// arithmetic on the same input - which is what makes byte identity across processor counts a property of
-// the design rather than a coincidence to re-check.
-function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, stats RegAllocStats, project Project) throws CompileError
-	if let result = try RegAllocResult.byAllocating(RegAllocUnit.extract(module, func: func, valueClass: valueClass), pool: pool, callerSaved: callerSaved, file: file, opFacts: opFacts) 'allocated'
-		spliceRegAllocResult(module, func: func, result: result)
-		foldFunctionAllocation(project, stats: stats, func: func, counters: result.counters, costs: result.costs, facts: result.facts)
-	end 'allocated' else (e) 'refused'
-		match e 'why'
-			hotOverflow then try refuseForRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts)
-		end 'why'
-	end 'refused'
-end 'allocateFunction'
 
 // RENDER THE E5001 A UNIT RUN REFUSED WITH, BY RUNNING THE CORE AGAIN ON THE FUNCTION ITSELF.
 //
 // The refusal's analysis state - the liveness it was measured against, the fresh-id lineage, the peak -
-// is far too large to come back through a reply cell, and on the parallel path it is on another green
-// thread's stack besides. What comes home is the bare `RegAllocRefusal`. So the second run is how the
-// state is recovered, and it is EXACT rather than approximate: the first run allocated a COPY, so this
-// function has not been touched, and the same core on the same input refuses at the same peak. A compile
-// that reaches here is failing, so the second run costs nothing anybody will see.
-module function refuseForRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts) throws CompileError
+// is far too large to come back through a reply cell, and it is on a worker's green thread besides. What
+// comes home is the bare `RegAllocRefusal`, so the second run is how the state is recovered — EXACTLY: the
+// first run allocated a COPY, so this function has not been touched, and the same core on the same input
+// refuses at the same peak. A compile that reaches here is failing, so the second run (and the fresh
+// variant memo it builds) costs nothing anybody will see.
+module function refuseForRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn) throws CompileError
+	var opFacts = OpVariantFacts.create()
 	var refusal = RegAllocRefusalSite.create()
 	var counters = RegAllocCounters.create()
 	var costs = RegAllocCosts.create()

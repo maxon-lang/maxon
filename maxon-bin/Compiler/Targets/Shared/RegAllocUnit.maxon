@@ -645,12 +645,8 @@ module type RegAllocResult
 	// question, because a shortfall would misattribute every later record.
 	export var debugLocations as DebugValueLocationArray
 
-	// ALLOCATE ONE UNIT - the whole of what a pool worker does, and the whole of what the serial path
-	// does. It takes the four per-ISA facts rather than deriving them, because both callers already hold
-	// them for the life of a compile: the driver sources them once per module and a worker once at
-	// `spawn`. `OpVariantFacts` especially - every fact in it is a property of the DIALECT, so a memo
-	// rebuilt per unit would re-derive the ~30 cases each function's ops name and pay the column growth
-	// to hold them, on every function.
+	// ALLOCATE ONE UNIT - the whole of what a pool worker does. It takes the four per-ISA facts rather
+	// than deriving them because the worker holds them for the whole compile (see `RegAllocWorker`).
 	//
 	// ⭐⭐ **IT IS A STATIC FACTORY WHOSE ONE RETURN IS `Self{…}`, AND THAT SHAPE IS LOAD-BEARING (E3137).**
 	// A REPLY moves, exactly as a message argument does, so a message may return only a value its frame

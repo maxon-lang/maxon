@@ -188,12 +188,14 @@ ragged.
 
 | date | minted at | change | rung 0 | rung 1 | rung 2 | rung 3 | rung 4 | rung 5 |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-09-10 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | OpVariantFacts sized to the whole TargetOp union at creation: one memo lives per regalloc worker, and which functions a worker gets is timing-dependent, so its lazy growth made regalloc memory differ between two compiles of one rung and every ladder since the pool landed read BROKEN RUN. Now identical across repeats. The module-level memo only refuseForRegisterPressure read is gone, and dead allocateOnThisThread/allocateFunction removed. First readable ladder after 6c6ac5c82d (spawn-aware stdlib reachability; this corpus spawns no service, so that change reads 0 here). Allocation totals scale with the host's processor count (one regalloc worker per processor): compare rows from same-core-count hosts only. | 4,051,353 | 6,065,963 | 10,091,698 | 18,146,909 | 34,264,189 | 66,540,997 |
 <!-- scale-history:allocations -->
 
 ## Bytes
 
 | date | minted at | change | rung 0 | rung 1 | rung 2 | rung 3 | rung 4 | rung 5 |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-09-10 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | OpVariantFacts sized to the whole TargetOp union at creation: one memo lives per regalloc worker, and which functions a worker gets is timing-dependent, so its lazy growth made regalloc memory differ between two compiles of one rung and every ladder since the pool landed read BROKEN RUN. Now identical across repeats. The module-level memo only refuseForRegisterPressure read is gone, and dead allocateOnThisThread/allocateFunction removed. First readable ladder after 6c6ac5c82d (spawn-aware stdlib reachability; this corpus spawns no service, so that change reads 0 here). Allocation totals scale with the host's processor count (one regalloc worker per processor): compare rows from same-core-count hosts only. | 286,905,620 | 457,666,956 | 814,808,692 | 1,534,223,990 | 3,011,957,699 | 5,932,257,299 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -243,6 +245,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 
 | date | minted at | change | rung 0 | rung 1 | rung 2 | rung 3 | rung 4 | rung 5 |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-09-10 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | OpVariantFacts sized to the whole TargetOp union at creation: one memo lives per regalloc worker, and which functions a worker gets is timing-dependent, so its lazy growth made regalloc memory differ between two compiles of one rung and every ladder since the pool landed read BROKEN RUN. Now identical across repeats. The module-level memo only refuseForRegisterPressure read is gone, and dead allocateOnThisThread/allocateFunction removed. First readable ladder after 6c6ac5c82d (spawn-aware stdlib reachability; this corpus spawns no service, so that change reads 0 here). Allocation totals scale with the host's processor count (one regalloc worker per processor): compare rows from same-core-count hosts only. | 2,225,010,200 | 3,157,755,920 | 5,287,627,420 | 9,733,381,180 | 19,226,164,980 | 38,825,518,080 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
