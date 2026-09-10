@@ -23,6 +23,13 @@ disagree? Open an issue. A good report includes:
 
 The smaller the reproduction, the faster it can be fixed.
 
+### Propose a feature or change
+
+Ideas for the language, the standard library or the toolchain go in
+[Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), not the issue
+tracker. Search there first — if someone has already proposed it, upvote it and add your use
+case in a comment. The most-upvoted ideas are the ones looked at first.
+
 ### Improve the compiler or standard library
 
 The compiler (a native backend, with no LLVM), the language server, and the standard library are all
