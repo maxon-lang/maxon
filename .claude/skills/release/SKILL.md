@@ -84,8 +84,8 @@ git push origin release/X.Y.Z vX.Y.Z
 ## 5 · Watch it
 
 `release.yml` builds and natively suite-tests four targets and publishes, then starts the Homebrew,
-VS Code extension, maxon.dev and install-script workflows at the tag — so the download links go live
-only once the downloads exist. Check all four actually ran: a release created with `GITHUB_TOKEN`
+Docker, VS Code extension, maxon.dev and install-script workflows at the tag — so the download links
+go live only once the downloads exist. Check all five actually ran: a release created with `GITHUB_TOKEN`
 fires no `release: published`. `install-script` green is what says both one-line installers can
 install the new release.
 

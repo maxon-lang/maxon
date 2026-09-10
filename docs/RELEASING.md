@@ -164,6 +164,7 @@ rebuilds.
 | | |
 |---|---|
 | **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, for arm64 macOS and x64/arm64 Linux. `homebrew.yml` installs and `brew test`s it on all three before committing it to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
+| **Docker** | `installer/docker/Dockerfile`, built by `docker.yml` from the release's own archives into `ghcr.io/maxon-lang/maxon` — `debian` (the default) and `distroless` variants, amd64 and arm64, each built on its own runner and tested before anything is pushed. Tags `X.Y.Z` and `X.Y` (plus `X` from 1.0), with `-distroless` for the second variant; `latest` and `distroless` move only when the version is the newest release. ⚠ GHCR creates the package private: make it public once, in the organisation's package settings. |
 | **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. |
 
 ---
@@ -286,8 +287,8 @@ builds the site from there. A fix committed after the tag is a fix nothing ships
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
 `ubuntu-24.04-arm`, builds and **natively suite-tests** each target, and publishes. The `publish` job
-then starts the workflows that update Homebrew, the VS Code extension, maxon.dev and the
-install-script check, at the tag — so the download links go live only once the downloads exist.
+then starts the workflows that update Homebrew, the Docker image, the VS Code extension, maxon.dev
+and the install-script check, at the tag — so the download links go live only once the downloads exist.
 ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no `release: published`,
 and on v0.1.1 none of them ran.
 
@@ -329,6 +330,7 @@ Re-download from the release page — not the local `dist/` copy, which is the t
   executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
   above either the compiler or the source.
 - Both install scripts on a clean machine, then `maxon version` in a new terminal.
+- `docker run --rm ghcr.io/maxon-lang/maxon maxon version`, logged out, so the package is public.
 - `brew install maxon-lang/tap/maxon` on macOS and on Linux, then `maxon version` in the same shell —
   Homebrew's symlink is the point, and the compiler resolves it.
 - Install the published VS Code extension on a machine with **no** compiler, and confirm the
