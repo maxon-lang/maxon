@@ -397,13 +397,15 @@ function Install-Maxon {
     }
 }
 
+# A script block of its own, so nothing it assigns lands in the session `irm | iex` runs in.
 & {
+    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath)
     try {
-        Install-Maxon -RequestedVersion $Version -Reinstall $Force.IsPresent -UpdatePath (-not $NoPathUpdate.IsPresent)
+        Install-Maxon -RequestedVersion $RequestedVersion -Reinstall $Reinstall -UpdatePath $UpdatePath
         $global:LASTEXITCODE = 0
     } catch {
         $global:LASTEXITCODE = 1
         [Console]::Error.WriteLine("maxon-install: $($_.Exception.Message)")
     }
-}
+} $Version $Force.IsPresent (-not $NoPathUpdate.IsPresent)
 Remove-Item -Path Function:\Install-Maxon
