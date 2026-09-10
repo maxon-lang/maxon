@@ -18,8 +18,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (without the leading v)'
-        required: true
+        description: 'Version to publish (without the leading v); empty takes it from the tag the run is on'
+        required: false
 
 permissions:
   contents: read
@@ -35,10 +35,12 @@ jobs:
 
       - name: Work out the version
         id: v
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            version="${{ github.event.inputs.version }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
           else
             version="${GITHUB_REF_NAME#v}"
           fi
