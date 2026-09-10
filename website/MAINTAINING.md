@@ -118,6 +118,12 @@ When either changes, the pages to update are `src/install.ts` (the install comma
 `install.astro`, `getting-started/installation.mdx`, `getting-started/first-program.md`,
 `contributing.md`, and the quickstart in `index.astro`.
 
+⚠ **The compiler prints the install commands too.** `maxon upgrade` gives this host's one-liner when it
+refuses an install it does not manage, and the pinned-release form when asked for `--version`, both from
+`maxon-bin/Upgrade/UpgradeCommand.maxon`. Change either on the site and change it there as well.
+`tests/cli/upgrade-refuses-an-unrecognised-layout.test.maxon` reads the one-liner out of `src/install.ts`
+and fails until the two agree; nothing compares the pinned-release form with `install.astro`'s.
+
 ## Positioning & copy decisions (keep these consistent)
 
 These are deliberate and easy to undo by accident — preserve them:

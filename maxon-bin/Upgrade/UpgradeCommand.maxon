@@ -36,6 +36,9 @@ let WordQuote = "\""
 #if os(Windows)
 	let InstallScriptUrl = "https://maxon.dev/install.ps1"
 
+	// Without a scheme because the install page prints it so, leaving it to maxon.dev's redirect to https.
+	let PublishedOneLiner = "powershell -c \"irm maxon.dev/install.ps1|iex\""
+
 	// Windows PowerShell by absolute path under the Windows directory, so nothing on PATH can stand in for it.
 	let SystemRootVariable = "SystemRoot"
 	let PowerShellUnderSystemRoot = "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
@@ -118,10 +121,11 @@ function refuse(reason String) returns ExitCode
 	return OwnFailureExit
 end 'refuse'
 
-// The one-liner the website publishes for this host.
+// ⚠ **THE INSTALL PAGE'S COMMAND FOR THIS HOST, CHARACTER FOR CHARACTER** — `website/src/install.ts`
+// declares it, and `upgrade-refuses-an-unrecognised-layout` holds this to that.
 function installOneLiner() returns String
 	#if os(Windows)
-		return "powershell -c \"irm {InstallScriptUrl} | iex\""
+		return PublishedOneLiner
 	#else
 		return "curl -fsSL {InstallScriptUrl} | sh"
 	#endif

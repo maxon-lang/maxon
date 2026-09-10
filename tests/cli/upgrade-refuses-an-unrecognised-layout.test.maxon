@@ -3,14 +3,57 @@
 //
 // The copy is flat - `maxon` and `stdlib/` in one directory, as an unpacked archive leaves them. It is a
 // working compiler, but no `bin/` sits under an install root here, so there is no root to upgrade.
+//
+// ⭐ **THE ONE-LINER IS READ OFF THE INSTALL PAGE'S SOURCE, NEVER RESPELLED HERE.** A reader copies it out of
+// the refusal, so it must be the page's command character for character, and the compiler's copy is the one
+// a change to the page leaves behind.
+
+// Where the install page declares its commands, relative to the checkout root. A declaration is one line,
+// `export const <name> = '<command>';`.
+let PublishedCommandsFile = "website/src/install.ts"
+let DeclarationQuote = "'"
+let DeclarationEnd = ";"
+
+#if os(Windows)
+	let PublishedOneLinerName = "INSTALL_POWERSHELL"
+#else
+	let PublishedOneLinerName = "INSTALL_SCRIPT"
+#endif
 
 test 'upgrade from an unrecognised layout refuses, giving the install one-liner'
+	let published = publishedOneLiner()
 	let staged = stageCompiler("upgrade-flat", binaryIn: CaseDirItself, stdlibIn: CaseDirItself)
 	let run = runDriver([UpgradeCommandWord], binary: staged)
 
 	let observedExit = run.exitCode() as AssertedInt
 	try Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord}` from {staged.toString()} did not refuse. Nothing installed it that `upgrade` can run again. It said: {run.stdout}{run.stderr}")
 
-	try Expect.contains(run.stderr, needle: InstallScriptAddress, message: "`maxon {UpgradeCommandWord}` from an unrecognised layout does not give the install one-liner, which is how its reader gets an install `upgrade` manages. It said: {run.stderr}")
+	try Expect.contains(run.stderr, needle: published, message: "`maxon {UpgradeCommandWord}` from an unrecognised layout does not give the install one-liner the install page prints ({PublishedOneLinerName} in {PublishedCommandsFile}), which is how its reader gets an install `upgrade` manages. It said: {run.stderr}")
 	try Expect.isEmpty(run.stdout, message: "`maxon {UpgradeCommandWord}` from an unrecognised layout wrote to stdout; a refusal says everything on stderr")
 end 'upgrade from an unrecognised layout refuses, giving the install one-liner'
+
+// The command `PublishedCommandsFile` declares for this host. Rebuilding the line from what its quotes cut
+// it into matches only a lone plain string literal, so an escape or a second literal is refused rather than
+// half-read.
+function publishedOneLiner() returns String
+	let path = try FilePath.from(PublishedCommandsFile) otherwise panic("upgrade-refuses-an-unrecognised-layout: '{PublishedCommandsFile}' is a relative path with no character a path refuses")
+	let source = try File.readText(path) otherwise panic("upgrade-refuses-an-unrecognised-layout: the gate could not run - could not read {PublishedCommandsFile}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let declared = "export const {PublishedOneLinerName} = "
+
+	for line in source.split("\n") 'eachLine'
+		if not line.startsWith(declared) 'anotherDeclaration'
+			continue
+		end 'anotherDeclaration'
+
+		let declaration = line.trimEnd()
+		let command = try declaration.split(DeclarationQuote).get(1) otherwise ""
+
+		if declaration != "{declared}{DeclarationQuote}{command}{DeclarationQuote}{DeclarationEnd}" or command.isEmpty() 'notOnePlainLiteral'
+			panic("upgrade-refuses-an-unrecognised-layout: the gate could not run - {PublishedCommandsFile} declares {PublishedOneLinerName} as `{declaration}`, which is not one plain single-quoted string, the only shape this case reads.")
+		end 'notOnePlainLiteral'
+
+		return command
+	end 'eachLine'
+
+	panic("upgrade-refuses-an-unrecognised-layout: the gate could not run - {PublishedCommandsFile} declares no {PublishedOneLinerName}, so there is no published one-liner to hold the refusal to.")
+end 'publishedOneLiner'
