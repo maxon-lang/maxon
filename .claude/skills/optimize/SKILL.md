@@ -21,10 +21,8 @@ independence is already true and is part of why the step exists.
   minutes later. Your correctness proof is your `--filter`ed specs staying green while you iterate.
 - **Invoked standalone**: the full suite and the commit are yours, at the end, once.
 
-**Either way, every golden your runs moved stays exactly where it lies.** A moved golden IS a codegen
-change — `git checkout -- specs/fragments/` to tidy `git status` deletes the record of what your
-change did to the emitted code. A fragment that moved for a reason you cannot state is a **finding**,
-not churn to drop.
+**Either way, golden drift is not your concern.** Every golden your runs mint, rewrite or delete stays
+exactly as it lies, for whoever commits to commit as it is. Do not measure, investigate or revert it.
 
 ## The mandate — UNSCALABLE ALGORITHMS (user directive)
 

@@ -102,25 +102,21 @@ Update documentation (`LANGUAGE_REFERENCE.md`, `STDLIB_REFERENCE.md`, `QUICK_REF
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,
   and you never touch it to make a number look better.** Read the doubling ladder straight off the
   ALLOCATION columns: **×2 is linear, ×4 is quadratic.** A curve that bends is a reading to explain.
-- **Codegen neutrality:** `git status --short specs/` EMPTY where the change should not have moved
-  any emitted code.
 
 **Check EXIT CODES. Never grep for a success string** — a past session reported a green build by
 grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** = memory leak.
 
-Ignore fragment churn until all runs complete; then review it — **a moved fragment IS a codegen
-change**, and the diff is the review.
+**Golden drift is not a review item.** Fragments the runs mint, rewrite or delete need no measuring,
+investigating or explaining — they are committed as they are (step 7).
 
 ## 7. Commit — STANDALONE ONLY
 
 Commit to the current branch, **including every golden the runs touched**. Give a message that
 summarizes **the change**, not what happened during the review.
 
-⛔ **MODIFIED goldens are committed, never reverted.** `git status --short specs/fragments/ specs/`
-→ `git add -A` those paths; `??` (minted), ` M` (**modified**) and ` D` (deleted) are one obligation.
-A `git checkout --` over them to leave a tidy `git status` destroys the record of what the change did to
-the emitted code — which is the very diff step 6 just told you to review. A fragment that moved for a
-reason you cannot state is a **finding**: explain it in the message, or fix it; do not drop it.
+**Golden drift goes in with it, with no further thought:** `git add -A specs/` — minted, modified and
+deleted alike, whatever moved them. Never revert it to tidy `git status`, and do not explain it in the
+message.
 
 ## Rules of engagement
 
