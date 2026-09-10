@@ -1,0 +1,51 @@
+// upgrade-dry-run-names-the-install.test.maxon - from a script install, `upgrade --dry-run` names the
+// install root it would upgrade and the command it would run, and runs nothing.
+//
+// The root is where the running compiler IS - `<root>/bin/maxon` beside `<root>/stdlib` - and never the
+// caller's MAXON_INSTALL, which may name another install entirely. So the child is handed a decoy there,
+// and the decoy must appear nowhere in what it prints.
+
+let StagedRootName = "upgrade-dry-run-root"
+let DecoyRootName = "upgrade-dry-run-decoy"
+let DecoyWord = "decoy"
+let InstallVariable = "MAXON_INSTALL"
+
+// What the dry run prints, one line each.
+let InstallRootLabel = "install root: "
+let CommandLabel = "command: "
+
+test 'upgrade --dry-run from a script install names that install and runs nothing'
+	let staged = stageCompiler(StagedRootName, binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
+	let binDir = try staged.parent() otherwise panic("upgrade dry run: the gate could not run - {staged.toString()} has no parent directory")
+	let installRoot = try binDir.parent() otherwise panic("upgrade dry run: the gate could not run - {binDir.toString()} has no parent directory")
+	let decoyParent = try installRoot.parent() otherwise panic("upgrade dry run: the gate could not run - {installRoot.toString()} has no parent directory")
+	let decoy = decoyParent.join("{DecoyRootName}").toString()
+
+	if installRoot.toString().contains(DecoyWord) 'rootLooksLikeTheDecoy'
+		panic("upgrade dry run: the gate could not run - the staged root {installRoot.toString()} itself contains '{DecoyWord}', so its absence from the output could never be asserted.")
+	end 'rootLooksLikeTheDecoy'
+
+	let run = runDriver([UpgradeCommandWord, DryRunFlag], binary: staged, environment: Environment.inheritUpdating([InstallVariable: decoy]))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from the script install at {installRoot.toString()} did not succeed. It said: {run.stdout}{run.stderr}")
+	try Expect.isEmpty(run.stderr, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from a script install wrote to stderr, and nothing went wrong")
+
+	var rootLine = ""
+
+	for line in run.stdout.split("\n") 'eachLine'
+		if line.startsWith(InstallRootLabel) 'theRootLine'
+			rootLine = line
+		end 'theRootLine'
+	end 'eachLine'
+
+	try Expect.contains(rootLine, needle: StagedRootName, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{InstallRootLabel}` line naming the install the running compiler sits in ({installRoot.toString()}). It said: {run.stdout}")
+	try Expect.contains(run.stdout, needle: CommandLabel, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` does not say what command it would run. It said: {run.stdout}")
+	try Expect.contains(run.stdout, needle: InstallScriptAddress, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` would not run the published install script from {InstallScriptAddress}. It said: {run.stdout}")
+	try Expect.isFalse(run.stdout.contains(DecoyWord), message: "`maxon {UpgradeCommandWord} {DryRunFlag}` took its root from the caller's {InstallVariable} ({decoy}) instead of from where the compiler is. It said: {run.stdout}")
+
+	// The install script fills `<root>/stdlib`, so a dry run that ran it leaves the staged one non-empty.
+	let stdlib = installRoot.join("{StdlibDirName}")
+	let installed = try Directory.list(stdlib) otherwise panic("upgrade dry run: the gate could not run - could not list {stdlib.toString()}, which this case staged moments ago")
+	try Expect.equal(installed.count() as AssertedInt, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` wrote into {stdlib.toString()}; a dry run runs nothing")
+end 'upgrade --dry-run from a script install names that install and runs nothing'

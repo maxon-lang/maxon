@@ -54,9 +54,10 @@ LABEL org.opencontainers.image.source="https://github.com/maxon-lang/maxon" \
       org.opencontainers.image.description="The Maxon compiler" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --from=fetch /opt/maxon /opt/maxon
-# MAXON_IMAGE tells `maxon upgrade` it is in an image, where the upgrade is a newer image, not a new install.
+# MAXON_IMAGE tells `maxon upgrade` it is in an image, and names the newest image of this variant, which
+# is what upgrades it.
 ENV PATH=/opt/maxon/bin:$PATH \
-    MAXON_IMAGE=ghcr.io/maxon-lang/maxon
+    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:latest
 RUN useradd --create-home --uid 1000 maxon
 WORKDIR /app
 CMD ["maxon"]
@@ -67,6 +68,6 @@ LABEL org.opencontainers.image.source="https://github.com/maxon-lang/maxon" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --from=fetch /opt/maxon /opt/maxon
 ENV PATH=/opt/maxon/bin:$PATH \
-    MAXON_IMAGE=ghcr.io/maxon-lang/maxon
+    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:distroless
 WORKDIR /app
 CMD ["maxon"]

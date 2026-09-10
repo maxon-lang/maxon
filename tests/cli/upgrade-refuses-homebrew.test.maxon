@@ -1,0 +1,19 @@
+// upgrade-refuses-homebrew.test.maxon - a compiler inside a Homebrew keg belongs to Homebrew, so `upgrade`
+// refuses and names the `brew upgrade` that owns it.
+//
+// The copy sits in a keg's shape - `Cellar/maxon/<version>/` - with `stdlib/` beside it the way the
+// formula lays it out, so nothing but the path says Homebrew.
+
+let KegDir = "Cellar/maxon/9.9.9/libexec"
+let BrewUpgrade = "brew upgrade maxon-lang/tap/maxon"
+
+test 'upgrade from a Homebrew keg refuses, naming brew upgrade'
+	let staged = stageCompiler("upgrade-homebrew", binaryIn: KegDir, stdlibIn: KegDir)
+	let run = runDriver([UpgradeCommandWord], binary: staged)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord}` from {staged.toString()} did not refuse. A keg is Homebrew's to replace, and a script install over it would leave brew tracking a binary it did not write. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: BrewUpgrade, message: "`maxon {UpgradeCommandWord}` from a Homebrew keg does not name `{BrewUpgrade}`. It said: {run.stderr}")
+	try Expect.isEmpty(run.stdout, message: "`maxon {UpgradeCommandWord}` from a Homebrew keg wrote to stdout; a refusal says everything on stderr")
+end 'upgrade from a Homebrew keg refuses, naming brew upgrade'

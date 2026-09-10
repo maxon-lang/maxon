@@ -1,0 +1,28 @@
+// upgrade-takes-no-arguments.test.maxon - `upgrade` refuses a positional argument, and refuses any option
+// but `--dry-run` by name, including one another command implements.
+//
+// The option half runs a copy staged as a script install, beside `--dry-run`: that is the one command line
+// `upgrade` otherwise answers with success, and a refusal that stopped happening prints a report there
+// rather than running the install script.
+
+let ExtraArgument = "extra"
+let OtherCommandsFlag = "--emit-ir"
+
+test 'upgrade refuses a positional argument and an option it does not take'
+	let positional = runDriver([UpgradeCommandWord, ExtraArgument])
+
+	let positionalExit = positional.exitCode() as AssertedInt
+	try Expect.equal(positionalExit, expected: 1, message: "`maxon {UpgradeCommandWord} {ExtraArgument}` was answered. `{UpgradeCommandWord}` takes no arguments. It said: {positional.stdout}{positional.stderr}")
+	try Expect.contains(positional.stderr, needle: "unexpected extra argument", message: "`maxon {UpgradeCommandWord} {ExtraArgument}` is not refused as an unexpected extra argument. It said: {positional.stderr}")
+	try Expect.isEmpty(positional.stdout, message: "`maxon {UpgradeCommandWord} {ExtraArgument}` wrote to stdout; a refusal says everything on stderr")
+
+	let staged = stageCompiler("upgrade-options-root", binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
+	let optionLine = [UpgradeCommandWord, DryRunFlag, OtherCommandsFlag]
+	let typed = listed(optionLine)
+	let option = runDriver(optionLine, binary: staged)
+
+	let optionExit = option.exitCode() as AssertedInt
+	try Expect.equal(optionExit, expected: 1, message: "`maxon {typed}` from a script install was answered. A flag consumed on its way past is a command line only partly understood. It said: {option.stdout}{option.stderr}")
+	try Expect.contains(option.stderr, needle: OtherCommandsFlag, message: "`maxon {typed}`'s refusal does not name the option that was typed. It said: {option.stderr}")
+	try Expect.isEmpty(option.stdout, message: "`maxon {typed}` wrote to stdout; a refusal says everything on stderr")
+end 'upgrade refuses a positional argument and an option it does not take'

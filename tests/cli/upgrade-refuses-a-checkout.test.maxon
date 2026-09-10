@@ -1,0 +1,22 @@
+// upgrade-refuses-a-checkout.test.maxon - a compiler built from a source checkout is updated with git and
+// a rebuild, so `upgrade` refuses and says so, with or without `--dry-run`.
+//
+// The compiler spawned here is this checkout's own: `maxon-bin/` sits beside the `stdlib/` it walks up
+// to. Running the install script from here would put a release binary somewhere nobody asked for.
+
+test 'upgrade from a source checkout refuses, pointing at git pull'
+	try expectCheckoutRefusal([UpgradeCommandWord])
+	try expectCheckoutRefusal([UpgradeCommandWord, DryRunFlag])
+end 'upgrade from a source checkout refuses, pointing at git pull'
+
+function expectCheckoutRefusal(arguments ListedWordArray) throws TestFailure
+	let typed = listed(arguments)
+	let run = runDriver(arguments)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {typed}` from a source checkout did not refuse. A checkout is updated with git and rebuilt, and `--dry-run` never bypasses a refusal. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: "pull", message: "`maxon {typed}` from a source checkout does not tell its reader to pull. It said: {run.stderr}")
+	try Expect.contains(run.stderr, needle: "git", message: "`maxon {typed}` from a source checkout does not name git, which is how a checkout is updated. It said: {run.stderr}")
+	try Expect.isEmpty(run.stdout, message: "`maxon {typed}` from a source checkout wrote to stdout; a refusal says everything on stderr")
+end 'expectCheckoutRefusal'

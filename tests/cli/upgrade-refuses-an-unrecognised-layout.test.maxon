@@ -1,0 +1,16 @@
+// upgrade-refuses-an-unrecognised-layout.test.maxon - a compiler that is not where the install script puts
+// one is refused, and the refusal says what `upgrade` does manage and how to get it.
+//
+// The copy is flat - `maxon` and `stdlib/` in one directory, as an unpacked archive leaves them. It is a
+// working compiler, but no `bin/` sits under an install root here, so there is no root to upgrade.
+
+test 'upgrade from an unrecognised layout refuses, giving the install one-liner'
+	let staged = stageCompiler("upgrade-flat", binaryIn: CaseDirItself, stdlibIn: CaseDirItself)
+	let run = runDriver([UpgradeCommandWord], binary: staged)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord}` from {staged.toString()} did not refuse. Nothing installed it that `upgrade` can run again. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: InstallScriptAddress, message: "`maxon {UpgradeCommandWord}` from an unrecognised layout does not give the install one-liner, which is how its reader gets an install `upgrade` manages. It said: {run.stderr}")
+	try Expect.isEmpty(run.stdout, message: "`maxon {UpgradeCommandWord}` from an unrecognised layout wrote to stdout; a refusal says everything on stderr")
+end 'upgrade from an unrecognised layout refuses, giving the install one-liner'

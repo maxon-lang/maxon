@@ -1,0 +1,14 @@
+// dry-run-is-upgrade-only.test.maxon - `--dry-run` belongs to `upgrade`, and every other command refuses
+// it as an option it does not implement.
+//
+// A command that ignored it would do for real what the caller asked to see first.
+
+let AnotherCommand = "version"
+
+test 'a command other than upgrade refuses --dry-run'
+	let run = runDriver([AnotherCommand, DryRunFlag])
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {AnotherCommand} {DryRunFlag}` was answered. Only `{UpgradeCommandWord}` has a dry run, and a command that ignores the flag does for real what the caller asked to see first. It said: {run.stdout}{run.stderr}")
+	try Expect.contains(run.stderr, needle: DryRunFlag, message: "`maxon {AnotherCommand} {DryRunFlag}`'s refusal does not name the option that was typed. It said: {run.stderr}")
+end 'a command other than upgrade refuses --dry-run'

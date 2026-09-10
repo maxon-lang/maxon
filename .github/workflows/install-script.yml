@@ -139,6 +139,24 @@ jobs:
           count="$(grep -c 'Added by the Maxon installer' "$profile")"
           [ "$count" = 1 ] || { echo "::error::$profile has $count installer lines"; exit 1; }
 
+      # `maxon upgrade` runs the PUBLISHED script against its own install, so this is the contract between
+      # every shipped compiler and whatever maxon.dev serves now. A release older than the command skips it.
+      - name: maxon upgrade finds the install current
+        run: |
+          set -euo pipefail
+          maxon="$HOME/.maxon/bin/maxon"
+          if ! "$maxon" help upgrade > /dev/null 2>&1; then
+            echo "::notice::the latest release has no maxon upgrade yet"
+            exit 0
+          fi
+          "$maxon" upgrade --dry-run
+          out="$(env PATH="$SYSTEM_PATH" "$maxon" upgrade 2>&1)"
+          echo "$out"
+          case "$out" in
+            *"already installed"*) ;;
+            *) echo "::error::maxon upgrade did not find the install current"; exit 1 ;;
+          esac
+
       - name: A specific version installs, and --force reinstalls the latest over it
         run: |
           set -euo pipefail
@@ -261,6 +279,24 @@ jobs:
           $out
           if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'a rerun did not report the install as current' }
           if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw 'a rerun changed the user Path' }
+
+      # Windows PowerShell turns a redirected native stderr line into an error, which the runner's 'stop'
+      # preference makes fatal before the exit code can be read; every exit code here is checked instead.
+      - name: maxon upgrade finds the install current
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $maxon = "$HOME\.maxon\bin\maxon.exe"
+          & $maxon help upgrade *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::notice::the latest release has no maxon upgrade yet'
+            $global:LASTEXITCODE = 0
+            return
+          }
+          & $maxon upgrade --dry-run
+          if ($LASTEXITCODE -ne 0) { throw "maxon upgrade --dry-run failed ($LASTEXITCODE)" }
+          $out = & $maxon upgrade 2>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'maxon upgrade did not find the install current' }
 
       - name: A specific version installs, and -Force reinstalls the latest over it
         run: |

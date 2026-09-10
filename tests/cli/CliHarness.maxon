@@ -1,11 +1,12 @@
 // CliHarness.maxon — the shared half every case under `tests/cli/` reaches for: the compiler it spawns,
-// one run of it, and the three readings of what it printed that let these cases assert WITHOUT keeping a
-// list of commands of their own.
+// one run of it, a copy of it staged where an install would put it, and the three readings of what it
+// printed that let these cases assert WITHOUT keeping a list of commands of their own.
 //
-// ⭐⭐ **WHAT THIS CORPUS PROVES: THE DRIVER'S OWN FACE — `maxon` with no arguments, and `maxon help`.**
-// Those are driver commands, so they are gated by spawning the compiler and asserting what it reports
-// (`tests/README.md`), and they cannot be gated in `specs/`: a spec case is a Maxon PROGRAM the harness
-// compiles and runs, which can reach `stdlib/` and nothing else.
+// ⭐⭐ **WHAT THIS CORPUS PROVES: THE DRIVER'S OWN FACE — `maxon` with no arguments, `maxon help`, and
+// `maxon upgrade`, which answers from where the running binary sits.** Those are driver commands, so they
+// are gated by spawning the compiler and asserting what it reports (`tests/README.md`), and they cannot be
+// gated in `specs/`: a spec case is a Maxon PROGRAM the harness compiles and runs, which can reach
+// `stdlib/` and nothing else.
 //
 // ⛔⛔ **NOT ONE BYTE OF THIS CORPUS IS A GOLDEN, AND THAT IS FORCED.** The reference embeds the commit
 // the binary was built from, the day, the host target, the supported target list and this machine's
@@ -59,6 +60,34 @@ export let HiddenCheapCommand = "verify-recheck"
 // LISTING must never produce.
 export let UnknownCommandPhrase = "unknown command"
 
+// The command the `upgrade-*` cases are about, and the one option it takes.
+export let UpgradeCommandWord = "upgrade"
+export let DryRunFlag = "--dry-run"
+
+// Where a case places a copy of the compiler, relative to the checkout root: gitignored, and one
+// directory per case under it, because `maxon test` runs files concurrently.
+let StagingRootDirName = "temp/cli"
+
+// What an install calls the compiler and the library it keeps beside it. The basename is kept for the
+// copy because macOS takes an ad-hoc signature's identifier from the FILENAME.
+let CompilerBaseName = "maxon"
+export let StdlibDirName = "stdlib"
+
+// The directory a script install keeps its binary in - `<root>/bin/maxon` beside `<root>/stdlib` - and the
+// spelling a staging call uses for the case's own directory. Respelled from the install script, which this
+// corpus cannot read.
+export let ScriptInstallBinDirName = "bin"
+export let CaseDirItself = ""
+
+// Where the install script is published, which every answer `upgrade` gives about it names.
+export let InstallScriptAddress = "maxon.dev/install"
+
+// A path component that climbs out of the directory it is joined under.
+let ParentComponent = ".."
+
+// The separator this file's own paths are spelled with, folded into the host's by `FilePath`.
+let PathSeparator = "/"
+
 // How the reference is laid out, and the whole of what these cases read it by. A COMMAND SECTION sits at
 // the left margin of `maxon help`; a LABEL — a command under `Commands:`, an option under its section — is
 // indented two spaces; wrapped prose starts in the text column, far to the right of either.
@@ -81,22 +110,21 @@ let LastAsciiByte = 127
 export typealias ListedWordArray = Array with String
 export typealias WordTally = int(0 to u32.max)
 
-// Spawn this checkout's `maxon` with `arguments` and collect everything it said.
-export function runDriver(arguments ListedWordArray) returns CollectedOutput
-	let binary = testedCompilerPath()
-
-	if not File.exists(binary) 'noBinary'
-		panic("CliHarness: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
-	end 'noBinary'
-
+// Spawn `binary` - this checkout's `maxon` unless a case staged a copy - with `arguments` in `environment`,
+// and collect everything it said.
+export function runDriver(arguments ListedWordArray, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit) returns CollectedOutput
 	var argv = StringArray.create()
 
 	for argument in arguments 'eachArgument'
 		argv.push(argument)
 	end 'eachArgument'
 
-	return try Subprocess.run(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
-		panic("CliHarness: the gate could not run — could not spawn the driver ({e.displayReason()}). These cases pin what it prints, and a report nothing compares is a claim.")
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = argv
+	config.environment = environment
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("CliHarness: the gate could not run - could not spawn {binary.toString()} ({e.displayReason()}). These cases pin what it prints, and a report nothing compares is a claim.")
 	end 'spawnFailed'
 end 'runDriver'
 
@@ -120,16 +148,89 @@ export function runHelpFor(command String) returns CollectedOutput
 	return runDriver(arguments)
 end 'runHelpFor'
 
-// The binary under test, with the suffix this host can actually spawn.
+// The binary under test, absolute and with the suffix this host can actually spawn.
 function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
+	let binary = relative.resolve(Directory.currentPath())
+
+	if not File.exists(binary) 'noBinary'
+		panic("CliHarness: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	return binary
+end 'testedCompilerPath'
+
+function executableSuffix() returns String
 	#if os(Windows)
-		let spelled = "{TestedCompilerStem}.exe"
+		let suffix = ".exe"
 	#else
-		let spelled = "{TestedCompilerStem}"
+		let suffix = ""
 	#endif
 
-	return try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run — '{TestedCompilerStem}' is not a spellable path")
-end 'testedCompilerPath'
+	return suffix
+end 'executableSuffix'
+
+// **A COPY OF THE COMPILER UNDER TEST, PLACED THE WAY AN INSTALL PLACES ONE, WITH AN EMPTY `stdlib/`.**
+// The compiler takes the NEAREST `stdlib/` above its own executable, so the staged one is found before the
+// checkout's, and whatever the copy concludes about how it was installed it reads off where it sits.
+//
+// `binaryIn` and `stdlibIn` name the directories holding the binary and `stdlib/`, relative to the case's
+// own staging directory, which `CaseDirItself` names. The previous run's files go first, so a rerun stages
+// the same tree; the standard library cannot remove a directory, so only files are cleared.
+export function stageCompiler(caseDirName String, binaryIn String, stdlibIn String) returns FilePath
+	for component in [caseDirName, binaryIn, stdlibIn] 'eachSpelling'
+		if component.contains(ParentComponent) 'climbsOut'
+			panic("CliHarness: the gate could not run - '{component}' climbs out of {StagingRootDirName}, and a staging call clears files under what it names.")
+		end 'climbsOut'
+	end 'eachSpelling'
+
+	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) 'notOneDirectory'
+		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
+	end 'notOneDirectory'
+
+	clearStagedFiles(stagingDir(caseRelative(caseDirName, relative: CaseDirItself)))
+	_ = stagingDir("{caseRelative(caseDirName, relative: stdlibIn)}{PathSeparator}{StdlibDirName}")
+
+	let staged = stagingDir(caseRelative(caseDirName, relative: binaryIn)).join("{CompilerBaseName}{executableSuffix()}")
+	let original = testedCompilerPath()
+	let image = try File.readBinary(original) otherwise panic("CliHarness: the gate could not run - could not read {original.toString()} to copy it.")
+	try File.writeBinary(staged, content: image, mode: FilePermission.executable) otherwise panic("CliHarness: the gate could not run - could not write the copy at {staged.toString()}.")
+
+	return staged
+end 'stageCompiler'
+
+// A case's staging directory, or a directory under it, spelled from the checkout root.
+function caseRelative(caseDirName String, relative String) returns String
+	let caseDir = "{StagingRootDirName}{PathSeparator}{caseDirName}"
+	return caseDir if relative.isEmpty() else "{caseDir}{PathSeparator}{relative}"
+end 'caseRelative'
+
+// A directory this run writes into, created with its missing ancestors so a fresh checkout without `temp/`
+// is not a failure, and absolute because what is staged in it is spawned.
+function stagingDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
+
+	if not Directory.create(path) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create '{spelled}', which is where a case stages its copy of the compiler.")
+	end 'couldNotCreate'
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+// Delete every file under a case's staging directory, leaving the directories.
+function clearStagedFiles(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("CliHarness: the gate could not run - could not list {dir.toString()}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear {entry.toString()} from a previous run's staging.")
+	end 'eachEntry'
+end 'clearStagedFiles'
 
 // ⭐ **THE LABELS A LISTING SHOWS**, read off its layout: a label is indented exactly two spaces, so
 // wrapped prose — which starts far to the right — is never mistaken for one. In the short list these are

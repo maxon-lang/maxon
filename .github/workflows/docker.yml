@@ -124,8 +124,10 @@ jobs:
           [ "$("$work/hello")" = "Hello, world!" ]
           out="$(docker run --rm --user 1000:1000 "$image" maxon run /opt/maxon/examples/hello.maxon)"
           [ "$out" = "Hello, world!" ] || { echo "::error::maxon run printed '$out'"; exit 1; }
-          # `maxon upgrade` reads this to point at a newer image instead of installing into one.
-          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" | grep -qx "MAXON_IMAGE=$IMAGE"
+          # `maxon upgrade` reads this to point at the newest image of this variant instead of installing.
+          newest="latest"
+          [ "${{ matrix.variant }}" = "debian" ] || newest="${{ matrix.variant }}"
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" | grep -qx "MAXON_IMAGE=$IMAGE:$newest"
 
       - name: Log in to GHCR
         if: needs.plan.outputs.publish == 'yes'

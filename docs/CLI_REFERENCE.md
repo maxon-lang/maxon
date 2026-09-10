@@ -29,6 +29,7 @@ the roster rather than inside it.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went |
 | `maxon run <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon test [directory]` | Run a project's own `test` declarations |
+| `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
 ### For working on the compiler itself
@@ -754,6 +755,40 @@ holds; the failures print their own reasons.
 
 ---
 
+### `maxon upgrade`
+
+```bash
+maxon upgrade              # install the newest release over the install this compiler runs from
+maxon upgrade --dry-run    # print the install root and the command that would run, and run nothing
+```
+
+It runs the published install script again, against the install the running compiler sits in —
+`<root>/bin/maxon` beside `<root>/stdlib`, which is the layout the script makes. The root comes from
+where the binary is, never from the caller's `MAXON_INSTALL`: the child is handed this root in that
+variable, so an upgrade cannot update some other install and leave this one as it was. Its exit status
+is the script's.
+
+- **macOS and Linux:** `curl` downloads `https://maxon.dev/install.sh`, then `/bin/sh` runs it with
+  `--no-modify-path`. Two steps rather than `curl | sh`, because a pipeline reports success when the
+  download fails.
+- **Windows:** Windows PowerShell, by its absolute path under `%SystemRoot%`, runs
+  `https://maxon.dev/install.ps1` as a script block with `-NoPathUpdate`.
+
+A compiler the script did not install is refused (exit 1), naming what does update it:
+
+| Where the compiler is | What `upgrade` says to run |
+|-----------------------|----------------------------|
+| The container image (`MAXON_IMAGE` is set and not empty) | `docker pull <MAXON_IMAGE>`, the newest image of that variant |
+| A Homebrew keg (`Cellar/maxon/<version>/`) | `brew upgrade maxon-lang/tap/maxon` |
+| A source checkout (`maxon-bin/` beside `stdlib/`) | `git -C <root> pull`, then `maxon-bin/.maxon/maxon build maxon-bin` |
+| Anywhere else | The install one-liner |
+
+`--dry-run` never bypasses a refusal, and every refusal leaves stdout empty. The command takes no
+argument and no other option. `maxon upgrade --version X` is refused too, naming the install script's
+own version option, which is what installs a chosen release.
+
+---
+
 ### `maxon version`
 
 Prints one line to stdout and exits 0:
@@ -880,7 +915,7 @@ caller reading only the exit code has to be able to tell them apart.
 
 ⚠ **[`maxon run`](#maxon-run) forwards the PROGRAM's exit code**, so the table above does not describe
 it. Any number in it is the program's own; only `1` is ever this driver's, and it means the program was
-never reached.
+never reached. [`maxon upgrade`](#maxon-upgrade) forwards the install script's the same way.
 
 ---
 

@@ -1,0 +1,19 @@
+// upgrade-refuses-a-container-image.test.maxon - inside the published image, `upgrade` refuses and names
+// the `docker pull` that replaces the image.
+//
+// The image is recognised by the variable its Dockerfile sets, and that check comes FIRST: the compiler
+// spawned here sits in a source checkout, so an answer about `git pull` means the variable was never read.
+
+// Respelled from the Dockerfile, which this corpus cannot read.
+let ImageVariable = "MAXON_IMAGE"
+let PublishedImage = "ghcr.io/maxon-lang/maxon"
+
+test 'upgrade inside the container image refuses, naming docker pull'
+	let run = runDriver([UpgradeCommandWord], environment: Environment.inheritUpdating([ImageVariable: PublishedImage]))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord}` with {ImageVariable}={PublishedImage} did not refuse. A container is replaced by pulling a new image, never upgraded in place. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: "docker pull {PublishedImage}", message: "`maxon {UpgradeCommandWord}` inside the image does not name `docker pull {PublishedImage}`, the one command its reader needs. It said: {run.stderr}")
+	try Expect.isEmpty(run.stdout, message: "`maxon {UpgradeCommandWord}` inside the image wrote to stdout; a refusal says everything on stderr")
+end 'upgrade inside the container image refuses, naming docker pull'

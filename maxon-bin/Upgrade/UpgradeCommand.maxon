@@ -1,0 +1,334 @@
+// UpgradeCommand.maxon — `maxon upgrade [--dry-run]`: update the install this compiler runs from by running
+// the published install script against it again.
+//
+// ⭐⭐ **THE INSTALL IS WHERE THIS BINARY IS, NEVER WHERE THE CALLER'S ENVIRONMENT POINTS.** The script
+// installs into `InstallRootVariable`, so the child is handed the root this compiler sits in over whatever
+// the caller set: following the caller's value would update some other install and leave this one as it was.
+//
+// ⚠ **THE SCRIPT'S INTERFACE IS A CONTRACT** with `website/public/install.sh` and `install.ps1` — the
+// install-root variable, `--no-modify-path` / `-NoPathUpdate`, and the exit status — and their headers
+// state it from their side.
+//
+// ⚠ **EVERY REFUSAL GOES TO STDERR AND LEAVES STDOUT EMPTY**: stdout is the dry run's report.
+
+// Set by the published image's Dockerfile to the newest image of its own variant, which is what upgrades it.
+let ImageVariable = "MAXON_IMAGE"
+
+// A Homebrew keg is `Cellar/<formula>/<version>/`, and only Homebrew replaces what it installed.
+let HomebrewCellarDirName = "Cellar"
+let HomebrewFormulaDirName = "maxon"
+let BrewUpgradeCommand = "brew upgrade maxon-lang/tap/maxon"
+
+// A source checkout keeps the compiler's sources beside `stdlib/` and builds the compiler into a slot under
+// them; a script install keeps the compiler in `bin/` beside `stdlib/`.
+let CompilerSourceDirName = "maxon-bin"
+let CheckoutSlotDirName = ".maxon"
+let ScriptInstallBinDirName = "bin"
+let CompilerBaseName = "maxon"
+
+// What stands for the release a reader picks, in the refusal that sends them to the script for one.
+let ReleasePlaceholder = "X.Y.Z"
+
+// How the dry run spells a word holding a space: quoted, as a reader would retype it.
+let WordBreak = " "
+let WordQuote = "\""
+
+#if os(Windows)
+	let InstallScriptUrl = "https://maxon.dev/install.ps1"
+
+	// Windows PowerShell by absolute path under the Windows directory, so nothing on PATH can stand in for it.
+	let SystemRootVariable = "SystemRoot"
+	let PowerShellUnderSystemRoot = "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+	let PowerShellOptions = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
+
+	// The script's own switches. An upgrade leaves PATH as the install that is being upgraded left it.
+	let NoPathUpdateSwitch = "-NoPathUpdate"
+	let ScriptVersionSwitch = "-Version"
+
+	// The script reports through `$LASTEXITCODE` and never exits, because it may be running in a user's own
+	// session; run on its own, the status has to be forwarded. It starts at failure because a download that
+	// fails leaves it unset, and `exit` of an unset status is 0.
+	let PresumeScriptFailed = "$LASTEXITCODE = 1"
+	let ForwardScriptStatus = "exit $LASTEXITCODE"
+#else
+	let InstallScriptUrl = "https://maxon.dev/install.sh"
+
+	// Only https, and only TLS 1.2 or later: the script's own rule for everything it fetches.
+	let CurlName = "curl"
+	let CurlOptions = ["--proto", "=https", "--tlsv1.2", "-fsSL"]
+
+	// Far above the script's size. A copy that reaches it is refused rather than run: the script keeps
+	// everything inside `main`, so a copy cut short runs nothing and exits 0.
+	let InstallScriptDownloadLimit = 1024 * 1024
+
+	// `sh -s` reads the script from stdin, and what follows `--` is the script's own command line.
+	let ShPath = "/bin/sh"
+	let ShReadsScriptFromStdin = "-s"
+	let ScriptArgumentsFollow = "--"
+
+	// The script's own flags. An upgrade leaves PATH as the install that is being upgraded left it.
+	let NoModifyPathFlag = "--no-modify-path"
+	let ScriptVersionFlag = "--version"
+#endif
+
+export function runUpgrade(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: upgradeUsageLine()) 'unexpectedArgument'
+		return OwnFailureExit
+	end 'unexpectedArgument'
+
+	if not args.anyOptionButDryRun.isEmpty() 'anotherOption'
+		printError("error: {commandAsTyped()} takes no option but {DryRunFlag}; it was given {args.anyOptionButDryRun}\n")
+		printError("Usage: {upgradeUsageLine()}\n")
+		return OwnFailureExit
+	end 'anotherOption'
+
+	// `--dry-run` is read only for an install this command updates: it never turns a refusal into a report.
+	return match installOrigin() 'origin'
+		scriptInstall(root) gives upgradeScriptInstall(root, dryRun: args.dryRun)
+		containerImage(image) gives refuse("this compiler is the container image {image}; a newer compiler is a newer image: docker pull {image}")
+		homebrewKeg(executable) gives refuse("{executable.toString()} is in a Homebrew keg, which only Homebrew replaces; update it with `{BrewUpgradeCommand}`")
+		sourceCheckout(root) gives refuse("this compiler was built from the checkout at {root.toString()}; update it with `git -C {shellWord(root.toString())} pull`, then rebuild it there with `{checkoutRebuildCommand()}`")
+		unrecognised(executable) gives refuse("{executable.toString()} is not an install {commandAsTyped()} manages. It updates installs made by the install script, <root>/{ScriptInstallBinDirName}/{CompilerBaseName} beside <root>/{StdlibDirName}. Install that way with: {installOneLiner()}")
+		unlocated gives refuse("the operating system did not say where this compiler is, so there is no install to update. Install with: {installOneLiner()}")
+	end 'origin'
+end 'runUpgrade'
+
+// ⭐ **`--version` AFTER `upgrade` ASKS FOR A PARTICULAR RELEASE**, which this command never installs: it
+// installs the newest. The install script takes a version, so this names it, spelled for this host.
+export function pinnedReleaseRefusal(option String) returns String
+	#if os(Windows)
+		let pinned = "{scriptBlockInvocation()} {ScriptVersionSwitch} {ReleasePlaceholder}"
+	#else
+		let pinned = "{installOneLiner()} {ShReadsScriptFromStdin} {ScriptArgumentsFollow} {ScriptVersionFlag} {ReleasePlaceholder}"
+	#endif
+
+	return "error: {option} is not an option of `{commandAsTyped()}`, which installs the newest release. For a specific release, run the install script with its version option: {pinned}"
+end 'pinnedReleaseRefusal'
+
+function commandAsTyped() returns String
+	return "maxon {UpgradeCommandName}"
+end 'commandAsTyped'
+
+function upgradeUsageLine() returns String
+	return "{commandAsTyped()} [{DryRunFlag}]"
+end 'upgradeUsageLine'
+
+function refuse(reason String) returns ExitCode
+	printError("{commandAsTyped()}: {reason}\n")
+	return OwnFailureExit
+end 'refuse'
+
+// The one-liner the website publishes for this host.
+function installOneLiner() returns String
+	#if os(Windows)
+		return "powershell -c \"irm {InstallScriptUrl} | iex\""
+	#else
+		return "curl -fsSL {InstallScriptUrl} | sh"
+	#endif
+end 'installOneLiner'
+
+function checkoutRebuildCommand() returns String
+	return "{CompilerSourceDirName}/{CheckoutSlotDirName}/{CompilerBaseName} {BuildSubcommandName} {CompilerSourceDirName}"
+end 'checkoutRebuildCommand'
+
+// Where this compiler came from, which decides whether this command updates it or names what does.
+union InstallOrigin
+	containerImage(image String)
+	homebrewKeg(executable FilePath)
+	sourceCheckout(root FilePath)
+	scriptInstall(root FilePath)
+	unrecognised(executable FilePath)
+	unlocated
+end 'InstallOrigin'
+
+// ⚠ **THE FIRST MATCH WINS, AND THE ORDER IS PART OF THE ANSWER.** Inside the image the compiler may sit in
+// any layout at all, so the image is asked first; a keg is a flat archive's layout apart from its path, so it
+// is asked before the layout is.
+function installOrigin() returns InstallOrigin
+	// Empty reads as unset, the rule the install scripts apply to their own variables.
+	if let image = try Process.environmentVariable(ImageVariable) 'imageVariableSet'
+		if not image.isEmpty() 'inTheImage'
+			return InstallOrigin.containerImage(image)
+		end 'inTheImage'
+	end 'imageVariableSet'
+
+	let executable = try Process.executablePath() otherwise return InstallOrigin.unlocated
+
+	if isInHomebrewKeg(executable) 'aKeg'
+		return InstallOrigin.homebrewKeg(executable)
+	end 'aKeg'
+
+	// The root is found the way the compiler finds the library it compiles against, so an upgrade replaces
+	// the very `stdlib/` this binary reads.
+	let stdlibDir = try locateStdlibDir() otherwise return InstallOrigin.unrecognised(executable)
+	let root = try stdlibDir.parent() otherwise return InstallOrigin.unrecognised(executable)
+
+	if Directory.isDirectory(root.join("{CompilerSourceDirName}")) 'aCheckout'
+		return InstallOrigin.sourceCheckout(root)
+	end 'aCheckout'
+
+	let binDir = try executable.parent() otherwise return InstallOrigin.unrecognised(executable)
+
+	// Compared as paths, so `bin` matches under the host filesystem's own case rule.
+	if binDir.equals(root.join("{ScriptInstallBinDirName}")) 'aScriptInstall'
+		return InstallOrigin.scriptInstall(root)
+	end 'aScriptInstall'
+
+	return InstallOrigin.unrecognised(executable)
+end 'installOrigin'
+
+// Whether the path above `below` runs through `Cellar/maxon`, with `below` or something under it as the
+// `<version>` a keg needs. Compared component by component, so a directory that merely ends in `Cellar` is
+// not one.
+function isInHomebrewKeg(below FilePath) returns bool
+	let dir = try below.parent() otherwise return false
+	let above = try dir.parent() otherwise return false
+
+	if dir.filename() == HomebrewFormulaDirName and above.filename() == HomebrewCellarDirName 'aKeg'
+		return true
+	end 'aKeg'
+
+	return isInHomebrewKeg(dir)
+end 'isInHomebrewKeg'
+
+// ⭐ **ONE DESCRIPTION OF A PROGRAM THE UPGRADE RUNS, READ BY BOTH THE RUN AND THE DRY RUN**, so a dry run
+// cannot print a command the run would not spawn.
+type UpgradeStep
+	export var executable as Executable
+	export var arguments as StringArray
+
+	export static function create(executable Executable, arguments StringArray) returns UpgradeStep
+		return Self{executable: executable, arguments: arguments}
+	end 'create'
+
+	// ⚠ **BUILT INTO A FRESH STRING.** `shellWord` may hand back the very String the executable's path holds,
+	// and appending to that would rewrite the path the run then spawns.
+	export function rendered() returns String
+		var line = ""
+		line.append(shellWord(self.executable.displayName()))
+
+		for argument in self.arguments 'eachArgument'
+			line.append("{WordBreak}{shellWord(argument)}")
+		end 'eachArgument'
+
+		return line
+	end 'rendered'
+end 'UpgradeStep'
+
+function shellWord(word String) returns String
+	return "{WordQuote}{word}{WordQuote}" if word.contains(WordBreak) else word
+end 'shellWord'
+
+// A program's fixed options, then the one argument that completes them.
+function argumentsEndingIn(leading StringArray, last String) returns StringArray
+	var arguments = leading.clone()
+	arguments.push(last)
+	return arguments
+end 'argumentsEndingIn'
+
+function upgradeScriptInstall(root FilePath, dryRun bool) returns ExitCode
+	let assignment = "{InstallRootVariable}={shellWord(root.toString())}"
+
+	#if os(Windows)
+		let noPowerShell = "Windows PowerShell, which runs the install script, is looked for under the absolute directory {SystemRootVariable} names, and it names none here"
+		let systemRoot = try Process.environmentVariable(SystemRootVariable) otherwise return refuse(noPowerShell)
+		let windowsDir = try FilePath.from(systemRoot) otherwise return refuse(noPowerShell)
+
+		// A relative one would be resolved against the working directory, where anything could stand in.
+		if not windowsDir.isAbsolute() 'notAbsolute'
+			return refuse(noPowerShell)
+		end 'notAbsolute'
+
+		let installer = powerShellRunningTheScript(windowsDir)
+		let rendered = "{assignment} {installer.rendered()}"
+	#else
+		let download = scriptDownload()
+		let installer = shellReadingTheScript()
+		let rendered = "{download.rendered()} | {assignment} {installer.rendered()}"
+	#endif
+
+	if dryRun 'describeOnly'
+		print("install root: {root.toString()}\n")
+		print("command: {rendered}\n")
+		return 0
+	end 'describeOnly'
+
+	printError("{commandAsTyped()}: updating the install in {root.toString()} (maxon {CompilerVersion})\n")
+	let environment = Environment.inheritUpdating([InstallRootVariable: root.toString()])
+
+	#if os(Windows)
+		return spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment, standardInput: InputSource.none, speaker: commandAsTyped())
+	#else
+		// ⭐ **TWO STEPS, NOT `curl | sh`**: a pipeline's status is its last command's, so a download that
+		// failed would hand `sh` an empty script and report success.
+		return match downloadScript(download) 'download'
+			fetched(script) gives spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment, standardInput: InputSource.bytes(script), speaker: commandAsTyped())
+			failed(reason) gives refuse(reason)
+		end 'download'
+	#endif
+end 'upgradeScriptInstall'
+
+#if os(Windows)
+	// Run as a script block, which is what lets the script take parameters; `irm | iex` cannot pass any.
+	function scriptBlockInvocation() returns String
+		return "& ([scriptblock]::Create((irm {InstallScriptUrl})))"
+	end 'scriptBlockInvocation'
+
+	function powerShellRunningTheScript(windowsDir FilePath) returns UpgradeStep
+		let script = "{PresumeScriptFailed}; {scriptBlockInvocation()} {NoPathUpdateSwitch}; {ForwardScriptStatus}"
+		return UpgradeStep.create(Executable.path(windowsDir.join("{PowerShellUnderSystemRoot}")), arguments: argumentsEndingIn(PowerShellOptions, last: script))
+	end 'powerShellRunningTheScript'
+#else
+	function scriptDownload() returns UpgradeStep
+		return UpgradeStep.create(Executable.name(CurlName), arguments: argumentsEndingIn(CurlOptions, last: InstallScriptUrl))
+	end 'scriptDownload'
+
+	function shellReadingTheScript() returns UpgradeStep
+		let sh = try FilePath.from(ShPath) otherwise panic("shellReadingTheScript: '{ShPath}' is an absolute path with no character a path refuses")
+		return UpgradeStep.create(Executable.path(sh), arguments: argumentsEndingIn([ShReadsScriptFromStdin, ScriptArgumentsFollow], last: NoModifyPathFlag))
+	end 'shellReadingTheScript'
+
+	union ScriptDownload
+		fetched(script String)
+		failed(reason String)
+	end 'ScriptDownload'
+
+	// curl's stderr is the reader's, so a failed download says why in curl's own words above the refusal.
+	function downloadScript(download UpgradeStep) returns ScriptDownload
+		var config = Configuration.create(download.executable)
+		config.arguments = download.arguments
+		config.standardOutput = OutputDestination.collect(InstallScriptDownloadLimit)
+		config.standardError = OutputDestination.inherit
+
+		let fetched = try Subprocess.runConfiguration(config) otherwise (e) 'curlDidNotRun'
+			return ScriptDownload.failed(curlDidNotRun(e))
+		end 'curlDidNotRun'
+
+		if not fetched.succeeded() 'curlFailed'
+			return ScriptDownload.failed("could not download {InstallScriptUrl} ({CurlName} {howItEnded(fetched.status)})")
+		end 'curlFailed'
+
+		if fetched.stdout.byteLength() >= InstallScriptDownloadLimit 'cutAtTheLimit'
+			return ScriptDownload.failed("{InstallScriptUrl} reached the {InstallScriptDownloadLimit}-byte limit on an install script, so the copy may be cut short and is not run")
+		end 'cutAtTheLimit'
+
+		return ScriptDownload.fetched(fetched.stdout)
+	end 'downloadScript'
+
+	function curlDidNotRun(e SubprocessError) returns String
+		return match e 'why'
+			executableNotFound gives "needs {CurlName} on PATH to download the install script"
+			spawnFailed or
+				ioFailed or
+				timeout or
+				inputTooLarge gives "could not run {CurlName} ({e.displayReason()})"
+		end 'why'
+	end 'curlDidNotRun'
+
+	function howItEnded(status TerminationStatus) returns String
+		return match status 'ended'
+			exited(code) gives "exited {code}"
+			signalled(code) gives "was killed by signal {code}"
+		end 'ended'
+	end 'howItEnded'
+#endif

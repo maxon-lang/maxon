@@ -108,6 +108,15 @@ let ProfileCommandName = "profile"
 // refusals, and a command renamed here must not leave those sentences naming the old word.
 module let RunCommandName = "run"
 
+// ⭐ `upgrade` — UPDATE THE INSTALL THIS COMPILER RUNS FROM, and `--dry-run`, the one option it takes.
+// `module` because `Upgrade/UpgradeCommand.maxon` names both in its own refusals and usage line.
+module let UpgradeCommandName = "upgrade"
+module let DryRunFlag = "--dry-run"
+
+// The variable the install script reads its install root from. Declared here for `RunCacheRootVariable`'s
+// reason: the reference names it, and `upgrade` overrides it with the root the running compiler sits in.
+module let InstallRootVariable = "MAXON_INSTALL"
+
 // Where `run` keeps its compiled programs, when the caller says. Declared here rather than beside the
 // cache that reads it because the REFERENCE prints it too, and a variable a reader is told to set must be
 // the one the code consults.
@@ -367,17 +376,23 @@ function main() returns ExitCode
 	// typo. `firstBadOption`'s "the first one typed wins" rule decides between two equally anonymous
 	// flags and does not reach across that difference.
 	if not args.withdrawnOption.isEmpty() 'withdrawnOption'
-		printError("{withdrawnOptionMessage(args.withdrawnOption)}\n")
-		printCommandList()
+		printError("{withdrawnOptionMessage(args.withdrawnOption, command: args.command)}\n")
+
+		// `upgrade`'s stdout is its dry run's report, which a script reads, so none of its refusals write
+		// there.
+		if args.command != MaxonCommand.upgrade 'owedTheCommandList'
+			printCommandList()
+		end 'owedTheCommandList'
+
 		return refusedCommandLineExit(args.command)
 	end 'withdrawnOption'
 
 	// An option the driver does not implement aborts BEFORE any command runs. Every
 	// command below would otherwise proceed as though the flag had been honoured,
 	// which is the one outcome a caller can neither see nor recover from.
-	// ⚠ `fmt` is EXEMPT and refuses its own options inside `runFmt`, in the reference's words rather
-	// than this driver's. See `FmtUsageLine`.
-	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt 'badOption'
+	// ⚠ `fmt` and `upgrade` are EXEMPT: each refuses every option it does not take itself, `fmt` in the
+	// reference's words (see `FmtUsageLine`) and `upgrade` with stdout left empty.
+	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
 		printCommandList()
 		return refusedCommandLineExit(args.command)
@@ -396,6 +411,7 @@ function main() returns ExitCode
 		scaleTest gives runScaleTest(args)
 		specTest gives runSpecTest(args)
 		test gives runTest(args)
+		upgrade gives runUpgrade(args)
 		verifyRecheck gives runVerifyRecheck(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		version gives runVersion(args)
@@ -1474,6 +1490,55 @@ module function quietTheBuildChatter(args MaxonArgs)
 	setLogLevel(LogLevel.ERROR)
 end 'quietTheBuildChatter'
 
+// ⭐ **WHAT `run` AND `upgrade` EXIT WITH WHEN THE FAILURE IS THEIR OWN** — the child was never reached,
+// or left no exit code to forward. Both forward their child's exit code otherwise. `refusedCommandLineExit`
+// answers with this for both words, so a command line `main` refuses and one either command refuses cannot
+// exit differently.
+module let OwnFailureExit = 1 as ExitCode
+
+// A signal number a child died on.
+typealias SignalNumber = int(i64.min to i64.max)
+
+// ⭐⭐ **A CHILD WHOSE STDOUT, STDERR AND EXIT CODE ARE THE COMMAND'S OWN** — `run`'s program and
+// `upgrade`'s install script. `speaker` opens the only sentences said here, which are about a child that
+// could not report for itself.
+//
+// `module` because both commands live below this file, and a second copy in either is a spawn two commands
+// are free to configure differently.
+//
+// ⚠ **`timeoutMs = 0` IS THE CHILD'S OWN RUNTIME AS THE BUDGET.** A deadline here would kill a
+// long-running child the caller launched deliberately, and nothing here knows what one is.
+module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, speaker String) returns ExitCode
+	var config = Configuration.create(executable)
+	config.arguments = arguments
+	config.environment = environment
+	config.standardInput = standardInput
+	config.standardOutput = OutputDestination.inherit
+	config.standardError = OutputDestination.inherit
+	config.timeoutMs = 0
+
+	let ran = try Subprocess.runConfiguration(config) otherwise (e) 'unspawnable'
+		printError("{speaker}: could not run {executable.displayName()} ({e.displayReason()})\n")
+		return OwnFailureExit
+	end 'unspawnable'
+
+	return match ran.status 'termination'
+		exited(code) gives code as ExitCode
+		signalled(code) gives reportSignalled(executable, signal: code as SignalNumber, speaker: speaker)
+	end 'termination'
+end 'spawnForwarding'
+
+// A child killed by a signal has no exit code to forward, so the signal is named and the failure is the
+// command's own rather than a number invented on the child's behalf.
+//
+// ⚠ **NO TARGET'S EMITTED RUNTIME RAISES `signalled`** — `SubprocessRuntime` stores only the `exited` and
+// `timedOut` discriminators — so an abnormally terminated child arrives as `exited` carrying the raw OS
+// status (0xC00000FD for a Windows stack overflow, forwarded verbatim). The arm is what the union owes.
+function reportSignalled(executable Executable, signal SignalNumber, speaker String) returns ExitCode
+	printError("{speaker}: {executable.displayName()} was killed by signal {signal}\n")
+	return OwnFailureExit
+end 'reportSignalled'
+
 // ⭐⭐ **WHAT A WITHDRAWN OPTION SAYS — one sentence per option this driver once had.**
 //
 // It is its OWN message and not `badOption`'s because the two are different facts about the reader:
@@ -1484,10 +1549,17 @@ end 'quietTheBuildChatter'
 // ⛔ **ONE ARM PER WITHDRAWN SPELLING, AND THE `panic` IS WHAT HOLDS THIS LIST TO `MaxonArgs.parse`'s.**
 // A spelling recorded there and unnamed here would be refused with an empty sentence — less than the
 // anonymous `badOption` path says, from the door that exists to say more.
-function withdrawnOptionMessage(option String) returns String
+//
+// ⚠ `command` matters where a command gives the spelling a meaning of its own: after `upgrade`,
+// `--version` asks for a particular release, which the install script installs, not for `maxon version`.
+function withdrawnOptionMessage(option String, command MaxonCommand) returns String
 	if option.startsWith(WithdrawnCompilerFlagPrefix) 'theCompilerFlag'
 		return "error: {WithdrawnCompilerFlagPrefix}= was REMOVED. spec-test compiles every selected test IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one. Run the suite with the binary you mean to test: `<compiler> {SpecTestCommandName}`."
 	end 'theCompilerFlag' else if option == WithdrawnVersionFlag or option == WithdrawnVersionFlagShort 'theVersionFlag'
+		if command == MaxonCommand.upgrade 'aReleaseToUpgradeTo'
+			return pinnedReleaseRefusal(option)
+		end 'aReleaseToUpgradeTo'
+
 		return "error: {option} was REMOVED. The version is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {VersionCommandName}`."
 	end 'theVersionFlag' else if option == WithdrawnHelpFlag or option == WithdrawnHelpFlagShort 'theHelpFlag'
 		return "error: {option} was REMOVED. Help is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {HelpCommandName}` for the whole reference, `maxon {HelpCommandName} <command>` for one command."
@@ -1645,9 +1717,10 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		lspServer gives 1
 		monitor gives 1
 		profile gives 1
-		run gives 1
+		run gives OwnFailureExit
 		scaleTest gives 1
 		specTest gives 1
+		upgrade gives OwnFailureExit
 		verifyRecheck gives 1
 		verifyWarmRebuild gives 1
 		version gives 1
@@ -1697,8 +1770,8 @@ let CompilerWorkHeading = "Commands for working on the compiler itself:"
 let ParagraphSeparator = "\n"
 let WordSeparator = " "
 
-// ⭐⭐ **WHO A COMMAND IS FOR, AND THEREFORE WHERE IT IS LISTED.** Fourteen commands is more than a
-// reader wanting to compile a program should have to read past, and four of them are about THIS
+// ⭐⭐ **WHO A COMMAND IS FOR, AND THEREFORE WHERE IT IS LISTED.** The whole roster is more than a
+// reader wanting to compile a program should have to read past, and four of its commands are about THIS
 // COMPILER rather than about any program it builds — a suite over `specs/`, a scaling ladder, and the
 // two spine gates. They are listed by `maxon help` and left out of what `maxon` prints.
 //
@@ -1768,6 +1841,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
+		upgrade gives CommandReference.create(UpgradeCommandName, arguments: "[{DryRunFlag}]", summary: "Update this compiler's install to the newest release.", detail: "It runs the published install script again, against the install this binary sits in, whatever {InstallRootVariable} says. A Homebrew keg, a container image and a source checkout are refused, each naming the command that does update it.", audience: CommandAudience.usingTheCompiler)
 		verifyRecheck gives CommandReference.create(VerifyRecheckCommandName, arguments: "<file|dir>", summary: "Assert ONE Project can be re-checked.", detail: "Two checks over unchanged input agree, and a diagnostic introduced by an edit CLEARS when the edit is undone. `{VerifyWarmRebuildCommandName}` gates the query spine without ever running the pipeline; this gates the pipeline over it, which is what an editor holding one project open for hours actually does.", audience: CommandAudience.workingOnTheCompiler)
 		verifyWarmRebuild gives CommandReference.create(VerifyWarmRebuildCommandName, arguments: "<file>", summary: "Assert the query spine is deterministic + incremental.", detail: "It exits 0 iff both properties hold, and never runs the pipeline over the spine it gates: `{VerifyRecheckCommandName}` is the command that does.", audience: CommandAudience.workingOnTheCompiler)
 		version gives CommandReference.create(VersionCommandName, arguments: "", summary: "Print the version, the commit it was built from and the host target.", detail: "It runs nothing, and goes to stdout, where a pipe can reach it.", audience: CommandAudience.usingTheCompiler)
@@ -1807,6 +1881,7 @@ enum HelpOption
 	testTimeout
 	testNoTiming
 	testColor
+	dryRun
 end 'HelpOption'
 
 // One option's entry. ⭐ **THE COMMANDS ARE A FIELD, NOT A `(build, test)` PREFIX ON THE SENTENCE**,
@@ -1852,6 +1927,7 @@ function optionReference(option HelpOption) returns OptionReference
 		testTimeout gives OptionReference.create("{TestTimeoutFlagPrefix}<ms>", description: "Kill a test process after <ms> milliseconds (default {DefaultTestTimeoutMs}). A whole file shares one process, so {TestIsolateFlag} is what gives each test the full budget to itself.", commands: [MaxonCommand.test])
 		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test])
 		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test])
+		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade])
 	end 'whichOption'
 end 'optionReference'
 
@@ -2133,6 +2209,9 @@ enum MaxonCommand
 	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
 	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
 	test
+
+	// `maxon upgrade` — update the install this compiler runs from. See `Upgrade/UpgradeCommand.maxon`.
+	upgrade
 	verifyRecheck
 	verifyWarmRebuild
 
@@ -2311,7 +2390,14 @@ module type MaxonArgs
 	// the word `fmt`. Recorded above the chain instead, unconditionally — the one site no ordering can
 	// reach around.
 	export var anyOption as String
+
+	// The first `-`-leading argument that is not `--dry-run`, recorded beside `anyOption` for its reason:
+	// `upgrade` takes that one option and refuses every other, including the ones this driver implements.
+	export var anyOptionButDryRun as String
 	export var badOption as String
+
+	// `--dry-run` (upgrade only): say what would run, and run nothing.
+	export var dryRun as bool
 
 	// ⭐ Set when an argument names an option this driver ONCE HAD and deliberately withdrew. A
 	// separate field from `badOption` because the two owe the reader different sentences and `main`
@@ -2328,7 +2414,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", anyOptionButDryRun: "", badOption: "", dryRun: false, withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -2375,6 +2461,10 @@ module type MaxonArgs
 			// it and wherever on the line it sat. See `anyOption`.
 			if arg.startsWith(OptionPrefix) 'anOption'
 				parsed.anyOption = firstBadOption(parsed.anyOption, arg: arg)
+
+				if arg != DryRunFlag 'notTheDryRun'
+					parsed.anyOptionButDryRun = firstBadOption(parsed.anyOptionButDryRun, arg: arg)
+				end 'notTheDryRun'
 			end 'anOption'
 
 			// ⭐⭐ **A `.maxon` FIRST ARGUMENT IS `run`, AND THAT IS WHAT A `#!/usr/bin/env maxon` SCRIPT
@@ -2638,7 +2728,13 @@ module type MaxonArgs
 					// `quietTheBuildChatter`.
 					parsed.logOverridden = true
 				end 'goodSpec'
-			end 'logFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
+			end 'logFlag' else if arg == DryRunFlag 'dryRunFlag'
+				parsed.dryRun = true
+
+				// ⛔ ALSO A BAD OPTION: only `upgrade` has a dry run, and `main` exempts it from `badOption`.
+				// Any other command that took the flag would do for real what the caller asked to see first.
+				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+			end 'dryRunFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
 				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnVersionFlag` and
 				// `withdrawnOptionMessage`. Both spellings are matched EXACTLY: anything longer that merely
 				// starts with one of them names no option this driver ever had, and belongs on the anonymous

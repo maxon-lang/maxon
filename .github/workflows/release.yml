@@ -154,6 +154,23 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/release.sh --package
 
+      # ⭐ THE ONE PLACE `maxon upgrade`'s SUCCESS PATH RUNS BEFORE A RELEASE: `tests/cli` spawns `dev`
+      # builds, and this is the versioned compiler about to ship, laid out as the install script lays it
+      # out. A dry run, so nothing is downloaded; it must name the probe's own root and the script.
+      - name: maxon upgrade --dry-run recognises a script install
+        if: steps.seed.outputs.seeded == 'yes'
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/upgrade-probe"
+          mkdir -p "$probe/bin"
+          cp maxon-bin/.maxon/maxon* "$probe/bin/"
+          rm -f "$probe"/bin/*.mxdbg "$probe"/bin/*.previous*
+          cp -R stdlib "$probe/stdlib"
+          out="$("$probe/bin/maxon" upgrade --dry-run)"
+          echo "$out"
+          case "$out" in *"install root: "*"upgrade-probe"*) ;; *) echo "::error::the dry run did not name the probe's root"; exit 1 ;; esac
+          case "$out" in *"maxon.dev/install"*) ;; *) echo "::error::the dry run did not name the install script"; exit 1 ;; esac
+
       - uses: actions/upload-artifact@v6
         if: steps.seed.outputs.seeded == 'yes'
         with:

@@ -15,7 +15,12 @@ This document covers the Maxon command-line interface and project system.
 |---------|-------------|
 | `maxon build [file\|directory]` | Compile a file, directory, or project (default: current directory) |
 | `maxon build` | With no path, runs the `build.maxon` manifest in the current directory |
+| `maxon run <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon fmt [file\|directory]` | Format `.maxon` source files in-place (default: current directory) |
+| `maxon test [directory]` | Run a project's own `test` declarations |
+| `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
+| `maxon version` | Print the version, the commit it was built from, and the host target |
+| `maxon help [command]` | Print every command's options, or one command's |
 | `maxon spec-test [options]` | Run spec tests |
 | `maxon monitor <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
 | `maxon lsp-server` | Start the language server (LSP) |
@@ -197,6 +202,21 @@ Starts the language server for IDE integration. Communicates over stdin/stdout u
 
 ---
 
+### `maxon upgrade`
+
+```bash
+maxon upgrade              # install the newest release over the install this compiler runs from
+maxon upgrade --dry-run    # print the install root and the command that would run, and run nothing
+```
+
+It runs the published install script again, against the install the running compiler sits in —
+`<root>/bin/maxon` beside `<root>/stdlib`, the layout the script makes — whatever `MAXON_INSTALL` says.
+Its exit status is the script's. A compiler the script did not install is refused, naming what does
+update it: `docker pull` for the container image, `brew upgrade maxon-lang/tap/maxon` for Homebrew,
+`git pull` and a rebuild for a source checkout. `--dry-run` never bypasses a refusal.
+
+---
+
 ## Logging
 
 All commands accept logging options to control diagnostic output:
@@ -332,6 +352,8 @@ end 'internal'
 |------|---------|
 | 0 | Success |
 | 1 | Error (compilation failed, invalid arguments, etc.) |
+
+`maxon run` forwards the program's exit code, and `maxon upgrade` the install script's.
 
 ---
 

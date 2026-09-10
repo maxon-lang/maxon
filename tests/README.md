@@ -29,7 +29,7 @@ SERVER its tests spawn.
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
-| `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test |
+| `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test, or a copy of it staged under `temp/cli/` where an install would put it |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
@@ -83,7 +83,7 @@ tests/
     coverage-byte-identical.test.maxon      instrumentation reaches the flagged build and no other
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
-    CliHarness.maxon                        the shared half: the spawn, and reading a roster off a listing
+    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, and reading a roster off a listing
     no-arguments.test.maxon                 `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.test.maxon               the reference leads with the short list, then what it hides
     help-per-command.test.maxon             every documented command answers `help <command>` for itself
@@ -91,6 +91,14 @@ tests/
     withdrawn-help-flags.test.maxon         `--help` / `-h` refused BY NAME, naming the command
     unknown-command-refused.test.maxon      a word naming no command fails at both doors
     help-takes-no-options.test.maxon        `help` refuses a flag another command implements
+    upgrade-refuses-a-container-image.test.maxon            MAXON_IMAGE set: refused, naming `docker pull` of that image
+    upgrade-refuses-a-checkout.test.maxon                   a source checkout: refused, pointing at `git pull`, `--dry-run` or not
+    upgrade-refuses-homebrew.test.maxon                     a keg under `Cellar/maxon/<version>/`: refused, naming `brew upgrade`
+    upgrade-refuses-an-unrecognised-layout.test.maxon       a flat `maxon` + `stdlib/`: refused, giving the install one-liner
+    upgrade-dry-run-names-the-install.test.maxon            `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
+    upgrade-takes-no-arguments.test.maxon                   a positional argument and a foreign option are both refused
+    upgrade-version-points-at-the-install-script.test.maxon `upgrade --version X` points at the install script's `--version`
+    dry-run-is-upgrade-only.test.maxon                      every other command refuses `--dry-run`
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.test.maxon         the busier function ranks first in every section

@@ -20,23 +20,16 @@
 // rule it enforces is met anyway: everything this writes goes to the cache slot it was told to write to,
 // never to `<project>/.maxon/`, so running a program from inside a checkout cannot race a build of it.
 
-// What a command line this command could not act on exits with. 1, not `NothingRanExitCode`: `run` has
-// only "it ran" and "it did not", which is the answer `Main.refusedCommandLineExit` gives for the word.
-let RefusedRunExit = 1 as ExitCode
-
-// A signal number a child died on.
-typealias SignalNumber = int(i64.min to i64.max)
-
 export function runRun(args MaxonArgs) returns ExitCode
 	let spelling = try args.paths.get(0) otherwise 'noProgram'
 		printError("Usage: {runUsageLine()}\n")
 		printError("No program was named. Give a `{MaxonSourceExtension}` file, or a directory to compile as one project.\n")
-		return RefusedRunExit
+		return OwnFailureExit
 	end 'noProgram'
 
 	let typed = try FilePath.from(spelling) otherwise 'badPath'
 		printError("error: invalid path: {spelling}\n")
-		return RefusedRunExit
+		return OwnFailureExit
 	end 'badPath'
 
 	// ⚠ **ABSOLUTE FROM HERE ON, AND THE REFUSAL BELOW STILL NAMES WHAT WAS TYPED.** The cache is keyed by
@@ -47,7 +40,7 @@ export function runRun(args MaxonArgs) returns ExitCode
 
 	if not isProject and not File.exists(program) 'nothingThere'
 		reportCompileError(CompileError.fileNotFound(typed))
-		return RefusedRunExit
+		return OwnFailureExit
 	end 'nothingThere'
 
 	quietTheBuildChatter(args)
@@ -85,18 +78,18 @@ function runProgram(program FilePath, isProject bool, arguments StringArray) ret
 
 	let slot = try locateRunSlot(program, isProject: isProject, target: target) otherwise (e) 'noCache'
 		reportCacheError(e)
-		return RefusedRunExit
+		return OwnFailureExit
 	end 'noCache'
 
 	// A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
 	// to compare — a build under that name was made from these very inputs.
 	if not File.exists(slot.executable) 'notCachedYet'
 		if not fillSlot(program, slot: slot, target: target) 'nothingToRun'
-			return RefusedRunExit
+			return OwnFailureExit
 		end 'nothingToRun'
 	end 'notCachedYet'
 
-	return spawnProgram(slot.executable, arguments: arguments)
+	return spawnForwarding(Executable.path(slot.executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
 end 'runProgram'
 
 // Compile the program into its cache slot and publish it under the name its key gives it. FALSE when
@@ -134,36 +127,3 @@ function fillSlot(program FilePath, slot RunSlot, target Target) returns bool
 
 	return true
 end 'fillSlot'
-
-// ⚠ **`timeoutMs = 0` IS THE PROGRAM'S OWN RUNTIME AS THE BUDGET.** A deadline here would kill a
-// long-running program the caller launched deliberately, and this command has no idea what one is.
-function spawnProgram(executable FilePath, arguments StringArray) returns ExitCode
-	var config = Configuration.create(Executable.path(executable))
-	config.arguments = arguments
-	config.standardInput = InputSource.inherit
-	config.standardOutput = OutputDestination.inherit
-	config.standardError = OutputDestination.inherit
-	config.timeoutMs = 0
-
-	let ran = try Subprocess.runConfiguration(config) otherwise (e) 'unspawnable'
-		printError("{RunCommandName}: could not run {executable.toString()} ({e.displayReason()})\n")
-		return RefusedRunExit
-	end 'unspawnable'
-
-	return match ran.status 'termination'
-		exited(code) gives code as ExitCode
-		signalled(code) gives reportSignalled(executable, signal: code as SignalNumber)
-	end 'termination'
-end 'spawnProgram'
-
-// A program killed by a signal has no exit code to forward, so the signal is named and the failure is
-// this command's own rather than a number invented on the program's behalf.
-//
-// ⚠ **NO TARGET'S EMITTED RUNTIME RAISES `signalled` YET** — `SubprocessRuntime` stores only the `exited`
-// and `timedOut` discriminators — so an abnormally terminated child arrives as `exited` carrying the raw
-// OS status (0xC00000FD for a Windows stack overflow, forwarded verbatim). The arm is what the union owes,
-// and it becomes reachable the day that decoding lands.
-function reportSignalled(executable FilePath, signal SignalNumber) returns ExitCode
-	printError("{RunCommandName}: {executable.toString()} was killed by signal {signal}\n")
-	return RefusedRunExit
-end 'reportSignalled'

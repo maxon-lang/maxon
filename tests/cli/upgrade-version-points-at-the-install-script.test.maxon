@@ -1,0 +1,19 @@
+// upgrade-version-points-at-the-install-script.test.maxon - `maxon upgrade --version X` is refused, and the
+// refusal points at the install script's own version option.
+//
+// `--version` is withdrawn everywhere and its refusal ordinarily points at `maxon version`. After
+// `upgrade`, though, the caller is asking for a particular release, and what installs one is the
+// install script's `--version`.
+
+let WithdrawnVersionFlag = "--version"
+let PinnedRelease = "0.1.0"
+
+test 'upgrade --version is refused, pointing at the install script'
+	let run = runDriver([UpgradeCommandWord, WithdrawnVersionFlag, PinnedRelease])
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord} {WithdrawnVersionFlag} {PinnedRelease}` was answered. `{WithdrawnVersionFlag}` is withdrawn. It said: {run.stdout}{run.stderr}")
+
+	try Expect.contains(run.stderr, needle: WithdrawnVersionFlag, message: "`maxon {UpgradeCommandWord} {WithdrawnVersionFlag} {PinnedRelease}`'s refusal does not name the flag that was typed. It said: {run.stderr}")
+	try Expect.contains(run.stderr, needle: InstallScriptAddress, message: "`maxon {UpgradeCommandWord} {WithdrawnVersionFlag} {PinnedRelease}` does not point at the install script ({InstallScriptAddress}), whose `{WithdrawnVersionFlag}` is what installs a chosen release. It said: {run.stderr}")
+end 'upgrade --version is refused, pointing at the install script'

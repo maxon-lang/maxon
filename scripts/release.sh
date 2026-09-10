@@ -327,7 +327,7 @@ write_default_notes() {
 		echo '```'
 		echo
 		echo "Either script downloads the archive for your machine, checks it against \`SHA256SUMS\`, installs it"
-		echo "into \`~/.maxon\` and puts \`maxon\` on your PATH; run it again to upgrade. With Homebrew,"
+		echo "into \`~/.maxon\` and puts \`maxon\` on your PATH; \`maxon upgrade\` updates the install later. With Homebrew,"
 		echo "\`brew install maxon-lang/tap/maxon\`. If you download an archive by hand on macOS, run"
 		echo "\`xattr -d com.apple.quarantine ./maxon\` once."
 		echo
