@@ -2,9 +2,38 @@
 
 What changed in each release of the Maxon compiler and standard library, newest first.
 
-Written by hand, for people installing a compiler rather than changing one. `scripts/changelog.sh
---commits-since` lists what has landed since the last release, to consult while writing the next
-entry; `docs/RELEASING.md` has the order a release is cut in.
+## 0.1.1 — 2026-09-09
+
+### Added
+
+- `maxon run`, which compiles a program and runs it in one step. A `.maxon` file may begin with a
+  `#!` line and be run directly as a script.
+- `maxon help`, and `maxon help <command>` for a single command. Running `maxon` with no arguments
+  now lists the commands.
+- `--define`, which sets a top-level `String` constant at build time.
+- Build manifests can declare several named targets, and state the version of what they build.
+- Compiled executables carry version metadata: a version resource on Windows, a source version on
+  macOS, and a producer string on Linux.
+
+### Changed
+
+- `maxon version` replaces the `--version` and `-V` flags, and reports the commit and date the
+  compiler was built from.
+- `maxon help` replaces the `--help` and `-h` flags.
+- `Build.buildOne` in a build manifest is renamed `Build.build`.
+- `maxon fmt` separates groups of declarations with one blank line at every nesting depth, not only
+  at the top level.
+- The Windows installer is code-signed.
+
+### Fixed
+
+- Non-ASCII text displays correctly in a Windows console.
+- A deadlocked program on Linux reports the deadlock instead of occasionally hanging.
+- A default parameter value is filled in a global variable's initializer, not only inside a function.
+
+### Removed
+
+- The Windows installer no longer offers to install the VS Code extension.
 
 ## 0.1.0 — 2026-09-08
 
@@ -12,22 +41,15 @@ The first release. One compiler, written in Maxon, that builds itself.
 
 ### Added
 
-- **Binaries for four targets** — `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`. Each
-  is built and has its whole spec suite run on hardware of its own architecture.
-- **A Windows installer.** `winget install MaxonLang.Maxon`, or the `.msi` directly: it installs to
-  `C:\Program Files\Maxon` and adds it to the system PATH.
-- **Homebrew on macOS** — `brew install maxon-lang/tap/maxon`, which puts `maxon` on the PATH and
-  clears the quarantine attribute a downloaded archive carries.
-- **A VS Code extension**, on both the Marketplace and Open VSX, with a language server providing
-  diagnostics, hover, go-to-definition, completion, rename, symbols and formatting. It finds a
-  compiler on your PATH, and offers to install one when it cannot.
-- **`maxon build`, `maxon fmt`, `maxon test`, `maxon spec-test`, `maxon lsp-server`** and a build
-  manifest that is a program rather than a config file — see the CLI reference.
+- Binaries for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`, each built and tested
+  on its own architecture.
+- A Windows installer, also available through winget.
+- A Homebrew formula for macOS.
+- A VS Code extension, on the Marketplace and Open VSX, with a language server providing
+  diagnostics, hover, go-to-definition, completion, rename, symbols and formatting.
+- `maxon build`, `fmt`, `test`, `spec-test` and `lsp-server`, and a build manifest written as a
+  Maxon program rather than a configuration file.
 
 ### Known limitations
 
-- The installers are not code-signed, so Windows SmartScreen warns on first run: **More info**, then
-  **Run anyway**.
-- ⚠ **`maxon` and `stdlib/` must stay together.** The compiler finds its standard library by walking
-  up from its own executable, so moving the binary out of the extracted directory on its own leaves
-  it without one.
+- The installers are not code-signed.

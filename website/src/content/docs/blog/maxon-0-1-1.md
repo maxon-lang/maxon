@@ -1,15 +1,17 @@
 ---
-title: Changelog
-description: Every released version of the Maxon compiler and standard library, and what changed in it.
+title: Maxon 0.1.1
+description: Release notes for Maxon 0.1.1 — what changed in the compiler and standard library.
+date: 2026-09-09
+authors: maxon
+tags:
+  - release
+excerpt: Maxon 0.1.1 is out. Here's what changed.
 ---
 
-Every released version, newest first.
+**Maxon 0.1.1 is released.** Archives for every supported target are on the
+[GitHub releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.1.1), alongside a Windows installer.
 
-Downloads for each release are on the
-[GitHub releases page](https://github.com/maxon-lang/maxon/releases), and the install instructions are in
-[Installation](/docs/getting-started/installation/).
-
-## 0.1.1 — 2026-09-09
+## What changed
 
 ### Added
 
@@ -42,21 +44,16 @@ Downloads for each release are on the
 
 - The Windows installer no longer offers to install the VS Code extension.
 
-## 0.1.0 — 2026-09-08
+## Download
 
-The first release. One compiler, written in Maxon, that builds itself.
+```
+winget install MaxonLang.Maxon          # Windows
+brew install maxon-lang/tap/maxon       # macOS
+```
 
-### Added
+Elsewhere, take the archive for your platform from the
+[releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.1.1) and follow the `INSTALL.md` inside it.
 
-- Binaries for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`, each built and tested
-  on its own architecture.
-- A Windows installer, also available through winget.
-- A Homebrew formula for macOS.
-- A VS Code extension, on the Marketplace and Open VSX, with a language server providing
-  diagnostics, hover, go-to-definition, completion, rename, symbols and formatting.
-- `maxon build`, `fmt`, `test`, `spec-test` and `lsp-server`, and a build manifest written as a
-  Maxon program rather than a configuration file.
-
-### Known limitations
-
-- The installers are not code-signed.
+⚠ Each archive holds the `maxon` compiler and `stdlib/` **as siblings**, and that layout is the
+contract: the compiler finds its standard library by walking up from its own executable, so moving the
+binary out on its own leaves it without one.
