@@ -49,10 +49,11 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 97 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
+// FREE number above 70, which is now 98 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
 // W215's arena alignment, SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
 // carrying a kind nothing writes — SV2 took 94 for a promise naming a mailbox-parked thread, 95 went to
-// `schedulerIdledAProcessorHoldingWork` and 96 to `transferredRecordNotSole`) — 77 went
+// `schedulerIdledAProcessorHoldingWork`, 96 to `transferredRecordNotSole` and 97 to
+// `schedulerThreadExhaustion`) — 77 went
 // to `managedListNodeNotInThisChain`, 81 to
 // `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
 // the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
@@ -356,6 +357,17 @@ export enum RuntimeAbort
 	// SYNTHESIZED Std function, and the abort road (`emitRuntimeAbort`) is `osExit`, not `osPanic` —
 	// `mrt_panic` prints a message but exits `PanicExitCode`, which is not this code.
 	transferredRecordNotSole = 96
+
+	// ⛔ `__sched_startm`: a machine was about to be created past `SchedRuntime.SchedMaxMachines` — Go's
+	// `checkmcount` and its `throw("thread exhaustion")` (`proc.go:976`), at Go's limit. A machine is an OS
+	// thread with its own syscall stack and event, and none is ever freed, so a spawn arm that keeps firing
+	// would otherwise run the process out of address space and fail somewhere unrelated to the cause. A
+	// separate code from `schedulerDeadlock` (92), this registry's founding rule: too many machines and too
+	// little work are two different faults.
+	//
+	// ⚠ **NO SPEC REACHES IT**: it takes ten thousand simultaneously blocked machines. It is proved by lowering
+	// the limit, which a `procs: 4` service program then crosses on its third machine.
+	schedulerThreadExhaustion = 97
 
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO

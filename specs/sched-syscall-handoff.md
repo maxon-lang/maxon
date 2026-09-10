@@ -679,3 +679,148 @@ read=5 blocked=yes
 ```exitcode
 0
 ```
+
+<!-- test: a-handed-off-processor-leaves-the-wake-gate-working -->
+<!-- procs: 2 -->
+<!-- stdin: delayed -->
+⭐⭐ **A HANDOFF STARTS ITS MACHINE WITHOUT A SPINNING CREDIT, BECAUSE IT RESERVED NONE — Go's
+`startm(pp, false)`.** `wakep` reserves one unit of `__sched_nmspinning` at its gate and hands it to the
+machine it starts; `handoffp` reserves nothing. A `__sched_startm` that handed over or gave back a unit
+the caller never took would leave the count one BELOW the truth, and a count that reads non-zero with
+nobody searching is what every later publish takes for *"somebody is already looking"*: it wakes nobody.
+
+⇒ **The first half forces exactly one handoff.** A spinner that never yields holds one processor, the reader
+blocks in the kernel holding the other, and the sentinel it pinged sits in that processor's ring where only
+a retake can reach it. **The second half publishes work while `main` runs without yielding**, and watches
+the idle-processor count: a working gate starts a machine on the spare processor at once, so the count
+reaches 0; a gate the handoff broke wakes nobody, and a parked machine's timeout looks only at the global
+queue, so the work waits in `main`'s ring and the count stays at 1 for the whole watch.
+
+⚠ **`woken=false` READS WITH `retaken=`**: only `retaken=yes woken=false` is the fault this case gates. On a
+single-processor host there is no spare processor to start, the count is 0 throughout, and the case passes
+without having asked the question.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+// A line already in the pipe answers in microseconds; the harness feeds about a second after `R: reading`.
+let blockedThresholdMs = 500
+
+// Longer than the read waits, so the spinner still holds its processor when the sysmon looks.
+let spinMs = 2500
+
+// Long enough for the spare processor's machine to take the spinner before `main` runs the reader.
+let claimMs = 200
+
+// Long enough for every machine to park once the first half is over.
+let settleMs = 300
+
+// A started machine takes the spare processor within microseconds; a parked one waits out its timeout.
+let watchMs = 400
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read(sentinel Sentinel.handle) returns Integer
+		print("R: reading\n")
+		let tailReply = sentinel.ping()
+		let start = Clock.nowMs()
+		let line = try Console.stdin().readLine() otherwise ""
+		let waitedMs = Clock.elapsedMs(start)
+		print("R: read returned\n")
+
+		let tail = try await tailReply otherwise 0
+		var blocked = "no"
+		if waitedMs >= blockedThresholdMs 'blocked'
+			blocked = "yes"
+		end 'blocked'
+		let n = line.count()
+		print("done sibling={tail} read={n} blocked={blocked}\n")
+
+		return n
+	end 'read'
+end 'Reader'
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		print("S: sentinel ran\n")
+
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+type Spinner
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function spin(ms Integer) returns Integer
+		let start = Clock.nowMs()
+		var turns = 0
+		while (Clock.elapsedMs(start) as Integer) < ms 'spin'
+			turns = turns + 1
+		end 'spin'
+
+		return 1
+	end 'spin'
+end 'Spinner'
+
+// The lowest idle-processor count seen while the caller runs for `ms` without yielding.
+function lowestIdleOver(ms Integer) returns Integer
+	var lowest = __Builtins.schedIdleProcessorCount()
+	let start = Clock.nowMs()
+	while (Clock.elapsedMs(start) as Integer) < ms 'watch'
+		let idle = __Builtins.schedIdleProcessorCount()
+		if idle < lowest 'lower'
+			lowest = idle
+		end 'lower'
+	end 'watch'
+
+	return lowest
+end 'lowestIdleOver'
+
+function main() returns ExitCode
+	let spinner = spawn Spinner.create()
+	let sentinel = spawn Sentinel.create()
+	let reader = spawn Reader.create()
+
+	let spun = spinner.spin(spinMs)
+	_ = lowestIdleOver(claimMs)
+	let n = try await reader.read(sentinel) otherwise 0
+	let s = try await spun otherwise 0
+	var retaken = "no"
+	if __Builtins.schedRetakeCount() > 0 'retaken'
+		retaken = "yes"
+	end 'retaken'
+
+	sleep(settleMs)
+	let probe = spawn Spinner.create()
+	let reply = probe.spin(1)
+	let lowest = lowestIdleOver(watchMs)
+	let p = try await reply otherwise 0
+	print("retaken={retaken} woken={lowest == 0} ran={n + s + p}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+R: reading
+S: sentinel ran
+R: read returned
+done sibling=1 read=5 blocked=yes
+retaken=yes woken=true ran=7
+```
+```exitcode
+0
+```

@@ -376,24 +376,25 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.greenThreads)
 	end 'select'
 
-	// ⭐⭐ **THE PER-P COUNTER SUMS — the select's case exactly, one band over.** Each is a walk of
-	// `__sched_procs`, so asking one INSTALLS the whole scheduler (`RuntimeUsage.recordCallUsage` routes every
-	// one to `recordGtUsage`), and a lane with no green-thread floor has no TLS slot for the install to reach:
-	// without this arm the compiler would die in a runtime emitter that knows it is x64-windows-only rather
-	// than refuse at the call. A builtin that turns on `usesGt` and is not named here is a door left open.
+	// ⭐⭐ **THE SCHEDULER-STATE QUERIES — the select's case exactly, one band over.** Each reads state only
+	// `__sched_init_procs` builds, so asking one INSTALLS the whole scheduler (`RuntimeUsage.recordCallUsage`
+	// routes every one to `recordGtUsage`), and a lane with no green-thread floor has no TLS slot for the
+	// install to reach: without this arm the compiler would die in a runtime emitter that knows it is
+	// x64-windows-only rather than refuse at the call. A builtin that turns on `usesGt` and is not named here is
+	// a door left open.
 	//
 	// ⚠ **THE ROSTER IS THE ONE `RuntimeUsage` ASKS, NOT A SECOND COPY OF IT.** Both halves of what these
-	// names mean — install the scheduler, require its floor — read `isSchedPerProcSumCallee`, which is why a
-	// new per-P sum cannot arrive gated at one end and open at the other.
+	// names mean — install the scheduler, require its floor — read `isSchedSubstrateQueryCallee`, which is why
+	// a new one cannot arrive gated at one end and open at the other.
 	//
 	// ⚠ **THEIR BAND-MATES `__sched_max_active_workers` AND `__sched_processor_count` ARE DELIBERATELY
 	// ABSENT**, for the reason the paragraph on the first of them gives below: each is one `.data` load and a
 	// `ret`, which lowers on every target the compiler emits, and neither sets `usesGt`.
 	// `specs/builtins-cpu-parallel.md` pins that acceptance, which is what keeps this a NARROW gate
 	// rather than a family-wide one.
-	if isSchedPerProcSumCallee(callee) 'perProcSums'
+	if isSchedSubstrateQueryCallee(callee) 'schedStateQueries'
 		return CalleeFacility.needs(HostFacility.greenThreads)
-	end 'perProcSums'
+	end 'schedStateQueries'
 
 	// The two subprocess surfaces whose entries live in the SCHEDULER band rather than behind the
 	// `__gt_subp_` prefix, named individually for that reason.

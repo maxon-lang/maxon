@@ -286,3 +286,127 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 42
 ```
+
+<!-- test: sched-processor.idle-processor-count-before-any-work -->
+<!-- procs: 4 -->
+**THE IDLE-PROCESSOR COUNT, GO'S `sched.npidle`.** Nothing spawned: the main thread holds one processor and
+every other one sits on the idle list. `__Builtins.schedIdleProcessorCount()` reads the count the scheduler
+keeps beside that list. Go reads the same number on every wake decision — whether to start a spinning machine
+when a processor is handed off, and how many spinners are worth having — which is why it is a maintained word
+rather than a walk of the list.
+
+⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER.** The scheduler clamps `procs: 4` to the host's processor count,
+so `idle=3` would be a claim about a box with at least four; `schedProcessorCount() - 1` is the answer on
+every host. The idle count is read first, because it is the query that brings the scheduler up.
+```maxon
+function main() returns ExitCode
+	let idle = __Builtins.schedIdleProcessorCount()
+	print("everyButMain={idle == __Builtins.schedProcessorCount() - 1}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+everyButMain=true
+```
+```exitcode
+0
+```
+
+<!-- test: sched-processor.idle-processor-count-returns-after-a-burst -->
+<!-- procs: 4 -->
+**THE COUNT FOLLOWS THE PROCESSORS BACK TO THE IDLE LIST.** Four services each do a share of work on
+whatever machines the scheduler starts for them, and every reply is awaited. Once the last worker has found
+nothing to run it releases its processor, so the count settles back at every processor but the main thread's
+— an agreement with `schedProcessorCount()`, for the case above's reason. The settling is waited for on a
+bounded budget rather than sampled once: a worker that has just finished a handler is still searching for a
+moment before it parks, and a single read taken in that moment would report a machine that is about to be idle
+as busy.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ShareHandleArray = Array with Share.handle
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let shares = 4
+let settleTurns = 3000
+
+type Share
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function work(rounds Integer) returns Integer
+		var acc = 0
+		var i = 0
+		while i < rounds 'spin'
+			acc = (acc + i * self.id) mod 1000003
+			i = i + 1
+		end 'spin'
+		return acc
+	end 'work'
+end 'Share'
+
+function main() returns ExitCode
+	var hs = ShareHandleArray.create()
+	var i = 0
+	while i < shares 'spawnEach'
+		hs.push(spawn Share.create(i + 1))
+		i = i + 1
+	end 'spawnEach'
+	var replies = ReplyPromiseArray.create()
+	var k = 0
+	while k < shares 'sendEach'
+		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
+		replies.push(h.work(200000))
+		k = k + 1
+	end 'sendEach'
+	var total = 0
+	var n = 0
+	while n < shares 'collect'
+		let p = try replies.get(n) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
+		total = total + (try await p otherwise 0)
+		n = n + 1
+	end 'collect'
+	let everyButMain = __Builtins.schedProcessorCount() - 1
+	var turn = 0
+	while turn < settleTurns and __Builtins.schedIdleProcessorCount() != everyButMain 'settle'
+		sleep(1)
+		turn = turn + 1
+	end 'settle'
+	let settled = __Builtins.schedIdleProcessorCount() == everyButMain
+	print("total={total} settled={settled}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+total=2400012 settled=true
+```
+```exitcode
+0
+```
+
+<!-- test: sched-processor.error.idle-processor-count-arity-checked -->
+The query takes no argument, like every member of its family.
+```maxon
+function main() returns ExitCode
+	return __Builtins.schedIdleProcessorCount(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.schedIdleProcessorCount' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: sched-processor.error.idle-processor-count-is-refused-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The count is a fact about processors, and a WASI component has none to count, so the query is refused where
+the green-thread substrate is: at the call's own span, with E3104.
+```maxon
+function main() returns ExitCode
+	return __Builtins.schedIdleProcessorCount() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__sched_idle_processor_count', which has no wasm32-wasi implementation
+```

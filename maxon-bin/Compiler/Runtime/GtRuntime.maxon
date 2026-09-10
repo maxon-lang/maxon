@@ -742,7 +742,7 @@ export let GtTrampolineName = b"__gt_trampoline"
 // function — it manipulates rsp and walks the saved-rbp chain, unrepresentable in Std. EXPORTED because the
 // prologue guard's `call __gt_morestack` (X64Backend) and the chunk's own name must agree — one spelling.
 export let GtMorestackName = b"__gt_morestack"
-let GtInitName = b"__gt_init"
+export let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 
 // ⭐⭐⭐ **`__gt_spawn_green(funcPtr) -> gt` — CREATE A GREEN THREAD RATHER THAN A COROUTINE (SV1).** The
@@ -2547,22 +2547,12 @@ end 'buildGtReady'
 // ⭐⭐⭐ **WHERE ONE INTRUSIVE FIFO'S TWO ENDS LIVE — the ONLY thing the global run queue and a green
 // thread's coroutine queue differ in, and therefore the only thing the emitters below take.**
 //
-// ⛔⛔ **IT EXISTS BECAUSE THE TWO QUEUES WERE ONE ALGORITHM WRITTEN TWICE (EC10 review).** EC10 built
-// `__gt_coro_enqueue` / `__gt_coro_dequeue` / `__gt_coro_sweep_dropped` / `__gt_coro_next` as deliberate
-// copies of `__gt_enqueue` / `__gt_dequeue` / `__sched_sweep_dropped` / `__sched_find_runnable`, each saying
-// at its own declaration that it was *"`__gt_enqueue`'s shape exactly"*. **Saying so is not what keeps it
-// so.** The intrusive-list protocol is ONE fact — the `next = 0` seed, the empty/append split, the tail
-// clear when the queue drains, the tombstone refusal — and eight functions held four copies of it with
-// nothing making them agree; a clause added to one and not its twin reads as correct at both sites and is a
-// coroutine RUN AFTER ITS PROMISE WAS DROPPED at runtime, not a compile error.
-//
-// ⛔ **AND THE COPY THAT WOULD ROT IS THE ONE NOTHING RUNS.** Dead-code elimination takes the whole
-// green-thread tier out of every emitted program until `spawn` (MEASURED: `--emit-ir-runtime=__gt_enqueue`
-// panics with *"this program contains nothing named '__gt_enqueue'"*), so a divergence in the global half would
-// be invisible to every test in the suite until the day that tier came back. One body per operation and two
-// `GtQueueEnds` means the tier `spawn` inherits is the one `async` has been exercising all along.
+// ⛔⛔ **THE TWO QUEUES ARE ONE ALGORITHM, SO THEY HAVE ONE BODY PER OPERATION.** The intrusive-list protocol
+// is ONE fact — the `next = 0` seed, the empty/append split, the tail clear when the queue drains, the
+// tombstone refusal — and a clause added to one copy and not its twin would read as correct at both sites
+// and be a coroutine RUN AFTER ITS PROMISE WAS DROPPED at runtime, not a compile error.
 export union GtQueueEnds
-	// The GLOBAL run queue — its head and tail are two `.data` words. ⚠ Unreached until `spawn`.
+	// The GLOBAL run queue — its head and tail are two `.data` words.
 	globalLabels
 
 	// A green thread's own coroutine queue — its head and tail are two fields of the struct `owner`
@@ -2758,9 +2748,12 @@ export function emitGtTombstoneHandback(module StdModule, func IrFunction, candi
 	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
 end 'emitGtTombstoneHandback'
 
-// `__gt_enqueue(g)` — append `g` to the tail of the global FIFO run queue. ⚠ UNREACHED until `spawn`: every
-// producer of the global tier goes through `SchedRuntime.__sched_publish_yield`'s green arm or the ring's
-// overflow, and until `spawn` has a source spelling nothing creates a green thread to route there.
+// `__gt_enqueue(g)` — append `g` to the tail of the global FIFO run queue. The caller holds `__sched_lock`.
+// Its producers are `SchedRuntime.__sched_publish_yield`'s green arm, the ring's overflow, the park's ring
+// drain and a publish by a party holding no processor.
+//
+// ⭐ **IT AND `__gt_dequeue` ARE THE ONLY TWO FUNCTIONS THAT MOVE THE GLOBAL QUEUE, SO THEY ARE WHERE
+// `__sched_runq_size` IS STEPPED** — no caller can move the queue without moving its count.
 function buildGtEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2770,13 +2763,14 @@ function buildGtEnqueue(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"empty")
 
 	emitParams(module, block: entry, count: 1)
+	emitSchedStepLockedCount(module, block: entry, label: SchedRunqSizeLabel, delta: OneMore, ids: ids)
 	emitGtFifoAppend(module, entry: entry, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.globalLabels, g: 0 as ValueId, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtEnqueue'
 
-// `__gt_dequeue() -> g` — pop the head green thread off the global FIFO run queue, or 0 if empty. ⚠
-// UNREACHED until `spawn`, for `__gt_enqueue`'s reason one consumer over.
+// `__gt_dequeue() -> g` — pop the head green thread off the global FIFO run queue, or 0 if empty. The caller
+// holds `__sched_lock`. The count comes down on the arm that really popped, which `popBlock` is.
 function buildGtDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2786,6 +2780,7 @@ function buildGtDequeue(module StdModule)
 	var clearTail = module.addBlock(func, label: b"cleartail")
 	var doneBlock = module.addBlock(func, label: b"done")
 
+	emitSchedStepLockedCount(module, block: popBlock, label: SchedRunqSizeLabel, delta: OneFewer, ids: ids)
 	emitGtFifoPop(module, entry: entry, popBlock: popBlock, clearTail: clearTail, doneBlock: doneBlock, ends: GtQueueEnds.globalLabels, ids: ids)
 
 	module.functions.push(func)
@@ -3960,7 +3955,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: driveGreen.id, elseBlockId: run.id))
 	drive.branchEdges.push(BranchEdge.create(run.id, argIds: argsOf(g)))
 
-	let greenGt = emitSchedFindRunnable(module, block: driveGreen, ids: ids)
+	let greenGt = emitSchedFindRunnable(module, block: driveGreen, searcher: SchedSearcher.driver, ids: ids)
 	let greenNull = emitCmp(module, block: driveGreen, a: greenGt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(driveGreen, op: StdOp.condBranch(greenNull, thenBlockId: netpoll.id, elseBlockId: run.id))
 	driveGreen.branchEdges.push(BranchEdge.create(run.id, argIds: argsOf(greenGt)))
@@ -6684,7 +6679,7 @@ function buildGtResched(module StdModule)
 	// on the very queue its driver reads FIRST and handed straight back, so a coroutine spinning on a yield
 	// loop would starve a green thread for ever. Bounding it to one turn is the whole difference between a
 	// yield and an await.
-	let schedGt = emitSchedFindRunnable(module, block: driveSched, ids: ids)
+	let schedGt = emitSchedFindRunnable(module, block: driveSched, searcher: SchedSearcher.driver, ids: ids)
 	let noSchedGt = emitCmp(module, block: driveSched, a: schedGt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(driveSched, op: StdOp.condBranch(noSchedGt, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
 	driveSched.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(schedGt)))
