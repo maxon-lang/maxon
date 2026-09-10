@@ -83,10 +83,9 @@ in this repo to fall back on — the published release is what seeds a build.
 
 ### Build and test
 
-Download the release for your platform from
-[the latest release](https://github.com/maxon-lang/maxon/releases/latest) and put its `maxon` binary
-at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows) — the **binary alone**, not the unpacked
-archive, because the compiler resolves `stdlib/` by walking up from its own executable and a released
+[Install](https://maxon.dev/install) a release and copy its binary into `.bootstrap/` with
+`mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/` — the **binary alone**, not the release's
+directory, because the compiler resolves `stdlib/` by walking up from its own executable and a released
 one left beside it would be compiled in place of this tree's.
 
 ```bash

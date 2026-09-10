@@ -240,6 +240,25 @@ notes, so the notes cannot promise a signature the file does not carry.
 
 ---
 
+## The install scripts
+
+`curl -fsSL https://maxon.dev/install.sh | sh` and `irm https://maxon.dev/install.ps1 | iex` are the
+primary way to install. Both scripts live in `website/public/` and are served verbatim by the website
+deploy, as `text/plain` (`website/public/_headers`). They read the newest version from the redirect of
+`releases/latest`, download that release's archive and `SHA256SUMS` from GitHub, and install into
+`~/.maxon`. So a release is installable by script the moment it is published, with nothing to
+regenerate.
+
+`install-script.yml` runs both on every platform against the latest release. `release.yml` starts it
+once a release is published, and a push that touches either script runs it too.
+
+⛔ **THE SCRIPTS' INTERFACE IS PERMANENT.** `maxon upgrade` runs them from every compiler that has
+it, with `MAXON_INSTALL` set to its own install and `--no-modify-path` / `-NoPathUpdate`, and reads
+only the exit status. Renaming, dropping or changing the meaning of any of those breaks upgrading from
+every release already shipped. A new option is fine; a changed one is not.
+
+---
+
 ## Package managers
 
 All three manifests are **generated from the published artifacts, never committed**, because each one
@@ -430,6 +449,7 @@ Re-download from the release page — not the local `dist/` copy, which is the t
   program with the full path to the extracted `maxon`. This is what proves the walk up from the
   executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
   above either the compiler or the source.
+- Both install scripts on a clean machine, then `maxon version` in a new terminal.
 - `winget install MaxonLang.Maxon`, then `winget uninstall`, on a clean VM.
 - `brew install maxon-lang/tap/maxon`, then `maxon version` in the same shell — Homebrew's symlink
   is the point, and the compiler resolves it.

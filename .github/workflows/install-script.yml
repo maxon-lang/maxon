@@ -1,22 +1,23 @@
-# Run `website/public/install.sh` the way a user does, on every platform it serves, against the latest
-# published release.
+# Run `website/public/install.sh` and `website/public/install.ps1` the way a user does, on every
+# platform they serve, against the latest published release.
 #
-# ⭐ THE SCRIPT IS WHAT A NEW USER RUNS FIRST, AND NOTHING ELSE EXERCISES IT. It is served as a static
-# file, so a broken one ships with the next website deploy and is found by the first person who tries
-# it. `release.yml`'s `publish` job starts this once a release is live, so a release that the script
-# cannot install is found by CI rather than by a user.
+# ⭐ THE SCRIPTS ARE WHAT A NEW USER RUNS FIRST, AND NOTHING ELSE EXERCISES THEM. They are served as
+# static files, so a broken one ships with the next website deploy and is found by the first person
+# who tries it. `release.yml`'s `publish` job starts this once a release is live, so a release that a
+# script cannot install is found by CI rather than by a user.
 #
-# ⚠ IT IS FED ON STDIN, AS `curl … | sh` FEEDS IT, and run by each runner's own `/bin/sh` — dash on
-# Ubuntu, bash in POSIX mode on macOS — so a bashism fails here rather than on someone's machine.
+# ⚠ install.sh IS FED ON STDIN, AS `curl … | sh` FEEDS IT, and run by each runner's own `/bin/sh` —
+# dash on Ubuntu, bash in POSIX mode on macOS — so a bashism fails here rather than on someone's
+# machine. install.ps1 runs under both Windows PowerShell 5.1 and PowerShell 7, the two a user may have.
 
 name: install-script
 
 on:
   push:
     branches: [main]
-    paths: ['website/public/install.sh', '.github/workflows/install-script.yml']
+    paths: ['website/public/install.sh', 'website/public/install.ps1', 'website/public/_headers', '.github/workflows/install-script.yml']
   pull_request:
-    paths: ['website/public/install.sh', '.github/workflows/install-script.yml']
+    paths: ['website/public/install.sh', 'website/public/install.ps1', 'website/public/_headers', '.github/workflows/install-script.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,6 +29,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: shellcheck --shell=sh website/public/install.sh
+
+  lint-ps1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Windows PowerShell 5.1's `irm` decodes a response without a charset as ISO-8859-1, so one
+      # non-ASCII byte can become a quote character that ends a string early.
+      - name: install.ps1 is ASCII, and Windows PowerShell 5.1 parses it
+        shell: powershell
+        run: |
+          $path = (Resolve-Path website/public/install.ps1).Path
+          $high = @([IO.File]::ReadAllBytes($path) | Where-Object { $_ -gt 127 }).Count
+          if ($high -ne 0) { throw "install.ps1 holds $high non-ASCII bytes" }
+          $errors = $null
+          $null = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errors)
+          if ($errors.Count -ne 0) { $errors; throw 'install.ps1 does not parse' }
+
+      # Write-Host is how the script talks to a person without writing to the pipeline of the session it
+      # runs in, and $global:LASTEXITCODE is how it reports a status without `exit`.
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $findings = Invoke-ScriptAnalyzer -Path website/public/install.ps1 -Severity Warning, Error -ExcludeRule PSAvoidUsingWriteHost, PSAvoidGlobalVars
+          $findings | Format-Table -AutoSize -Wrap
+          if ($findings) { throw "PSScriptAnalyzer reported $(@($findings).Count) findings" }
 
   install:
     strategy:
@@ -49,9 +77,8 @@ jobs:
         shell: bash
     env:
       GH_TOKEN: ${{ github.token }}
-      # ⚠ THE RUNNER'S OWN PATH MAY ALREADY HOLD ~/.local/bin, which would skip the profile edit and let
-      # every PATH check pass on the runner's say-so. The install and the new shell get the system
-      # directories only, so `maxon` is found through the profile or not at all.
+      # The install and the new shell get the system directories only, so `maxon` is found through the
+      # profile line or not at all.
       SYSTEM_PATH: /usr/bin:/bin:/usr/sbin:/sbin
     steps:
       - uses: actions/checkout@v5
@@ -65,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           latest="$(gh release view --json tagName --jq .tagName)"
-          reported="$("$HOME/.local/bin/maxon" version)"
+          reported="$("$HOME/.maxon/bin/maxon" version)"
           echo "$reported"
           case "$reported" in
             "maxon ${latest#v} "*) ;;
@@ -77,35 +104,70 @@ jobs:
       - name: A new ${{ matrix.shell }} finds `maxon` by name
         run: env -i HOME="$HOME" TERM=dumb PATH="$SYSTEM_PATH" "$(command -v ${{ matrix.shell }})" -ic 'command -v maxon && maxon version'
 
-      # The compiler finds stdlib/ by walking up from its own executable. Run through the link, from a
-      # directory with no checkout above it, this is the case a user is in.
+      # The compiler finds stdlib/ by walking up from its own executable; from a directory with no
+      # checkout above it, this is the case a user is in.
       - name: It compiles and runs a program outside any checkout
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
-          cp "$HOME/.local/share/maxon/examples/hello.maxon" "$work/"
+          cp "$HOME/.maxon/examples/hello.maxon" "$work/"
           cd "$work"
-          "$HOME/.local/bin/maxon" build hello.maxon -o hello
+          "$HOME/.maxon/bin/maxon" build hello.maxon -o hello
           [ "$(./hello)" = "Hello, world!" ]
 
       - name: A download is not quarantined, so Gatekeeper does not stop it
         if: runner.os == 'macOS'
         run: |
-          if xattr -p com.apple.quarantine "$HOME/.local/share/maxon/maxon" 2>/dev/null; then
+          if xattr -p com.apple.quarantine "$HOME/.maxon/bin/maxon" 2>/dev/null; then
             echo "::error::the installed compiler carries com.apple.quarantine"
             exit 1
           fi
 
-      - name: Running it again replaces the install and writes the profile line once
+      - name: Running it again says the install is current and writes the profile line once
         run: |
           set -euo pipefail
-          env PATH="$SYSTEM_PATH" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh
+          out="$(env PATH="$SYSTEM_PATH" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh)"
+          echo "$out"
+          case "$out" in
+            *"already installed"*) ;;
+            *) echo "::error::a rerun did not report the install as current"; exit 1 ;;
+          esac
           case "${{ matrix.shell }}" in
             zsh)  profile="$HOME/.zshrc" ;;
             bash) profile="$HOME/.bashrc" ;;
           esac
           count="$(grep -c 'Added by the Maxon installer' "$profile")"
           [ "$count" = 1 ] || { echo "::error::$profile has $count installer lines"; exit 1; }
+
+      - name: A specific version installs, and --force reinstalls the latest over it
+        run: |
+          set -euo pipefail
+          latest="$(gh release view --json tagName --jq .tagName)"
+          env PATH="$SYSTEM_PATH" sh -s -- --version 0.1.0 --no-modify-path < website/public/install.sh
+          case "$("$HOME/.maxon/bin/maxon" version 2>/dev/null || true)" in
+            "maxon ${latest#v} "*) echo "::error::--version 0.1.0 left the latest release in place"; exit 1 ;;
+          esac
+          env PATH="$SYSTEM_PATH" sh -s -- --force --no-modify-path < website/public/install.sh
+          case "$("$HOME/.maxon/bin/maxon" version)" in
+            "maxon ${latest#v} "*) ;;
+            *) echo "::error::--force did not install the latest release"; exit 1 ;;
+          esac
+          leftovers="$(find "$HOME/.maxon" -mindepth 1 -maxdepth 1 -name '.*')"
+          [ -z "$leftovers" ] || { echo "::error::left behind: $leftovers"; exit 1; }
+
+      - name: MAXON_INSTALL puts the install anywhere, and refuses a directory that is not one
+        run: |
+          set -euo pipefail
+          custom="$(mktemp -d)/maxon"
+          MAXON_INSTALL="$custom" sh -s -- --no-modify-path < website/public/install.sh
+          "$custom/bin/maxon" version
+          foreign="$(mktemp -d)"
+          mkdir "$foreign/stdlib"
+          if MAXON_INSTALL="$foreign" sh -s -- --no-modify-path < website/public/install.sh; then
+            echo "::error::a directory with its own stdlib/ was installed over"
+            exit 1
+          fi
+          [ -z "$(ls -A "$foreign/stdlib")" ] || { echo "::error::the foreign stdlib/ was touched"; exit 1; }
 
       # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE. The real archive is
       # served from a mirror whose SHA256SUMS names another hash; the install must refuse and leave the
@@ -120,10 +182,168 @@ jobs:
           mkdir -p "$mirror/v$version"
           gh release download "v$version" --pattern "$asset" --dir "$mirror/v$version"
           printf '%064d  %s\n' 0 "$asset" > "$mirror/v$version/SHA256SUMS"
-          before="$(readlink "$HOME/.local/bin/maxon"; "$HOME/.local/bin/maxon" version)"
-          if MAXON_DOWNLOAD_BASE="file://$mirror" sh -s -- --version "$version" < website/public/install.sh; then
+          before="$(cksum < "$HOME/.maxon/bin/maxon")"
+          if MAXON_DOWNLOAD_BASE="file://$mirror" sh -s -- --version "$version" --force < website/public/install.sh; then
             echo "::error::a tampered SHA256SUMS was accepted"
             exit 1
           fi
-          after="$(readlink "$HOME/.local/bin/maxon"; "$HOME/.local/bin/maxon" version)"
+          after="$(cksum < "$HOME/.maxon/bin/maxon")"
           [ "$before" = "$after" ] || { echo "::error::the failed install changed the existing one"; exit 1; }
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    # ⚠ THE RUNNER'S SHELL WRAPPER EXITS WITH $LASTEXITCODE, so a step that expects the script to fail
+    # resets it before it ends.
+    steps:
+      - uses: actions/checkout@v5
+
+      # An entry the install must neither expand nor lose, in a value it must not flatten to REG_SZ.
+      - name: Seed the user PATH with an expandable entry
+        run: |
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+          $current = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          $key.SetValue('Path', ($current.TrimEnd(';') + ';%USERPROFILE%\seeded').TrimStart(';'), 'ExpandString')
+          $key.Close()
+
+      - name: Install, as `irm | iex` would
+        run: |
+          Get-Content -Raw website/public/install.ps1 | Invoke-Expression
+          if ($LASTEXITCODE -ne 0) { throw "the install failed ($LASTEXITCODE)" }
+          if (Get-Command Install-Maxon -ErrorAction SilentlyContinue) { throw 'the script left Install-Maxon defined in the session' }
+
+      - name: The installed compiler is the latest release
+        run: |
+          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          $reported = & "$HOME\.maxon\bin\maxon.exe" version
+          $reported
+          if ($reported -notlike "maxon $latest *") { throw "expected $latest, the latest release" }
+
+      - name: A new terminal finds `maxon`, and the user PATH kept its kind and its entries
+        run: |
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $kind = $key.GetValueKind('Path')
+          $raw = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          $key.Close()
+          "kind: $kind"
+          "raw:  $raw"
+          if ($kind -ne 'ExpandString') { throw "the user Path is $kind, not ExpandString" }
+          if ($raw -notlike '*%USERPROFILE%\seeded*') { throw 'the %USERPROFILE%\seeded entry was expanded or lost' }
+          $bin = "$HOME\.maxon\bin"
+          $count = @($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin }).Count
+          if ($count -ne 1) { throw "$bin is on the user Path $count times" }
+          $env:Path = [Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + $raw)
+          $found = (Get-Command maxon).Source
+          if ($found -ine "$bin\maxon.exe") { throw "a new terminal runs '$found'" }
+
+      - name: It compiles and runs a program outside any checkout
+        run: |
+          $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'hello')
+          Copy-Item "$HOME\.maxon\examples\hello.maxon" $work
+          Set-Location $work
+          & "$HOME\.maxon\bin\maxon.exe" build hello.maxon -o hello.exe
+          if ($LASTEXITCODE -ne 0) { throw 'the build failed' }
+          $out = & .\hello.exe
+          if ($out -ne 'Hello, world!') { throw "hello printed '$out'" }
+
+      - name: Running it again says the install is current and leaves the user PATH alone
+        run: |
+          $before = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $out = & ([scriptblock]::Create((Get-Content -Raw website/public/install.ps1))) 6>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'a rerun did not report the install as current' }
+          if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw 'a rerun changed the user Path' }
+
+      - name: A specific version installs, and -Force reinstalls the latest over it
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          & $install -Version 0.1.0
+          if ($LASTEXITCODE -ne 0) { throw '-Version 0.1.0 failed' }
+          if ("$(& "$HOME\.maxon\bin\maxon.exe" version)" -like "maxon $latest *") { throw '-Version 0.1.0 left the latest release in place' }
+          & $install -Force
+          if ("$(& "$HOME\.maxon\bin\maxon.exe" version)" -notlike "maxon $latest *") { throw '-Force did not install the latest release' }
+          $leftovers = @(Get-ChildItem -Force "$HOME\.maxon" | Where-Object Name -like '.*')
+          if ($leftovers.Count -ne 0) { throw "left behind: $($leftovers.Name)" }
+
+      # `maxon upgrade` runs this script from the compiler it replaces.
+      - name: An install replaces a running compiler, and the next run removes the old one
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $info = New-Object Diagnostics.ProcessStartInfo "$HOME\.maxon\bin\maxon.exe", 'lsp-server'
+          $info.UseShellExecute = $false
+          $info.RedirectStandardInput = $true
+          $info.RedirectStandardOutput = $true
+          $server = [Diagnostics.Process]::Start($info)
+          Start-Sleep -Seconds 1
+          if ($server.HasExited) { throw 'the language server did not stay up' }
+          & $install -Force
+          if ($LASTEXITCODE -ne 0) { throw 'the install over a running compiler failed' }
+          if (-not (Test-Path "$HOME\.maxon\bin\maxon.exe.old")) { throw 'the running compiler was not renamed aside' }
+          $server.StandardInput.Close()
+          if (-not $server.WaitForExit(10000)) { $server.Kill() }
+          & $install -Force
+          if (Test-Path "$HOME\.maxon\bin\maxon.exe.old*") { throw 'the old compiler was not removed' }
+
+      - name: A locked standard library leaves the install as it was
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $file = Get-ChildItem "$HOME\.maxon\stdlib" -Filter *.maxon | Select-Object -First 1
+          $before = (Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash
+          $stream = [IO.File]::Open($file.FullName, 'Open', 'Read', 'Read')
+          try { & $install -Force } finally { $stream.Close() }
+          if ($LASTEXITCODE -ne 1) { throw "a locked stdlib did not fail the install ($LASTEXITCODE)" }
+          if ((Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash -ne $before) { throw 'the failed install changed the compiler' }
+          if (-not (Test-Path "$HOME\.maxon\stdlib\$($file.Name)")) { throw 'the standard library was not restored' }
+          $leftovers = @(Get-ChildItem -Force "$HOME\.maxon" | Where-Object Name -like '.*')
+          if ($leftovers.Count -ne 0) { throw "left behind: $($leftovers.Name)" }
+          $global:LASTEXITCODE = 0
+
+      # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE.
+      - name: A checksum mismatch installs nothing
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $version = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          $asset = "maxon-$version-x64-windows.zip"
+          $mirror = Join-Path $env:RUNNER_TEMP 'mirror'
+          $dir = New-Item -ItemType Directory -Force -Path "$mirror\v$version"
+          gh release download "v$version" --pattern $asset --dir $dir
+          Set-Content -Path "$dir\SHA256SUMS" -Value (('0' * 64) + "  $asset") -Encoding ascii
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', $mirror -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $before = (Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash
+          $env:MAXON_DOWNLOAD_BASE = 'http://127.0.0.1:8765'
+          try { & $install -Version $version -Force } finally { Stop-Process -Id $server.Id }
+          if ($LASTEXITCODE -ne 1) { throw 'a tampered SHA256SUMS was accepted' }
+          if ((Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash -ne $before) { throw 'the failed install changed the existing one' }
+          $global:LASTEXITCODE = 0
+
+      - name: MAXON_INSTALL with -NoPathUpdate installs anywhere and leaves the user PATH alone
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $before = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $env:MAXON_INSTALL = Join-Path $env:RUNNER_TEMP 'custom'
+          & $install -NoPathUpdate
+          if ($LASTEXITCODE -ne 0) { throw 'the custom install failed' }
+          & "$env:MAXON_INSTALL\bin\maxon.exe" version
+          if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw '-NoPathUpdate changed the user Path' }
+
+      # The exact shape `maxon upgrade` runs, reading success and failure from the exit code alone.
+      - name: The upgrade invocation reports its outcome in its exit code
+        run: |
+          $script = (Resolve-Path website/public/install.ps1).Path
+          $command = "& ([scriptblock]::Create((Get-Content -Raw '$script'))) -NoPathUpdate; exit `$LASTEXITCODE"
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $command
+          if ($LASTEXITCODE -ne 0) { throw "a current install exited $LASTEXITCODE" }
+          $env:MAXON_INSTALL = 'relative'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $command
+          if ($LASTEXITCODE -ne 1) { throw "a failed install exited $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0

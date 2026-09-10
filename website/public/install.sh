@@ -5,8 +5,13 @@
 #   curl -fsSL https://maxon.dev/install.sh | sh
 #
 # Downloads the release archive for this machine from GitHub, checks it against the release's
-# SHA256SUMS, unpacks it into ~/.local/share/maxon and links ~/.local/bin/maxon to it. Running it again
-# replaces the install with the latest release. `usage` below lists the options.
+# SHA256SUMS, and installs it into ~/.maxon: the compiler in ~/.maxon/bin, the standard library in
+# ~/.maxon/stdlib. Running it again installs the latest release, or says the install is current.
+# `usage` below lists the options.
+#
+# ⛔ `maxon upgrade` RUNS THIS SCRIPT, SO ITS INTERFACE IS A CONTRACT WITH EVERY SHIPPED COMPILER:
+# it honours MAXON_INSTALL and --no-modify-path, and exits 0 when the install is current and non-zero
+# when it is not. Renaming or dropping any of those breaks `maxon upgrade` in every release that has it.
 
 # Everything is inside main, so a download cut off partway runs nothing.
 main() {
@@ -15,41 +20,76 @@ main() {
 	repo="maxon-lang/maxon"
 	version=""
 	modify_path=1
+	force=0
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--version)        [ $# -ge 2 ] || fail "--version needs a value"; version="${2#v}"; shift 2 ;;
 			--version=*)      version="${1#--version=}"; version="${version#v}"; shift ;;
 			--no-modify-path) modify_path=0; shift ;;
+			--force)          force=1; shift ;;
 			-h|--help)        usage; exit 0 ;;
 			*)                fail "unknown option '$1' (see --help)" ;;
 		esac
 	done
+
+	if [ -n "$version" ]; then
+		check_version "$version"
+	fi
 
 	need curl
 	need tar
 	need uname
 
 	target="$(detect_target)"
-	install_dir="${MAXON_INSTALL_DIR:-$HOME/.local/share/maxon}"
-	bin_dir="${MAXON_BIN_DIR:-$HOME/.local/bin}"
+	root="$(install_root)"
+	bin_dir="$root/bin"
+
+	pinned=1
+	[ -n "$version" ] || pinned=0
 
 	if [ -n "${MAXON_DOWNLOAD_BASE:-}" ]; then
 		base="$MAXON_DOWNLOAD_BASE"
-		[ -n "$version" ] || fail "MAXON_DOWNLOAD_BASE needs --version: a mirror has no 'latest' to ask"
+		[ "$pinned" -eq 1 ] || fail "MAXON_DOWNLOAD_BASE needs --version: a mirror has no 'latest' to ask"
 		fetch() { curl -fsSL "$1" -o "$2"; }
 	else
 		base="https://github.com/$repo/releases/download"
 		# Only https, and only TLS 1.2 or later, for anything this script runs.
 		fetch() { curl --proto '=https' --tlsv1.2 -fsSL "$1" -o "$2"; }
-		[ -n "$version" ] || version="$(latest_version)"
+		[ "$pinned" -eq 1 ] || version="$(latest_version)"
+	fi
+
+	if [ "$force" -eq 0 ] && [ -d "$root/stdlib" ] && [ "$(installed_version "$bin_dir/maxon")" = "$version" ]; then
+		if [ "$pinned" -eq 1 ]; then
+			say "Maxon $version is already installed in $root (--force reinstalls it)"
+		else
+			say "Maxon $version, the latest release, is already installed in $root (--force reinstalls it)"
+		fi
+		finish_path "$bin_dir" "$modify_path"
+		return 0
+	fi
+
+	# A directory that already holds a stdlib/ or examples/ of its own is not ours to replace.
+	if [ ! -e "$bin_dir/maxon" ]; then
+		for entry in stdlib examples; do
+			if [ -e "$root/$entry" ]; then
+				fail "$root/$entry exists and $root holds no bin/maxon, so it is not a Maxon install; set MAXON_INSTALL to a new directory"
+			fi
+		done
 	fi
 
 	asset="maxon-$version-$target.tar.gz"
-	say "installing Maxon $version for $target"
+	say "installing Maxon $version for $target into $root"
 
 	tmp="$(mktemp -d 2>/dev/null || mktemp -d -t maxon-install)"
-	trap 'rm -rf "$tmp"' EXIT INT TERM
+	# Staged beside the install so every rename below stays on one filesystem.
+	mkdir -p "$bin_dir"
+	staging="$root/.staging.$$"
+	retired="$root/.retired.$$"
+	# `retired` is only ever removed empty: after a kill mid-swap it holds the previous install.
+	trap 'rm -rf "$tmp" "$staging"; rmdir "$retired" 2>/dev/null || true' EXIT INT TERM
+	rm -rf "$staging"
+	mkdir "$staging"
 
 	fetch "$base/v$version/$asset" "$tmp/$asset" \
 		|| fail "could not download $asset — is $version a published release with a $target build?"
@@ -57,55 +97,31 @@ main() {
 		|| fail "could not download SHA256SUMS for $version"
 	verify_checksum "$tmp" "$asset"
 
-	# The compiler finds stdlib/ by walking up from its own executable, so the archive's layout — `maxon`
-	# and `stdlib/` side by side — is kept whole, and only a link to the binary goes on PATH.
-	mkdir -p "$tmp/unpacked"
-	tar -xzf "$tmp/$asset" -C "$tmp/unpacked"
-	unpacked="$tmp/unpacked/maxon-$version-$target"
-	if [ ! -x "$unpacked/maxon" ] || [ ! -d "$unpacked/stdlib" ]; then
-		fail "$asset does not hold maxon and stdlib/ in maxon-$version-$target/"
+	tar -xzf "$tmp/$asset" -C "$staging"
+	unpacked="$staging/maxon-$version-$target"
+	if [ ! -x "$unpacked/maxon" ] || [ ! -d "$unpacked/stdlib" ] || [ ! -d "$unpacked/examples" ]; then
+		fail "$asset does not hold maxon, stdlib/ and examples/ in maxon-$version-$target/"
 	fi
 
-	# Unpacked next to its destination and swapped in with two renames, so a failure leaves either the
-	# old install or the new one, never half of each.
-	mkdir -p "$(dirname "$install_dir")" "$bin_dir"
-	staged="$install_dir.new.$$"
-	retired="$install_dir.old.$$"
-	rm -rf "$staged"
-	mv "$unpacked" "$staged"
 	# 126 and 127 are the shell saying it could not execute the file at all, and 128 and up a signal —
 	# a wrong architecture or a noexec mount. Any other status is the compiler running and answering,
 	# and older releases answer `version` differently.
 	rc=0
-	"$staged/maxon" version >/dev/null 2>&1 || rc=$?
+	"$unpacked/maxon" version >/dev/null 2>&1 || rc=$?
 	if [ "$rc" -ge 126 ]; then
-		rm -rf "$staged"
 		fail "the downloaded compiler does not run on this machine (exit $rc)"
 	fi
-	if [ -e "$install_dir" ]; then
-		mv "$install_dir" "$retired"
+
+	mkdir "$retired"
+	if ! swap_in "$root" "$unpacked" "$retired"; then
+		roll_back "$root" "$retired"
+		rm -rf "$retired"
+		fail "could not move the new release into $root; the previous install is unchanged"
 	fi
-	mv "$staged" "$install_dir"
 	rm -rf "$retired"
 
-	ln -sf "$install_dir/maxon" "$bin_dir/maxon"
-	say "installed Maxon $version in $install_dir, linked as $bin_dir/maxon"
-
-	case ":$PATH:" in
-		*":$bin_dir:"*)
-			found="$(command -v maxon 2>/dev/null || true)"
-			if [ -n "$found" ] && [ "$found" != "$bin_dir/maxon" ]; then
-				say "warning: $found comes before $bin_dir on your PATH, so \`maxon\` runs that one"
-			fi
-			;;
-		*)
-			if [ "$modify_path" -eq 1 ]; then
-				add_to_path "$bin_dir"
-			else
-				say "$bin_dir is not on your PATH; add it to run \`maxon\` by name"
-			fi
-			;;
-	esac
+	say "installed Maxon $version in $root"
+	finish_path "$bin_dir" "$modify_path"
 }
 
 usage() {
@@ -117,14 +133,14 @@ Install Maxon on macOS or Linux.
 
 Options:
   --version X.Y.Z     install that release instead of the latest
-  --no-modify-path    do not add the link directory to PATH in your shell profile
+  --force             reinstall even when that release is already installed
+  --no-modify-path    do not add ~/.maxon/bin to PATH in your shell profile
 
 Environment:
-  MAXON_INSTALL_DIR   where the release is unpacked (default ~/.local/share/maxon)
-  MAXON_BIN_DIR       where the `maxon` link goes (default ~/.local/bin)
+  MAXON_INSTALL       where Maxon is installed (default ~/.maxon)
   MAXON_DOWNLOAD_BASE a mirror of the release assets, laid out as <base>/v<version>/<asset>
 
-Uninstall: rm -rf ~/.local/share/maxon ~/.local/bin/maxon
+Uninstall: rm -rf ~/.maxon, and delete the line this script added to your shell profile.
 USAGE
 }
 
@@ -137,6 +153,67 @@ fail() {
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "this installer needs '$1', which is not on PATH"
+}
+
+# A version is interpolated into URLs and file names, so anything but a version's own characters is refused.
+check_version() {
+	case "$1" in
+		[0-9]*.[0-9]*.[0-9]*) ;;
+		*) fail "'$1' is not a release version (expected X.Y.Z)" ;;
+	esac
+	case "$1" in
+		*[!0-9A-Za-z.-]*) fail "'$1' is not a release version (expected X.Y.Z)" ;;
+	esac
+}
+
+install_root() {
+	dir="${MAXON_INSTALL:-$HOME/.maxon}"
+	case "$dir" in
+		/*) ;;
+		*) fail "MAXON_INSTALL must be an absolute path, not '$dir'" ;;
+	esac
+
+	while [ "${dir%/}" != "$dir" ]; do
+		dir="${dir%/}"
+	done
+	[ -n "$dir" ] || fail "MAXON_INSTALL cannot be /"
+	echo "$dir"
+}
+
+# The version an installed compiler reports, or nothing when there is no compiler or it answers in a
+# form this script does not know.
+installed_version() {
+	[ -x "$1" ] || return 0
+	"$1" version 2>/dev/null | awk 'NR == 1 && $1 == "maxon" { print $2 }' || true
+}
+
+# Each entry is renamed aside before the new one takes its place, and the binary goes last as one
+# rename(2): a running compiler keeps its inode, and the old binary stays until the new one is whole.
+swap_in() {
+	root="$1"
+	unpacked="$2"
+	retired="$3"
+	for entry in stdlib examples; do
+		if [ -e "$root/$entry" ]; then
+			mv "$root/$entry" "$retired/$entry" || return 1
+		fi
+		mv "$unpacked/$entry" "$root/$entry" || return 1
+		: > "$retired/$entry.placed" || return 1
+	done
+	mv -f "$unpacked/maxon" "$root/bin/maxon" || return 1
+}
+
+roll_back() {
+	root="$1"
+	retired="$2"
+	for entry in examples stdlib; do
+		if [ -e "$retired/$entry.placed" ]; then
+			rm -rf "${root:?}/$entry"
+		fi
+		if [ -e "$retired/$entry" ]; then
+			mv "$retired/$entry" "$root/$entry"
+		fi
+	done
 }
 
 detect_target() {
@@ -161,7 +238,7 @@ detect_target() {
 			esac
 			;;
 		MINGW*|MSYS*|CYGWIN*)
-			fail "on Windows, install with: winget install MaxonLang.Maxon"
+			fail "on Windows, install from PowerShell with: powershell -c \"irm https://maxon.dev/install.ps1 | iex\""
 			;;
 		*)
 			fail "there is no Maxon build for $os"
@@ -175,7 +252,7 @@ latest_version() {
 		|| fail "could not ask GitHub for the latest release"
 	tag="${url##*/}"
 	case "$tag" in
-		v[0-9]*) echo "${tag#v}" ;;
+		v[0-9]*) check_version "${tag#v}"; echo "${tag#v}" ;;
 		*)       fail "could not read a version from $url" ;;
 	esac
 }
@@ -183,7 +260,7 @@ latest_version() {
 verify_checksum() {
 	dir="$1"
 	file="$2"
-	# `*` before a name is sha256sum's binary-mode marker, which v0.1.0's SHA256SUMS carries.
+	# `*` before a name is sha256sum's binary-mode marker.
 	expected="$(awk -v f="$file" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1 }' "$dir/SHA256SUMS")"
 	[ -n "$expected" ] || fail "SHA256SUMS lists no $file"
 
@@ -198,9 +275,43 @@ verify_checksum() {
 	[ "$actual" = "$expected" ] || fail "$file does not match its published checksum — nothing was installed"
 }
 
+finish_path() {
+	dir="$1"
+	modify="$2"
+	case ":$PATH:" in
+		*":$dir:"*)
+			found="$(command -v maxon 2>/dev/null || true)"
+			if [ -n "$found" ] && [ "$found" != "$dir/maxon" ]; then
+				say "warning: $found comes before $dir on your PATH, so \`maxon\` runs that one$(owner_hint "$found")"
+			fi
+			;;
+		*)
+			if [ "$modify" -eq 1 ]; then
+				add_to_path "$dir"
+			else
+				say "$dir is not on your PATH; add it to run \`maxon\` by name"
+			fi
+			;;
+	esac
+}
+
+owner_hint() {
+	case "$1" in
+		/opt/homebrew/*|/home/linuxbrew/.linuxbrew/*|"$HOME"/.linuxbrew/*)
+			echo " (Homebrew's; \`brew uninstall maxon-lang/tap/maxon\` removes it)"
+			;;
+	esac
+}
+
 # One line in the profile the user's login shell reads, written once however often this runs.
 add_to_path() {
 	dir="$1"
+	# Written with $HOME unexpanded, so the profile keeps working if the home directory moves.
+	case "$dir" in
+		"$HOME"/*) shown="\$HOME${dir#"$HOME"}" ;;
+		*)         shown="$dir" ;;
+	esac
+
 	shell_name="$(basename "${SHELL:-sh}")"
 	case "$shell_name" in
 		zsh)  profile="${ZDOTDIR:-$HOME}/.zshrc" ;;
@@ -216,9 +327,9 @@ add_to_path() {
 	esac
 
 	if [ "$shell_name" = "fish" ]; then
-		line="fish_add_path \"$dir\""
+		line="fish_add_path \"$shown\""
 	else
-		line="export PATH=\"$dir:\$PATH\""
+		line="export PATH=\"$shown:\$PATH\""
 	fi
 
 	mkdir -p "$(dirname "$profile")"

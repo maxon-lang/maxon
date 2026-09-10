@@ -84,9 +84,10 @@ git push origin release/X.Y.Z vX.Y.Z
 ## 5 · Watch it
 
 `release.yml` builds and natively suite-tests four targets, builds the MSI from the x64-windows job's
-own artifact, signs it, and publishes, then starts the Homebrew, VS Code extension and maxon.dev
-workflows at the tag — so the download links go live only once the downloads exist. Check all three
-actually ran: a release created with `GITHUB_TOKEN` fires no `release: published`.
+own artifact, signs it, and publishes, then starts the Homebrew, VS Code extension, maxon.dev and
+install-script workflows at the tag — so the download links go live only once the downloads exist.
+Check all four actually ran: a release created with `GITHUB_TOKEN` fires no `release: published`.
+`install-script` green is what says both one-line installers can install the new release.
 
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.

@@ -29,6 +29,11 @@ project layout; this doc covers running and evolving the site.
   thing on `maxon.dev`.
 - **To verify a deploy:** watch the `website` workflow run, then load https://maxon.dev. The
   Cloudflare Pages dashboard shows what was uploaded.
+- ⛔ **`public/install.sh` and `public/install.ps1` are the installers, and a deploy publishes them.**
+  They are what `curl … | sh` and `irm … | iex` fetch, and what `maxon upgrade` runs, so a deploy
+  with a broken one breaks installing and upgrading for everyone. `install-script.yml` tests every
+  change to them; deploy only a commit where it is green. `public/_headers` serves both as
+  `text/plain`, so "Read the script" shows them in the browser rather than downloading them.
 - **Build output:** static, 34 pages as of this writing, plus a Pagefind search index and
   `sitemap-index.xml`. `site: 'https://maxon.dev'` is set in `astro.config.mjs` — keep it
   accurate or canonical URLs / sitemap / OG links break.
@@ -63,8 +68,9 @@ project layout; this doc covers running and evolving the site.
 - **Platform tabs are shared between the docs and the marketing pages.** Starlight's
   `<Tabs syncKey="os">` persists the chosen tab's *label* under `starlight-synced-tabs__os`, and
   `PlatformTabs.astro` reads and writes that same key. **The labels must match exactly** —
-  `Windows`, `macOS`, `Linux` — in `installation.mdx`, `installCommands` in `install.astro`, and
-  `quickstarts` in `index.astro`. Change one and the sync silently stops working.
+  `macOS & Linux`, `Windows` — in `installation.mdx`, the tabs in `install.astro`, and
+  `quickstarts` in `index.astro`. Change one and the sync silently stops working. A tab's
+  `platforms` lists the detected platforms it is preselected for, so one tab can serve two.
 - **Syntax highlighting:** the Maxon TextMate grammar (`src/grammars/maxon.tmLanguage.json`) is
   copied from the compiler repo's VS Code extension and registered with Shiki / Expressive
   Code. ` ```maxon ` fenced blocks highlight at build time, matching the editor exactly.
@@ -100,25 +106,17 @@ When importing curated Markdown:
 - Files copied from the Windows compiler repo may have **CRLF** line endings; be careful with
   scripted edits to YAML front matter (a `\r` can swallow the line break).
 
-## The build is the source of truth, not the upstream README
+## Install and build instructions follow the scripts and the repository
 
-The compiler's build setup changed over time and the upstream README lagged reality. The
-website's install instructions were corrected against the **actual** build, not the README:
+The install commands and paths on this site are the ones `public/install.sh` and
+`public/install.ps1` implement: `~/.maxon/bin` and `~/.maxon/stdlib`, `MAXON_INSTALL`, and the
+options each script's usage lists. The build-from-source steps are the repository's own
+(`README.md`, `CONTRIBUTING.md`): seed `.bootstrap/` with an installed compiler, then
+`scripts/build-from-seed.sh`.
 
-- The shipping compiler is the **C# one** (`maxon-sharp`, targets **.NET 10**), which builds
-  to `bin/maxon`. There is **no C++ compiler, no `make`, no CMake/Ninja** anymore (those were
-  removed; the README was stale).
-- Build: `dotnet build maxon-sharp`. On Windows, `buildall.bat` builds + tests the full
-  toolchain (C# compiler, self-hosted compiler, spec tests).
-- Run a program: `bin/maxon build <file>`. Run tests: `bin/maxon spec-test`.
-- There is **no verified Linux/macOS build script** — `buildall.bat` is Windows-only. The
-  install page deliberately doesn't promise a cross-platform build path it can't back up. If
-  one is added upstream, update `src/pages/install.astro` and
-  `src/content/docs/docs/getting-started/installation.md`.
-
-If the upstream build changes again, the pages to update are: `install.astro`,
-`getting-started/installation.md`, `getting-started/first-program.md`, `contributing.md`, and
-the "Build it and run something" terminal block in `index.astro`.
+When either changes, the pages to update are `src/install.ts` (the install commands),
+`install.astro`, `getting-started/installation.mdx`, `getting-started/first-program.md`,
+`contributing.md`, and the quickstart in `index.astro`.
 
 ## Positioning & copy decisions (keep these consistent)
 

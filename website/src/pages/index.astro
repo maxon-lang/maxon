@@ -2,7 +2,7 @@
 import MarketingLayout from '../layouts/MarketingLayout.astro';
 import MaxonCode from '../components/MaxonCode.astro';
 import PlatformTabs from '../components/PlatformTabs.astro';
-import { INSTALL_SCRIPT } from '../install';
+import { INSTALL_POWERSHELL, INSTALL_SCRIPT } from '../install';
 
 // All snippets below are real Maxon, drawn from / faithful to the example
 // programs in the compiler repo (examples/hello.maxon, spectral-norm.maxon).
@@ -46,30 +46,26 @@ end 'iterate'`;
 
 // Quickstart shown in the install CTA, per platform. The visitor's platform is
 // detected client-side and that tab is preselected; every tab is rendered either
-// way, so the block still works with JS off (all three simply stack).
+// way, so the block still works with JS off (the tabs simply stack).
 //
-// `maxon build` with no -o writes the binary NEXT TO THE SOURCE, hence
-// `./examples/hello` rather than `./hello`. Verified against the 0.1.0 compiler.
+// `curl | sh` runs in a child shell, so the terminal it was typed into needs the
+// PATH line the script prints; `irm | iex` runs in the PowerShell session itself.
 const quickstarts = [
   {
-    id: 'windows',
-    label: 'Windows',
-    // winget package id, published from installer/winget in the compiler repo.
+    id: 'unix',
+    label: 'macOS & Linux',
+    platforms: ['macos', 'linux'],
     lines: [
-      'winget install MaxonLang.Maxon',
-      'maxon build examples\\hello.maxon',
-      '.\\examples\\hello.exe',
+      INSTALL_SCRIPT,
+      'export PATH="$HOME/.maxon/bin:$PATH"',
+      'maxon build ~/.maxon/examples/hello.maxon -o hello',
+      './hello',
     ],
   },
   {
-    id: 'macos',
-    label: 'macOS',
-    lines: [INSTALL_SCRIPT, 'maxon build ~/.local/share/maxon/examples/hello.maxon -o hello', './hello'],
-  },
-  {
-    id: 'linux',
-    label: 'Linux',
-    lines: [INSTALL_SCRIPT, 'maxon build ~/.local/share/maxon/examples/hello.maxon -o hello', './hello'],
+    id: 'windows',
+    label: 'Windows',
+    lines: [INSTALL_POWERSHELL, 'maxon build $HOME\\.maxon\\examples\\hello.maxon -o hello.exe', '.\\hello.exe'],
   },
 ];
 
@@ -272,8 +268,7 @@ const influences = [
     <div class="rounded-2xl border border-ink-700 bg-linear-to-br from-ink-850 to-ink-950 p-10 text-center sm:p-14">
       <h2 class="text-2xl font-bold text-white sm:text-3xl">Build it and run something.</h2>
       <p class="mx-auto mt-3 max-w-xl text-slate-400">
-        Clone the repository, build the compiler, and compile your first program in a
-        couple of commands.
+        Install the compiler and compile your first program in a couple of commands.
       </p>
       <div class="mx-auto mt-7 max-w-md">
         <PlatformTabs tabs={quickstarts} trailing="Hello, world!" />

@@ -74,6 +74,20 @@ statically-typed, compiled language:
 - **Language Server (LSP)** — `maxon lsp-server`, for IDE integration.
 - **VS Code extension** — syntax highlighting and language features.
 
+## Install
+
+```bash
+curl -fsSL https://maxon.dev/install.sh | sh        # macOS and Linux
+```
+
+```powershell
+irm https://maxon.dev/install.ps1 | iex             # Windows, in PowerShell
+```
+
+Both install into `~/.maxon` (`%USERPROFILE%\.maxon` on Windows) and add its `bin` directory to your
+PATH; run the command again to upgrade. Homebrew, archives, a specific version and uninstalling are on
+the [install page](https://maxon.dev/install).
+
 ## Building from source
 
 Maxon is written in Maxon, so building it needs a Maxon compiler. There is no second implementation
@@ -84,9 +98,8 @@ to fall back on — the published release is what seeds a build.
 - Git
 - Node.js 20+ (only needed to build the VS Code extension)
 
-**Seed the build.** Download the release for your platform from
-[the latest release](https://github.com/maxon-lang/maxon/releases/latest) and put its `maxon` binary
-at `.bootstrap/maxon` (`.bootstrap/maxon.exe` on Windows).
+**Seed the build.** [Install](#install) a release and copy its binary into `.bootstrap/`:
+`mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/`.
 
 > ⚠ The **binary alone**, not the unpacked archive. The compiler finds `stdlib/` by walking up from
 > its own executable, so a released `stdlib/` left beside it would be compiled instead of this
