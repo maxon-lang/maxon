@@ -42,14 +42,6 @@ let KeywordNote = "Maxon language keyword."
 // stream carries about nesting once block structure is off the table (see the header).
 let TopLevelColumn = 1 as ColumnNumber
 
-// A stdlib type lives in the file named after it: `Array` in `stdlib/Array.maxon`. That convention is
-// what lets a hover on `arr.push(4)` reach the doc comment an editor user most wants without the whole
-// project a non-parsing buffer cannot produce.
-//
-// ⚠ Spelled here because `Compiler.MaxonSourceExtension` is `module`-visible to `Compiler/`, which this
-// directory is not inside.
-let MaxonSourceExtension = ".maxon"
-
 module function hoverServedMethods() returns LspMethodArray
 	var served = LspMethodArray.create()
 	served.push(LspMethod.hover)
@@ -904,10 +896,10 @@ type HoverDocument
 		return module.returnTypeOf(head)
 	end 'libraryMethodReturnType'
 
-	// The text of the `stdlib/` module that declares `owner`. Reached by NAME, per the convention
-	// `MaxonSourceExtension` is declared with above: nothing else about a non-parsing buffer says which file
-	// a type came from. Absence covers every way there is no such module — no `stdlib/`, no file named for
-	// the owner, or a file that cannot be read.
+	// The text of the `stdlib/` module that declares `owner`, reached by NAME: a stdlib type lives in the
+	// file called after it (`Array` in `stdlib/Array.maxon`), and nothing else about a non-parsing buffer
+	// says which file a type came from. Absence covers every way there is no such module — no `stdlib/`, no
+	// file named for the owner, or a file that cannot be read.
 	function stdlibSourceFor(owner ByteArray) returns HoverModuleSource
 		let directory = try locateStdlibDir() otherwise return HoverModuleSource.absent
 		let path = directory.join("{String.from(owner)}{MaxonSourceExtension}")

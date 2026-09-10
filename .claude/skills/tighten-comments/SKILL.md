@@ -22,8 +22,9 @@ that is exactly what lets you delete freely, and it is true only while you delet
 `maxon-bin/Compiler/Runtime/SlabClasses.maxon`, or if the file's first 20 lines say `GENERATED` or
 `DO NOT EDIT`.
 
-Three things are never edited: **`///` doc comments** on exported functions (`maxon run` prints them
-in its command listing — they are program output; tighten their prose, never delete them); a `//`
+Three things are never edited: **`///` doc comments** on exported functions (the language server
+renders them in `textDocument/hover`, so they are what a reader sees in an editor; tighten their
+prose, never delete them); a `//`
 **inside a string literal**, which is not a comment; and anything the lexer treats as a token.
 
 ## The rules

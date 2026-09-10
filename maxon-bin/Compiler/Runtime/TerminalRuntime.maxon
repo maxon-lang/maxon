@@ -15,12 +15,12 @@
 //      alone disables, whatever the value, so this reads the variable's EXISTENCE and never its text.
 //   3. **`TERM` is not `dumb`** (case-insensitive) — the terminal itself saying it cannot render this.
 //
-// ⛔⛔ **THE POLICY IS HERE RATHER THAN IN MAXON SOURCE BECAUSE THE ENVIRONMENT IS NOT REACHABLE FROM
-// MAXON.** `osEnvRead` exists at the Std tier and has no `__Builtins` surface, and inventing a general
-// `Process.environmentVariable` for the sake of two names would be a much larger commitment than this
-// flag warrants — one with its own unresolved question (`GetEnvironmentVariableA` answers 0 both for a
-// variable that is unset and for one set to the empty string, which condition 2 must distinguish and a
-// `String`-returning surface could not). The runtime already reads `MAXON_DEBUGSTREAM` and
+// ⛔⛔ **THE POLICY IS HERE RATHER THAN IN MAXON SOURCE BECAUSE THIS IS EMITTED CODE.** These conditions
+// are decided inside the runtime the compiler writes into every program, which calls no library: a
+// `stdlib/` function is not reachable from here whatever its signature. `Process.environmentVariable`
+// answers the same question at the LIBRARY tier — including the unset-versus-empty distinction, which
+// it carries by THROWING for an absent name rather than by answering a String — and none of that is
+// reachable from an emitted runtime. The runtime already reads `MAXON_DEBUGSTREAM` and
 // `MAXON_MAX_PROCS` for its own purposes, so a host-convention read here is where its neighbours are.
 //
 // ⚠ **CONDITION 2 IS "THE VARIABLE HAS A NON-EMPTY VALUE" ON THIS LANE, AND THAT IS A WIN32 LIMIT RATHER

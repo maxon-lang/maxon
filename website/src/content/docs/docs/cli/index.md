@@ -369,14 +369,14 @@ maxon build program.maxon
 # Navigate to project
 cd myproject
 
-# List available commands from build.maxon
-maxon run
-
-# Build the project
+# List the builds build.maxon declares
 maxon build
 
-# Run a specific task (dashes translate to underscores)
-maxon run spec-test-selfhosted
+# Build one of them
+maxon build app
+
+# Compile the directory as one program and run it; the tail is the PROGRAM's argv
+maxon run . --verbose
 ```
 
 ### Running Tests During Development

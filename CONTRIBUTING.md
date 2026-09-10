@@ -83,7 +83,15 @@ first; a FAILED build then leaves the slot EMPTY rather than a stale compiler an
 were current. `scripts/fixpoint.sh` builds the compiler with itself twice and checks that the two
 binaries are byte-identical.
 
-Compile and run a program with the freshly built compiler:
+Run a program with the freshly built compiler:
+
+```bash
+maxon-bin/.maxon/maxon run examples/basic.maxon
+```
+
+`run` compiles the program, caches the build and launches it, forwarding its streams and its exit
+code; the tail of the command line is the program's own. To produce a binary you can keep, build it
+instead:
 
 ```bash
 maxon-bin/.maxon/maxon build examples/basic.maxon

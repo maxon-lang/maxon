@@ -1,0 +1,49 @@
+// concurrent.test.maxon — several simultaneous COLD runs of one program each behave like the only one.
+//
+// ⭐⭐ **THE EMPTY STDERR IS THIS CASE'S SUBJECT.** `maxon run` promises both streams to the PROGRAM, and
+// a cold run that has to share its output path with another one breaks that promise from inside the
+// compiler: the backend writers report a failed `File.writeBinary` by LOGGING it, and the ERROR level is
+// deliberately left speaking, so the loser of the race writes the winner's filename onto the program's own
+// stderr. MEASURED before the build's name became its key: four simultaneous cold runs, two of them
+// carrying 160 bytes of `Failed to write PE file` and exiting 0 with correct stdout.
+//
+// ⭐ **AN EXIT CODE AND A STDOUT ARE NOT ENOUGH TO SEE IT**, which is why all three are asserted together:
+// every one of those runs answered correctly. What a contended output path costs is the promise about the
+// streams — and, unobservably from here, a slot left holding a binary the run that named it did not build.
+//
+// ⚠ **COLD IS WHAT MAKES IT A RACE.** `stageCase` empties the case's cache, so every child here has to
+// COMPILE; children finding a hit would never reach the writer at all.
+
+let ConcurrentCaseLabel = "concurrent"
+
+// Eight. The window is one file write wide and two children need not overlap in it; four was measured
+// enough to redden the control 3/3, and the extra four cost this case ~120 ms against a 5 s deadline.
+let SimultaneousRuns = 8 as ConcurrentRunTally
+
+test 'simultaneous cold runs of one program each report only the program'
+	let staged = stageCase(ConcurrentCaseLabel, fixture: HelloFixtureName)
+	let reported = spawnConcurrentRuns(staged, program: stagedMain(staged), howMany: SimultaneousRuns)
+
+	var failed = ""
+	var misprinted = ""
+	var noisy = ""
+	for (position, run) in reported.withIterator() 'eachRun'
+		let ordinal = position.index() + 1
+
+		if run.exitCode != 0 'didNotSucceed'
+			failed.append("{LineFeed}  run {ordinal} exited {run.exitCode}")
+		end 'didNotSucceed'
+
+		if withoutCarriageReturns(run.stdout) != "{HelloGreeting}{LineFeed}" 'wrongAnswer'
+			misprinted.append("{LineFeed}  run {ordinal} printed: {run.stdout}")
+		end 'wrongAnswer'
+
+		if not run.stderr.isEmpty() 'spokeOnStderr'
+			noisy.append("{LineFeed}  run {ordinal} said: {withoutCarriageReturns(run.stderr)}")
+		end 'spokeOnStderr'
+	end 'eachRun'
+
+	try Expect.isEmpty(failed, message: "these simultaneous cold runs of one program did not exit 0. A run has to be indistinguishable from one launched by name whatever else is running at the time.")
+	try Expect.isEmpty(misprinted, message: "these simultaneous cold runs of one program did not print what it prints, so one of them ran something else.")
+	try Expect.isEmpty(noisy, message: "these simultaneous cold runs wrote to the PROGRAM's stderr, which belongs to the program alone: a cached run writes zero bytes of its own to either stream. Two cold runs sharing one output path is what puts a compiler's own words there.")
+end 'simultaneous cold runs of one program each report only the program'

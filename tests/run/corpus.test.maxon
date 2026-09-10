@@ -1,0 +1,88 @@
+// corpus.test.maxon — the two things asked of this corpus itself rather than of the driver.
+//
+// ⭐⭐ **A FIXTURE NOBODY STAGES READS EXACTLY LIKE A FIXTURE THAT PASSED**, and a file-per-case layout
+// structurally cannot see it: the case that would have staged it does not exist, so there is nothing to go
+// red. Both halves below are read off the filesystem and off the harness's own roster, never off a number
+// somebody remembered to bump.
+
+// The stored-name suffix, dropped when a fixture is staged, and what makes a corpus entry a fixture.
+let CorpusFixturesLabel = "tests/run/fixtures"
+
+test 'every fixture directory is one the harness names'
+	var unnamed = StringArray.create()
+	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
+		if not Directory.isDirectory(entry) 'notAFixture'
+			continue
+		end 'notAFixture'
+
+		if not fixtureNames().contains(entry.filename()) 'namedByNothing'
+			unnamed.push(entry.filename())
+		end 'namedByNothing'
+	end 'eachEntry'
+
+	// One STRING and not a count, because a reader looking at a red gate needs the names.
+	try Expect.isEmpty(listedNames(unnamed), message: "these directories under {CorpusFixturesLabel} are named by nothing in {SharedHelperFileName}, so no case can stage them and they prove nothing. Give each one a constant in the fixture roster, and a case that uses it.")
+
+	var absent = StringArray.create()
+	for name in fixtureNames() 'eachNamedFixture'
+		if not Directory.isDirectory(fixtureDir(FixturesDirName).join("{name}")) 'nothingThere'
+			absent.push(name)
+		end 'nothingThere'
+	end 'eachNamedFixture'
+
+	try Expect.isEmpty(listedNames(absent), message: "the harness names these fixtures and there is no directory for them under {CorpusFixturesLabel}. A case staging one would panic rather than fail, so the roster and the corpus have to agree.")
+end 'every fixture directory is one the harness names'
+
+// ⛔⛔ **EVERY SOURCE HERE MUST BE A `*.test.maxon` OR THE SHARED HALF, AND NOTHING ELSE ENFORCES IT.**
+// `maxon test` compiles every `.maxon` under the project it is given and drops only test sources from the
+// RUN roster, so a spare ordinary source beside these files is compiled INTO this project — where its
+// top-level names join the harness's and its own diagnostics fail every case here for a reason having
+// nothing to do with the command under test.
+//
+// ⚠ The usual cure, a `.maxonignore` at the corpus root, cannot be used: the marker excludes its subtree
+// from the very walk `maxon test` performs, so it would delete this gate rather than protect it.
+//
+// ⚠ **THE FIXTURES ARE NOT SWEPT, BECAUSE NOTHING THERE IS A `.maxon` AT ALL** — rule 1 stores each one as
+// `<name>.fixture`, and a walk finding a live source under `fixtures/` is itself the failure. That is what
+// the second half below asks.
+test 'no ordinary source sits in the corpus, and no live source in the fixtures'
+	var ordinary = StringArray.create()
+	for entry in listing(fixtureDir(ProjectDirName)) 'eachEntry'
+		let name = entry.filename()
+		if Directory.isDirectory(entry) 'aSubdirectory'
+			continue
+		end 'aSubdirectory'
+
+		if name.endsWith(MaxonSourceSuffix) and not name.endsWith(TestSourceSuffix) and name != SharedHelperFileName 'anOrdinarySource'
+			ordinary.push(entry.toString())
+		end 'anOrdinarySource'
+	end 'eachEntry'
+
+	try Expect.isEmpty(listedNames(ordinary), message: "these files under {ProjectDirName} are ORDINARY Maxon sources, which `maxon test` compiles into the project they sit in — failing every case here for a reason having nothing to do with the command under test. Fold each declaration into {SharedHelperFileName} or into a `{TestSourceSuffix}` file; do NOT add a `.maxonignore`, which would hide this corpus from the command that runs it.")
+
+	var live = StringArray.create()
+	for entry in listing(fixtureDir(FixturesDirName)) 'eachFixture'
+		if not Directory.isDirectory(entry) 'notAFixture'
+			continue
+		end 'notAFixture'
+
+		for stored in listing(entry) 'eachStoredFile'
+			if not stored.filename().endsWith(StoredFixtureSuffix) 'notStored'
+				live.push(stored.toString())
+			end 'notStored'
+		end 'eachStoredFile'
+	end 'eachFixture'
+
+	try Expect.isEmpty(listedNames(live), message: "these files under {CorpusFixturesLabel} are not stored as `<name>{StoredFixtureSuffix}`. A live `{MaxonSourceSuffix}` under `tests/` is one `maxon fmt` over the checkout rewrites, and a fixture the formatter has reformatted is no longer the program a case staged.")
+end 'no ordinary source sits in the corpus, and no live source in the fixtures'
+
+// The names a refusal lists, one per line — empty when there are none, which is what makes each assertion
+// above an `isEmpty` over the very text a reader has to act on.
+function listedNames(names StringArray) returns String
+	var listed = ""
+	for name in names 'eachName'
+		listed.append("{LineFeed}  {name}")
+	end 'eachName'
+
+	return listed
+end 'listedNames'

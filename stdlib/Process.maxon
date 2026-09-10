@@ -15,9 +15,25 @@
 	public typealias ExitCode = int(0 to 255)
 #endif
 
+typealias StringArray = Array with String
+
+// What separates a name from its value inside one entry: `=` (0x3D). ⭐ ONE home, because both halves of
+// the split and the block ASSEMBLER must divide an entry at the same byte.
+//
+// ⚠ At file scope because a `let` inside a type body declares a FIELD: a constant cannot be a static
+// member here. It is the only name this facility adds to the global namespace, and the three functions
+// that read it are members of `Process`.
+public let EnvNameValueSeparator = 61 as Byte
+
+// A byte position inside one `NAME=VALUE` environment entry.
+typealias EnvEntryBytePos = int(0 to u64.max)
+
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
 public enum ProcessIntrospectionError implements Error
 	pathUnavailable
+	/// No entry of this process's environment carries the name asked for. DISTINCT from a variable
+	/// whose value is the empty string, which is a value a caller may legitimately have set.
+	variableUnset
 end 'ProcessIntrospectionError'
 
 /// Information about the currently-running process.
@@ -30,4 +46,152 @@ public type Process
 		let path = String.init(managed)
 		return try FilePath.from(path) otherwise throw ProcessIntrospectionError.pathUnavailable
 	end 'executablePath'
+
+	/// The value of `name` in this process's own environment, or `variableUnset` when nothing carries
+	/// it.
+	///
+	/// ⭐ It reads the environment through the SAME walk `Subprocess` builds a child's block from
+	/// (`currentEnvironmentEntries`), so this process has one reading of its own environment rather
+	/// than two free to disagree about what is set.
+	///
+	/// ⚠ **THE NAME IS FOLDED ON WINDOWS AND MATCHED EXACTLY UNDER POSIX**, because that is what the
+	/// two platforms mean by a variable name: Windows spells its search path `Path` and answers to
+	/// `PATH`, while under POSIX two names differing in case are two variables. A byte-exact match
+	/// everywhere would report `variableUnset` on Windows for variables that are plainly set.
+	///
+	public static function environmentVariable(name String) returns String throws ProcessIntrospectionError
+		#if os(Windows)
+			let wanted = name.toLower()
+		#else
+			let wanted = name
+		#endif
+
+		for entry in currentEnvironmentEntries() 'eachEntry'
+			#if os(Windows)
+				let candidate = envEntryName(entry).toLower()
+			#else
+				let candidate = envEntryName(entry)
+			#endif
+
+			if candidate == wanted 'thisOne'
+				return envEntryValue(entry)
+			end 'thisOne'
+		end 'eachEntry'
+
+		throw ProcessIntrospectionError.variableUnset
+	end 'environmentVariable'
+
+	/// This process's environment, one `NAME=VALUE` entry per element, in the order the OS reports them.
+	///
+	/// ⚠ THE WALK ENDS AT THE FIRST EMPTY ANSWER, and that is the intrinsic's contract rather than a
+	/// guess: every environment entry carries at least a name, so no real one is the empty string and
+	/// nothing a real environment contains can end the walk early.
+	///
+	/// ⛔⛔ **AND THREE OF THE FOUR PRODUCERS BREAK THAT CONTRACT ON THEIR FAILURE ARMS, WHICH MAKES A
+	/// TRUNCATED ENVIRONMENT INDISTINGUISHABLE FROM A COMPLETE ONE. NOT FIXED — see below.**
+	/// The empty answer means "past the end" to this walk, and each producer also answers it when it
+	/// COULD NOT ANSWER:
+	///
+	///   • the bootstrap's x86 `maxon_os_environment_entry` shares one `rt_oee_free_empty` arm between
+	///     past-the-end, a `WideCharToMultiByte` sizing failure and an `mm_raw_alloc` that returned NULL;
+	///   • its arm64 twin has the same shape;
+	///   • the compiler's `__gt_subp_env_entry` answers empty when `GetEnvironmentStringsA` itself failed
+	///     (`SubprocessRuntime.buildSubpEnvEntryFromBlock`'s `subpenvnone` arm).
+	///
+	/// A failure at entry k therefore stops the walk at k, and `appendInheritedEntries` hands the child a
+	/// block missing every variable from k on — silently, with a successful spawn. ⚠ the compiler's POSIX shape
+	/// (`buildSubpEnvEntryFromVector`) is the one that does NOT: its only empty answers are a NULL
+	/// `environ` and a NULL `environ[k]`, both of which genuinely mean "no entry".
+	///
+	/// ⇒ THE CURE IS A SECOND CHANNEL, not a different sentinel: a failure has to be reportable
+	/// separately from an answer, in all three producers, and this walk has to fail the spawn when one is
+	/// raised — which makes `spawnEnvironmentFor` and its callers throwing. That is a change to the spawn
+	/// contract across two compilers and both of the bootstrap's backends, so it is a rung rather than
+	/// something to bolt onto one producer and leave the other two disagreeing.
+	public static function currentEnvironmentEntries() returns StringArray
+		var entries = StringArray.create()
+		var index = 0
+
+		while true 'eachEntry'
+			let entry = String.init(__Builtins.osEnvironmentEntry(index))
+			if entry.isEmpty() 'pastTheEnd'
+				break
+			end 'pastTheEnd'
+
+			entries.push(entry)
+			index = index + 1
+		end 'eachEntry'
+
+		return entries
+	end 'currentEnvironmentEntries'
+
+	/// The NAME half of one `NAME=VALUE` entry — everything before its first `=`, or the whole entry when
+	/// it holds none.
+	public static function envEntryName(entry String) returns String
+		let bytes = entry.toByteArray()
+
+		return envEntryBytes(bytes, from: 0, to: envEntrySeparatorAt(bytes))
+	end 'envEntryName'
+
+	/// The VALUE half of one `NAME=VALUE` entry — everything past its first `=`, or the empty String when
+	/// it holds none.
+	///
+	/// An entry carrying no separator at all is a name set to nothing, and the empty String is its value
+	/// rather than a sentinel — `Process.environmentVariable` reports an ABSENT name by throwing.
+	public static function envEntryValue(entry String) returns String
+		let bytes = entry.toByteArray()
+		let at = envEntrySeparatorAt(bytes)
+
+		// An entry holding no separator answers `at == count`, so its value is the zero-width slice at the
+		// end — the same shape a `NAME=` with nothing after it produces.
+		let firstValueByte = bytes.count() if at == bytes.count() else at + 1
+
+		return envEntryBytes(bytes, from: firstValueByte, to: bytes.count())
+	end 'envEntryValue'
+
+	/// Where one entry divides: the position of its first `=`, or its byte length when it holds none.
+	///
+	/// ⭐ **ONE ANSWER FOR BOTH HALVES.** A name taken from one rule and a value from another disagree
+	/// the moment either is edited, and the entry they disagree over is `=C:=C:\dir` — a name split at
+	/// the wrong byte reads as a value, silently.
+	///
+	/// ⚠ THE SEARCH STARTS AT BYTE 1, NOT BYTE 0, and that is a platform fact rather than a defensive
+	/// flourish: a Windows process's environment begins with entries like `=C:=C:\dir` recording the
+	/// current directory of each drive, whose NAME is `=C:`. Splitting at byte 0 would give every one of
+	/// them the empty name, and they would then collide with each other in the override lookup.
+	static function envEntrySeparatorAt(bytes ByteArray) returns EnvEntryBytePos
+		let n = bytes.count()
+		for i in 1 upto n 'eachByte'
+			let b = try bytes.get(i) otherwise panic("envEntrySeparatorAt: i < n = bytes.count() but get({i}) failed")
+			if b == EnvNameValueSeparator 'atSeparator'
+				return i
+			end 'atSeparator'
+		end 'eachByte'
+
+		return n
+	end 'envEntrySeparatorAt'
+
+	static function envEntryBytes(bytes ByteArray, from EnvEntryBytePos, to EnvEntryBytePos) returns String
+		var taken = ByteArray.create()
+		for i in from upto to 'eachByte'
+			taken.push(try bytes.get(i) otherwise panic("envEntryBytes: i < to <= bytes.count() but get({i}) failed"))
+		end 'eachByte'
+
+		return String.from(taken)
+	end 'envEntryBytes'
 end 'Process'
+
+// ============================================================================================
+// THIS PROCESS'S ENVIRONMENT — the entry walk, and the rule that divides an entry
+// ============================================================================================
+//
+// ⭐ Here rather than in `Subprocess` because reading THIS process's environment is introspection of
+// this process, which is what this file is. `Subprocess` is a CONSUMER: it builds a child's block from
+// these same entries, and a second walk there would be free to disagree with this one about what this
+// process's environment contains.
+//
+// ⚠ `public` is the tier a stdlib symbol crossing a file boundary takes (see
+// `Compiler/UnusedExportCheck.maxon`): `module` is audited by E3094 and would fire for every program
+// that reaches only one of the two readers, which is most of them.
+
+// What separates a name from its value inside one entry: `=` (0x3D). ⭐ ONE home, because both halves of

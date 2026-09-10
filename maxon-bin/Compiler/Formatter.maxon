@@ -234,6 +234,14 @@ type CommentScan
 	end 'create'
 
 	function run() returns SourceCommentMap
+		// The lexer skips a `#!` at byte 0 whole (`Lexer.skipShebang`), so no token carries it and the
+		// gap-emit path — which writes text no token carries — is the only thing that can put it back.
+		// Recorded as a whole-line comment on line 1, which is the only line it can legally occupy.
+		if self.opensWithShebang() 'shebang'
+			self.record(0, comment: SourceComment.create(lines.textIn(0, from: 0, to: lines.length(0)).trimEnd(), wholeLine: true))
+			self.line = 1
+		end 'shebang'
+
 		while self.line < lines.count() 'eachLine'
 			self.at = 0
 			self.scanLine()
@@ -241,6 +249,13 @@ type CommentScan
 		end 'eachLine'
 		return self.comments
 	end 'run'
+
+	function opensWithShebang() returns bool
+		if lines.count() == 0 or lines.length(0) < 2 'tooShort'
+			return false
+		end 'tooShort'
+		return lines.byteAt(0, offset: 0) == Ascii.hash and lines.byteAt(0, offset: 1) == Ascii.bang
+	end 'opensWithShebang'
 
 	function scanLine()
 		while self.line < lines.count() and self.at < lines.length(self.line) 'eachByte'

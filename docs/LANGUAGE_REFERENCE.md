@@ -156,6 +156,23 @@ Nested `#if` blocks are supported.
 */
 ```
 
+### Shebang Line
+
+A file whose **first two bytes** are `#!` has that first line ignored by the lexer, so a Maxon program can be an executable script:
+
+```maxon
+#!/usr/bin/env maxon
+
+function main() returns ExitCode
+	print("Hello, world!\n")
+	return 0
+end 'main'
+```
+
+Byte 0 and nowhere else: `#` opens a compiler directive (`#if` / `#else` / `#endif`) everywhere else in a file, so a `#!` anywhere but the very start of one is `E1009: Unknown compiler directive`. The line's newline is **not** consumed, so every line beneath it keeps the number it has in the file and a diagnostic on line 4 says line 4. `maxon fmt` preserves the line verbatim.
+
+A kernel execs such a file by handing the interpreter the script's path, which is the wordless door onto [`maxon run`](CLI_REFERENCE.md#maxon-run).
+
 ### Identifiers
 
 Identifiers name variables, functions, types, and other declarations.
@@ -5217,100 +5234,54 @@ Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or L
 
 ## Build System
 
-Maxon uses a `build.maxon` file as a script file with exported functions that can be run via `maxon run`. This file serves as both a project root marker and a task runner.
-
-### Project Structure
-
-A Maxon project is defined by the presence of a `build.maxon` file:
+A Maxon project is a directory of `.maxon` files — there is nothing to declare. A directory that wants to say *how* it is built puts a **`build.maxon`** beside its sources, and `maxon build` with no path compiles that file, runs its `build` task, and performs the build it describes.
 
 ```
 myproject/
-├── build.maxon          # Script file with exported functions
-├── main.maxon           # Entry point
-├── lib.maxon            # Project file
+├── build.maxon          # the build manifest, if the directory needs one
+├── main.maxon           # entry point
+├── lib.maxon
 └── utils/
-    └── math.maxon       # Files in subdirectories are included
+    └── math.maxon       # files in subdirectories are included
 ```
 
 ### build.maxon
 
-The `build.maxon` file contains exported functions that serve as runnable commands. Each exported function must return `ExitCode` and must not throw. Private helper functions (without `export`) are not listed or runnable.
+⭐ **A manifest is a PROGRAM, not a configuration file.** It is ordinary Maxon with the whole standard library available, so a build can *compute* what it compiles — read a directory, choose by host, derive a version from git — rather than only spell it out. The compiler does not parse it; it runs it and reads the build description it prints.
 
-Each exported function may be preceded by `///` doc-comment lines; those lines are rendered next to the command name in the `maxon run` listing. Plain `//` comments are treated as in-source notes and are not surfaced to the CLI.
+Its entry point is **`build`**, not `main`: a manifest holds tasks, and `build` is the one this command asks for by name. It returns `ExitCode`, and a non-zero return or a crash fails the build with nothing compiled.
 
 ```maxon
-/// Build the project.
 export function build() returns ExitCode
-	let exe = try FilePath.from("maxon") otherwise return 2
-	var argv = StringArray.create()
-	argv.push("build")
-	argv.push(".")
-	let result = try Subprocess.run(.path(exe), arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 60000) otherwise return 1
-	if not result.succeeded() 'failed'
-		return 1
-	end 'failed'
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("app", source: "src", output: "build/app"))
+	targets.push(Build.target("tool", source: "tool", output: "build/tool"))
+	Build.buildTargets(targets)
 	return 0
 end 'build'
-
-/// Compile the self-hosted compiler and run its spec tests.
-export function spec_test_selfhosted() returns ExitCode
-	print("Compiling...\n")
-	let exe = try FilePath.from("maxon-bin/.maxon/maxon.exe") otherwise return 2
-	var argv = StringArray.create()
-	argv.push("build")
-	argv.push("maxon-bin")
-	let result = try Subprocess.run(.path(exe), arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 120000) otherwise return 1
-	if not result.succeeded() 'failed'
-		return 1
-	end 'failed'
-	return 0
-end 'spec_test_selfhosted'
-
-// Private helper - not listed or runnable via maxon run
-function log(msg String)
-	print(msg)
-end 'log'
 ```
 
-This automatically:
-- Sets output to `myapp.exe` in the project root
-- Discovers all `.maxon` files in the project directory (recursively)
-- Skips directories containing a `.maxonignore` flag file
-- Uses default compilation settings
+One target needs no name; several are **listed rather than guessed at**, so `maxon build` with no argument prints their names and compiles nothing, and `maxon build <name>` selects one. `build.maxon` at the root of this repository is a worked example: it declares `maxon-bin` and `dev-mcp`, and derives the compiler's version from git.
 
-Use `maxon run` to execute exported functions from `build.maxon`:
+The `Build.*` calls, the precedence between a manifest and the command line, and the rest of the surface are documented in [docs/CLI_REFERENCE.md](CLI_REFERENCE.md#the-build-manifest), which is the authority.
 
-```bash
-# List available commands (names shown with dashes)
-maxon run
-
-# Run a specific function (dashes are translated to underscores)
-maxon run spec-test-selfhosted
-
-# maxon build is shorthand for maxon run build
-maxon build
-```
-
-> **Note:** The CLI translates dashes to underscores, so `maxon run spec-test-selfhosted` runs the function `spec_test_selfhosted`. The listing displays function names with dashes for convenience.
+`build.maxon` is never swept into the program being built: it is a program in its own right.
 
 ### Multi-Project Workspaces
 
-Multiple projects can coexist in a workspace. Each project is isolated by its `build.maxon`:
+Multiple projects can coexist in a workspace. Each is a directory, and the path you name is the one that gets compiled:
 
 ```
 workspace/
 ├── project-a/
-│   ├── build.maxon      # Project A root
+│   ├── build.maxon      # how project A is built
 │   └── main.maxon
 └── project-b/
-    ├── build.maxon      # Project B root
+    ├── build.maxon      # how project B is built
     └── main.maxon
 ```
 
-The LSP automatically detects project boundaries and provides:
-- Project-scoped symbol completion
-- Cross-file go-to-definition within a project
-- Isolated diagnostics per project
+⚠ **The language server does not discover projects.** It holds the open buffers and nothing else, so a document is checked as itself plus `stdlib/` — never alongside the sibling sources a `maxon build` of that directory would compile. A diagnostic that depends on what a sibling file declares is therefore answered about a program you did not write.
 
 ---
 
@@ -5624,23 +5595,17 @@ maxon build myproject/
 # Emit IR alongside executable
 maxon build app.maxon --emit-ir
 
-# Write IR at each pipeline stage
-maxon build app.maxon --dump-stages
+# Compile if needed, then run — everything after the path is the PROGRAM's own argv
+maxon run app.maxon --verbose
 
-# List available commands from build.maxon
-maxon run
-
-# Run an exported function from build.maxon (dashes translate to underscores)
-maxon run spec-test-selfhosted
+# The same with no command word, which is what a `#!/usr/bin/env maxon` script arrives as
+maxon app.maxon --verbose
 
 # Run spec fragment tests
 maxon spec-test
 
 # Run tests matching a pattern
 maxon spec-test --filter=array
-
-# Run tests with verbose output
-maxon spec-test --verbose
 ```
 
 ---

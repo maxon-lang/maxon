@@ -1,0 +1,410 @@
+// RunCache.maxon — where `maxon run` keeps a compiled program, and how it decides the one it kept is
+// still the program it was asked to run.
+//
+// ⭐⭐ **THE KEY IS THE BUILD'S FILENAME, WHICH IS WHAT MAKES A WRONG ANSWER UNREACHABLE.** Nothing is
+// recorded beside the executable and nothing is compared: a build named after the inputs it was made from
+// cannot vouch for any others. Two runs that compute DIFFERENT keys therefore write DIFFERENT files and
+// cannot contend at all, and two that compute the SAME key are producing byte-identical output, so
+// whichever of them lands is correct.
+//
+// ⭐⭐ **EVERY SOURCE IN THE KEY IS THERE BY ITS CONTENT HASH, NEVER BY A MODIFICATION TIME.**
+// `File.info().modifiedTime` is whole SECONDS on every target this compiler emits
+// (`Testing/CompilerFreshness.maxon` records the measurement), so an edit landing in the same second as
+// the build it invalidates TIES — and a tie resolved either way is wrong: reuse runs STALE CODE, rebuild
+// recompiles on every run inside one second. A hash has no tie, which is also what lets a test assert a
+// hit and a miss without sleeping. ⚠ The COMPILER is the one input that is identified rather than
+// hashed, and `compilerLine` states the tie that costs.
+//
+// ⭐⭐ **THE STANDARD LIBRARY AND THE COMPILER ARE IN THE KEY**, because a cached binary froze both: an
+// edit under `stdlib/` or a newer compiler must produce a different program from the same source, and
+// nothing in the program's own text says so.
+//
+// ⭐ **EACH FILE IS HASHED ON ITS OWN AND THE KEY IS TAKEN OVER THE DIGESTS**, so peak memory is about
+// twice the largest source rather than the whole corpus — the standard library alone is megabytes, and
+// this runs ahead of every cached run.
+
+// Bumped when the manifest below changes shape, which invalidates every slot at once: two rules can agree
+// on a key by accident, and the name a key becomes says nothing about which rule spelled it.
+let CacheFormatVersion = "maxon-run-cache-1"
+
+#if os(Windows)
+	// Windows has no directory every process may write to unasked, so these two ARE the answer and a host
+	// setting neither is refused by name rather than sent to an invented path.
+	let WindowsCacheRootVariable = "LOCALAPPDATA"
+	let WindowsTempVariable = "TEMP"
+#else
+	let PosixTempVariable = "TMPDIR"
+	// Every POSIX host has one, so there is a last resort needing no variable at all.
+	let PosixLastResortRoot = "/tmp"
+#endif
+
+// `<root>/maxon/run/<one directory per program>` — under a directory of this compiler's own, so a shared
+// temp area is not littered with slot names that say nothing about what put them there.
+let CacheVendorDirName = "maxon"
+let CacheCommandDirName = "run"
+
+// What separates a build's name from the key that names it, and what an in-flight build carries before
+// its extension.
+//
+// ⛔ **NOTHING PUBLISHED CAN END IN THE PENDING MARKER**, which is what keeps a half-written build out of
+// the hit test: a published name ends in the key's hex digits, and `p` is not one.
+let SlotKeySeparator = "-"
+let PendingBuildMarker = ".tmp"
+
+// Manifest fields are tab-separated and one fact per line: a path may contain a space, and cannot contain
+// a tab or a newline on any host this compiler targets.
+let ManifestFieldSeparator = "\t"
+let ManifestLineSeparator = "\n"
+
+let VersionFieldLabel = "format"
+let CompilerFieldLabel = "compiler"
+let ProgramFieldLabel = "program"
+let StdlibFieldLabel = "stdlib"
+
+typealias CacheVariableArray = Array with String
+typealias ManifestFieldArray = Array with String
+
+// ⛔ **ONE ARM CARRYING THE SENTENCE.** Every cause — no writable root, an unreadable source, a compiler
+// that cannot name itself — is the SAME fact to the caller (there is no cache to build in) and a DIFFERENT
+// sentence to the reader, so the arm is the fact and the payload is the sentence.
+module union RunCacheError implements Error
+	unavailable(reason String)
+end 'RunCacheError'
+
+// One program's place in the cache: the build the current inputs name, and the private path a fresh one
+// is written to before it takes that name.
+module type RunSlot
+	export let directory as FilePath
+	export let executable as FilePath
+	export let pending as FilePath
+	export let binarySuffix as String
+
+	static function create(directory FilePath, executable FilePath, pending FilePath, binarySuffix String) returns RunSlot
+		return Self{directory: directory, executable: executable, pending: pending, binarySuffix: binarySuffix}
+	end 'create'
+end 'RunSlot'
+
+// The slot this program's build belongs in, and the name a build made from the current inputs carries
+// there.
+//
+// ⛔ **THE PATH SPELLING IS THE SLOT'S IDENTITY AND IS NOT CANONICALIZED.** `FilePath.normalize()` returns
+// its receiver and nothing folds `.` or `..`, so `./x.maxon` and `x.maxon` get two slots. That is the SAFE
+// direction — an extra compile, never a cached binary served for a different program — and a canonicalizer
+// written here would be a second answer to a question the filesystem owns.
+//
+// ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
+// one slot directory holds one program's builds, so the key alone would locate them.
+//
+// ⚠ **THE MONOTONIC READING IS NOT UNIQUENESS, IT IS SEPARATION.** Its period is 100 ns on Windows, so two
+// runs starting inside one tick can spell one pending name; nothing short of an OS-allocated name rules
+// that out, and the cost of it is the two-writers-on-one-path this naming exists to make unreachable
+// everywhere else.
+module function locateRunSlot(program FilePath, isProject bool, target Target) returns RunSlot throws RunCacheError
+	let key = try freshnessKey(program, isProject: isProject, target: target)
+	let stem = try slotStem(program, isProject: isProject)
+	let dir = try slotDirectory(program)
+	let binarySuffix = executableExtension(target)
+	let built = "{stem}{SlotKeySeparator}{key}"
+
+	return RunSlot.create(dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{Clock.nowNanos()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix)
+end 'locateRunSlot'
+
+// Take the built program's key-name, which IS publishing it: from that moment every other run reads it as
+// a hit.
+//
+// ⭐ **A FAILED RENAME WHOSE TARGET IS THERE IS A SUCCESS.** The name is the key, so whatever occupies it
+// was built from these very inputs — by a run that got there first, and which Windows will not let this
+// one replace while it is executing it. A failure with NOTHING there is the real one, and it refuses by
+// name rather than leaving the caller to discover there is nothing to run.
+module function publishSlotBuild(slot RunSlot, built FilePath) throws RunCacheError
+	try File.rename(built, to: slot.executable) otherwise 'notRenamed'
+		if not File.exists(slot.executable) 'nothingPublished'
+			throw RunCacheError.unavailable("could not publish {slot.executable.toString()}: {built.toString()} could not be renamed onto it, and nothing is there to run")
+		end 'nothingPublished'
+
+		discardBuild(built)
+		return
+	end 'notRenamed'
+
+	publishDebugSidecar(built, to: slot.executable)
+	discardSupersededBuilds(slot)
+end 'publishSlotBuild'
+
+// The sidecar is named after the binary, so it travels with it: the name is the only thing linking a
+// `.mxdbg` to an executable.
+//
+// Debug info is an aid rather than an output, so every step is best-effort and silent — a program that
+// built correctly must not be refused because its sidecar could not be moved.
+function publishDebugSidecar(built FilePath, to FilePath)
+	let sidecar = try debugSidecarOf(built) otherwise return
+	let published = try debugSidecarOf(to) otherwise return
+
+	if not File.exists(sidecar) 'nothingToMove'
+		return
+	end 'nothingToMove'
+
+	try File.rename(sidecar, to: published) otherwise ignore
+end 'publishDebugSidecar'
+
+// This program's earlier builds, which no run can reach again: a key is a name, so nothing that would
+// find one of them has inputs that hash to it.
+//
+// ⛔ **EVERY FAILURE IS IGNORED AND NONE REACHES A STREAM.** A superseded build another run is EXECUTING
+// cannot be removed on Windows, and the run doing the removing has already built what it was asked for.
+//
+// ⛔ **A PENDING NAME IS LEFT ALONE — ANOTHER RUN IS WRITING IT.** Removing one costs that run its rename,
+// which it would then report as a failure with nothing published.
+function discardSupersededBuilds(slot RunSlot)
+	let entries = try Directory.list(slot.directory) otherwise return
+	let current = slot.executable.filename()
+	let currentSidecar = "{current}{MxdbgSidecarExtension}"
+	let pending = "{PendingBuildMarker}{slot.binarySuffix}"
+	let pendingSidecar = "{pending}{MxdbgSidecarExtension}"
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+		if name == current or name == currentSidecar 'theBuildJustPublished'
+			continue
+		end 'theBuildJustPublished'
+
+		if name.endsWith(pending) or name.endsWith(pendingSidecar) 'stillBeingWritten'
+			continue
+		end 'stillBeingWritten'
+
+		discardQuietly(entry)
+	end 'eachEntry'
+end 'discardSupersededBuilds'
+
+// A build that never took its name, sidecar included. What survives is a pending name, which the hit test
+// structurally cannot match.
+function discardBuild(built FilePath)
+	discardQuietly(built)
+
+	let sidecar = try debugSidecarOf(built) otherwise return
+	discardQuietly(sidecar)
+end 'discardBuild'
+
+// A binary's debug sidecar. The extension is composed in ONE place because the name is the only thing
+// linking the two files.
+function debugSidecarOf(binary FilePath) returns FilePath throws RunCacheError
+	return try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise throw RunCacheError.unavailable("{binary.toString()} has no spellable debug-sidecar path")
+end 'debugSidecarOf'
+
+function discardQuietly(path FilePath)
+	if not File.exists(path) 'nothingThere'
+		return
+	end 'nothingThere'
+
+	try File.delete(path) otherwise ignore
+end 'discardQuietly'
+
+// ============================================================================================
+// WHERE A SLOT LIVES
+// ============================================================================================
+
+// The cache roots this host consults, in order. The override comes first so a caller whose temp area is
+// unwritable — or a test that must not touch the developer's — can name another without this having to
+// guess.
+function cacheRootVariables() returns CacheVariableArray
+	var names = CacheVariableArray.create()
+	names.push(RunCacheRootVariable)
+
+	#if os(Windows)
+		names.push(WindowsCacheRootVariable)
+		names.push(WindowsTempVariable)
+	#else
+		names.push(PosixTempVariable)
+	#endif
+
+	return names
+end 'cacheRootVariables'
+
+function cacheRoot() returns FilePath throws RunCacheError
+	for name in cacheRootVariables() 'eachVariable'
+		let spelled = try Process.environmentVariable(name) otherwise continue
+		if spelled.isEmpty() 'namesNowhere'
+			continue
+		end 'namesNowhere'
+
+		return try FilePath.from(spelled) otherwise continue
+	end 'eachVariable'
+
+	return try lastResortCacheRoot()
+end 'cacheRoot'
+
+function lastResortCacheRoot() returns FilePath throws RunCacheError
+	#if os(Windows)
+		throw RunCacheError.unavailable(noCacheRootMessage())
+	#else
+		return try FilePath.from(PosixLastResortRoot) otherwise throw RunCacheError.unavailable(noCacheRootMessage())
+	#endif
+end 'lastResortCacheRoot'
+
+// The refusal names the variables THIS host consults, read off the same list that consulted them: a
+// sentence naming a variable nothing reads sends its reader to set something that changes nothing.
+function noCacheRootMessage() returns String
+	var named = ""
+	for name in cacheRootVariables() 'eachVariable'
+		named = name if named.isEmpty() else "{named}, {name}"
+	end 'eachVariable'
+
+	return "no directory to keep compiled programs in: none of {named} names one. Set {RunCacheRootVariable} to a writable directory."
+end 'noCacheRootMessage'
+
+// ⛔ **WHAT MATTERS IS THAT THE SLOT IS THERE AFTERWARDS, NOT THAT THIS RUN MADE IT.** `Directory.create`
+// answers false when the underlying create fails, and a run losing the mkdir to a simultaneous one fails
+// exactly that way against a directory that now EXISTS — so the creation alone is not the question to ask.
+function slotDirectory(program FilePath) returns FilePath throws RunCacheError
+	let root = try cacheRoot()
+	let dir = root.join("{CacheVendorDirName}").join("{CacheCommandDirName}").join(hexDigest(sha256(program.toString().toByteArray())))
+
+	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'
+		throw RunCacheError.unavailable("could not create {dir.toString()}, where this program's build is kept. Set {RunCacheRootVariable} to a writable directory.")
+	end 'unusable'
+
+	return dir
+end 'slotDirectory'
+
+// A file's build is named after the FILE and a directory's after the DIRECTORY.
+//
+// ⚠ **THAT DELIBERATELY DIFFERS FROM `build`**, which names a directory's product after its FIRST SOURCE
+// FILE: that name depends on walk order, so two builds of one project can produce two names, and a slot's
+// contents must be findable by anybody reading the directory.
+function slotStem(program FilePath, isProject bool) returns String throws RunCacheError
+	let name = program.filename() if isProject else program.stem()
+	if name.isEmpty() 'unnameable'
+		throw RunCacheError.unavailable("{program.toString()} has no name a cached build could be called after")
+	end 'unnameable'
+
+	return name
+end 'slotStem'
+
+// ============================================================================================
+// THE KEY
+// ============================================================================================
+
+function freshnessKey(program FilePath, isProject bool, target Target) returns String throws RunCacheError
+	var manifest = ""
+	manifest.append(versionLine())
+	manifest.append(try compilerLine(target))
+
+	let sources = try programSources(program, isProject: isProject)
+	manifest.append(try digestLines(ProgramFieldLabel, paths: sources))
+
+	let library = try stdlibSources()
+	manifest.append(try digestLines(StdlibFieldLabel, paths: library))
+
+	return hexDigest(sha256(manifest.toByteArray()))
+end 'freshnessKey'
+
+// One manifest line: a label and its fields. Everything the key is computed over comes through here, so no
+// caller assembles a separator of its own.
+function manifestLine(label String, fields ManifestFieldArray) returns String
+	var line = ""
+	line.append(label)
+	for field in fields 'eachField'
+		line.append("{ManifestFieldSeparator}{field}")
+	end 'eachField'
+	line.append(ManifestLineSeparator)
+
+	return line
+end 'manifestLine'
+
+function versionLine() returns String
+	var fields = ManifestFieldArray.create()
+	fields.push(CacheFormatVersion)
+
+	return manifestLine(VersionFieldLabel, fields: fields)
+end 'versionLine'
+
+// ⚠ **THE COMPILER IS IDENTIFIED BY ITS PATH, SIZE AND MODIFICATION TIME, NOT BY ITS BYTES.** Hashing a
+// binary of tens of megabytes ahead of every cached run is exactly the cost this cache exists to avoid.
+//
+// ⛔ **AND THAT IS THE ONE PLACE THE KEY CAN TIE.** A modification time is whole seconds, so two DIFFERENT
+// compilers of the same size written to one path inside one second are indistinguishable here and the
+// second serves the first's builds. A self-compile takes far longer than a second, so the reachable shape
+// is a script copying prebuilt compilers over one path — not an edit-and-rebuild loop, which is what every
+// other input is hashed to protect.
+//
+// The TARGET rides beside it because one compiler emits several.
+function compilerLine(target Target) returns String throws RunCacheError
+	let exe = try Process.executablePath() otherwise throw RunCacheError.unavailable("could not determine this compiler's own path, which the build cache key is computed over")
+	let info = try File.info(exe) otherwise throw RunCacheError.unavailable("could not read {exe.toString()}, which the build cache key is computed over")
+
+	var fields = ManifestFieldArray.create()
+	fields.push(exe.toString())
+	fields.push("{info.size}")
+	fields.push("{info.modifiedTime}")
+	fields.push(targetToString(target))
+
+	return manifestLine(CompilerFieldLabel, fields: fields)
+end 'compilerLine'
+
+// ⭐ **WALK ORDER IS PART OF THE KEY.** The loader registers sources in the order the walk found them and
+// never sorts, so two orders are two programs. The PATH rides in the line beside the digest for the same
+// reason: a namespace is derived from a path, so a renamed file is a different program with identical
+// bytes.
+function digestLines(label String, paths MaxonSourcePathArray) returns String throws RunCacheError
+	var lines = ""
+	for path in paths 'eachSource'
+		lines.append(try sourceLine(label, path: path))
+	end 'eachSource'
+
+	return lines
+end 'digestLines'
+
+function sourceLine(label String, path FilePath) returns String throws RunCacheError
+	let bytes = try File.readBinary(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
+
+	var fields = ManifestFieldArray.create()
+	fields.push(path.toString())
+	fields.push(hexDigest(sha256(bytes)))
+
+	return manifestLine(label, fields: fields)
+end 'sourceLine'
+
+// The sources a build of this program compiles. The walk is the compiler's own, so a file the build reads
+// and this did not is not expressible.
+function programSources(program FilePath, isProject bool) returns MaxonSourcePathArray throws RunCacheError
+	var sources = MaxonSourcePathArray.create()
+	if not isProject 'oneNamedFile'
+		sources.push(program)
+		return sources
+	end 'oneNamedFile'
+
+	_ = try collectMaxonSources(program, into: sources) otherwise throw RunCacheError.unavailable("could not walk {program.toString()} for the sources the build cache key is computed over")
+
+	return sources
+end 'programSources'
+
+// ⛔ **THE SUPERSEDED RUNTIME MODULE IS SKIPPED BECAUSE THE LOADER NEVER COMPILES IT.** A file no build
+// reads cannot change what a build produces, and it is a large one to hash ahead of every run.
+function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
+	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
+	let superseded = supersededRuntimeModulePath(stdlibDir)
+
+	var walked = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
+
+	var compiled = MaxonSourcePathArray.create()
+	for path in walked 'eachModule'
+		if path.equals(superseded) 'notCompiled'
+			continue
+		end 'notCompiled'
+
+		compiled.push(path)
+	end 'eachModule'
+
+	return compiled
+end 'stdlibSources'
+
+// Nothing in the standard library renders bytes as hex, and a key has to be TEXT: it is the build's
+// filename.
+function hexDigest(digest ByteArray) returns String
+	var rendered = ""
+	for one in digest 'eachByte'
+		rendered.append("{one:02x}")
+	end 'eachByte'
+
+	return rendered
+end 'hexDigest'

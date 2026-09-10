@@ -1,0 +1,22 @@
+// Test: shebang.first-line-is-ignored
+// --- file: main.maxon
+#!/usr/bin/env maxon
+function main() returns ExitCode
+	print("ran\n")
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "ran\x0a"
+    x64.callDirect print
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

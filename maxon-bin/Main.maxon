@@ -99,6 +99,20 @@ let CoverageCommandName = "coverage"
 // and one it does not must not abort the run before the child is ever spawned.
 let ProfileCommandName = "profile"
 
+// ⭐ `run` — COMPILE A PROGRAM (or reuse a cached build of it) AND RUN IT. Tail-stopping for `profile`'s
+// reason: everything after the path is the PROGRAM's own command line.
+//
+// ⚠ **IT IS ALSO REACHED WITH NO WORD AT ALL** — a first argument ending in `MaxonSourceExtension`, which
+// is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`. See
+// `MaxonArgs.parse`'s two arms. `module` because `Run/RunCommand.maxon` names the command in its own
+// refusals, and a command renamed here must not leave those sentences naming the old word.
+module let RunCommandName = "run"
+
+// Where `run` keeps its compiled programs, when the caller says. Declared here rather than beside the
+// cache that reads it because the REFERENCE prints it too, and a variable a reader is told to set must be
+// the one the code consults.
+module let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+
 module let WorkerPersistentFlag = "--worker-persistent"
 
 // Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
@@ -377,6 +391,7 @@ function main() returns ExitCode
 		lspServer gives runLspServer()
 		monitor gives runMonitor(args)
 		profile gives runProfile(args)
+		run gives runRun(args)
 		scaleTest gives runScaleTest(args)
 		specTest gives runSpecTest(args)
 		test gives runTest(args)
@@ -1405,6 +1420,21 @@ end 'refusedPositionalBeyond'
 // How many positional arguments a command reads. Two today — one, or none.
 typealias PositionalCount = int(0 to 1)
 
+// ⛔ **A COMMAND'S STREAMS BELONG TO ITS SUBJECT, NOT TO THE BUILD BEHIND IT.** The default log level is
+// INFO, at which every compile announces the bytes it wrote — noise on `test`'s stdout, which a reader is
+// about to diff against a fixture, and noise on `run`'s two streams, which are the PROGRAM's. Silenced
+// unless the caller asked for logging, which is the one thing that says they want the build's voice back.
+//
+// `module` because both commands live below this file — `Testing/` and `Run/` — and a second copy of it in
+// either is a rule two commands are free to answer differently.
+module function quietTheBuildChatter(args MaxonArgs)
+	if args.logOverridden 'theCallerAskedForLogging'
+		return
+	end 'theCallerAskedForLogging'
+
+	setLogLevel(LogLevel.ERROR)
+end 'quietTheBuildChatter'
+
 // ⭐⭐ **WHAT A WITHDRAWN OPTION SAYS — one sentence per option this driver once had.**
 //
 // It is its OWN message and not `badOption`'s because the two are different facts about the reader:
@@ -1573,6 +1603,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		lspServer gives 1
 		monitor gives 1
 		profile gives 1
+		run gives 1
 		scaleTest gives 1
 		specTest gives 1
 		verifyRecheck gives 1
@@ -1686,6 +1717,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
+		run gives CommandReference.create(RunCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under a host cache area ({RunCacheRootVariable} first, then LOCALAPPDATA or TEMP on Windows and TMPDIR or /tmp elsewhere) and reused while the program's sources, the standard library and this compiler all still hash the same. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -2030,6 +2062,10 @@ enum MaxonCommand
 	// `maxon profile run <exe>` — sample a running program and report where its CPU time went. Tail-stopping
 	// like `coverage`, and for exactly its reason: the tail is a CHILD's command line.
 	profile
+	// `maxon run <file|directory> [args...]` — compile a program, or reuse a cached build of it, and run
+	// it. Tail-stopping like `profile`, and reached by a second door with no word at all: see
+	// `RunCommandName`.
+	run
 	scaleTest
 	specTest
 	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
@@ -2247,6 +2283,21 @@ module type MaxonArgs
 				parsed.anyOption = firstBadOption(parsed.anyOption, arg: arg)
 			end 'anOption'
 
+			// ⭐⭐ **A `.maxon` FIRST ARGUMENT IS `run`, AND THAT IS WHAT A `#!/usr/bin/env maxon` SCRIPT
+			// ARRIVES AS.** A kernel execs the interpreter with the script's path ahead of the script's own
+			// arguments, so the word `run` is never typed and cannot be. The tail is filed verbatim WITH THE
+			// FILE IN IT, because both doors hand `runRun` the same shape: the program at position 0 and the
+			// program's own arguments after it.
+			//
+			// ⚠ **POSITION 1 AND A `.maxon` SPELLING, BOTH.** Position 1 is the only place a kernel puts it,
+			// and no command word ends in that extension — so this arm cannot swallow a word the chain below
+			// owns, and the first-word rule that chain enforces is untouched.
+			if i == 1 and parsed.command == MaxonCommand.unknown and arg.endsWith(MaxonSourceExtension) 'wordlessRun'
+				parsed.command = MaxonCommand.run
+				parsed.paths = monitorTail(args, from: i)
+				break
+			end 'wordlessRun'
+
 			// ⭐⭐ **`monitor` STOPS THE PARSE, AND THAT IS THE WHOLE OF HOW A CHILD'S COMMAND LINE SURVIVES
 			// THIS DRIVER.** The arms below are order-independent, so a child's `--filter=mm` would be read as
 			// `spec-test`'s TEST SELECTION and any flag this driver does not implement would set `badOption`
@@ -2287,6 +2338,15 @@ module type MaxonArgs
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'profileCmd'
+
+			// `run` stops the parse for `profile`'s reason: everything after the path is the PROGRAM's own
+			// command line, so a flag this driver implements must not be consumed on its way past and one it
+			// does not must not abort the run before the program is ever compiled.
+			if arg == RunCommandName and parsed.command == MaxonCommand.unknown 'runCmd'
+				parsed.command = MaxonCommand.run
+				parsed.paths = monitorTail(args, from: i + 1)
+				break
+			end 'runCmd'
 
 			// The command as it stood BEFORE this argument, so the arms below can stay a plain chain and
 			// the first-word rule be applied once, after them. See `laterCommandWordIsAPath`.
@@ -2471,9 +2531,9 @@ module type MaxonArgs
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
 				end 'badSpec' else 'goodSpec'
-					// ⚠ RECORDED, because `test` SILENCES the compiler's own INFO chatter — and must not do so
-					// behind the back of a caller who explicitly asked for it. See
-					// `TestCommand.quietTheBuildChatter`.
+					// ⚠ RECORDED, because `test` and `run` SILENCE the compiler's own INFO chatter — and must
+					// not do so behind the back of a caller who explicitly asked for it. See
+					// `quietTheBuildChatter`.
 					parsed.logOverridden = true
 				end 'goodSpec'
 			end 'logFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'

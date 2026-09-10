@@ -1,0 +1,34 @@
+// argv.test.maxon — everything after the path is the PROGRAM's command line and reaches it untouched.
+//
+// ⭐⭐ **THE ARGUMENTS ARE DELIBERATELY WORDS THIS DRIVER KNOWS.** `--filter=x`, `-o`, `build` and `test`
+// are a flag it implements, a flag that consumes the argument after it, and two of its own command words.
+// A parser that did not stop at the program would swallow `-o`'s neighbour, select `build` as the command,
+// or abort the run over a flag it does not implement — and a case passing bland arguments would be green
+// through all three.
+
+let ArgvCaseLabel = "argv"
+
+// The tail handed to the program, and what it must print back: one argument per line, in order.
+let ForwardedFilterFlag = "--filter=x"
+let ForwardedOutputFlag = "-o"
+let ForwardedBuildWord = "build"
+let ForwardedTestWord = "test"
+
+test 'the arguments after the program reach it verbatim'
+	let staged = stageCase(ArgvCaseLabel, fixture: ArgvFixtureName)
+
+	var arguments = runArguments(stagedMain(staged))
+	arguments.push(ForwardedFilterFlag)
+	arguments.push(ForwardedOutputFlag)
+	arguments.push(ForwardedBuildWord)
+	arguments.push(ForwardedTestWord)
+
+	let run = spawnDriver(staged, arguments: arguments, standardInput: InputSource.none)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {RunCommandName}` did not run the program at all. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	let expectedStdout = "{ForwardedFilterFlag}{LineFeed}{ForwardedOutputFlag}{LineFeed}{ForwardedBuildWord}{LineFeed}{ForwardedTestWord}{LineFeed}"
+	try Expect.equal(observedStdout, expected: expectedStdout, message: "the program did not see the arguments it was given. This driver reads every one of these words itself, so a tail it re-parsed would arrive short, reordered, or not at all.")
+end 'the arguments after the program reach it verbatim'

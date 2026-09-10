@@ -18,8 +18,8 @@
 //
 //   1. **PARITY** — `format(<Name>.in)` equals `<Name>.expected` byte for byte. The strongest of the
 //      three.
-//   2. **COMMENT MULTIPLICITY** — every distinct `//`-bearing text occurs the same number of times
-//      after formatting as before. ⚠ COUNTS, not presence: a DUPLICATED comment
+//   2. **COMMENT MULTIPLICITY** — every distinct `//`-bearing text, plus a line-1 `#!`, occurs the same
+//      number of times after formatting as before. ⚠ COUNTS, not presence: a DUPLICATED comment
 //      (`NestedStringInsideInterpolation`) is a real defect and a presence check passes it.
 //   3. **IDEMPOTENCE** — `format(format(x))` equals `format(x)`. A formatter can preserve every comment
 //      and still move one a little further on each run; neither question above can see that.
@@ -53,6 +53,11 @@ let UnlexableCasePrefix = "Unterminated"
 // The marker a `//` comment begins with. Both halves of the multiplicity census read it: the scan that
 // finds a comment on a line, and the count of how often that comment's text occurs in the whole text.
 let CommentMarker = "//"
+
+// The two bytes a shebang opens with. The lexer skips such a line whole when it is the source's first
+// (`Lexer.skipShebang`), so no token carries it and the formatter reproduces it through the same
+// raw-source path as a `//` comment — which is the path that can drop or duplicate one.
+let ShebangMarker = "#!"
 
 let LineFeed = "\n"
 
@@ -266,10 +271,24 @@ end 'requireCommentMultiplicityHolds'
 // It is a raw line scan and not a token walk on purpose: comments are not in the compiler's token stream (the
 // `///` doc comment excepted), so the thing under test recovers them from raw source exactly this way,
 // and a census built on the formatter's own scanner would follow it wherever it went.
+//
+// ⭐ **A LINE-1 `#!` IS CENSUSED THE SAME WAY, AND ONLY ON LINE 1.** It reaches the output through the
+// same line-keyed raw-source path, so it is exposed to the same loss and the same duplication; line 1 is
+// the only place it is a shebang at all, and censusing one anywhere else would demand the preservation of
+// a `#` the lexer refuses.
 function commentTextsIn(source String) returns StringArray
 	var found = StringArray.create()
+	var onLineOne = true
 
 	for rawLine in source.split(LineFeed) 'eachLine'
+		if onLineOne 'lineOne'
+			onLineOne = false
+			if rawLine.startsWith(ShebangMarker) 'shebang'
+				found.push(rawLine.trimEnd())
+				continue
+			end 'shebang'
+		end 'lineOne'
+
 		let at = try rawLine.findFirst(CommentMarker) otherwise continue
 		let text = rawLine.slice(at, endIndex: rawLine.endIndex()).trimEnd()
 		if found.contains(text) 'alreadyListed'

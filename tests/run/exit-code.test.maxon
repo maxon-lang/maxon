@@ -1,0 +1,15 @@
+// exit-code.test.maxon — the program's exit code is this command's, not a report of whether a program was
+// successfully launched.
+//
+// ⭐ **THE HALF A SCRIPT READS.** A driver that ran the program perfectly and exited 0 regardless is green
+// to every eye and breaks every caller that branches on the number.
+
+let ExitCodeCaseLabel = "exit-code"
+
+test 'run exits with the code the program returned'
+	let staged = stageCase(ExitCodeCaseLabel, fixture: ExitCodeFixtureName)
+	let run = runProgram(staged, program: stagedMain(staged))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: ForwardedExitCode as AssertedInt, message: "`maxon {RunCommandName}` did not forward the program's exit code. It said: {run.stdout}{run.stderr}")
+end 'run exits with the code the program returned'

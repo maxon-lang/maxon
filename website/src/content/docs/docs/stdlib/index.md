@@ -824,14 +824,20 @@ end 'main'
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `executablePath()` | `FilePath` | `ProcessIntrospectionError` | Absolute path to the running executable. Uses `GetModuleFileNameA` (Windows), `_NSGetExecutablePath` (macOS), `/proc/self/exe` (Linux). Throws `pathUnavailable` when the OS lookup fails. |
+| `environmentVariable(name)` | `String` | `ProcessIntrospectionError` | The value `name` carries in **this** process's environment. Throws `variableUnset` when no entry carries it. |
+
+**Name matching follows the platform, because that is what the two platforms mean by a variable name.** The name is folded on Windows — the environment block spells the search path `Path` and answers to `PATH` — and matched byte-exactly under POSIX, where two names differing in case are two variables. A byte-exact match everywhere would report `variableUnset` for variables that are plainly set.
 
 **Errors:**
 
 ```maxon
 enum ProcessIntrospectionError implements Error
 	pathUnavailable
+	variableUnset
 end 'ProcessIntrospectionError'
 ```
+
+`variableUnset` is thrown rather than an empty `String` returned: **absent** and **set to the empty string** are different facts, and the second is a value a caller may legitimately have set.
 
 **Example:**
 

@@ -1,0 +1,40 @@
+// cache-miss-edit.test.maxon — an edited program is recompiled, and the new answer is what runs.
+//
+// ⭐⭐ **THE OTHER HALF OF THE CACHE, AND THE DANGEROUS ONE.** A cache that never hits costs time; a cache
+// that never misses runs STALE CODE and reports success doing it. So the edit is asserted twice: the
+// program prints the NEW text, and the cached build carries a different NAME — the name is the key, so a
+// build an edit did not reach would still be sitting under the name the next run looks for.
+//
+// ⚠ **THE EDIT LANDS INSIDE THE SAME SECOND AS THE BUILD BEFORE IT, and that is the point rather than an
+// accident.** A file's modification time is whole seconds on every target, so a freshness rule built on
+// timestamps ties here and serves the stale build. This case is what makes the content hash observable.
+//
+// ⚠ **THE SLOT STILL HOLDS ONE BUILD AFTERWARDS**, and `slotExecutableName` is where that is asked: a
+// superseded build is one no key can name again, so the run that supersedes it takes it away.
+
+let CacheMissCaseLabel = "cache-miss-edit"
+
+// What the staged program is rewritten to say.
+let EditedGreeting = "goodbye from maxon run"
+
+test 'an edited program is rebuilt and the new answer runs'
+	let staged = stageCase(CacheMissCaseLabel, fixture: HelloFixtureName)
+	let program = stagedMain(staged)
+
+	let first = runProgram(staged, program: program)
+	let firstExit = first.exitCode() as AssertedInt
+	try Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
+	try Expect.equal(withoutCarriageReturns(first.stdout), expected: "{HelloGreeting}{LineFeed}", message: "the first run did not print what the program prints")
+
+	let staleName = slotExecutableName(staged)
+
+	rewriteStagedMain(staged, replacing: HelloGreeting, becoming: EditedGreeting)
+
+	let second = runProgram(staged, program: program)
+	let secondExit = second.exitCode() as AssertedInt
+	try Expect.equal(secondExit, expected: 0, message: "the run after the edit failed. It said: {second.stdout}{second.stderr}")
+	try Expect.equal(withoutCarriageReturns(second.stdout), expected: "{EditedGreeting}{LineFeed}", message: "the run after the edit printed the OLD program's answer, so a cached build was served for a source that had changed")
+
+	let freshName = slotExecutableName(staged)
+	try Expect.notEqual(freshName, expected: staleName, message: "the cached build's NAME did not change when the program did. The name is the key, so a name blind to an edit serves a stale build for every later run.")
+end 'an edited program is rebuilt and the new answer runs'

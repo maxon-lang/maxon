@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Thirteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Fourteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -31,6 +31,7 @@ SERVER its tests spawn.
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
 | `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
+| `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -39,7 +40,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other ten: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other thirteen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -96,6 +97,20 @@ tests/
     profile-greenthreads.test.maxon         two green threads as themselves, the scheduler absent
     fixtures/hotwarm/main.maxon.fixture     stored name only - see rule 1
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
+  run/
+    RunHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
+    corpus.test.maxon                       the fixture roster, and the corpus's own file rules
+    hello.test.maxon                        the program's stdout, NOTHING on stderr, exit 0
+    exit-code.test.maxon                    the program's exit code is the command's
+    argv.test.maxon                         the tail reaches the program verbatim, driver words and all
+    stdin.test.maxon                        the program reads the caller's stdin
+    compile-error.test.maxon                refused, nothing run, and no build left in the slot
+    cache-hit.test.maxon                    an unchanged program is not compiled a second time
+    cache-miss-edit.test.maxon              an edited one is, and the new answer runs
+    directory.test.maxon                    a directory is compiled as ONE project
+    wordless.test.maxon                     a `.maxon` first argument IS `run` - the shebang door
+    missing-path.test.maxon                 a path naming nothing is refused at both doors
+    fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
 ```
 
 ## The six rules, and the hazard each one answers
@@ -120,12 +135,12 @@ Two independent reasons, and the second is the one that bites:
 
 ⚠ **This rule is `fmt/`'s, and the live `.maxon` under `tests/` are no longer only the
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
-`lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon` and
-`profile/ProfileHarness.maxon` are each their corpus's shared half, named so the runner does not
-take them for test files. That is fine and is not an exception being smuggled in: the hazard
-above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk — `lsp/`'s are
-`b"…"` byte literals inside its test files, and the other three assert properties. A helper that
-`fmt` reformats stays a correct helper.
+`lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
+`profile/ProfileHarness.maxon` and `run/RunHarness.maxon` are each their corpus's shared half, named so
+the runner does not take them for test files. That is fine and is not an exception being smuggled
+in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
+`lsp/`'s are `b"…"` byte literals inside its test files, and the other four assert properties. A
+helper that `fmt` reformats stays a correct helper.
 ⇒ The rule to carry forward is **"nothing `fmt` rewrites may be a stored expectation"**,
 not "no live `.maxon`". `fmt/` states it the strong way because every one of ITS fixtures
 is a stored expectation.
@@ -331,3 +346,67 @@ stacks and both tasks ranked, not their names in the stacks table.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one file.
+
+## `run/` — compile a program and run it, and do not compile it again
+
+Thirteen cases in twelve files over one subject: `maxon run <file|directory> [args...]` compiles a program (or reuses a
+cached build of it) and runs it, forwarding stdin, stdout, stderr and the exit code. The shared half —
+the driver stem, the staging, the per-case cache root, the two spawners and the slot readers — lives in
+`RunHarness.maxon`; see the note under `debug/`.
+
+⭐⭐ **EVERY CASE POINTS THE DRIVER AT A CACHE OF ITS OWN**, through `MAXON_RUN_CACHE_ROOT` in the child's
+environment, and that is two facts at once: `maxon test` runs files CONCURRENTLY, so two cases sharing a
+cache would race over one slot; and the cache the command reaches for by default is the developer's own
+temp area, which a test must neither write into nor read a previous run out of. A case finds its slot by
+listing `<cache>/maxon/run/` and requiring EXACTLY ONE entry — which both locates it and checks that the
+driver put its build where its own layout says — rather than by respelling the key rule.
+
+⭐⭐ **THE BUILD'S NAME IS THE KEY IT WAS BUILT UNDER**, so a case reads freshness off the slot listing and
+there is nothing recorded beside a build to read instead. `slotExecutableName` is that reader; a pending
+`.tmp` name is excluded from it exactly as it is excluded from the driver's hit test, because counting one
+would make a run that CRASHED mid-build read like a cached one.
+
+⭐⭐ **"THE BINARY DID NOT CHANGE" IS NOT REUSE, AND THAT IS `cache-hit`'s WHOLE DIFFICULTY.** A compiler is
+deterministic: recompiling one unchanged program produces the same bytes, the same size and the same
+name, so every comparison of the slot's CONTENTS is equally satisfied by a cache that never hits at all.
+The discriminator is the DEBUG SIDECAR, removed between the two runs — nothing reads it back and it is not
+part of the key, so its absence changes no answer the driver gives, except that a rebuild writes it again
+and a reused build does not. Sabotage-proved: a hit test forced to answer false reddens this case alone.
+
+⭐ **FRESHNESS IS A CONTENT HASH, AND `cache-miss-edit` IS WHERE THAT BECOMES OBSERVABLE.** It edits the
+staged program within the same second as the build before it. A file's modification time is whole seconds
+on every target, so a timestamp rule TIES there and serves the stale build; the case asserts both that the
+new text runs and that the build's name moved. Its `slotExecutableName` also gates the sweep that follows a
+publish: a superseded build is one no key can name again, so the slot holds ONE build afterwards.
+
+⭐⭐ **`concurrent` IS THE ONLY CASE HERE THAT SPAWNS ITS CHILDREN BEFORE WAITING ON ANY OF THEM**, and
+that is the whole of what it tests. `Configuration.run()` spawns and waits in one call, so a loop over it
+is a queue; `spawnConcurrentRuns` uses `StreamingSubprocess` to get four cold runs of one program actually
+overlapping, then drains each child's streams and waits. What it asserts is EMPTY STDERR alongside the
+exit code and the stdout, because the exit code and the stdout are not enough to see the defect: two cold
+runs sharing one output path both answer correctly, and the loser writes the backend's
+`Failed to write PE file` onto the PROGRAM's stderr. Red-gate control: compile straight to the published
+name instead of a `.tmp` of the run's own, and this case reddens 3/3 on exactly that assertion.
+
+⚠ **`hello` ASSERTS AN EMPTY STDERR, AND THAT IS THE SHARPEST LINE IN THE CORPUS.** A compile at the
+default log level announces every file it writes, and those lines land on the streams the PROGRAM is
+speaking through. Sabotage-proved: dropping the driver's `quietTheBuildChatter` call reddens this case
+alone, with three `INFO` lines in `received:`.
+
+⚠ **`argv`'s ARGUMENTS ARE DELIBERATELY WORDS THE DRIVER KNOWS** — `--filter=x`, `-o`, `build`, `test`. A
+parser that did not stop at the program would swallow `-o`'s neighbour, select `build` as the command, or
+abort over a flag it does not implement; bland arguments would be green through all three.
+
+⛔ **WHAT `concurrent` CANNOT SEE: THE CREATION OF THE SLOT DIRECTORY.** `stageCase` clears a case's cache
+of FILES and cannot remove the directories — the standard library has no directory removal — so a case's
+slot directory survives from its previous run and `Directory.create` short-circuits on it. Simultaneous
+children racing to create one is therefore only reachable against a cache root that has never held this
+program's slot: `rm -rf` the root and launch several `maxon run` of one script by hand. MEASURED that way,
+six children reddened it about one attempt in three, with `could not create <slot>` on the loser's stderr —
+which is why `slotDirectory` asks whether the directory is THERE rather than whether this run made it.
+
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
+directory under `temp/run/`), and it keeps rule 5: one spawning `test`, one file. `corpus.test.maxon` is
+the exception and spawns nothing — it holds the two guards that are about the corpus rather than about the
+driver: every fixture directory is one the harness's roster names and every name in that roster is a
+directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.

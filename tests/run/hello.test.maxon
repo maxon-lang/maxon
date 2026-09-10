@@ -1,0 +1,23 @@
+// hello.test.maxon — the whole of what `maxon run` promises, on the smallest program there is: the
+// program's own stdout, NOTHING on stderr, and exit 0.
+//
+// ⭐⭐ **THE EMPTY STDERR IS THE SHARPEST HALF.** A compile at the default log level announces every file
+// it writes, and those lines would land on the streams the PROGRAM is speaking through — output nobody
+// asked for and nothing downstream can filter back out. A case comparing only stdout would pass
+// throughout that defect.
+
+let HelloCaseLabel = "hello"
+
+test 'run prints the program and says nothing of its own'
+	let staged = stageCase(HelloCaseLabel, fixture: HelloFixtureName)
+	let run = runProgram(staged, program: stagedMain(staged))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {RunCommandName}` did not exit 0 for a program that returns 0. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	try Expect.equal(observedStdout, expected: "{HelloGreeting}{LineFeed}", message: "stdout is the PROGRAM's, and this is not what the program printed")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	try Expect.isEmpty(observedStderr, message: "`maxon {RunCommandName}` wrote to stderr. That stream belongs to the program: a build announcing the bytes it wrote there is output the caller never asked for and cannot filter out.")
+end 'run prints the program and says nothing of its own'

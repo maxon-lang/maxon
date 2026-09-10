@@ -51,7 +51,12 @@ public type Directory
 				_ = Directory.create(parent)
 			end 'nonEmpty'
 		end 'hasParent'
-		try __ManagedDirectory.create(path.path.addressableBytes()) otherwise return false
+		try __ManagedDirectory.create(path.path.addressableBytes()) otherwise 'createFailed'
+			// The contract is about the directory EXISTING after the call, not about who made it: another
+			// process can win the gap between the check above and this call, and a caller told `false` for a
+			// directory that is plainly there refuses work it could have done.
+			return Directory.exists(path)
+		end 'createFailed'
 		return true
 	end 'create'
 

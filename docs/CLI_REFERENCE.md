@@ -12,10 +12,12 @@ this document and that listing disagree, the listing is the compiler and this is
 ## Quick Reference
 
 Alphabetical, which is the order the driver itself prints — see [`maxon help`](#maxon-help) for why that
-one and not another.
+one and not another. The first row is the exception: it is no command word at all, so it sits ahead of
+the roster rather than inside it.
 
 | Command | Description |
 |---------|-------------|
+| `maxon <file>.maxon [args...]` | Run a Maxon file as a script — [`maxon run`](#maxon-run) with the word left out |
 | `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line + branch coverage |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary |
@@ -25,6 +27,7 @@ one and not another.
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went |
+| `maxon run <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon test [directory]` | Run a project's own `test` declarations |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
@@ -47,6 +50,123 @@ argument, so `maxon fmt fmt` formats the directory `fmt/` rather than selecting 
 ---
 
 ## Commands
+
+### `maxon run`
+
+Compiles a program — or reuses a cached build of it — and runs it.
+
+**Usage:**
+```bash
+maxon run <file|directory> [args...]
+maxon <file>.maxon [args...]
+```
+
+**Two doors, one command.** The word, and a **first** argument ending in `.maxon` with no word at all
+— which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.
+No command word ends in that extension, so the wordless door cannot swallow one, and both doors reach
+the same implementation.
+
+**Everything after the path is the PROGRAM's command line** and reaches it verbatim, including every
+token this driver implements for some other command: `--filter=x`, `-o`, `build` and `test` are the
+program's arguments here. **`run` therefore takes no options of its own** — a flag it consumed would
+be a flag no program run this way could ever be given.
+
+The program inherits **stdin, stdout, stderr and the working directory**, and **its exit code becomes
+this command's**, so a program launched this way is indistinguishable from one launched by name. The
+build says nothing at all: a cached run writes zero bytes of its own to either stream, because a
+compiler announcing what it just wrote onto a program's own stdout is output nothing downstream can
+filter back out. ⚠ The program's `argv[0]` is the cached executable, not the path that was typed.
+
+**Host target only.** There is no `--target`: a program built for another target is one this machine
+cannot run, and building one is what [`maxon build --target=`](#maxon-build) is for.
+
+**The cache.** Each program's build gets a directory of its own, and is reused until something it was
+built from changes:
+
+```
+<root>/maxon/run/<sha256 of the program's absolute path>/
+├── hello-<key>.exe         # the build, named after the key it was built under
+└── hello-<key>.exe.mxdbg   # its debug-info sidecar, always written — a script is code being developed
+```
+
+⭐ **The key IS the filename, and nothing is recorded beside the build or compared against it.** A hit
+is that file existing. A build named after the inputs it was made from cannot vouch for any others, so
+two runs that compute different keys write different files and cannot contend, and two that compute the
+same key are producing byte-identical output — whichever of them lands is correct. A fresh build is
+written under a `.tmp` name of its own and renamed into place, so simultaneous cold runs of one program
+never share an output path; a rename that fails onto a name already there has been beaten to it by a run
+that built the very same bytes, and is a hit. Superseded builds are removed as each new one is published,
+best-effort and silently — one another process is executing cannot be deleted on Windows, and the run
+doing the removing has already built what it was asked for.
+
+`<root>` is **`MAXON_RUN_CACHE_ROOT`** when that is set, then `LOCALAPPDATA` and `TEMP` on Windows, and
+`TMPDIR` then `/tmp` elsewhere. Windows has no directory every process may write to unasked, so a host
+setting neither of its two is **refused by name** rather than sent to an invented path.
+
+⚠ **The path is resolved against the working directory but not canonicalized**, so one spelling run
+from two directories reaches one slot, while `x.maxon`, `./x.maxon` and `a/../x.maxon` are three. That
+is the safe direction — an extra compile, never a cached binary served for a different program — and a
+canonicalizer written here would be a second answer to a question the filesystem owns.
+
+⭐ **The key is a CONTENT hash, never a modification time.** It covers every source file of the program
+and every `stdlib/` source the build compiles, each hashed by its bytes, plus this compiler's own
+identity — its path, size, modification time and target. (The compiler is identified rather than
+hashed: reading tens of megabytes of binary ahead of every cached run is the cost this cache exists to
+avoid, and it is the same identity test `spec-test` decides a compiler is current by.) A modification
+time is whole **seconds** on every target this compiler emits, so an edit landing in the same second as
+the build it invalidates would TIE — and a tie resolved either way is wrong: reuse runs stale code,
+rebuild recompiles on every run inside that second. A hash has no tie. A rebuild happens when anything
+in that set changes, and only then.
+
+Measured on one Windows machine for a hello-world script: ~450 ms cold, ~170 ms warm, against ~90 ms
+for launching the built executable directly. The warm gap over that floor is the key — hashing the
+program and the standard library.
+
+**The shebang line.** A source file whose **first two bytes** are `#!` has that first line ignored by
+the lexer, which is what lets a Maxon program be an executable script:
+
+```maxon
+#!/usr/bin/env maxon
+
+function main() returns ExitCode
+	print("Hello, world!\n")
+	return 0
+end 'main'
+```
+
+```bash
+chmod +x hello.maxon
+./hello.maxon
+```
+
+⛔ **At byte 0 and nowhere else.** `#` opens a compiler directive (`#if` / `#else` / `#endif`)
+everywhere else in a file, so a `#!` anywhere but the very start of one is still
+**E1009: Unknown compiler directive**. The line's newline is **not** consumed, so every line beneath it
+keeps the number it has in the file and a diagnostic on line 4 says line 4. `maxon fmt` preserves the
+line verbatim.
+
+⚠ **Windows has no shebang mechanism** — its kernel does not read the first line of a file it is asked
+to execute. Git Bash and WSL honour it; `maxon hello.maxon` is the spelling that works everywhere.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| the program's | Forwarded verbatim, whatever it is — including the raw status of a child that terminated abnormally (`3221225725` on Windows for a stack overflow) |
+| `1` | This command could not act: no program named, no such file, a compile error (the diagnostics are printed and the program is **not** run), no writable cache root, or a finished build that could not be published into one |
+
+A missing file is reported as `error: file not found: <path as typed>`, the same sentence
+[`maxon build`](#maxon-build) prints for the same path.
+
+**Examples:**
+```bash
+maxon run hello.maxon                 # compile if needed, then run
+maxon run myproject --verbose         # a directory as one project; `--verbose` is the program's
+maxon hello.maxon a b c               # the wordless door, with three arguments
+MAXON_RUN_CACHE_ROOT=/build/cache maxon run hello.maxon
+```
+
+---
 
 ### `maxon build`
 
@@ -703,7 +823,10 @@ that silently reports nothing.
 
 ## Logging
 
-Every command accepts logging options.
+Every command accepts logging options **except [`maxon run`](#maxon-run)**, whose tail belongs to the
+program it launches: a `--log=` written after the path is one of the program's own arguments. Written
+before the word — `maxon --log=compiler:debug run app.maxon` — it is this driver's, and it also
+restores the build chatter `run` otherwise silences.
 
 | Option | Description |
 |--------|-------------|
@@ -735,6 +858,10 @@ maxon spec-test --log=ir:debug
 
 `2` is deliberately distinct from `1`: "nothing ran" and "something failed" are different facts, and a
 caller reading only the exit code has to be able to tell them apart.
+
+⚠ **[`maxon run`](#maxon-run) forwards the PROGRAM's exit code**, so the table above does not describe
+it. Any number in it is the program's own; only `1` is ever this driver's, and it means the program was
+never reached.
 
 ---
 
@@ -917,6 +1044,12 @@ See [STDLIB_REFERENCE.md](STDLIB_REFERENCE.md) for what the library contains.
 ## Common Workflows
 
 ### A single file
+
+```bash
+maxon run program.maxon        # compile if needed, then run — the build is cached
+```
+
+To produce a binary you can ship or hand to another tool, build it:
 
 ```bash
 maxon build program.maxon

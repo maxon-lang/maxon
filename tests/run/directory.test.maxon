@@ -1,0 +1,19 @@
+// directory.test.maxon — a DIRECTORY is compiled as one project and run, exactly as `maxon build` treats
+// one.
+//
+// ⭐ **THE FIXTURE IS TWO FILES AND ITS ANSWER COMES FROM THE SECOND.** A run that compiled only the entry
+// file would not resolve the greeting at all, so the printed line is the proof that the whole directory
+// was compiled rather than one file inside it.
+
+let DirectoryCaseLabel = "directory"
+
+test 'a directory is compiled as one project and run'
+	let staged = stageCase(DirectoryCaseLabel, fixture: ProjectFixtureName)
+	let run = runProgram(staged, program: staged.sources)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {RunCommandName} <directory>` did not run the project. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	try Expect.equal(observedStdout, expected: "{ProjectGreeting}{LineFeed}", message: "the project did not print its own answer, which only the SECOND file in the directory can supply")
+end 'a directory is compiled as one project and run'

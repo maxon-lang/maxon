@@ -206,9 +206,6 @@ typealias EnvSourceValue = int(0 to 1)
 // by both runtimes.
 let BlobTokenTerminator = 0 as Byte
 
-// What separates a name from its value inside one entry: `=` (0x3D).
-let EnvNameValueSeparator = 61 as Byte
-
 /// Carries the (block, source) pair the spawn contract's `env` / `envInherit` slots take. A type for
 /// `StdioRuntimeTriple`'s reason: the two are one decision and a caller that computed them separately
 /// could compute a block for a spawn that will not read it, or the reverse.
@@ -699,8 +696,8 @@ function appendInheritedEntries(out ByteArray, overrides EnvMap)
 		pending.upsert(name, value: value)
 	end 'eachOverride'
 
-	for entry in currentEnvironmentEntries() 'eachInherited'
-		let name = envEntryName(entry)
+	for entry in Process.currentEnvironmentEntries() 'eachInherited'
+		let name = Process.envEntryName(entry)
 		if let replacement = try pending.get(name) 'overridden'
 			// The entry is rebuilt rather than patched, and the REMOVE comes after it: what is left in
 			// `pending` at the end is exactly the overrides that named nothing inherited.
@@ -728,73 +725,6 @@ function appendEnvEntry(out ByteArray, name String, value String)
 	out.push(EnvNameValueSeparator)
 	appendNulTerminated(out, source: value)
 end 'appendEnvEntry'
-
-/// This process's environment, one `NAME=VALUE` entry per element, in the order the OS reports them.
-///
-/// ⚠ THE WALK ENDS AT THE FIRST EMPTY ANSWER, and that is the intrinsic's contract rather than a
-/// guess: every environment entry carries at least a name, so no real one is the empty string and
-/// nothing a real environment contains can end the walk early.
-///
-/// ⛔⛔ **AND THREE OF THE FOUR PRODUCERS BREAK THAT CONTRACT ON THEIR FAILURE ARMS, WHICH MAKES A
-/// TRUNCATED ENVIRONMENT INDISTINGUISHABLE FROM A COMPLETE ONE. NOT FIXED — see below.**
-/// The empty answer means "past the end" to this walk, and each producer also answers it when it
-/// COULD NOT ANSWER:
-///
-///   • the bootstrap's x86 `maxon_os_environment_entry` shares one `rt_oee_free_empty` arm between
-///     past-the-end, a `WideCharToMultiByte` sizing failure and an `mm_raw_alloc` that returned NULL;
-///   • its arm64 twin has the same shape;
-///   • the compiler's `__gt_subp_env_entry` answers empty when `GetEnvironmentStringsA` itself failed
-///     (`SubprocessRuntime.buildSubpEnvEntryFromBlock`'s `subpenvnone` arm).
-///
-/// A failure at entry k therefore stops the walk at k, and `appendInheritedEntries` hands the child a
-/// block missing every variable from k on — silently, with a successful spawn. ⚠ the compiler's POSIX shape
-/// (`buildSubpEnvEntryFromVector`) is the one that does NOT: its only empty answers are a NULL
-/// `environ` and a NULL `environ[k]`, both of which genuinely mean "no entry".
-///
-/// ⇒ THE CURE IS A SECOND CHANNEL, not a different sentinel: a failure has to be reportable
-/// separately from an answer, in all three producers, and this walk has to fail the spawn when one is
-/// raised — which makes `spawnEnvironmentFor` and its callers throwing. That is a change to the spawn
-/// contract across two compilers and both of the bootstrap's backends, so it is a rung rather than
-/// something to bolt onto one producer and leave the other two disagreeing.
-function currentEnvironmentEntries() returns StringArray
-	var entries = StringArray.create()
-	var index = 0
-
-	while true 'eachEntry'
-		let entry = String.init(__Builtins.osEnvironmentEntry(index))
-		if entry.isEmpty() 'pastTheEnd'
-			break
-		end 'pastTheEnd'
-
-		entries.push(entry)
-		index = index + 1
-	end 'eachEntry'
-
-	return entries
-end 'currentEnvironmentEntries'
-
-/// The NAME half of one `NAME=VALUE` entry — everything before its first `=`, or the whole entry when
-/// it holds none.
-///
-/// ⚠ THE SEARCH STARTS AT BYTE 1, NOT BYTE 0, and that is a platform fact rather than a defensive
-/// flourish: a Windows process's environment begins with entries like `=C:=C:\dir` recording the
-/// current directory of each drive, whose NAME is `=C:`. Splitting at byte 0 would give every one of
-/// them the empty name, and they would then collide with each other in the override lookup.
-function envEntryName(entry String) returns String
-	let bytes = entry.toByteArray()
-	let n = bytes.count()
-	var name = ByteArray.create()
-
-	for i in 0 upto n 'eachByte'
-		let b = try bytes.get(i) otherwise panic("envEntryName: i < n = bytes.count() but get({i}) failed")
-		if i > 0 and b == EnvNameValueSeparator 'atSeparator'
-			return String.from(name)
-		end 'atSeparator'
-		name.push(b)
-	end 'eachByte'
-
-	return entry
-end 'envEntryName'
 
 /// One String's bytes, appended verbatim. `appendNulTerminated` is this plus the terminator; an entry's
 /// NAME needs the half without it, because the entry does not end there.

@@ -1,0 +1,33 @@
+// missing-path.test.maxon — a path naming nothing is refused, by name, at both doors.
+//
+// ⭐ **BOTH DOORS, BECAUSE A REFUSAL IS WHERE TWO ENTRANCES MOST EASILY DIVERGE.** The word door and the
+// wordless one are one command, and a reader who mistyped a filename needs the same sentence whichever way
+// they reached it.
+
+let MissingPathCaseLabel = "missing-path"
+
+// A name nothing in the staged tree answers to.
+let AbsentProgramName = "nope.maxon"
+
+test 'a path naming nothing is refused at both doors'
+	let staged = stageCase(MissingPathCaseLabel, fixture: HelloFixtureName)
+
+	var withWord = StringArray.create()
+	withWord.push(RunCommandName)
+	withWord.push(AbsentProgramName)
+
+	var wordless = StringArray.create()
+	wordless.push(AbsentProgramName)
+
+	for arguments in [withWord, wordless] 'eachDoor'
+		let run = spawnDriver(staged, arguments: arguments, standardInput: InputSource.none)
+
+		let observedExit = run.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 1, message: "a path naming nothing did not fail. It said: {run.stdout}{run.stderr}")
+
+		let observedStdout = withoutCarriageReturns(run.stdout)
+		try Expect.isEmpty(observedStdout, message: "the refusal printed to stdout, which is the PROGRAM's stream and no program ran")
+
+		try Expect.contains(withoutCarriageReturns(run.stderr), needle: AbsentProgramName, message: "the refusal does not name the file that was asked for, so nothing tells the caller what they mistyped")
+	end 'eachDoor'
+end 'a path naming nothing is refused at both doors'

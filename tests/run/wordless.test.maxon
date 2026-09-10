@@ -1,0 +1,27 @@
+// wordless.test.maxon — a first argument ending in `.maxon` IS `run`, with no command word typed.
+//
+// ⭐⭐ **THIS IS THE SHEBANG DOOR, AND NOTHING ELSE REACHES IT.** A kernel execs the interpreter named on a
+// `#!/usr/bin/env maxon` line with the script's path ahead of the script's own arguments, so the word `run`
+// is never typed and cannot be. What is asserted is that the path is the PROGRAM rather than one of its
+// arguments, and that everything after it reaches the program exactly as the word door's tail does.
+
+let WordlessCaseLabel = "wordless"
+
+// The one argument handed past the script.
+let ForwardedArgument = "alpha"
+
+test 'a maxon file as the first argument runs it, with no command word'
+	let staged = stageCase(WordlessCaseLabel, fixture: ArgvFixtureName)
+
+	var arguments = StringArray.create()
+	arguments.push(stagedMain(staged).toString())
+	arguments.push(ForwardedArgument)
+
+	let run = spawnDriver(staged, arguments: arguments, standardInput: InputSource.none)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "a `{MaxonSourceSuffix}` first argument was not run. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	try Expect.equal(observedStdout, expected: "{ForwardedArgument}{LineFeed}", message: "the program did not see exactly the arguments typed after it. The path itself is the PROGRAM, never one of its arguments.")
+end 'a maxon file as the first argument runs it, with no command word'

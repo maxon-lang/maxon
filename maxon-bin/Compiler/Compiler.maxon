@@ -1938,14 +1938,18 @@ end 'loadOneSourceFile'
 // enumerates `stdlib/` as well as the user's own paths), and `Formatter.collectFormattableFiles`, which
 // is `maxon fmt`'s SEPARATE walk — it takes `*.test.maxon`, which a build does not, and prunes `.git`,
 // which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
-// two names. `module` visibility is what lets it, and a second spelling of either name would be a
-// file-discovery contract written down twice.
+// two names, and a second spelling of either would be a file-discovery contract written down twice.
+
 // Where a self-rebuild parks the image it is running from. See `vacateRunningImage`.
 let PreviousImageSuffix = ".previous"
 
 module let BuildManifestName = "build.maxon"
 
-module let MaxonSourceExtension = ".maxon"
+// ⭐ **`export` BECAUSE WHAT A MAXON SOURCE IS CALLED IS NOT ONLY A COMPILER'S QUESTION.**
+// `Main.MaxonArgs.parse` reads a first argument ending in it as `maxon run`, which is how a
+// `#!/usr/bin/env maxon` script arrives, and `Lsp/LspHover` names a stdlib file from a type's name.
+// Neither is under this directory.
+export let MaxonSourceExtension = ".maxon"
 
 // ⭐⭐ **A `test` DECLARATION'S FILE IS A SOURCE CATEGORY, NOT A FLAG INSIDE THE FILE** (see
 // `docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). A `*.test.maxon` file carries the project's tests and

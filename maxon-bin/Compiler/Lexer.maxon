@@ -824,6 +824,9 @@ type Lexer
 		// run of letters following the `#`, and we want to emit a dedicated
 		// TokenKind based on the name rather than two separate tokens.
 		if ch == Ascii.hash 'isDirective'
+			if startByte == 0 and len > 1 and (try bytes.get(1) otherwise panic("Lexer: byte 1 is unreachable in a source of {len} bytes")) == Ascii.bang 'isShebang'
+				return try skipShebang()
+			end 'isShebang'
 			return try scanDirective(startLine, startCol: startCol)
 		end 'isDirective'
 		// `@` opens a compiler annotation (e.g. `@heap`). Like `#`, it sits
@@ -1550,33 +1553,48 @@ type Lexer
 		return false
 	end 'scanDirective'
 
-	// Both '/' characters already consumed. Advances to (but not past) the newline, which is left for
-	// the main DFA to consume and emit as a token.
+	// `#!` as the source's first two bytes is the line a kernel reads to pick an interpreter, so the
+	// compiler owes it nothing but silence. Only at byte 0: `#` opens a directive everywhere else, and a
+	// rule keyed on "a line beginning `#!`" would swallow a mistyped directive mid-file. Emits no token —
+	// the line is not part of the program.
+	function skipShebang() returns bool throws CursorError
+		try skipToLineEnd()
+		return false
+	end 'skipShebang'
+
+	// Advance to — and not past — the line's terminator, which the main DFA consumes and emits as a
+	// token. ⭐ **NOT PAST IT IS LOAD-BEARING**: the newline surviving as a token is what keeps every line
+	// below at the number it has in the file, and what leaves the parser's every "a statement/header/label
+	// line ends here" rule demanding a literal newline.
 	//
-	// ⭐ **NOT PAST THE NEWLINE IS LOAD-BEARING NOW, NOT MERELY TIDY**: it is what guarantees a
-	// `docComment` token is always immediately followed by a `newline` one, which is the whole reason the
-	// parser can treat a doc comment as layout and still leave every "a statement/header/label line ends
-	// here" rule demanding a literal newline.
+	// ⛔ **A LINE THAT RUNS TO EOF IS COMPLETE, NOT TRUNCATED INPUT.** The last byte is one no advance can
+	// step past, so an unguarded move here unwinds as `E1008 Unexpected end of input` on a whole file.
+	function skipToLineEnd() throws CursorError
+		while cursorByte() < len 'skipLine'
+			if cursor.current() == Ascii.lf 'endOfLine'
+				break
+			end 'endOfLine'
+			if not tryAdvance() 'lineEndsTheFile'
+				try finishAtEof()
+			end 'lineEndsTheFile'
+		end 'skipLine'
+	end 'skipToLineEnd'
+
+	// Both '/' characters already consumed. A `//` emits no token, so the rest of the line is skipped
+	// whole; a THIRD slash makes it a doc comment, which does.
 	function scanComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
 		if cursor.current() == Ascii.slash 'aThirdSlash'
 			try scanDocComment(startLine, startCol: startCol, startByte: startByte)
 			return
 		end 'aThirdSlash'
 
-		while cursorByte() < len 'skipComment'
-			if cursor.current() == Ascii.lf 'endComment'
-				break
-			end 'endComment'
-			if not tryAdvance() 'commentEof'
-				// Comment runs to end of file — that's a complete comment, not a
-				// truncated token.
-				try finishAtEof()
-			end 'commentEof'
-		end 'skipComment'
+		try skipToLineEnd()
 	end 'scanComment'
 
 	// ⭐⭐ **`///` IS THE ONE COMMENT FORM THAT BECOMES A TOKEN** — the formatter round-trips it and the
-	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. The third slash
+	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. Its own walk stops
+	// AT the newline for `skipToLineEnd`'s reason, which is what makes a `docComment` token always
+	// immediately followed by a `newline` one — the whole reason the parser can treat one as layout. The third slash
 	// and then ONE following space are consumed and left OUT of the text, so `/// text` and `///text`
 	// carry the identical prose and a re-emit can put the separator back by rule instead of preserving
 	// whatever the author typed. The SPAN still opens at the first slash, because that is where the
@@ -1864,6 +1882,7 @@ end 'classifyDirective'
 module enum Ascii
 	lf = 10
 	space = 32
+	bang = 33
 	dquote = 34
 	hash = 35
 	quote = 39

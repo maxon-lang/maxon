@@ -1,0 +1,29 @@
+// compile-error.test.maxon — a program that does not compile is not run, and leaves nothing behind that a
+// later run could mistake for a build of it.
+//
+// ⭐⭐ **THREE CLAIMS, AND THE THIRD IS THE ONE NOTHING ELSE COVERS.** The exit code and the diagnostic are
+// what a caller sees; the EMPTY SLOT is what the NEXT run sees. A driver that recorded a key beside a build
+// that never happened would serve it as a hit, and every later run of that program would run nothing at
+// all while reporting success.
+
+let CompileErrorCaseLabel = "compile-error"
+
+// What the pipeline's own refusal opens with. The CODE is not pinned: which diagnostic an unresolved call
+// produces is the checker's business and moves with it, while `error` is what every one of them says.
+let DiagnosticWord = "error"
+
+test 'a program that does not compile is refused and leaves no build'
+	let staged = stageCase(CompileErrorCaseLabel, fixture: BrokenFixtureName)
+	let run = runProgram(staged, program: stagedMain(staged))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {RunCommandName}` did not fail for a program that does not compile. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	try Expect.isEmpty(observedStdout, message: "stdout is the PROGRAM's, and no program ran. A diagnostic printed there is one a caller piping the program's output would receive as the program's own.")
+
+	try Expect.contains(withoutCarriageReturns(run.stderr), needle: DiagnosticWord, message: "the refusal said nothing on stderr, so nothing tells the caller why their program did not run")
+
+	let leftBehind = slotExecutables(staged).count() as AssertedInt
+	try Expect.equal(leftBehind, expected: 0, message: "a failed compile left a binary in {soleSlotDir(staged).toString()}. Whatever is there is not a build of this program, and a later run that found it would run it.")
+end 'a program that does not compile is refused and leaves no build'

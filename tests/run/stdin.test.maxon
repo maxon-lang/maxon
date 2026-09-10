@@ -1,0 +1,23 @@
+// stdin.test.maxon — the program reads the caller's stdin.
+//
+// ⭐ **NOTHING ELSE IN THIS CORPUS CAN SEE THIS.** A driver that closed the child's stdin runs every other
+// case here perfectly; the program simply gets EOF where it expected input, which is a wrong answer only
+// a program that reads can report.
+
+let StdinCaseLabel = "stdin"
+
+// What is fed, and what the fixture echoes back for it. The newline is what makes it a LINE: a payload
+// without one leaves the program's read waiting on a stream that is about to close.
+let FedLine = "ping"
+let EchoPrefix = "echo "
+
+test 'the program reads the stdin the caller gave'
+	let staged = stageCase(StdinCaseLabel, fixture: StdinFixtureName)
+	let run = spawnDriver(staged, arguments: runArguments(stagedMain(staged)), standardInput: InputSource.bytes("{FedLine}{LineFeed}"))
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "the program did not read a line from stdin. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	try Expect.equal(observedStdout, expected: "{EchoPrefix}{FedLine}{LineFeed}", message: "the program did not echo the line it was fed")
+end 'the program reads the stdin the caller gave'

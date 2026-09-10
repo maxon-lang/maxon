@@ -1,0 +1,50 @@
+// cache-hit.test.maxon — the second run of an unchanged program reuses the first run's build.
+//
+// ⭐⭐ **"THE BINARY DID NOT CHANGE" IS NOT REUSE, AND THAT IS THIS CASE'S WHOLE DIFFICULTY.** A compiler
+// is deterministic: recompiling one unchanged program produces the same bytes, the same size and the same
+// NAME, so every comparison of the slot's CONTENTS is equally satisfied by a cache that never hits at all.
+// The discriminator is the DEBUG SIDECAR, removed between the two runs — nothing reads it back and it is
+// not part of the key, so its absence changes no answer the driver gives, except that a rebuild writes it
+// again and a reused build does not.
+//
+// The contents are still compared, and they are the half that catches the opposite failure: a cache
+// serving a build of some OTHER program, or one whose name drifts on its own so that nothing is ever
+// reused.
+//
+// ⚠ **NOT THE MODIFICATION TIME, EITHER.** A rebuild landing in the same whole second as the build it
+// replaced ties, so a time comparison passes for a cache that recompiles every time.
+
+let CacheHitCaseLabel = "cache-hit"
+
+test 'a second run of an unchanged program reuses the first build'
+	let staged = stageCase(CacheHitCaseLabel, fixture: HelloFixtureName)
+	let program = stagedMain(staged)
+
+	let first = runProgram(staged, program: program)
+	let firstExit = first.exitCode() as AssertedInt
+	try Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for a second one to reuse. It said: {first.stdout}{first.stderr}")
+
+	let builtSize = slotExecutableSize(staged) as AssertedInt
+	let builtName = slotExecutableName(staged)
+	removeSlotSidecar(staged)
+
+	let second = runProgram(staged, program: program)
+	let secondExit = second.exitCode() as AssertedInt
+	try Expect.equal(secondExit, expected: 0, message: "the second run failed. It said: {second.stdout}{second.stderr}")
+
+	let recompiled = slotHasSidecar(staged)
+	try Expect.isFalse(recompiled, message: "the second run of an unchanged program COMPILED it again: the debug sidecar removed between the two runs is back. Nothing is being reused, and every run of every program pays for a full build.")
+
+	// ⚠ The two runs agreeing proves nothing on its own — two identically wrong answers agree perfectly —
+	// so the first is also held to what the program actually prints.
+	let firstStdout = withoutCarriageReturns(first.stdout)
+	let secondStdout = withoutCarriageReturns(second.stdout)
+	try Expect.equal(secondStdout, expected: firstStdout, message: "two runs of one unchanged program printed different things")
+	try Expect.equal(firstStdout, expected: "{HelloGreeting}{LineFeed}", message: "neither run printed what the program prints, so the agreement above is between two wrong answers")
+
+	let reusedSize = slotExecutableSize(staged) as AssertedInt
+	try Expect.equal(reusedSize, expected: builtSize, message: "the cached executable changed size across two runs of an unchanged program, so what the second run ran is not what the first one built")
+
+	let reusedName = slotExecutableName(staged)
+	try Expect.equal(reusedName, expected: builtName, message: "the cached build's NAME changed across two runs of an unchanged program. The name is the key, so a name that moves on its own means nothing is ever reused.")
+end 'a second run of an unchanged program reuses the first build'
