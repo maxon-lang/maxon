@@ -30,7 +30,6 @@ Downloads for each release are on the
 - `Build.buildOne` in a build manifest is renamed `Build.build`.
 - `maxon fmt` separates groups of declarations with one blank line at every nesting depth, not only
   at the top level.
-- The Windows installer is code-signed.
 - On Linux and macOS, starting a program that cannot be found raises
   `SubprocessError.executableNotFound` instead of `spawnFailed`.
 
@@ -42,10 +41,6 @@ Downloads for each release are on the
 - On Linux, a subprocess started by program name finds the program on `PATH`, and a file of that
   name in the working directory is never run in its place.
 
-### Removed
-
-- The Windows installer no longer offers to install the VS Code extension.
-
 ## 0.1.0 — 2026-09-08
 
 The first release. One compiler, written in Maxon, that builds itself.
@@ -54,13 +49,8 @@ The first release. One compiler, written in Maxon, that builds itself.
 
 - Binaries for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`, each built and tested
   on its own architecture.
-- A Windows installer, also available through winget.
 - A Homebrew formula for macOS.
 - A VS Code extension, on the Marketplace and Open VSX, with a language server providing
   diagnostics, hover, go-to-definition, completion, rename, symbols and formatting.
 - `maxon build`, `fmt`, `test`, `spec-test` and `lsp-server`, and a build manifest written as a
   Maxon program rather than a configuration file.
-
-### Known limitations
-
-- The installers are not code-signed.

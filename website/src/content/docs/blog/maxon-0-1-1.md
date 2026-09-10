@@ -32,7 +32,6 @@ excerpt: Maxon 0.1.1 is out. Here's what changed.
 - `Build.buildOne` in a build manifest is renamed `Build.build`.
 - `maxon fmt` separates groups of declarations with one blank line at every nesting depth, not only
   at the top level.
-- The Windows installer is code-signed.
 - On Linux and macOS, starting a program that cannot be found raises
   `SubprocessError.executableNotFound` instead of `spawnFailed`.
 
@@ -44,15 +43,11 @@ excerpt: Maxon 0.1.1 is out. Here's what changed.
 - On Linux, a subprocess started by program name finds the program on `PATH`, and a file of that
   name in the working directory is never run in its place.
 
-### Removed
-
-- The Windows installer no longer offers to install the VS Code extension.
-
 ## Download
 
 ```
-winget install MaxonLang.Maxon          # Windows
-brew install maxon-lang/tap/maxon       # macOS
+curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
+irm https://maxon.dev/install.ps1 | iex         # Windows, in PowerShell
 ```
 
 Elsewhere, take the archive for your platform from the

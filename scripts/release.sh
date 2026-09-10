@@ -28,7 +28,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
-. scripts/lib/msi.sh
 
 DIST="dist"
 mode=""
@@ -116,17 +115,6 @@ package_one() {
 	rm -rf "$stage"
 	echo "release.sh: wrote $archive"
 	[ "$native" -eq 1 ] || echo "release.sh: ⚠ $tgt was CROSS-BUILT and its suite was not run here" >&2
-
-	# ⚠ THE INSTALLER IS BUILT FROM THE ARCHIVE, and only when WiX is present. A release machine has it;
-	# someone packaging locally may not, and should not be stopped by that — the zip is a release asset
-	# either way and the MSI is an additional one.
-	if [ "$tgt" = "x64-windows" ]; then
-		if command -v wix >/dev/null 2>&1; then
-			installer/windows/build.sh "$archive"
-		else
-			echo "release.sh: no WiX on PATH, so no MSI was built (dotnet tool install --global wix --version 5.*)" >&2
-		fi
-	fi
 }
 
 # ⛔ THE EXECUTABLE BIT HAS TO BE PUT INTO THE ARCHIVE, NOT ASSUMED FROM THE FILE. A tar records the
@@ -245,7 +233,12 @@ whole directory, or put it on your PATH as it is.
 
 ## Install
 
-Extract the archive somewhere permanent and add that directory to your PATH. Then:
+The one-line installers do all of this for you — see https://maxon.dev/install:
+
+    curl -fsSL https://maxon.dev/install.sh | sh          # macOS and Linux
+    irm https://maxon.dev/install.ps1 | iex               # Windows, in PowerShell
+
+By hand: extract the archive somewhere permanent and add that directory to your PATH. Then:
 
     maxon version
     maxon build examples/basic.maxon -o hello
@@ -282,21 +275,15 @@ EOF
 			cat >> "$out" <<'EOF'
 ## Windows: SmartScreen
 
-The `maxon.exe` in this archive is not code-signed — the `.msi` installer is — so SmartScreen may warn
-the first time you run it. Choose **More info** then **Run anyway**. The checksum published beside this
-archive is what tells you the file is the one that was built.
-
-⚠ Do not build your own projects from INSIDE the install directory. The compiler takes a lock at the
-root of the tree it is compiling, and a directory you do not own is one it cannot write to.
+The `maxon.exe` in this archive is not code-signed, so when the archive came from a browser, SmartScreen
+may warn the first time you run it. Choose **More info** then **Run anyway**. The checksum published
+beside this archive is what tells you the file is the one that was built.
 EOF
 			;;
 	esac
 }
 
-# Release notes: how to install, and what each asset is for.
-#
-# ⚠ IT NAMES ONLY THE ASSETS THAT EXIST. A release built without WiX has no MSI, and a notes template
-# that mentions one regardless sends people to a download that is not there.
+# Release notes: what changed, how to install, and what each asset is for.
 write_default_notes() {
 	local out="$1"
 
@@ -315,7 +302,7 @@ write_default_notes() {
 	{
 		# ⭐⭐ **WHAT CHANGED COMES FIRST, AND IT COMES OUT OF THE COMMITTED `CHANGELOG.md`.** Install
 		# instructions also live in every archive's `INSTALL.md` and on the website; what changed lives
-		# only here, and a page that opens with `winget install` buries the reason to upgrade.
+		# only here, and a page that opens with an install command buries the reason to upgrade.
 		#
 		# ⛔ **READ FROM THE FILE, NOT FROM HISTORY.** The publish job's checkout is shallow and
 		# tagless, and — more to the point — the notes that ship are then byte-for-byte the ones
@@ -327,34 +314,23 @@ write_default_notes() {
 		echo
 		echo "## Install"
 		echo
-		if ls "$DIST"/*.msi >/dev/null 2>&1; then
-			echo "**Windows**"
-			echo
-			echo '```'
-			echo "winget install MaxonLang.Maxon"
-			echo '```'
-			echo
-			echo "Or download the \`.msi\` below. It installs to \`C:\\Program Files\\Maxon\` and adds it to PATH."
-			if msi_is_signed "$(find "$DIST" -maxdepth 1 -type f -name '*.msi' | sort | head -n1)"; then
-				echo "The installer is code-signed, so Windows runs it without a SmartScreen prompt."
-			else
-				echo "The installer is not code-signed, so SmartScreen warns on first run: **More info** then **Run anyway**."
-			fi
-			echo
-			echo
-		fi
-		if ls "$DIST"/*-macos.tar.gz >/dev/null 2>&1 || ls "$DIST"/*-linux.tar.gz >/dev/null 2>&1; then
-			echo "**macOS and Linux**"
-			echo
-			echo '```'
-			echo "curl -fsSL https://maxon.dev/install.sh | sh"
-			echo '```'
-			echo
-			echo "The script downloads the archive for your machine, checks it against \`SHA256SUMS\`, and puts"
-			echo "\`maxon\` on your PATH. On macOS, \`brew install maxon-lang/tap/maxon\` works too. If you download"
-			echo "an archive by hand on macOS, run \`xattr -d com.apple.quarantine ./maxon\` once."
-			echo
-		fi
+		echo "**macOS and Linux**"
+		echo
+		echo '```'
+		echo "curl -fsSL https://maxon.dev/install.sh | sh"
+		echo '```'
+		echo
+		echo "**Windows**, in PowerShell"
+		echo
+		echo '```'
+		echo "irm https://maxon.dev/install.ps1 | iex"
+		echo '```'
+		echo
+		echo "Either script downloads the archive for your machine, checks it against \`SHA256SUMS\`, installs it"
+		echo "into \`~/.maxon\` and puts \`maxon\` on your PATH; run it again to upgrade. With Homebrew,"
+		echo "\`brew install maxon-lang/tap/maxon\`. If you download an archive by hand on macOS, run"
+		echo "\`xattr -d com.apple.quarantine ./maxon\` once."
+		echo
 
 		echo "⚠ **Keep \`maxon\` and \`stdlib/\` together.** The compiler finds its standard library by walking"
 		echo "up from its own executable, so moving the binary out on its own leaves it without one."
@@ -367,7 +343,7 @@ write_default_notes() {
 		echo "## Assets"
 		echo
 		local f
-		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -printf '%f\n' | sort); do
+		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort); do
 			echo "- \`$f\`"
 		done
 	} > "$partial"
@@ -400,7 +376,7 @@ fi
 [ -n "$version" ] || { echo "release.sh: --publish needs a version, e.g. v0.1.0" >&2; exit 2; }
 
 # ⛔ THE TAG AND THE BINARY MUST AGREE, AND THIS IS THE ONLY PLACE THAT CAN CHECK IT. Everything
-# downstream — the MSI, the winget manifest, the install page — derives from one of the two, so a
+# downstream — the archives, the Homebrew formula, the install page — derives from one of the two, so a
 # disagreement here becomes a release whose parts name different versions.
 if [ "$version" != "v$version_from_binary" ]; then
 	echo "release.sh: the tag says $version and the compiler says $version_from_binary." >&2
@@ -408,10 +384,10 @@ if [ "$version" != "v$version_from_binary" ]; then
 	exit 1
 fi
 
-archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) | sort)"
+archives="$(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) | sort)"
 [ -n "$archives" ] || { echo "release.sh: no archives in $DIST — run --package first" >&2; exit 1; }
 
-( cd "$DIST" && sha256sum $(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -printf '%f\n' | sort) > SHA256SUMS )
+( cd "$DIST" && sha256sum $(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort) > SHA256SUMS )
 echo "release.sh: checksums"
 sed 's/^/  /' "$DIST/SHA256SUMS"
 

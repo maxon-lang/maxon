@@ -6,8 +6,8 @@ description: Cut a release of the compiler — a release branch, the hand-writte
 # Cut a release
 
 **`docs/RELEASING.md` IS THE PROCESS AND THIS IS NOT A SECOND COPY OF IT.** Read it. It carries the
-whole picture — the bootstrap chain, the double self-compile, the platform gotchas, the installer and
-its signing, the package managers, the verification afterwards. This file is the ORDER of operations
+whole picture — the bootstrap chain, the double self-compile, the platform gotchas, the install
+scripts, the package managers, the verification afterwards. This file is the ORDER of operations
 and the checks, and it links out for every "why".
 
 ⛔ **THE TAG IS THE STEP THAT PUBLISHES.** Everything before it is rehearsable. `release.yml`'s
@@ -83,11 +83,11 @@ git push origin release/X.Y.Z vX.Y.Z
 
 ## 5 · Watch it
 
-`release.yml` builds and natively suite-tests four targets, builds the MSI from the x64-windows job's
-own artifact, signs it, and publishes, then starts the Homebrew, VS Code extension, maxon.dev and
-install-script workflows at the tag — so the download links go live only once the downloads exist.
-Check all four actually ran: a release created with `GITHUB_TOKEN` fires no `release: published`.
-`install-script` green is what says both one-line installers can install the new release.
+`release.yml` builds and natively suite-tests four targets and publishes, then starts the Homebrew,
+VS Code extension, maxon.dev and install-script workflows at the tag — so the download links go live
+only once the downloads exist. Check all four actually ran: a release created with `GITHUB_TOKEN`
+fires no `release: published`. `install-script` green is what says both one-line installers can
+install the new release.
 
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.
@@ -96,10 +96,9 @@ Last, `publish` deletes `release/X.Y.Z` — the tag is the record, and the **Rel
 every `v*` tag immutable. ⚠ If the branch has a commit past the tag, that step FAILS and leaves the
 branch: tell the user, since it is work nothing shipped.
 
-## 6 · winget, then merge the tag back
+## 6 · Merge the tag back
 
 ```bash
-wingetcreate update MaxonLang.Maxon --version X.Y.Z --urls <msi-url> --submit
 git fetch origin --tags --prune
 git checkout main && git merge --no-ff vX.Y.Z && git push origin main
 git branch -d release/X.Y.Z
@@ -112,15 +111,9 @@ tag until it happens. The branch is already gone, so the TAG is what is merged.
 merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next release's
 `--commits-since`.
 
-⚠ **Until `MaxonLang.Maxon` is merged into winget-pkgs, `update` fails** — replace the version directory
-on the open new-package PR (microsoft/winget-pkgs#431736) with `installer/winget/generate.sh`'s output
-instead. See `docs/RELEASING.md`.
-
 ## What this skill may not do
 
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
   are set with `gh secret set`, which prompts and hides the input.
-- **Never sign the MSI by hand or work around a signing failure.** The signature is read back off the
-  file for a reason.
 - **Never force-push a tag**, and never delete a published one. A wrong release is superseded by the
   next patch version, which is what patch versions are.

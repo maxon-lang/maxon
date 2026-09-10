@@ -1,7 +1,7 @@
 # Releasing Maxon
 
-Cutting a release means producing four tested compilers, one Windows installer, and the package
-manifests that point at them — then publishing the lot under one version.
+Cutting a release means producing four tested compilers and the package manifests that point at
+them — then publishing the lot under one version.
 
 Almost all of it is automated. This document exists for the parts that are not, and for the one
 release that cannot use the automation at all.
@@ -43,16 +43,16 @@ The shape is rustc's: the release number, then the commit and day it was built f
 what make a bug report about "0.1.1" answerable when there have been forty builds of 0.1.1.
 
 `release.sh` reads it from there and from nowhere else, and `--publish` refuses when the tag
-disagrees with it. That single check is what keeps the archives, the MSI's `ProductVersion`, the
-winget manifest and the Homebrew formula from naming different releases — a binary built before a
-version bump reports the old one, and asking the artifact is the only way to notice.
+disagrees with it. That single check is what keeps the archives and the Homebrew formula from naming
+different releases — a binary built before a version bump reports the old one, and asking the
+artifact is the only way to notice.
 
 ⛔ **THE WORKFLOWS BUILD TWICE: THE SEED BUILDS `C1`, AND `C1` BUILDS THE COMPILER THAT SHIPS**
 ([`scripts/build-from-seed.sh`](../scripts/build-from-seed.sh)). A seed older than named manifest
 targets reads `maxon-bin` as a path, so it never runs `build.maxon` — where the version comes from —
 and its output reports `dev`; that output's own runtime is also the seed's. `C1` builds by name, so the
 second build runs the manifest and carries this ref's version and runtime. MEASURED on the 0.1.1
-rehearsal: one build produced `maxon-dev-x64-windows`, and the MSI step refused it.
+rehearsal: one build produced `maxon-dev-x64-windows`.
 
 ⇒ **Cut a `release/X.Y.Z` branch or tag `vX.Y.Z`, then rebuild, then package.** The number follows
 the ref, so there is no file to forget to edit — but packaging without the rebuild still publishes
@@ -99,7 +99,6 @@ a generated `INSTALL.md`, and archives the result into `dist/`.
   is not, and says so on stderr; `--publish` repeats it in the release notes. Use it for a target you
   have no hardware for, never as a shortcut past a runner you do have.
 - `--skip-tests` exists for iterating on the packaging itself. It is not a release path.
-- On `x64-windows` it also builds the MSI, if WiX is present.
 
 ### `--publish` — once, anywhere, over what the first half left
 
@@ -137,109 +136,6 @@ is a floor, not a template to fight.
 
 ---
 
-## The Windows installer
-
-```bash
-dotnet tool install --global wix --version 5.0.2
-installer/windows/build.sh              # takes the x64-windows zip from dist/
-```
-
-⛔ **The MSI carries no UI and no custom actions**, so its only executable content is the payload —
-which is the least a validation sandbox can object to. winget never used the directory chooser
-anyway: it passes `INSTALLDIR="<path>"` on the command line.
-
-WiX is the one remaining .NET dependency, and it is asked of whoever cuts a release. Nothing about
-*building* Maxon needs it, and it is not a contributor prerequisite.
-
-The MSI is per-machine, installs to `C:\Program Files\Maxon` and appends to the system PATH.
-
-### Signing
-
-The `msi` job signs the installer with **Azure Artifact Signing** (the service formerly called
-Trusted Signing). It is a signing *service*, not a certificate you hold: a certificate is minted per
-request and lives about three days, so there is no key on a runner, in this repository, or on the
-machine of whoever cuts a release. Authentication is **OIDC** — GitHub mints a token for one workflow
-run and Azure trades it through a federated credential scoped to this repository — so no signing
-credential exists that would keep working for someone who stole it.
-
-⚠ **Only the MSI is signed.** The `maxon.exe` inside the zip and inside the MSI is not, so
-SmartScreen still warns when that binary is run from an extracted archive, and winget's validation
-sandbox still scans an unsigned payload. Signing the payload too means signing it in the `package`
-job, before the archive is built — otherwise the MSI and the zip would carry two different compilers
-for one version, which is exactly what building the MSI from the archive exists to prevent.
-
-⭐ **Configured by repository variables, so a fork is not broken by it.** `AZURE_SIGNING_ENDPOINT`
-is the switch: unset, the job builds an unsigned MSI and says so with a workflow warning; set, the
-rest must be right too.
-
-| Variable | Example |
-|---|---|
-| `AZURE_SIGNING_ENDPOINT` | `https://eus.codesigning.azure.net` — the region the account was created in |
-| `AZURE_SIGNING_ACCOUNT` | the Artifact Signing account name |
-| `AZURE_SIGNING_PROFILE` | the certificate profile name |
-| `AZURE_SIGNING_CLIENT_ID` / `AZURE_SIGNING_TENANT_ID` / `AZURE_SIGNING_SUBSCRIPTION_ID` | the app registration and subscription |
-
-They are `vars` and not `secrets` because a tenant, client and subscription id are identifiers rather
-than credentials — and because `secrets` is not a context a step's `if:` can read, so gating on one
-is not expressible.
-
-⛔ **The signature is read back off the file before the MSI can be uploaded**, and the timestamp is
-checked as well as the signature. A green signing step is not the question: a filter that matched
-nothing leaves an unsigned installer, and an untimestamped signature is verified against a
-certificate that expires within the week — it would look right in CI and fail on a user's machine
-days later.
-
-#### One-time setup, in the Azure portal
-
-1. Register the `Microsoft.CodeSigning` resource provider on the subscription.
-2. Create an **Artifact Signing account** (Basic SKU) in a supported region — its region decides the
-   `endpoint` URI, e.g. East US → `https://eus.codesigning.azure.net`.
-3. Assign yourself **Artifact Signing Identity Verifier** on the account (it also needs Reader at
-   subscription scope), then create an **identity validation**. ⚠ It takes 1–20 business days, and it
-   is the long pole — start it before anything else here matters.
-   ⛔ **Individual validation is limited to the US and Canada, and its fields come from the Azure
-   billing account, read-only.** The certificate subject is then a person's legal name, not
-   "Maxon Language"; an organization subject needs a registered legal entity and its own validation.
-4. Create a **Public Trust** certificate profile against that validation.
-5. Register an Entra app, give it a **federated credential** for this repository, and assign it
-   **Artifact Signing Certificate Profile Signer** — scoped to the certificate profile, not the
-   subscription:
-   ```
-   az role assignment create --assignee <app object id>      --role "Artifact Signing Certificate Profile Signer"      --scope "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CodeSigning/codeSigningAccounts/<account>/certificateProfiles/<profile>"
-   ```
-6. Set the six repository variables above.
-
-All of it is provisioned and signing is ON. The account is `maxonlang` in `maxon-signing` (East US),
-the profile is `maxon-public-trust`, and the app registration's federated credential names the
-`release` GitHub environment — which is why the `msi` job carries an `environment:` line, and why
-renaming that line revokes signing rather than moving it. The signer role is scoped to the
-certificate profile, not the account or the subscription.
-
-The certificate subject is **`CN=Eric Stern, O=Eric Stern, L=El Cajon, S=ca, C=US`** — an individual
-identity validation, so it names a person and not "Maxon Language". That is what a UAC prompt shows
-and what winget reports as the publisher. Changing it means a new identity validation and a new
-profile; it cannot be edited.
-
-⚠ **Identity Verifier is not implied by Owner.** The role table grants "manage identity validation"
-to that role alone, so a subscription owner finds the portal's **New identity** button dimmed with
-nothing explaining why.
-
-⚠ **Identity validation is not an ARM resource**, so nothing outside the portal can read it — not the
-`artifact-signing` CLI extension, and not the REST API at any version the provider advertises. Its id
-is needed to create a certificate profile, and copying it out of the portal is the only way to get it.
-
-⛔ **Artifact Signing refuses free, trial and sponsored subscriptions**, so a subscription still on
-a free-trial offer must be upgraded to pay-as-you-go before the account can be created at all. The
-error names the cause plainly (`BadResourceOperation`) and comes back from account creation, not from
-signing, so it is found at setup rather than at a release.
-
-⚠ **An MSI built by hand is unsigned.** `installer/windows/build.sh` calls no signing service, so a
-release packaged locally rather than by `release.yml` ships an unsigned installer. `release.sh` reads
-the signature state out of the MSI itself and writes the matching SmartScreen line into the release
-notes, so the notes cannot promise a signature the file does not carry.
-
----
-
 ## The install scripts
 
 `curl -fsSL https://maxon.dev/install.sh | sh` and `irm https://maxon.dev/install.ps1 | iex` are the
@@ -261,19 +157,14 @@ every release already shipped. A new option is fine; a changed one is not.
 
 ## Package managers
 
-All three manifests are **generated from the published artifacts, never committed**, because each one
-carries a hash — and for winget a `ProductCode` that WiX mints fresh on every build. A manifest
-checked in beside the source is stale the first time anyone rebuilds.
+The Homebrew formula is **generated from the published artifacts, never committed**, because it
+carries the hash of each archive. A formula checked in beside the source is stale the first time anyone
+rebuilds.
 
 | | |
 |---|---|
-| **winget** | `installer/winget/generate.sh` → `dist/winget/`. Identifier `MaxonLang.Maxon` — **not** `Maxon.*`, which is Maxon Computer GmbH's namespace and would be rejected on review. |
-| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, committed to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**, the same collision as winget. |
+| **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, committed to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
 | **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. |
-
-**winget's first submission cannot be automated.** `wingetcreate update` requires the package to
-already exist in `microsoft/winget-pkgs`, so v0.1.0 goes in by hand with `wingetcreate new` once the
-asset URL is live. Expect validation plus human review — days, and *after* the GitHub release exists.
 
 ---
 
@@ -394,9 +285,8 @@ the release notes and the maxon.dev post take their text from `CHANGELOG.md` the
 builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and
-`ubuntu-24.04-arm`, builds and **natively suite-tests** each target, builds the MSI from the
-x64-windows job's own artifact, and publishes. The `publish` job then starts the workflows that
-update Homebrew, the VS Code extension and maxon.dev, at the tag — so the download links go live only
+`ubuntu-24.04-arm`, builds and **natively suite-tests** each target, and publishes. The `publish` job then starts the workflows that
+update Homebrew, the VS Code extension, maxon.dev and the install-script check, at the tag — so the download links go live only
 once the downloads exist. ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no
 `release: published`, and on v0.1.1 none of the three ran.
 
@@ -407,19 +297,7 @@ that never existed, which `release.yml` would build and test at the real version
 exist cannot take one. It is deleted only when its tip IS the tagged commit — a commit past the tag
 fails the step and leaves the branch for a person, since deleting it would strand work nothing shipped.
 
-### 5. Submit to winget
-
-```bash
-wingetcreate update MaxonLang.Maxon --version 0.1.1 --urls <msi-url> --submit
-```
-
-⚠ **Until `MaxonLang.Maxon` is merged into `microsoft/winget-pkgs`, `update` has nothing to update.**
-The new-package PR is [microsoft/winget-pkgs#431736](https://github.com/microsoft/winget-pkgs/pull/431736),
-opened for 0.1.0 and retargeted to 0.1.1 when 0.1.0's unsigned installer failed the Defender scan. Until
-it merges, a new release REPLACES the version directory on that PR's branch with
-`installer/winget/generate.sh`'s output rather than opening a second new-package PR.
-
-### 6. Merge the tag back
+### 5. Merge the tag back
 
 ```bash
 git fetch origin --tags --prune
@@ -437,7 +315,7 @@ offer this one's changes again as new. If `main` has moved since the branch was 
 run the suite before pushing it — it combines runtime work nobody has tested together.
 
 **For v0.1.0**, the same steps ran by hand: package each target on hardware of its own architecture,
-collect the archives into one `dist/`, build the MSI, then `--publish`.
+collect the archives into one `dist/`, then `--publish`.
 
 ---
 
@@ -450,7 +328,6 @@ Re-download from the release page — not the local `dist/` copy, which is the t
   executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
   above either the compiler or the source.
 - Both install scripts on a clean machine, then `maxon version` in a new terminal.
-- `winget install MaxonLang.Maxon`, then `winget uninstall`, on a clean VM.
 - `brew install maxon-lang/tap/maxon`, then `maxon version` in the same shell — Homebrew's symlink
   is the point, and the compiler resolves it.
 - Install the published VS Code extension on a machine with **no** compiler, and confirm the

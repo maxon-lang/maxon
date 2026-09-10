@@ -172,120 +172,8 @@ jobs:
           path: dist/spec-test-*.log
           if-no-files-found: ignore
 
-  # ⭐ THE MSI IS BUILT FROM THE PUBLISHED ARCHIVE, NOT FROM A SECOND BUILD OF THE TREE. It takes the
-  # `x64-windows` job's own artifact, so the compiler inside the installer is byte-for-byte the one in
-  # the zip beside it — two builds of the same commit would be two different files and nothing would
-  # say which one a user had.
-  msi:
-    needs: [guard, package]
-    if: needs.package.outputs.seeded == 'yes'
-    runs-on: windows-latest
-    # ⛔ OIDC, SO THERE IS NO SIGNING CREDENTIAL TO LEAK. GitHub mints a token for this one run and
-    # Azure trades it for one through a federated credential scoped to this repository. Nothing that
-    # would still work for someone who obtained it exists in a secret store, on a runner, or here.
-    permissions:
-      contents: read
-      id-token: write
-    # ⛔ THE FEDERATED CREDENTIAL IS SCOPED TO THIS ENVIRONMENT NAME, so the job cannot obtain a
-    # signing token from anywhere else — not from a branch, not from a fork, not from a workflow that
-    # merely asks for one. Azure checks the `environment:release` claim, so renaming this line revokes
-    # signing rather than moving it.
-    environment: release
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v7
-        with:
-          name: maxon-x64-windows
-          path: dist
-
-      # ⚠ PINNED — an installer should not change because a toolset released on a Tuesday.
-      - name: Install WiX
-        run: |
-          set -euo pipefail
-          dotnet tool install --global wix --version 5.0.2
-          echo "$USERPROFILE\\.dotnet\\tools" >> "$GITHUB_PATH"
-
-      - name: Build the MSI
-        run: ./installer/windows/build.sh
-
-      # ⭐ SIGNING IS SWITCHED ON BY A REPOSITORY VARIABLE RATHER THAN BY EDITING THIS FILE, so a fork
-      # — which has no Azure subscription and cannot be given one — still produces a release instead
-      # of failing forever on a step it can never satisfy. `AZURE_SIGNING_ENDPOINT` is the switch.
-      #
-      # ⚠ THESE ARE `vars` AND NOT `secrets`, WHICH IS FORCED AS WELL AS CORRECT. A tenant, client and
-      # subscription id are identifiers, not credentials — the credential is the OIDC token, minted per
-      # run — and `secrets` is not a context `if:` can read, so gating on one is not expressible.
-      - name: Azure login
-        if: vars.AZURE_SIGNING_ENDPOINT != ''
-        uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
-
-      # Azure Artifact Signing, the service formerly called Trusted Signing. It mints a certificate
-      # per request rather than handing one out, so there is no key on this runner and none to steal.
-      - name: Sign the MSI
-        if: vars.AZURE_SIGNING_ENDPOINT != ''
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files-folder: dist
-          files-folder-filter: msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: The Maxon compiler
-          description-url: https://maxon.dev
-
-      # ⛔ THE SIGNATURE IS READ BACK OFF THE FILE, BECAUSE "THE SIGNING STEP EXITED 0" IS NOT THE SAME
-      # QUESTION. A filter that matched nothing, a file signed after it was copied, a chain that does
-      # not build on a stranger's machine — each leaves a green step and an unsigned installer, which
-      # is the single outcome this whole apparatus exists to prevent.
-      #
-      # ⛔ AND THE TIMESTAMP IS CHECKED, NOT ASSUMED. Artifact Signing issues certificates that live
-      # about THREE DAYS; a signature without a countersigned timestamp is verified against the
-      # certificate's own validity window and is therefore broken by the weekend. An untimestamped
-      # signature is worse than none — it looks right here and fails on a user's machine later.
-      - name: Verify the signature
-        if: vars.AZURE_SIGNING_ENDPOINT != ''
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $found = @(Get-ChildItem dist -Filter *.msi)
-          if ($found.Count -ne 1) { throw "expected one MSI in dist/, found $($found.Count)" }
-          $msi = $found[0]
-          $sig = Get-AuthenticodeSignature $msi.FullName
-          Write-Host "$($msi.Name): $($sig.Status)"
-          if ($sig.Status -ne 'Valid') {
-            throw "$($msi.Name) is not validly signed: $($sig.Status) - $($sig.StatusMessage)"
-          }
-          if (-not $sig.TimeStamperCertificate) {
-            throw "$($msi.Name) is signed but NOT timestamped, so the signature expires with a certificate that lives three days"
-          }
-          Write-Host "signer:    $($sig.SignerCertificate.Subject)"
-          Write-Host "issuer:    $($sig.SignerCertificate.Issuer)"
-          Write-Host "timestamp: $($sig.TimeStamperCertificate.Subject)"
-
-      - name: Say that the installer is unsigned
-        if: vars.AZURE_SIGNING_ENDPOINT == ''
-        run: |
-          echo "::warning title=Unsigned installer::AZURE_SIGNING_ENDPOINT is not set, so the MSI was not signed. SmartScreen will warn on first run, and winget submission validation may refuse it."
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: maxon-msi
-          path: dist/*.msi
-          if-no-files-found: error
-
   publish:
-    needs: [guard, package, msi]
+    needs: [guard, package]
     # ⛔ THE TAG IS THE ONLY THING THAT PUBLISHES. A release-branch run has reached this point having
     # built and tested everything, which is the whole point of rehearsing one — and stops here.
     if: needs.package.outputs.seeded == 'yes' && needs.guard.outputs.publish == 'yes'
@@ -307,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) -exec cp {} dist/ \;
+          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
           ls -la dist/
 
       # ⭐⭐ **THE VERSION IS READ OFF A COMPILER, SO THIS JOB HAS TO HAVE ONE.** `release.sh` asks the
@@ -337,8 +225,8 @@ jobs:
           echo "seeded $(./maxon-bin/.maxon/maxon version)"
 
       # ⛔ THE TAG AND THE BINARIES MUST NAME ONE VERSION. `release.sh --publish` refuses when the tag
-      # disagrees with what the compiler reports, which is the check that keeps the MSI, the winget
-      # manifest and the install page from naming different releases.
+      # disagrees with what the compiler reports, which is the check that keeps the archives, the
+      # Homebrew formula and the install page from naming different releases.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

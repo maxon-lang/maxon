@@ -286,10 +286,10 @@ function takeLock(lockPath FilePath) returns ExitCode
 	let token = "{pid}-{sinceUnix}-{Clock.nowNanos()}"
 
 	// ⛔ **THE REMEDY IS IN THE MESSAGE, BECAUSE THE LIKELIEST READER OF THIS LINE OWNS NEITHER THE
-	// DIRECTORY NOR THE PROBLEM.** An installed Maxon lives somewhere a user cannot write — the
-	// per-machine MSI puts it under Program Files — and `stdlibDirAbove` finds THAT install's `stdlib/`
-	// for any file placed beneath it, so dropping a `hello.maxon` there and building it lands exactly
-	// here. Naming only the path told that reader their "checkout" was broken: a checkout they do not
+	// DIRECTORY NOR THE PROBLEM.** An installed Maxon can live somewhere a user cannot write — a
+	// container image, a directory an administrator unpacked — and `stdlibDirAbove` finds THAT
+	// install's `stdlib/` for any file placed beneath it, so dropping a `hello.maxon` there and
+	// building it lands exactly here. Naming only the path told that reader their "checkout" was broken: a checkout they do not
 	// have, holding a lock they have never heard of. The word is gone for the same reason.
 	if not writeRecord(lockPath, token: token, sinceUnix: sinceUnix, heldSeconds: 0) 'unwritable'
 		printError("error: could not write the tree lock at {lockPath.toString()} — that directory is not writable by you. The lock guards the shared output directories two commands would otherwise corrupt, so nothing was run.\n")

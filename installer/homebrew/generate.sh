@@ -16,14 +16,14 @@
 # ⛔ THE TAP PREFIX IS REQUIRED, NOT A CONVENTION — `brew install maxon` INSTALLS SOMETHING ELSE.
 # `maxon` in homebrew-cask is **Maxon App**, Maxon Computer's Cinema 4D / ZBrush installer, and a bare
 # `brew install maxon` resolves to it. MEASURED: the attempt reported "Purging files for version
-# 2026.5.0 of Cask maxon". This is the same trademark collision that forced `MaxonLang.Maxon` on winget,
-# so the fully-qualified `maxon-lang/tap/maxon` is the ONLY spelling that installs the language.
+# 2026.5.0 of Cask maxon". So the fully-qualified `maxon-lang/tap/maxon` is the ONLY spelling that
+# installs the language.
 #
 # ⚠ `brew tap` + a bare name is not a shortcut either: a third-party tap now needs `brew trust` before
 # its formulae load, and the bare name would still hit the cask.
 #
-# ⚠ GENERATED, NOT COMMITTED, for the winget manifest's reason: the formula carries the SHA256 of each
-# archive, and a formula checked in beside the source is stale the moment a release is rebuilt.
+# ⚠ GENERATED, NOT COMMITTED: the formula carries the SHA256 of each archive, and a formula checked in
+# beside the source is stale the moment a release is rebuilt.
 #
 # Usage:
 #   installer/homebrew/generate.sh [<version>]
