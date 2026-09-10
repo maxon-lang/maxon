@@ -1,6 +1,6 @@
 # Install Maxon on Windows:
 #
-#   powershell -c "irm https://maxon.dev/install.ps1 | iex"
+#   powershell -c "irm maxon.dev/install.ps1|iex"
 #
 # A specific release:
 #
@@ -22,8 +22,8 @@
 # has it.
 #
 # ASCII ONLY: Windows PowerShell 5.1's `irm` decodes a response without a charset as ISO-8859-1.
-# NEVER `exit`: under `irm | iex` this runs in the user's own session, and `exit` would close it. So
-# `powershell -c "irm ... | iex"` exits 0 whatever happened; a caller that needs the status runs
+# NEVER `exit`: under `irm | iex` this runs in whatever session `iex` is in, and `exit` would close it.
+# So `powershell -c "irm ...|iex"` exits 0 whatever happened; a caller that needs the status runs
 #   & ([scriptblock]::Create((irm https://maxon.dev/install.ps1))); exit $LASTEXITCODE
 
 param(

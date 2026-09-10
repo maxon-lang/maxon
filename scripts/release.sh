@@ -236,7 +236,7 @@ whole directory, or put it on your PATH as it is.
 The one-line installers do all of this for you — see https://maxon.dev/install:
 
     curl -fsSL https://maxon.dev/install.sh | sh          # macOS and Linux
-    irm https://maxon.dev/install.ps1 | iex               # Windows, in PowerShell
+    powershell -c "irm maxon.dev/install.ps1|iex"         # Windows
 
 By hand: extract the archive somewhere permanent and add that directory to your PATH. Then:
 
@@ -320,10 +320,10 @@ write_default_notes() {
 		echo "curl -fsSL https://maxon.dev/install.sh | sh"
 		echo '```'
 		echo
-		echo "**Windows**, in PowerShell"
+		echo "**Windows**"
 		echo
 		echo '```'
-		echo "irm https://maxon.dev/install.ps1 | iex"
+		echo 'powershell -c "irm maxon.dev/install.ps1|iex"'
 		echo '```'
 		echo
 		echo "Either script downloads the archive for your machine, checks it against \`SHA256SUMS\`, installs it"

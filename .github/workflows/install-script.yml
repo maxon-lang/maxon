@@ -282,6 +282,16 @@ jobs:
 
       # Windows PowerShell turns a redirected native stderr line into an error, which the runner's 'stop'
       # preference makes fatal before the exit code can be read; every exit code here is checked instead.
+      # Exactly as the install page prints it: plain-http `maxon.dev`, redirected to https, run by a child
+      # Windows PowerShell. It is the published copy it fetches, not this checkout's.
+      - name: The published one-liner finds the install current
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = powershell -c "irm maxon.dev/install.ps1|iex" 2>&1 | Out-String
+          $out
+          if ($out -notmatch 'already installed') { throw 'the published one-liner did not find the install current' }
+          $global:LASTEXITCODE = 0
+
       - name: maxon upgrade finds the install current
         run: |
           $ErrorActionPreference = 'Continue'

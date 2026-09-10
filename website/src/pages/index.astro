@@ -48,8 +48,8 @@ end 'iterate'`;
 // detected client-side and that tab is preselected; every tab is rendered either
 // way, so the block still works with JS off (the tabs simply stack).
 //
-// `curl | sh` runs in a child shell, so the terminal it was typed into needs the
-// PATH line the script prints; `irm | iex` runs in the PowerShell session itself.
+// Both installers run in a child process, so the terminal they were typed into needs
+// the PATH line added by hand before it can find `maxon`.
 const quickstarts = [
   {
     id: 'unix',
@@ -65,7 +65,12 @@ const quickstarts = [
   {
     id: 'windows',
     label: 'Windows',
-    lines: [INSTALL_POWERSHELL, 'maxon build $HOME\\.maxon\\examples\\hello.maxon -o hello.exe', '.\\hello.exe'],
+    lines: [
+      INSTALL_POWERSHELL,
+      '$env:Path = "$HOME\\.maxon\\bin;$env:Path"',
+      'maxon build $HOME\\.maxon\\examples\\hello.maxon -o hello.exe',
+      '.\\hello.exe',
+    ],
   },
 ];
 

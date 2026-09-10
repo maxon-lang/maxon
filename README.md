@@ -81,7 +81,7 @@ curl -fsSL https://maxon.dev/install.sh | sh        # macOS and Linux
 ```
 
 ```powershell
-irm https://maxon.dev/install.ps1 | iex             # Windows, in PowerShell
+powershell -c "irm maxon.dev/install.ps1|iex"  # Windows
 ```
 
 Both install into `~/.maxon` (`%USERPROFILE%\.maxon` on Windows) and add its `bin` directory to your

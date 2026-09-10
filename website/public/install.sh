@@ -238,7 +238,7 @@ detect_target() {
 			esac
 			;;
 		MINGW*|MSYS*|CYGWIN*)
-			fail "on Windows, install from PowerShell with: powershell -c \"irm https://maxon.dev/install.ps1 | iex\""
+			fail "on Windows, install with: powershell -c \"irm maxon.dev/install.ps1|iex\""
 			;;
 		*)
 			fail "there is no Maxon build for $os"

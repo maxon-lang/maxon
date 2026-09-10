@@ -138,7 +138,7 @@ is a floor, not a template to fight.
 
 ## The install scripts
 
-`curl -fsSL https://maxon.dev/install.sh | sh` and `irm https://maxon.dev/install.ps1 | iex` are the
+`curl -fsSL https://maxon.dev/install.sh | sh` and `powershell -c "irm maxon.dev/install.ps1|iex"` are the
 primary way to install. Both scripts live in `website/public/` and are served verbatim by the website
 deploy, as `text/plain` (`website/public/_headers`). They read the newest version from the redirect of
 `releases/latest`, download that release's archive and `SHA256SUMS` from GitHub, and install into
