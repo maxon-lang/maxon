@@ -114,12 +114,11 @@ end 'eliminateDeadFunctions'
 // call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
 // file's header names.
 //
-// ⚠⚠ **IT USED TO CATCH TWO CAUSES AND ONLY ONE OF THEM WAS A COMPILER BUG (A1w).** The other — an author's
-// declaration of one of the four names kind 2 of `seedRoots` roots — is now refused at that root, with a
-// POSITIONED E4015, so it can no longer arrive here as an unpositioned panic. What is left is the genuine
-// compiler bug: a stdlib function reached through a witness table or a layout-descriptor slot, a DATA edge
-// `StdlibSource`'s Maxon-tier walk does not model (its own header records that this is exact "at this rung"
-// and not in general).
+// ⚠⚠ **WHAT ARRIVES HERE IS A COMPILER BUG.** An author's declaration of one of the four names kind 2 of
+// `seedRoots` roots is refused at that root with a POSITIONED E4015, so it never arrives as an unpositioned
+// panic. What does arrive is an edge `StdlibSource`'s Maxon-tier walk fails to model: a DATA edge (a
+// witness-table or layout-descriptor slot), or a call from a body synthesized after that walk
+// (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live.
 //
 // COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
 // program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
@@ -130,7 +129,7 @@ function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByN
 			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
 
 			if isLive 'reachedAnyway'
-				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: a DATA edge (a witness-table or layout-descriptor slot) reaches a stdlib function, which the Maxon-tier walk in StdlibSource does not model. Keeping it would emit an EMPTY function the program calls")
+				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached it along an edge the Maxon-tier walk in StdlibSource does not model — a DATA edge (a witness-table or layout-descriptor slot), or a call from a body synthesized after that walk (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live. Keeping it would emit an EMPTY function the program calls")
 			end 'reachedAnyway'
 		end 'aModuleFunction'
 	end 'eachSkipped'

@@ -516,13 +516,10 @@ function declaredInterfaceParameterNoun(signatures ProgramSignatures, resolved M
 	return InterfaceParameterNoun if form == TypeDeclKind.interfaceType else ""
 end 'declaredInterfaceParameterNoun'
 
-// ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that made every
-// `.get(0)` on this path safe, and it was written FOUR times (SV1 review).** `classifyServiceTarget`,
-// `classifyServiceRoster`, `serviceRequestPayloads` and `ServiceLoop.buildServiceArm` each spelled the same
-// fetch and their own sentence for why it cannot miss. That is `serviceLayoutOf`'s finding one column
-// over — *"five of them was five copies of one `match`"* — and it is worth collapsing for the same reason:
-// the day a message can reach any of those four without a declaration, the answer must change in one place,
-// not in whichever three somebody remembers.
+// ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that makes every
+// `.get(0)` on this path safe.** `classifyServiceTarget`, `classifyServiceRoster`, `serviceRequestPayloads`
+// and `ServiceLoop.buildMessageArm` all rest on it, so the day a message can reach any of them without a
+// declaration, the answer changes in one place.
 //
 // ⚠ **IT TAKES THE ARRAY, NOT THE KEY, AND THAT IS DELIBERATE.** Two of the callers have already asked
 // `overloadedDeclsOf` — one to refuse an EMPTY set, one to refuse an OVERLOADED one — and a door that
@@ -846,8 +843,8 @@ function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, de
 end 'serviceMessageHasAReply'
 
 // ⭐⭐ **WHICH PAYLOAD SLOT OF ONE VARIANT IS THE `__reply` CELL, IF ANY — THE ONE AUTHORITY THREE SITES
-// READ (SV2).** The send mints a cell into it (`Parser.fillMessageReplySlot`), the loop completes what it
-// finds there (`ServiceLoop.buildServiceArm`) and the abandon path answers `ServiceError.stopped` into it
+// READ.** The send mints a cell into it (`Parser.fillMessageReplySlot`), the loop completes what it
+// finds there (`ServiceLoop.buildMessageArm`) and the abandon path answers `ServiceError.stopped` into it
 // (`ServiceLoop.buildServiceAbandon`) — and a disagreement between any two of them is a HANG: a cell minted
 // by a send the loop never completes leaves its awaiter parked for ever, with no leak and no diagnostic.
 //
@@ -891,7 +888,7 @@ end 'ServiceReplySlotIndex'
 // match and needs no second dispatch engine.
 //
 // ⛔⛔ **THE TWO SIDES ARE IN DIFFERENT PROCESSES OF THE COMPILER AND MUST AGREE TO THE DIGIT.**
-// `ServiceLoop.buildServiceArm` SHIFTS the handler's raw error flag by `offset - ErrorFlagOrdinalBias`
+// `ServiceLoop.emitFusedHandlerFlag` SHIFTS the handler's raw error flag by `offset - ErrorFlagOrdinalBias`
 // before writing it into the cell, and `Parser.serviceReplyErrorMembers` builds the layout the awaiter's
 // `match e` dispatches against from the same offsets. A disagreement is not a crash: it is an arm running
 // for a case that was not raised.
@@ -1048,10 +1045,9 @@ end 'serviceSpawnSiteOf'
 // two cannot come to disagree about what a message is — and the answer is read off the REQUEST UNION, the
 // same roster `dispatchOnServiceHandle` resolves a send against.
 //
-// ⚠ **VARIANT 0 IS EXCLUDED.** `__shutdown` is the compiler's pill and no source declares a function under
-// that name, so it can never be the enclosing function of anything.
+// A message is exactly a function `<T>.__loop` calls (`serviceArmAt`), so the pill is never one.
 //
-// ⚡ **IT COSTS THREE ALLOCATIONS PER ASK — the roster array, its return, and the boxed answer — so a
+// ⚡ **IT ALLOCATES PER ASK — the roster, and a qualified name and a boxed arm per variant — so a
 // PER-STATEMENT caller gates on `ProgramSignatures.spawnsAnyService()` first.** That gate lives at the door
 // that needs it (`Parser.requireServiceReplyDoesNotAliasState`) rather than here, because here it could only
 // skip the roster and would still box a `notAMessage` to say so.
@@ -1060,11 +1056,12 @@ module function serviceMessageOwnerOf(signatures ProgramSignatures, callee ByteA
 		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
 
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
-			if caseIndex == ServiceShutdownCaseIndex 'theCompilersOwnPill'
-				continue
-			end 'theCompilersOwnPill'
+			let isThisMessage = match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
+				shutdownPill gives false
+				message(handler) gives handler.equals(callee)
+			end 'arm'
 
-			if qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)).equals(callee) 'thisMessage'
+			if isThisMessage 'thisMessage'
 				return ServiceMessageOwner.ofService(typeName, methodName: request.caseNameAt(caseIndex))
 			end 'thisMessage'
 		end 'eachVariant'
@@ -1097,6 +1094,50 @@ module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName By
 		undeclared then throw MapError.keyNotFound
 	end 'lookup'
 end 'serviceRequestLayoutOf'
+
+// The request union's layout, or a panic, for a caller that holds a SPAWNED type: its companions were minted
+// before any body was parsed, so a missing union is a compiler bug rather than a program's.
+module function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout
+	return try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise panic("requireServiceRequestLayout: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
+end 'requireServiceRequestLayout'
+
+// ⭐⭐ **WHAT `<T>.__loop`'s ARM FOR ONE REQUEST VARIANT RUNS — the ONE answer to "which functions does the
+// loop call?"** `ServiceLoop.buildServiceArm` builds each arm from it, `serviceMessageOwnerOf` answers "is this
+// function a message?" from it, and `serviceLoopHandlerCallees` hands the reachability walk the same list, so
+// the handlers the loop calls and the stdlib bodies the compile builds for them cannot come apart.
+module union ServiceArm
+	// Variant 0, the compiler's `__shutdown`: no source declares a function under that name.
+	shutdownPill
+
+	// Every other variant calls the message it is named after.
+	message(callee ByteArray)
+end 'ServiceArm'
+
+module function serviceArmAt(request EnumLayout, typeName ByteArray, caseIndex CaseIndex) returns ServiceArm
+	if caseIndex == ServiceShutdownCaseIndex 'thePoisonPill'
+		return ServiceArm.shutdownPill
+	end 'thePoisonPill'
+
+	return ServiceArm.message(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
+end 'serviceArmAt'
+
+// ⭐⭐ **EVERY HANDLER A `spawn` OF `typeName` MAKES LIVE, WHETHER OR NOT ANY HANDLE SENDS IT.** The loop's
+// switch has an arm per variant, so a message nobody sends is still called — and `DeadFunctionElimination`
+// reaches it through the `funcAddr` the `spawn` lowers to. `StdlibSource`'s walk runs before the loop exists
+// and credits the `spawn` with this list instead.
+module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns ByteArrayArray
+	let request = requireServiceRequestLayout(signatures, typeName: typeName)
+	var callees = ByteArrayArray.create()
+
+	for caseIndex in 0 upto request.caseCount() 'eachVariant'
+		match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
+			shutdownPill then continue
+			message(callee) then callees.push(callee)
+		end 'arm'
+	end 'eachVariant'
+
+	return callees
+end 'serviceLoopHandlerCallees'
 
 module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
 	var services = ByteArrayArray.create()

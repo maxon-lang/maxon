@@ -135,6 +135,10 @@ export typealias StdlibSubstrateEntryMap = Map with (ByteArray, ByteArray)
 // smaller stdlib-only key space `buildCsr` is handed.
 typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 
+// The service types whose loop handlers the walk has credited, so a type spawned at many sites pays for its
+// handler roster once rather than once per `spawn`.
+typealias CreditedServiceSet = Set with ByteArray
+
 // ⭐ THE TWO FACTS ABOUT STDLIB SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
 // object rather than two `Project` fields because they are one derivation over one call graph:
 // `substrateEntries` is meaningful only for the functions `unreachable` does NOT hold (code the program
@@ -534,9 +538,10 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var witnessInterfaces = InterfaceNameSet.create()
 	var witnessInterfaceOrder = ByteArrayArray.create()
 	var interfacesSeeded = 0 as FieldIndex
+	var creditedServices = CreditedServiceSet.create()
 
 	while true 'seedRounds'
-		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder)
+		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices)
 
 		if interfacesSeeded == witnessInterfaceOrder.count() 'noInterfaceLeftToSeed'
 			break
@@ -646,12 +651,12 @@ end 'conformersMintedWithoutTheirOwnMethods'
 // later function names is one the seed still owes — so every reached function is asked. The ask is a
 // qualified-name split and a handful of map lookups, and it is now the only thing standing between a
 // `Hashable` program and 9 KB of `.rdata` it cannot reach.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, creditedServices CreditedServiceSet)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
-		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names)
+		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
 	end 'walk'
 end 'drainReachableWorklist'
@@ -679,7 +684,7 @@ end 'drainReachableWorklist'
 //
 // ⛔⛔ **W17 MADE THE SEED UNCONDITIONAL, AND THAT BROKE THE RUNTIME FLOOR FOR EVERY PROGRAM IN THE
 // LANGUAGE (repaired here).** With the cone listed those five names ARE stdlib names, so the root list made
-// `anyRootNamesStdlib` answer TRUE for a program whose whole text is `return 0 as ExitCode`: the
+// `anyNameReachesStdlib` answer TRUE for a program whose whole text is `return 0 as ExitCode`: the
 // allocation-free short-circuit never fired again, the precise walk ran on every compile, and it reached
 // `Character.hash` — whose conformer key then credits `Character.clone`/`Character.init`, bodies that build
 // the managed record `Character{managed: …}`. `scanRuntimeUsage` turned the heap on,
@@ -1025,7 +1030,7 @@ end 'markOneReachable'
 // with the `__cs_*` runtime. **A new such callee brings the question back HERE and not into a second pass**:
 // a walk of its own would re-derive, on every compile, a callee name this one already holds. See
 // `functionDeclaresAWitnessPosition`'s header for the two routes that remain.
-function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 
@@ -1033,6 +1038,7 @@ function markMaxonCallees(module MaxonModule, project Project, signatures Progra
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 			markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			markServiceLoopHandlers(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -1059,6 +1065,32 @@ module function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncInde
 		noCallee then break 'kind'
 	end 'kind'
 end 'markMaxonCalleeEdge'
+
+// ⭐⭐ **A `spawn` REACHES EVERY HANDLER ITS SERVICE LOOP DISPATCHES.** `<T>.__loop` is built after this walk
+// (`installServiceLoops`), and `DeadFunctionElimination` reaches it through the `funcAddr` the `spawn` lowers
+// to — so the loop's calls are credited here, at the op that makes the loop live, from the roster the loop is
+// built from (`serviceLoopHandlerCallees`). Its other callees are runtime entries and synthesized drops, never
+// stdlib source.
+//
+// ⚡ Credited once per TYPE: the spawn sites and the messages of one service both grow with the program, and
+// their product would not.
+function markServiceLoopHandlers(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+	if not maxonOpIsServiceSpawn(op) 'startsNoService'
+		return
+	end 'startsNoService'
+
+	let typeName = maxonOpSpawnedServiceType(op)
+
+	if creditedServices.contains(typeName) 'alreadyCredited'
+		return
+	end 'alreadyCredited'
+
+	for handler in serviceLoopHandlerCallees(signatures, typeName: typeName) 'eachHandler'
+		markReachable(handler, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachHandler'
+
+	creditedServices.insert(typeName)
+end 'markServiceLoopHandlers'
 
 // ⭐⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — CREDITED AT THE CONFORMER
 // THE WALK REACHES (W35).** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
@@ -1282,7 +1314,8 @@ end 'markCorpusSlotInitCallees'
 // allocation-free pre-scan that lets a program which never touches stdlib skip the reachability walk and
 // the substrate fixpoint entirely. It asks the same dialect classifier `markMaxonCalleeEdge` does
 // (`maxonOpCalleeKind`), and differs from it only in what it does with a hit: it runs on every compile, so
-// it must allocate nothing (no map, no queue) — it only asks "is one present?".
+// it allocates nothing (no map, no queue) — it only asks "is one present?". The one exception is a program that
+// spawns a service, whose handler roster `anyServiceHandlerReachesStdlib` builds once.
 //
 // ⚠ **IT ANSWERS OVER THE SAME LISTS THE PRECISE WALK ROOTS FROM — those shared lists are the guarantee,
 // not a matching root SET**, and the difference is worth stating because the two are easy to confuse.
@@ -1305,7 +1338,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// naming it — the call belongs to `__module_init`, which does not exist yet. Missing it would answer "all
 	// of stdlib is unreachable" for a program that reaches it, the direction that skips a body the back end
 	// then calls.
-	if anyRootNamesStdlib(initCallees, project: project, stdlib: stdlib) 'rootedInStdlib'
+	if anyNameReachesStdlib(initCallees, project: project, stdlib: stdlib) 'rootedInStdlib'
 		return true
 	end 'rootedInStdlib'
 
@@ -1318,6 +1351,13 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	if corpusDeclaresASeededConformance(project, signatures: signatures) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
 		return true
 	end 'widensOrThreadsOne'
+
+	// ⭐ **AND A SERVICE LOOP IS THE THIRD: `<T>.__loop` calls every handler, and it is built after this scan.**
+	// A user handler's body is scanned below like any other, so what this answers for is a handler that IS
+	// stdlib source. See `anyServiceHandlerReachesStdlib` for why it is asked of the roster and not per `spawn`.
+	if signatures.spawnsAnyService() and anyServiceHandlerReachesStdlib(project, signatures: signatures, stdlib: stdlib) 'aHandlerIsStdlib'
+		return true
+	end 'aHandlerIsStdlib'
 
 	for func in module.functions 'eachFunc'
 		// ⭐ SKIP STDLIB's OWN BODIES. Stdlib is internally connected (`Clock.elapsedMs` calls
@@ -1417,17 +1457,30 @@ function corpusDeclaresASeededConformance(project Project, signatures ProgramSig
 	return false
 end 'corpusDeclaresASeededConformance'
 
-// Does any name on the precise walk's initializer root LIST belong to stdlib? Kept a named function rather
-// than inlined: a second root LIST would be one call, and cannot then arrive with a subtly different test.
-function anyRootNamesStdlib(roots ByteArrayArray, project Project, stdlib FunctionNameSet) returns bool
-	for name in roots 'eachRoot'
+// Does any name on a list the precise walk marks reach stdlib? One function for every such list — the
+// initializer roots and a service's handlers — so none of them can arrive with a subtly different test.
+function anyNameReachesStdlib(names ByteArrayArray, project Project, stdlib FunctionNameSet) returns bool
+	for name in names 'eachName'
 		if nameReachesStdlib(name, project: project, stdlib: stdlib) 'found'
 			return true
 		end 'found'
-	end 'eachRoot'
+	end 'eachName'
 
 	return false
-end 'anyRootNamesStdlib'
+end 'anyNameReachesStdlib'
+
+// The short-circuit's half of `markServiceLoopHandlers`. Asked once over the ROSTER — every type any `spawn`
+// starts, so a superset of what the precise walk credits, which only ever costs that walk — rather than at
+// each `spawn`, whose handler roster would be rebuilt per site.
+function anyServiceHandlerReachesStdlib(project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
+	for typeName in serviceTypeRoster(signatures) 'eachService'
+		if anyNameReachesStdlib(serviceLoopHandlerCallees(signatures, typeName: typeName), project: project, stdlib: stdlib) 'found'
+			return true
+		end 'found'
+	end 'eachService'
+
+	return false
+end 'anyServiceHandlerReachesStdlib'
 
 // Whether one `MaxonOp` names a callee in `stdlib` — the SAME dialect classifier `markMaxonCalleeEdge`
 // asks, over the same four callee-bearing variants.

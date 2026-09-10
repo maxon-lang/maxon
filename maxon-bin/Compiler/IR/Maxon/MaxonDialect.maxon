@@ -1926,6 +1926,57 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 	end 'op'
 end 'maxonOpCalleeName'
 
+// ⭐ **DOES THIS OP START A SERVICE?** A `spawn` binds no callee (`maxonOpCalleeKind`), yet it makes the
+// synthesized `<T>.__loop` — and every handler that loop dispatches — live, so a walk that follows calls must
+// ask this too. Every arm is named, so a variant added later is a compile error here rather than an omission.
+export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
+	return match op 'op'
+		serviceSpawn gives true
+		call or
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			tryCall or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint gives false
+	end 'op'
+end 'maxonOpIsServiceSpawn'
+
+// The type a `spawn` starts — asked only of an op `maxonOpIsServiceSpawn` answered true for.
+export function maxonOpSpawnedServiceType(op MaxonOp) returns ByteArray
+	return match op 'op'
+		serviceSpawn(_, typeName, _) gives typeName
+		default panic("maxonOpSpawnedServiceType: asked of an op that starts no service — `maxonOpIsServiceSpawn` answers false for it, and every caller gates on that")
+	end 'op'
+end 'maxonOpSpawnedServiceType'
+
 // The same op with its callee name replaced — every other operand carried through verbatim. Asked only of an
 // op `maxonOpCalleeKind` answered `direct` for, so every other variant panics rather than returning the op
 // unchanged: a silent pass-through would make a resolver's rewrite vanish for one op kind.

@@ -5352,3 +5352,111 @@ end 'main'
 ```stdout
 survived
 ```
+
+<!-- test: an-unsent-message-that-calls-the-library-still-compiles -->
+**A MESSAGE NOBODY SENDS IS STILL REACHABLE, BECAUSE THE SERVICE LOOP DISPATCHES IT.** `spawn` makes the
+synthesized `Reader.__loop` live, and that loop's switch names every message the type exports, so `read` is
+code the program keeps whether or not any handle ever calls it. Its call to `String.count` is therefore a live
+edge into the standard library. The compiler decides which library bodies to build by one reachability walk
+and which functions to keep by another; both must follow the loop's dispatch, or the second keeps a function
+whose body the first never built.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read() returns Integer
+		let line = "hello"
+		return line.count() as Integer
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let reader = spawn Reader.create()
+	_ = reader
+	return 7 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-unsent-message-of-a-generic-service-that-calls-the-library-still-compiles -->
+The same edge through a GENERIC service. The loop dispatches a message by its base name whatever the
+instantiation, so the library body its unsent message reaches must be built for every instantiation the
+program spawns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function label() returns Integer
+		let text = "boxed"
+		return text.count() as Integer
+	end 'label'
+end 'Box'
+
+function main() returns ExitCode
+	let small = spawn Box.create(1)
+	let named = spawn Box.create("one")
+	_ = small
+	_ = named
+	return 7 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-message-that-spawns-a-service-keeps-that-services-unsent-messages-alive -->
+The edge is transitive. `Outer.start` is sent, and its body spawns `Inner`, so `Inner.__loop` is live and every
+message it dispatches is reached — including `Inner.read`, which nobody sends and which calls the library.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read() returns Integer
+		let line = "hello"
+		return line.count() as Integer
+	end 'read'
+end 'Inner'
+
+type Outer
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function start() returns Integer
+		let inner = spawn Inner.create()
+		_ = inner
+		return 7
+	end 'start'
+end 'Outer'
+
+function main() returns ExitCode
+	let outer = spawn Outer.create()
+	let r = try await outer.start() otherwise 0
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
