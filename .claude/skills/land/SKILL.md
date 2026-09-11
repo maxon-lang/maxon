@@ -131,6 +131,7 @@ five times per change and exactly one of those runs gates anything.
 
 | Work | Runs | Where | Everywhere else |
 |---|---|---|---|
+| **build** | **only when the binary is stale** | whoever last edited a compiled-in source | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
 | **full suite · wasm lane · self-compile** | **once** | **you, §7** | ⛔ **no agent runs any of these** — the reviewer finishes minutes before the battery, on the identical tree |
 | **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
@@ -138,6 +139,24 @@ five times per change and exactly one of those runs gates anything.
 
 **When an agent suspects something it cannot cheaply confirm, it says so in its report** — a sentence
 feeding a gate that is going to run anyway beats a run nobody can attribute.
+
+> ### ⭐⭐ NEVER REPEAT A BUILD OR A RUN WHOSE INPUTS HAVE NOT CHANGED (user directive)
+> A build's inputs are the sources compiled into the compiler; a run's are the binary, the tree and the
+> filter. Same inputs, same answer — so a repeat buys nothing and costs minutes.
+> - **Build only when the binary is STALE** — a compiled-in source (`maxon-bin/**.maxon`) is newer than
+>   it: `find maxon-bin -name '*.maxon' -newer maxon-bin/.maxon/maxon.exe | head -1` (`maxon` off
+>   Windows) prints nothing when it is current, and a missing binary is stale. ⛔ **Never build "to be
+>   safe"**: `spec-test` and `scale-test` refuse a stale binary by themselves
+>   (`Testing/CompilerFreshness.maxon`), and a `stdlib/` edit needs no build at all — the suite
+>   compiles the stdlib from source.
+> - **A run already done on the same binary and tree is READ, not repeated.** Agents write every build
+>   and run to a file under `temp/` and report its path and exit code; you read that file. Re-run only
+>   when something it depended on has changed since.
+> - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
+>   after a run started invalidates that run. So the battery starts only once no agent can still edit:
+>   §5's review finishes first, and if it touched `maxon-bin/`, that is one rebuild, then the battery.
+> - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
+>   whole suite.
 
 ### Every brief carries these six things
 
@@ -151,6 +170,9 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    prevent.
 5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's.
 6. **The gate table above**, in one line: which runs are yours, which are not.
+7. **"Write every build and run to a file under `temp/`, and report each one's path and exit code"** —
+   including your LAST build, and whether you edited a compiled-in source after it. That report is what
+   lets the coordinator read your work instead of repeating it.
 
 ⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
 prove each parses", "confirm no other spec regressed", "check nothing was left disabled" — the §7
@@ -160,8 +182,9 @@ stop out.
 
 ### Verify the claims, do not re-derive the work
 
-**Do not trust a report.** Re-run the crux filter yourself (one call, structured output), read the crux
-lines of the diff, **check exit codes, and never grep for a success string** — a past session reported a
+**Do not trust a report — read its evidence.** Read the crux run's log file yourself, check the binary
+was current when it ran (the staleness check above), read the crux lines of the diff, **check exit
+codes, and never grep for a success string** — a past session reported a
 green build by grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** is a
 leak. What you must NOT do is re-derive the agent's diagnosis or re-run what it already ran; auditing
 its diff for quality is **§5's** job, not yours.
@@ -178,11 +201,11 @@ cheapest moment to ask.
 
 - ⚠ **`git status` must be CLEAN**, so the one commit holds this change and nothing left over from
   another. (Goldens the suite touches along the way are not a concern — §7.)
-- **BUILD.** The compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both*
-  directions. `build` compiles `maxon-bin/` with the compiler already in the slot and renames the
-  result into place, falling back to a released binary at `.bootstrap/maxon` when the slot is empty.
-  This is not a baseline — it is making the binary current, and every red you read in §1 is read
-  off it.
+- **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
+  compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
+  `build` compiles `maxon-bin/` with the compiler already in the slot and renames the result into
+  place, falling back to a released binary at `.bootstrap/maxon` when the slot is empty. A current
+  binary is already what every red in §1 is read off: rebuilding it is minutes spent to learn nothing.
 - **No baseline suite run.** The §7 gate is `failed: 0`, not a delta from a remembered total, so there is
   nothing to measure yet. (When §7 comes back red you therefore may not assume the red is yours — §7 says
   how to attribute it.)
@@ -290,10 +313,12 @@ deliverable stays one chunk and one commit.)*
 
 ## 3. Green the set — the agent's loop, your confirmation
 
-**The agent iterates: edit → build → filtered run**, until its cases are green. Rebuild every time; a
-stale binary reads green or red for the wrong reason. **Then YOU re-run the filter once yourself** and
-read the result — one call, structured output, and it is the only thing standing between an agent's
-report and §7.
+**The agent iterates: edit → build → filtered run**, until its cases are green. It rebuilds after every
+edit to a compiled-in source and at no other time — a stale binary reads green or red for the wrong
+reason, and a current one rebuilt reads exactly what it read before. **Then YOU read its last filtered
+run** — the log file it reported, with the binary current when it ran — and that is the only thing
+standing between an agent's report and §7. Re-run the filter yourself only when that evidence is
+missing or something changed after it.
 
 - ⛔ **NOBODY runs the full suite in this loop — not you, not the agent.** It is §7's, once. A suite
   run per iteration is the single largest piece of duplicated work these processes have ever paid for,
@@ -380,7 +405,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | Always — the binary is gitignored and the rebase may have moved its sources |
+| **Build** exit 0 | **Only if stale** — the rebase or a review edit moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin -o temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
@@ -403,8 +428,9 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > `git checkout --` to tidy `git status` is the one wrong thing to do with drift.
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
-before yours (CLAUDE.md). To attribute it: do the failures touch what you changed? If that is not
-obvious in a minute, **measure the control** — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
+before yours (CLAUDE.md). To attribute it: do the failures touch what you changed? Re-run **the failing
+cases alone, by filter** — never the whole suite for them. If that still does not settle it, **measure
+the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
 folded into the green.
 
