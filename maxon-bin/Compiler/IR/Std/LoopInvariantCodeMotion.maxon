@@ -186,7 +186,7 @@ end 'hoistLoopInvariants'
 // ⭐ **INNERMOST LOOP FIRST, AND EACH LOOP'S HOISTS ARE APPLIED BEFORE THE NEXT IS ANALYSED**, which is
 // what lets a value escape a whole NEST in one run of the pass. An op moved to an inner loop's preheader
 // is still inside the outer loop, so the outer loop's analysis sees it in a member block and can move it
-// again. `distinctLoopHeaders` returns headers in back-edge discovery order, which is innermost-first
+// again. `NaturalLoops.headers` lists headers in back-edge discovery order, which is innermost-first
 // for a nest (its header says why); a different order would hoist less, never wrongly.
 //
 // ⚠ Applying a hoist moves op REFERENCES between blocks and creates and deletes no block, so the
@@ -208,41 +208,40 @@ function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
 	// dominator solve and a child adjacency, all to be told there was no loop to use them on.
 	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
 
-	var backEdges = LoopBackEdges.create()
-	findLoopBackEdges(succ, nodeCount: blockCount, edges: backEdges)
+	let loops = NaturalLoops.find(succ, nodeCount: blockCount)
 
-	if backEdges.count() == 0 'loopless'
+	if loops.headers.count() == 0 'loopless'
 		return
 	end 'loopless'
 
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
 
-	for header in distinctLoopHeaders(backEdges, nodeCount: blockCount) 'eachLoop'
-		hoistFromLoop(module, func: func, tree: tree, backEdges: backEdges, header: header as BlockRefIndex, scratch: scratch)
+	for header in loops.headers 'eachLoop'
+		hoistFromLoop(module, func: func, tree: tree, loops: loops, header: header as BlockRefIndex, scratch: scratch)
 	end 'eachLoop'
 end 'hoistInFunc'
 
 // Analyse ONE natural loop and move what it admits into that loop's preheader.
-function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
+function hoistFromLoop(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, scratch LicmScratch)
 	scratch.beginLoop(tree.blockCount)
-	collectNaturalLoop(tree.pred, header: header as CsrIndex, edges: backEdges, nodeCount: tree.blockCount as CsrIndex, into: scratch.members)
+	loops.collect(tree.pred, header: header as CsrIndex, into: scratch.members)
 
 	match soleLoopEntry(tree, members: scratch.members, header: header) 'preheader'
 		none then return
-		position(preheader) then hoistIntoPreheader(module, func: func, tree: tree, backEdges: backEdges, header: header, preheader: preheader, scratch: scratch)
+		position(preheader) then hoistIntoPreheader(module, func: func, tree: tree, loops: loops, header: header, preheader: preheader, scratch: scratch)
 	end 'preheader'
 end 'hoistFromLoop'
 
 // The half of `hoistFromLoop` that runs once a preheader is known — split out so the `match` above has
 // nothing but the two answers in it.
-function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, preheader BlockRefIndex, scratch LicmScratch)
+function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, preheader BlockRefIndex, scratch LicmScratch)
 	scanLoopEffects(module, func: func, scratch: scratch)
 
 	if not scratch.effects.admitsAnyHoist() 'aCallCrossesEveryHoistedRange'
 		return
 	end 'aCallCrossesEveryHoistedRange'
 
-	markMustExecuteBlocks(tree, backEdges: backEdges, header: header, scratch: scratch)
+	markMustExecuteBlocks(tree, loops: loops, header: header, scratch: scratch)
 	collectLoopDefs(module, func: func, members: scratch.members, definedInLoop: scratch.definedInLoop, def: scratch.def)
 	analyzeLoopBlocks(module, func: func, tree: tree, header: header, memoryIsStable: scratch.effects.memoryIsStable(), scratch: scratch)
 
@@ -330,7 +329,7 @@ end 'soleEntryLeadsOnlyToTheHeader'
 //
 // ⚠ A duplicate in the named set (a latch that is also an exit) is harmless: its chain is climbed twice
 // and the required count is two higher, so the equality still selects exactly the blocks on all chains.
-function markMustExecuteBlocks(tree StdDominatorTree, backEdges LoopBackEdges, header BlockRefIndex, scratch LicmScratch)
+function markMustExecuteBlocks(tree StdDominatorTree, loops NaturalLoops, header BlockRefIndex, scratch LicmScratch)
 	for position in scratch.members.blocks 'eachExit'
 		if not blockLeavesTheLoop(tree, position: position as BlockRefIndex, members: scratch.members) 'notAnExit'
 			continue
@@ -339,14 +338,8 @@ function markMustExecuteBlocks(tree StdDominatorTree, backEdges LoopBackEdges, h
 		scratch.mustExecute.climbChainFrom(position as BlockRefIndex, header: header, tree: tree)
 	end 'eachExit'
 
-	for k in 0 upto backEdges.count() 'eachLatch'
-		let h = (try backEdges.heads.get(k) otherwise panic("markMustExecuteBlocks: heads.get OOB at {k}")) as BlockRefIndex
-
-		if h != header 'anotherLoop'
-			continue
-		end 'anotherLoop'
-
-		scratch.mustExecute.climbChainFrom((try backEdges.tails.get(k) otherwise panic("markMustExecuteBlocks: tails.get OOB at {k}") as BlockRefIndex), header: header, tree: tree)
+	for k in 0 upto loops.latches.degree(header as CsrIndex) 'eachLatch'
+		scratch.mustExecute.climbChainFrom(loops.latches.neighbour(header as CsrIndex, k: k) as BlockRefIndex, header: header, tree: tree)
 	end 'eachLatch'
 end 'markMustExecuteBlocks'
 
@@ -418,7 +411,7 @@ end 'LoopEffects'
 //
 // ⭐⭐ **A `return` INSIDE THE LOOP IS SAFE, AND NOT BECAUSE THIS SCAN REFUSES IT.** A block ending in
 // `ret`/`retVoid`/`errorReturn` has NO CFG successors, so it cannot be on a path to a latch, so
-// `collectNaturalLoop` never admits it — it is a NON-MEMBER successor of the block that branches to it,
+// `NaturalLoops.collect` never admits it — it is a NON-MEMBER successor of the block that branches to it,
 // which makes that predecessor an EXIT under `blockLeavesTheLoop` and forces `markMustExecuteBlocks` to
 // climb from it. A block that does not run on the return path therefore cannot dominate all exits, and
 // Rule 2a refuses it. The return path is covered by the speculation rule, not by the effects scan.
@@ -824,7 +817,7 @@ type LicmScratch
 	// and the op reading it would be hoisted out of a loop that computes it. Clearing per LOOP is
 	// stricter than per function and makes both cases correct at one site.
 	// ⚠ FOUR columns are NOT reset here, each because its own owner resets it before its first read:
-	// `members` (`collectNaturalLoop` clears it as it fills it), `effects` (`scanLoopEffects`),
+	// `members` (`NaturalLoops.collect` clears it as it fills it), `effects` (`scanLoopEffects`),
 	// `walkOrder` (`analyzeLoopBlocks`) and `leaving` (`analyzeLoopBlock`, per BLOCK rather than per
 	// loop). Clearing them twice would cost a second walk and buy nothing. Every column that IS reset here is reset by the positions or ids the
 	// last loop touched, never by the space it is dense over.

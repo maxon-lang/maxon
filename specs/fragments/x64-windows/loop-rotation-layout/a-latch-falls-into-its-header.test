@@ -1,0 +1,293 @@
+// Test: a-latch-falls-into-its-header
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function copyTail(source WordArray, scratch WordArray, n Word)
+	for i in 1 upto n 'copy'
+		let element = try source.get(i) otherwise panic("copyTail: i < n = source.count()")
+		try scratch.set(i, value: element) otherwise panic("copyTail: i < n = scratch.count()")
+	end 'copy'
+end 'copyTail'
+
+function main() returns ExitCode
+	var source = WordArray.create()
+	var scratch = WordArray.create()
+	for i in 0 upto 6 'seed'
+		source.push(i * 3)
+		scratch.push(0)
+	end 'seed'
+	copyTail(source, scratch: scratch, n: 6)
+	var total = 0
+	for v in scratch 'sum'
+		total = total + v
+	end 'sum'
+	return total
+end 'main'
+---
+ExitCode: 45
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @copyTail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 104
+    x64.movRegImm32 rsi, 1
+  __us_test#38:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rdx + 16]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, forhdr#1
+  __us_test#39:
+    x64.loadRegBaseDisp.word64 r8, [rdx + 8]
+    x64.loadRegBaseDisp.word64 r9, [rdx + 0]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc equal, forhdr#1
+  __us_test#40:
+    x64.leaRegRegImm32 r10, r9, -24
+    x64.loadRegBaseDisp.word64 r10, [r10 + 16]
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, forhdr#1
+  __us_test#41:
+    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r11, [rdx + 40]
+    x64.movRegImm32 rbx, 0
+    x64.cmpRegReg r11, rbx
+    x64.jcc notEqual, forhdr#1
+    x64.jmp forhdr#22
+  __rc_ok#9:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#14
+  __im_load#15:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rdi, [rdi + rsi*8 + 0]
+    x64.movRegReg r8, rdi
+  __rc_ok#11:
+    x64.loadRegBaseDisp.word64 rdi, [rdx + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, __im_slow#17
+  __im_bounds#18:
+    x64.loadRegBaseDisp.word64 rdi, [rdx + 8]
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#17
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_slow#17
+  __im_viewed:
+    x64.leaRegRegImm32 r9, rdi, -24
+    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc notEqual, __im_slow#17
+  __im_store#21:
+    x64.storeBaseIndexScaleReg.word64 [rdi + rsi*8 + 0], r8
+  forstep#3:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#1:
+    x64.cmpRegReg rsi, rax
+    x64.jcc less, __rc_ok#9
+    x64.jmp forexit
+  __rc_ok#36:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#34
+  __im_load#35:
+    x64.loadRegBaseIndexScale.word64 r11, [r10 + rsi*8 + 0]
+  __im_bounds#30:
+    x64.cmpRegReg rsi, r8
+    x64.jcc aboveEqual, __im_slow#26
+  __im_store#27:
+    x64.storeBaseIndexScaleReg.word64 [r9 + rsi*8 + 0], r11
+  forstep#23:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#22:
+    x64.cmpRegReg rsi, rax
+    x64.jcc less, __rc_ok#36
+  forexit:
+    x64.epilogue 104
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#14:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp __rc_ok#11
+  __im_slow#17:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rsi
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp forstep#3
+  __im_slow#34:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r9
+    x64.storeSlotReg slot7, r10
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.movRegReg r11, r8
+    x64.movRegReg rbx, r10
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r9, slot6
+    x64.loadRegSlot r10, slot7
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, __im_bounds#30
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-latch-falls-into-its-header.test:7: copyTail: i < n = source.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 104
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#26:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r9
+    x64.storeSlotReg slot7, r10
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rsi
+    x64.movRegReg rax, r11
+    x64.callDirect __managed_set
+    x64.movRegReg r11, r8
+    x64.movRegReg r11, r10
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r9, slot6
+    x64.loadRegSlot r10, slot7
+    x64.cmpRegImm32 r11, 0
+    x64.jcc equal, forstep#23
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-latch-falls-into-its-header.test:8: copyTail: i < n = scratch.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 104
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  seed:
+    x64.imulRegRegImm32 rdx, r13, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 6
+    x64.jcc less, seed
+  forexit#4:
+    x64.movRegImm32 rax, 6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect copyTail
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.jmp forhdr#5
+  sum:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg r13, r13, rsi
+  forstep#7:
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#5:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, sum
+  forexit#8:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-latch-falls-into-its-header.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

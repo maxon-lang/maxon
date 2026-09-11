@@ -2,7 +2,7 @@
 // Shared by every backend that allocates registers (x64 and arm64); wasm consumes Std directly and
 // never reaches this tier.
 //
-// Five transforms, all of them local to one function's block layout:
+// Six transforms, all of them local to one function's block layout:
 //
 //   1. JUMP ELISION       — a block whose terminator is the ISA's unconditional branch to the block
 //                           laid down immediately after it loses that branch. Control reaches the
@@ -17,6 +17,11 @@
 //   5. COLD-BLOCK SINKING  — every cold block moves to the end of its function, so a guard's cold
 //                           arm no longer sits between the guard and its hot continuation, and
 //                           transform 2 then makes that continuation the fall-through.
+//   6. LOOP ROTATION      — a loop's header chain moves to just after its hot latch, so the latch's
+//                           back-edge branch becomes a fall-through (transform 1) and the exit test's
+//                           conditional is the iteration's one taken branch: its own branch into the
+//                           body, or the complement of its branch to an exit that now falls through
+//                           (transform 2). One instruction fewer per iteration either way.
 //
 // ⭐⭐ WHY IT RUNS WHERE IT DOES — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE
 // WHOLE CORRECTNESS ARGUMENT FOR TRANSFORM 3.
@@ -35,8 +40,9 @@
 //
 // ⚠ THE ONE LAYOUT CONSTRAINT: a block with no terminator op (a parser `dead` continuation) reaches
 // the backend relying on physically falling into its neighbour, and the ops-derived CFG cannot see
-// that edge. Transform 4 keeps such a neighbour alive on that edge (`dropUnreachableBlocks`) and
-// transform 5 moves the two as one unit (`sinkColdBlocks`); no other transform moves a block.
+// that edge. Transform 4 keeps such a neighbour alive on that edge (`dropUnreachableBlocks`),
+// transform 5 moves the two as one unit (`sinkColdBlocks`) and transform 6 refuses a loop whose
+// rotation would part them (`rotateLoops`); no other transform moves a block.
 //
 // ISA-neutrality is not an accident of the transforms: every question this pass asks is answered by
 // a shared roster. `unconditionalBranchTargetOf` classifies both ISAs' terminators, `retargetControlOp`
@@ -60,15 +66,15 @@ export function cleanUpBranches(module TargetModule, project Project)
 	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
 end 'cleanUpBranches'
 
-// ⭐ THE ORDER OF THE FIVE IS LOAD-BEARING, in three steps.
+// ⭐ THE ORDER OF THE SIX IS LOAD-BEARING, in three steps.
 //
 // Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
 // successor is its conditional branch's target and its first is its terminator's. Transforms 1 and 2
 // DELETE that terminator, which makes the else-edge unreadable from the ops (it becomes a layout fact
-// instead). So every question that needs the CFG is asked first, the sinking reorders while every
-// else-edge is still an op (a block that has lost its terminator falls into its neighbour and could
-// not move), and the elision is last — after which nothing in the compiler builds a CFG for this
-// function again.
+// instead). So every question that needs the CFG is asked first, the two reorders — the sinking, then
+// the rotation — run while every else-edge is still an op (a block that has lost its terminator falls
+// into its neighbour and could not move), and the elision is last — after which nothing in the
+// compiler builds a CFG for this function again.
 function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// The skeleton read off the ops, exactly as the allocator builds it — this pass derives no CFG of
 	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
@@ -79,12 +85,46 @@ function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 		return
 	end 'noBlocks'
 
+	// Whether the function has a loop is asked of THIS topology, before the drop and the two reorders,
+	// so the loopless function — most of them — never pays the fresh topology `rotateLoops` builds. It
+	// can be asked this early because none of the three creates or destroys a loop among the reachable
+	// blocks: threading re-points an edge through an empty block at that block's own target, the drop
+	// removes only blocks with no path from the entry, and a reorder changes no edge. A loop the drop
+	// removes whole costs one topology built for nothing.
+	let hasALoop = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex).headers.count() > 0
+
 	let resolved = resolveJumpChains(module, topo: topo)
 	threadResolvedEdges(module, topo: topo, resolved: resolved)
 	dropUnreachableBlocks(module, func: func, topo: topo, resolved: resolved)
 	sinkColdBlocks(module, func: func)
+
+	if hasALoop 'loopToRotate'
+		rotateLoops(module, func: func)
+	end 'loopToRotate'
+
 	elideFallthroughBranches(module, func: func)
 end 'cleanUpFunctionBranches'
+
+// The "no such block" answer for a column indexed by local: one past every valid local, so it can
+// never collide with a real answer.
+function noSuchLocal(topo FuncTopology) returns CfgIndex
+	return topo.numBlocks
+end 'noSuchLocal'
+
+// A local where a block may have none to answer.
+union OptionalLocal
+	none
+	at(index CfgIndex)
+end 'OptionalLocal'
+
+// The local a block's terminator branches to unconditionally — `unconditionalBranchTargetOf`, the
+// one roster for that question, resolved through the topology.
+function unconditionalBranchLocalOf(module TargetModule, topo FuncTopology, block IrBlock) returns OptionalLocal
+	return match unconditionalBranchTargetOf(module, block: block) 'terminator'
+		none gives OptionalLocal.none
+		blockId(target) gives OptionalLocal.at(localOfBlockId(topo, blockId: target))
+	end 'terminator'
+end 'unconditionalBranchLocalOf'
 
 // ==========================================================================
 // Transform 3 — jump threading
@@ -120,8 +160,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 		try forwardTargetOf.set(local, value: target) otherwise panic("resolveJumpChains: forwardTargetOf.set OOB at {local}")
 	end 'eachBlock'
 
-	// `blockCount` is one past every valid local, so it can never collide with a real answer.
-	let unresolved = blockCount
+	let unresolved = noSuchLocal(topo)
 	var resolved = CfgIndexArray.create()
 	resolved.refill(blockCount as ElementIndex, value: unresolved)
 	var onPath = BoolArray.create()
@@ -188,9 +227,9 @@ function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local CfgInde
 		return local
 	end 'carriesWork'
 
-	return match unconditionalBranchTargetOf(module, block: block) 'terminator'
+	return match unconditionalBranchLocalOf(module, topo: topo, block: block) 'terminator'
 		none gives local
-		blockId(target) gives localOfBlockId(topo, blockId: target)
+		at(target) gives target
 	end 'terminator'
 end 'emptyJumpTargetOf'
 
@@ -363,6 +402,337 @@ function pushBlockRange(func IrFunction, from CfgIndex, through CfgIndex, into B
 		into.push(try func.blockRefs.get(i) otherwise panic("pushBlockRange: blockRefs.get OOB at {i}"))
 	end 'eachRef'
 end 'pushBlockRange'
+
+// ==========================================================================
+// Transform 6 — loop rotation by layout
+// ==========================================================================
+
+// Lay every admitted natural loop's HEADER CHAIN down immediately after the loop's hot latch. The
+// latch's back-edge branch then names the physically next block and transform 1 drops it; what the
+// exit test at the chain's end does depends on its shape, and the loop is admitted only where the
+// result is one instruction fewer per iteration:
+//
+//   • `jcc body; jmp exit` (the parser's `for` / `while cond` header): the conditional INTO THE BODY
+//     is the taken back branch; the latch's `jmp`, and the not-taken conditional in front of it
+//     before the move, are gone. Admitted whatever lies after the latch; if the exit does, transform
+//     1 drops the `jmp exit` too.
+//   • `jcc exit; jmp body` (a folded `while true` whose `break` test ends the header): pays only when
+//     the exit block is the one physically after the latch, so that transform 2 turns the pair into
+//     the complemented conditional into the body with the exit falling through. Anywhere else the
+//     iteration would still run both branch instructions, plus the entry branch the move adds.
+//
+// Entering the loop costs one branch where the preheader fell into the header before the move, paid
+// once per entry; the saving is paid once per iteration.
+//
+// Sound for the same reason as the sinking: it runs while every else-edge is still a terminator op,
+// so the order of blocks that carry one is a layout choice and nothing more. The one implicit edge
+// is a block with no terminator op falling into its physical successor, and a rotation moves exactly
+// two blocks away from theirs — the block before the header, and the chain's last block, which is
+// followed by whatever came after the latch. The loop is refused when either lacks a terminator op
+// (the glue rule); the latch carries one by construction. The invariant every chain block keeps is
+// that none lacking a terminator op is parted from its physical successor: an interior block is
+// followed by the next chain block, except where it is itself another loop's latch and that loop's
+// chain drains between the two — and a latch carries an unconditional terminator.
+//
+// The chain is the header plus the blocks it falls through with only cold arms beside it — a guarded
+// load's fast path — up to the block with a hot exit edge. The loop is REFUSED when the walk reaches
+// another loop's header (that loop's own rotation owns it), reaches the latch (a latch inside the
+// chain has nothing to fall into), needs a block that is not the physically next one, or finds no
+// exit test at all — a header branching into two hot in-loop arms, or a chain whose every exit is
+// somewhere in the body behind it.
+//
+// Of a header's hot latches the PHYSICALLY LAST is chosen: the body's normal step block is laid out
+// after every `continue`'s branch, so this is the latch the iteration reaches by falling through the
+// body, and the `continue` branches keep reaching the header wherever it lands.
+//
+// Linear in the function: one topology, one loop finder, one shared membership record whose per-loop
+// cost is the loop's own size, latches read from the finder's per-header buckets, and ONE rebuild of
+// the block list. A function with many loops is the shape the compiler is measured on.
+function rotateLoops(module TargetModule, func IrFunction)
+	// The topology `cleanUpFunctionBranches` built is stale here: the drop rebuilt `func.blockRefs`
+	// and the sinking reordered it. Locals are again layout positions.
+	let topo = buildFuncTopology(module, func: func)
+	let loops = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex)
+	var plan = RotationPlan.create(topo)
+	var member = LoopMembership.create()
+
+	for h in loops.headers 'eachLoop'
+		planLoopRotation(module, topo: topo, loops: loops, member: member, plan: plan, header: h as CfgIndex)
+	end 'eachLoop'
+
+	if not plan.recordedAny 'nothingMoved'
+		return
+	end 'nothingMoved'
+
+	func.blockRefs = plan.layout(topo)
+end 'rotateLoops'
+
+// Plan one loop's rotation: nothing for the entry (the prologue goes there, so it stays first) or for
+// a loop with no hot unconditional latch.
+function planLoopRotation(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex)
+	if header == 0 'entryIsTheHeader'
+		return
+	end 'entryIsTheHeader'
+
+	match lastHotLatchOf(module, topo: topo, loops: loops, header: header) 'latch'
+		none then return
+		at(latch) then planChainAfterLatch(module, topo: topo, loops: loops, member: member, plan: plan, header: header, latch: latch)
+	end 'latch'
+end 'planLoopRotation'
+
+// With the latch known: collect the loop, walk the chain, and record it behind the latch if admitted.
+function planChainAfterLatch(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex, latch CfgIndex)
+	loops.collect(topo.pred, header: header as CsrIndex, into: member)
+
+	match headerChainEnd(module, topo: topo, loops: loops, member: member, plan: plan, header: header, latch: latch) 'chain'
+		none then return
+		at(chainEnd) then plan.record(header, chainEnd: chainEnd, latch: latch)
+	end 'chain'
+end 'planChainAfterLatch'
+
+// The physically last latch of `header`'s loop that is hot and closes the loop with the ISA's
+// unconditional branch, read off the finder's bucket for that header.
+function lastHotLatchOf(module TargetModule, topo FuncTopology, loops NaturalLoops, header CfgIndex) returns OptionalLocal
+	var found = false
+	var last = 0 as CfgIndex
+
+	for k in 0 upto loops.latches.degree(header as CsrIndex) 'eachLatch'
+		let tail = loops.latches.neighbour(header as CsrIndex, k: k) as CfgIndex
+
+		if not isHotLatchOf(module, topo: topo, tail: tail, header: header) 'notAJumpLatch'
+			continue
+		end 'notAJumpLatch'
+
+		if not found or tail > last 'laterLatch'
+			last = tail
+			found = true
+		end 'laterLatch'
+	end 'eachLatch'
+
+	return OptionalLocal.at(last) if found else OptionalLocal.none
+end 'lastHotLatchOf'
+
+// Whether `tail` is a hot block whose terminator is the ISA's unconditional branch to `header`. A
+// tail reaching the header through its conditional branch has nothing a fall-through could replace.
+function isHotLatchOf(module TargetModule, topo FuncTopology, tail CfgIndex, header CfgIndex) returns bool
+	let block = blockAt(module, topo: topo, local: tail)
+
+	if block.heat == BlockHeat.cold 'coldTail'
+		return false
+	end 'coldTail'
+
+	return match unconditionalBranchLocalOf(module, topo: topo, block: block) 'terminator'
+		none gives false
+		at(target) gives target == header
+	end 'terminator'
+end 'isHotLatchOf'
+
+// The last block of `header`'s chain — the first block along it with a hot exit edge, admitted by
+// `admitChainEnd` — or `none` when the loop is refused (see `rotateLoops`).
+function headerChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, plan RotationPlan, header CfgIndex, latch CfgIndex) returns OptionalLocal
+	var cur = header
+
+	while cur < topo.numBlocks 'walk'
+		// Chains are contiguous, start at a header and never step onto another header, so two cannot
+		// overlap; a block already on one is a broken premise, not a loop to refuse.
+		if plan.isClaimed(cur) 'onAnotherChain'
+			panic("headerChainEnd: local {cur} on the chain from header {header} is already on another loop's chain")
+		end 'onAnotherChain'
+
+		if cur == latch 'latchReached'
+			return OptionalLocal.none
+		end 'latchReached'
+
+		var hasHotExit = false
+		var hotInLoopSucc = noSuchLocal(topo)
+		var hotInLoopSuccCount = 0 as CfgIndex
+
+		for k in 0 upto topo.succ.degree(cur as CsrIndex) 'eachSucc'
+			let succ = topo.succ.neighbour(cur as CsrIndex, k: k) as CfgIndex
+
+			// A cold arm beside the chain is not a layout constraint: it is already sunk, and control
+			// that takes it comes back by branch.
+			if blockAt(module, topo: topo, local: succ).heat == BlockHeat.cold 'coldArm'
+				continue
+			end 'coldArm'
+
+			if not member.contains(succ as CsrIndex) 'hotExit'
+				hasHotExit = true
+			end 'hotExit' else if succ != hotInLoopSucc 'newInLoopSucc'
+				// Both arms naming one block is one successor, not two.
+				hotInLoopSucc = succ
+				hotInLoopSuccCount = hotInLoopSuccCount + 1
+			end 'newInLoopSucc'
+		end 'eachSucc'
+
+		if hasHotExit 'exitTest'
+			return admitChainEnd(module, topo: topo, loops: loops, member: member, header: header, latch: latch, chainEnd: cur)
+		end 'exitTest'
+
+		if hotInLoopSuccCount != 1 or hotInLoopSucc != cur + 1 'noFallthroughContinuation'
+			return OptionalLocal.none
+		end 'noFallthroughContinuation'
+
+		// A node is a header exactly when the finder bucketed a latch under it.
+		if loops.latches.degree(hotInLoopSucc as CsrIndex) > 0 'anotherLoopsHeader'
+			return OptionalLocal.none
+		end 'anotherLoopsHeader'
+
+		cur = hotInLoopSucc
+	end 'walk'
+
+	panic("headerChainEnd: the chain from header {header} walked past the last block {topo.numBlocks - 1}, which every step's successor check rules out")
+end 'headerChainEnd'
+
+// The exit test found: `chainEnd` ends the chain when the rotation PAYS — the two shapes `rotateLoops`
+// states — and the glue rule holds. A block whose hot exit is not a conditional branch's (an
+// unconditional exit, a jump table) has no test to make the back branch.
+function admitChainEnd(module TargetModule, topo FuncTopology, loops NaturalLoops, member LoopMembership, header CfgIndex, latch CfgIndex, chainEnd CfgIndex) returns OptionalLocal
+	let block = blockAt(module, topo: topo, local: chainEnd)
+
+	if not block.hasCondBranchOp() 'noExitTest'
+		return OptionalLocal.none
+	end 'noExitTest'
+
+	let condOp = try module.ops.get(block.condBranchIndex()) otherwise panic("admitChainEnd: conditional branch op of local {chainEnd} not in module.ops")
+	let condTarget = localOfBlockId(topo, blockId: condBranchTargetOf(condOp, block: block))
+	let paysOff = member.contains(condTarget as CsrIndex) or exitFallsThroughAfterInversion(module, topo: topo, loops: loops, latch: latch, chainEnd: chainEnd, condTarget: condTarget)
+
+	if not paysOff or not hasGlueAround(module, topo: topo, header: header, chainEnd: chainEnd) 'refused'
+		return OptionalLocal.none
+	end 'refused'
+
+	return OptionalLocal.at(chainEnd)
+end 'admitChainEnd'
+
+// The second paying shape, `jcc exit; jmp body`: transform 2 fires after the move exactly when the
+// exit is the block laid down right after the chain AND the conditional is the block's last body op —
+// transform 2's own precondition, asked of the one helper that owns it (`invertibleCondBranchIn`).
+//
+// The exit is decided on pre-rotation locals, and `latch + 1` is exactly the block laid after the
+// chain once `latch + 1` is not a header: a header's chain is skipped at its own position and laid
+// elsewhere, so the exit would not be next after all. Nothing else that moves can sit at `latch + 1`:
+// an interior chain block cannot (a latch's only hot in-loop successor along a chain walk is its own
+// header, which precedes it), and in the stacked shape — a latch that is another chain's end — the
+// outer loop's exit cannot equal its `latch + 1`, which is the inner body, a member. The equality
+// already places `latch + 1` inside the function, so the bucket read is in range.
+function exitFallsThroughAfterInversion(module TargetModule, topo FuncTopology, loops NaturalLoops, latch CfgIndex, chainEnd CfgIndex, condTarget CfgIndex) returns bool
+	if condTarget != latch + 1 or loops.latches.degree(condTarget as CsrIndex) > 0 'exitNotNextAfterTheMove'
+		return false
+	end 'exitNotNextAfterTheMove'
+
+	return match invertibleCondBranchIn(module, blockRef: try topo.blockRefByLocal.get(chainEnd) otherwise panic("exitFallsThroughAfterInversion: blockRefByLocal.get OOB at {chainEnd}")) 'inversion'
+		none gives false
+		opIndex gives true
+	end 'inversion'
+end 'exitFallsThroughAfterInversion'
+
+// The glue rule: the block before the header and the chain's last block both carry a terminator op,
+// so neither relies on falling into the block the rotation takes away from it. `header` is never the
+// entry, so `header - 1` is a block.
+function hasGlueAround(module TargetModule, topo FuncTopology, header CfgIndex, chainEnd CfgIndex) returns bool
+	return blockAt(module, topo: topo, local: header - 1).hasTerminatorOp() and blockAt(module, topo: topo, local: chainEnd).hasTerminatorOp()
+end 'hasGlueAround'
+
+// The rotations planned for one function: per latch, the contiguous run of locals laid down after
+// it, and which locals those runs claim. A latch closes exactly one loop (its branch names one
+// header), so the latch is the key.
+type RotationPlan
+	// `noSuchLocal` where a local has no chain behind it.
+	var chainStartAfter as CfgIndexArray
+	var chainEndAfter as CfgIndexArray
+	var claimed as BoolArray
+	var noChain as CfgIndex
+
+	// Exported because a bare field is private to the TYPE (E3014); `rotateLoops` reads it.
+	export var recordedAny = false
+
+	static function create(topo FuncTopology) returns RotationPlan
+		let noChain = noSuchLocal(topo)
+		var chainStartAfter = CfgIndexArray.create()
+		chainStartAfter.refill(topo.numBlocks as ElementIndex, value: noChain)
+		var chainEndAfter = CfgIndexArray.create()
+		chainEndAfter.refill(topo.numBlocks as ElementIndex, value: noChain)
+		var claimed = BoolArray.create()
+		claimed.resize(topo.numBlocks)
+		return Self{chainStartAfter: chainStartAfter, chainEndAfter: chainEndAfter, claimed: claimed, noChain: noChain}
+	end 'create'
+
+	function isClaimed(local CfgIndex) returns bool
+		return try self.claimed.get(local) otherwise panic("RotationPlan.isClaimed: claimed.get OOB at {local}")
+	end 'isClaimed'
+
+	// Record the run `header..chainEnd` behind `latch`. A latch closes exactly one loop, so a second
+	// chain behind one is a broken premise; recorded anyway it would strand the first chain's claimed
+	// blocks and surface only as `layout`'s count panic, far from the cause.
+	function record(header CfgIndex, chainEnd CfgIndex, latch CfgIndex)
+		let prior = try self.chainStartAfter.get(latch) otherwise panic("RotationPlan.record: chainStartAfter.get OOB at {latch}")
+
+		if prior != self.noChain 'latchAlreadyCarriesAChain'
+			panic("RotationPlan.record: latch {latch} already carries the chain from header {prior}; a second chain from header {header} cannot follow it")
+		end 'latchAlreadyCarriesAChain'
+
+		for b in header to chainEnd 'claimChain'
+			try self.claimed.set(b, value: true) otherwise panic("RotationPlan.record: claimed.set OOB at {b}")
+		end 'claimChain'
+
+		try self.chainStartAfter.set(latch, value: header) otherwise panic("RotationPlan.record: chainStartAfter.set OOB at {latch}")
+		try self.chainEndAfter.set(latch, value: chainEnd) otherwise panic("RotationPlan.record: chainEndAfter.set OOB at {latch}")
+		self.recordedAny = true
+	end 'record'
+
+	// The rebuilt block list: every unclaimed local in layout order, each latch followed by its chain.
+	// A chain's block can itself be the latch of another loop whose chain then follows IT — an inner
+	// header whose exit edge is the outer back edge — so the chains pending behind the current block
+	// form a stack of ranges rather than one range.
+	function layout(topo FuncTopology) returns BlockRefArray
+		var laid = BlockRefArray.create()
+		var pendingNext = CfgIndexArray.create()
+		var pendingEnd = CfgIndexArray.create()
+
+		for local in 0 upto topo.numBlocks 'eachBlock'
+			if self.isClaimed(local) 'laidAfterItsLatch'
+				continue
+			end 'laidAfterItsLatch'
+
+			self.layBlockAndOpenItsChain(topo, local: local, laid: laid, pendingNext: pendingNext, pendingEnd: pendingEnd)
+
+			while pendingNext.count() > 0 'drainChains'
+				let top = pendingNext.count() - 1
+				let next = try pendingNext.get(top) otherwise panic("RotationPlan.layout: pendingNext.get OOB at {top}")
+				let last = try pendingEnd.get(top) otherwise panic("RotationPlan.layout: pendingEnd.get OOB at {top}")
+
+				if next > last 'chainDone'
+					_ = try pendingNext.pop() otherwise panic("RotationPlan.layout: pendingNext.pop on non-empty failed")
+					_ = try pendingEnd.pop() otherwise panic("RotationPlan.layout: pendingEnd.pop on non-empty failed")
+					continue
+				end 'chainDone'
+
+				try pendingNext.set(top, value: next + 1) otherwise panic("RotationPlan.layout: pendingNext.set OOB at {top}")
+				self.layBlockAndOpenItsChain(topo, local: next, laid: laid, pendingNext: pendingNext, pendingEnd: pendingEnd)
+			end 'drainChains'
+		end 'eachBlock'
+
+		if laid.count() != topo.numBlocks 'blockLostOrDoubled'
+			panic("RotationPlan.layout: laid {laid.count()} blocks of {topo.numBlocks} — a chain was laid twice or a claimed block had no latch to follow")
+		end 'blockLostOrDoubled'
+
+		return laid
+	end 'layout'
+
+	// Append `local`'s block, and queue the chain recorded behind it, if any, to be laid down next.
+	function layBlockAndOpenItsChain(topo FuncTopology, local CfgIndex, laid BlockRefArray, pendingNext CfgIndexArray, pendingEnd CfgIndexArray)
+		laid.push(try topo.blockRefByLocal.get(local) otherwise panic("RotationPlan.layBlockAndOpenItsChain: blockRefByLocal.get OOB at {local}"))
+		let chainStart = try self.chainStartAfter.get(local) otherwise panic("RotationPlan.layBlockAndOpenItsChain: chainStartAfter.get OOB at {local}")
+
+		if chainStart == self.noChain 'noChainHere'
+			return
+		end 'noChainHere'
+
+		pendingNext.push(chainStart)
+		pendingEnd.push(try self.chainEndAfter.get(local) otherwise panic("RotationPlan.layBlockAndOpenItsChain: chainEndAfter.get OOB at {local}"))
+	end 'layBlockAndOpenItsChain'
+end 'RotationPlan'
 
 // ==========================================================================
 // Transforms 1 and 2 — jump elision and conditional inversion

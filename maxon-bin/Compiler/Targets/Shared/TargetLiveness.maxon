@@ -2040,12 +2040,11 @@ function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) retu
 		return depth
 	end 'empty'
 
-	var backEdges = LoopBackEdges.create()
-	findLoopBackEdges(succ, nodeCount: numBlocks as CsrIndex, edges: backEdges)
+	let loops = NaturalLoops.find(succ, nodeCount: numBlocks as CsrIndex)
 
 	// NO BACK EDGE, NO LOOP — and that is MOST functions, so the header sweep's columns are not
 	// allocated for them. This is asked once per function on every build.
-	if backEdges.count() == 0 'loopless'
+	if loops.headers.count() == 0 'loopless'
 		return depth
 	end 'loopless'
 
@@ -2054,8 +2053,8 @@ function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) retu
 	// was written the other way.
 	var member = LoopMembership.create()
 
-	for h in distinctLoopHeaders(backEdges, nodeCount: numBlocks as CsrIndex) 'eachLoop'
-		collectNaturalLoop(pred, header: h, edges: backEdges, nodeCount: numBlocks as CsrIndex, into: member)
+	for h in loops.headers 'eachLoop'
+		loops.collect(pred, header: h, into: member)
 
 		for b in member.blocks 'bump'
 			let d = try depth.get(b) otherwise panic("computeLoopDepth: depth.get OOB")
@@ -2088,16 +2087,15 @@ end 'computeLoopDepth'
 // costs the same shape as `computeLoopDepth` itself — one DFS plus one BFS per distinct header — and
 // runs at most once per compile.
 export function enclosingLoopBlocks(topo FuncTopology, blockLocal CfgIndex) returns BoolArray
-	var backEdges = LoopBackEdges.create()
-	findLoopBackEdges(topo.succ, nodeCount: topo.numBlocks as CsrIndex, edges: backEdges)
+	let loops = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex)
 
 	var nest = BoolArray.create()
 	nest.resize(topo.numBlocks)
 	var found = false
 	var member = LoopMembership.create()
 
-	for h in distinctLoopHeaders(backEdges, nodeCount: topo.numBlocks as CsrIndex) 'eachLoop'
-		collectNaturalLoop(topo.pred, header: h, edges: backEdges, nodeCount: topo.numBlocks as CsrIndex, into: member)
+	for h in loops.headers 'eachLoop'
+		loops.collect(topo.pred, header: h, into: member)
 
 		if not member.contains(blockLocal as CsrIndex) 'otherLoop'
 			continue

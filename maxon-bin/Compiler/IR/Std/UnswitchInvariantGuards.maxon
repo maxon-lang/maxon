@@ -237,25 +237,23 @@ function unswitchInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, 
 	end 'nothingToVersion'
 
 	let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
-	var backEdges = LoopBackEdges.create()
-	findLoopBackEdges(succ, nodeCount: blockCount, edges: backEdges)
+	let loops = NaturalLoops.find(succ, nodeCount: blockCount)
 
-	if backEdges.count() == 0 'loopless'
+	if loops.headers.count() == 0 'loopless'
 		return 0
 	end 'loopless'
 
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
 	let analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
-	let headers = distinctLoopHeaders(backEdges, nodeCount: blockCount)
 	var plans = UnswitchPlanArray.create()
 
-	// Outermost first: the discovery order is innermost-first for a nest (`distinctLoopHeaders`).
-	var next = headers.count()
+	// Outermost first: the discovery order is innermost-first for a nest (`NaturalLoops.headers`).
+	var next = loops.headers.count()
 
 	while next > 0 'eachLoopOutermostFirst'
 		next = next - 1
-		let header = (try headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}")) as BlockRefIndex
-		collectNaturalLoop(analysis.tree.pred, header: header as CsrIndex, edges: backEdges, nodeCount: blockCount as CsrIndex, into: scratch.members)
+		let header = (try loops.headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}")) as BlockRefIndex
+		loops.collect(analysis.tree.pred, header: header as CsrIndex, into: scratch.members)
 
 		var plan = UnswitchPlan.create(func.name, header: header, members: scratch.members.blocks)
 

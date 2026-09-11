@@ -103,7 +103,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered |
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* |
-| **Block merging / branch simplification** | ✅ `BranchCleanup` (EC11, EC29) — elision, inversion, threading, unreachable, cold-block sinking, on x64 AND arm64; loop rotation is the open remainder |
+| **Block merging / branch simplification** | ✅ `BranchCleanup` (EC11, EC29, EC30) — elision, inversion, threading, unreachable, cold-block sinking, loop rotation by layout, on x64 AND arm64 |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
@@ -478,7 +478,7 @@ Both of `EC14`'s reloads are gone. What is left against the roadmap's "ideal 5" 
     division or a read. ⛔ An earlier spelling of this census named only the seven IMPURE ones and
     called them "the only variants" — wrong, and wrong in the direction that matters, because it told a
     reader that a loop containing a `return` was refused here. It is not: a block ending in `ret` has no
-    successors, so `collectNaturalLoop` never admits it, so its predecessor is an EXIT and Rule 2a is
+    successors, so `NaturalLoops.collect` never admits it, so its predecessor is an EXIT and Rule 2a is
     what covers the return path. The pass's own header now carries that argument; this was one fact
     written down twice and wrong in both.
   - **Rule 2 — speculation.** A hoisted load executes even when the loop body never runs, and the
@@ -1761,8 +1761,49 @@ load-bearing in both orders; with the unit rule removed as well, the two panic c
 sums (6 and 15) and never panic. Scale ladder against a control compiler built from the pre-change
 commit: `branchCleanup` allocations +0.5% at every rung (two `BlockRefArray`s per function), ×1.9 per
 doubling on both. Open beside it: loop rotation (the back edge's `jmp`, now the only taken branch per
-iteration in every fannkuch loop) and a redundant reload of `temp[firstValue]` one block after the
-first load.
+iteration in every fannkuch loop — taken by `EC30`) and a redundant reload of `temp[firstValue]` one
+block after the first load.
+
+**`EC30` · Loop rotation by layout — a loop's header chain is laid down after its hot latch.** — ✅
+**CLOSED 2026-09-10 (round 8 of the fannkuch loop).** After `EC29` the one taken branch per iteration
+in every hot loop was the back edge: the header tests the loop condition with a not-taken `jcc` to the
+exit, the body follows, and the step block closes the loop with a taken `jmp` to the header. `BranchCleanup`
+gained transform 6, `rotateLoops`, scheduled between `sinkColdBlocks` and `elideFallthroughBranches` —
+the same window `EC29` uses, where every else-edge is still a terminator op and the order of blocks that
+carry one is semantically free. Per natural loop (`IR/NaturalLoops.maxon`, the one finder the Std LICM
+and the allocator's loop depth already share) it takes the header CHAIN — the header plus the blocks it
+falls through with only cold arms beside it, up to the first block with a hot exit edge, the exit test —
+and lays it down immediately after the loop's hot latch, the physically last hot block whose terminator
+is an unconditional branch to the header (a `continue` arm that also ends in a `jmp` sits earlier and
+keeps branching; a `continue` that threading folded into a conditional back edge is not a latch here at
+all). The existing transforms then finish it, and the loop is admitted only where they leave ONE
+INSTRUCTION FEWER per iteration: the latch's `jmp` names the next block and transform 1 drops it; a
+`for` / `while cond` header's `jcc body; jmp exit` keeps its conditional INTO THE BODY as the taken back
+branch (a taken `jmp` behind a not-taken `jcc` became one taken `jcc`), with transform 1 dropping the
+`jmp exit` too when the exit lands next; a header whose conditional aims at the exit (a folded
+`while true` ending in its `break` test) is admitted only when that exit block is the one physically
+after the latch, so that transform 2 makes the pair the complemented conditional into the body with the
+exit falling through — anywhere else the iteration would still run both branch instructions plus the
+entry `jmp` the move adds. The loop's entry pays one `jmp` to the header where the preheader used to
+fall into it. The glue rule keeps the one implicit edge intact: a block with no terminator op falls
+into its physical successor, so a loop is refused when the block before its header or the chain's last
+block lacks one; the latch carries one by construction and the chain moves as one run. A loop is also
+refused when the chain walk reaches another loop's header or the latch, or finds no exit test. Per
+function: one topology, one `NaturalLoops.find` (its latches bucketed per header, so a loop's member
+walk and latch choice cost the loop's own back edges — the flat-list seeding every consumer paid was
+Θ(headers × back edges), and the walk's worklist is now the shared `LoopMembership`'s), one shared
+membership record and ONE rebuild of `func.blockRefs` — no per-loop allocation, since the corpus has a
+function with N loops; the loopless function is gated on the pre-drop topology and never builds the
+second one. Shared by x64 and arm64 through the ISA-neutral rosters (`unconditionalBranchTargetOf`,
+`condBranchTargetOf`); wasm never reaches this tier. Pinned by `specs/loop-rotation-layout.md` (14
+cases: the shape in its fragment golden, and controls for a zero-iteration and a one-iteration loop, a
+nest, a `while` with `continue`, a `while` with two jump latches, a nest whose inner header is the outer
+latch, a sunk slow arm re-entering the chain, a range check firing inside the loop, a header chain of
+guarded loads, a `break`, an early `return`, and two refused `while true` shapes). In the shape case's
+golden `copyTail`'s versioned copy loop is `forstep#23: lea` falling into
+`forhdr#22: cmp; jcc less, __rc_ok#36` with `forexit` next; the pre-rotation layout is inferred from
+the same golden's slow-loop entry and `EC29`'s description (`jmp` latch behind a not-taken `jcc`), no
+golden holding it. Interleaved A/B against a control built from c7e0ed04, n=11 ×5: 2,519 → 2,408 ms (−4.4%, beyond both arms' spread); n=12 32,993 → 31,883 ms (ratio to C 1.59 → 1.53); the compiler's self-compile 44,566 → 38,602 ms (−13.4%); census ops 2518 → 2517 and jmp 42 → 41, since each elided back-edge `jmp` is offset by the entry `jmp` the unswitched sibling loop now needs. Scale ladder against a control built by the slot from the same commit: `branchCleanup` 444,571 → 509,343 allocations at rung 5 (×1.91 → ×1.89 per doubling; the second topology build and the rotation tables per looped function), `loopInvariantCodeMotion` 52,803 → 61,729 allocations and 31.5 → 29.1 MB (the bucketed seed).
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row
@@ -1832,7 +1873,7 @@ heat-driven half — every cold block sunk after the function's last hot block. 
 fall-throughs that already existed; `EC29` creates them where a cold arm sat between a guard and its
 continuation. A hot-successor-first chain layout beyond that is not filed: with the arms sunk, the
 front end's order already puts each loop's body in line, and the remaining taken branch per iteration
-is the back edge, which is loop rotation's.
+is the back edge, which is loop rotation's — `EC30`, transform 6 of the same pass.
 
 **`B2` · `critsplit` edge copies** — 5,752 in the self-compile, 72 in fannkuch, 108 in nbody. `EC19`:
 the phi is biased to the register the *slow* arm's call returns in, so both *fast* arms pay.

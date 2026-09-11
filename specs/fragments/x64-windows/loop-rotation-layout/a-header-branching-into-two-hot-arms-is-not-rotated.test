@@ -1,0 +1,115 @@
+// Test: a-header-branching-into-two-hot-arms-is-not-rotated
+typealias Small = int(0 to 100)
+
+function stepTo(limit Small) returns Small
+	var i = 0 as Small
+	while true 'spin'
+		if i mod 2 == 0 'evenStep'
+			i = i + 3
+		end 'evenStep' else 'oddStep'
+			i = i + 1
+		end 'oddStep'
+		if i >= limit 'done'
+			break
+		end 'done'
+	end 'spin'
+	return i
+end 'stepTo'
+
+function main() returns ExitCode
+	return stepTo(10) + stepTo(5)
+end 'main'
+---
+ExitCode: 18
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @stepTo {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk#11:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, __rc_panic#10
+  __rc_ok#9:
+    x64.movRegImm32 rax, 0
+  spin:
+    x64.movRegReg rdx, rax
+    x64.andRegImm32 rdx, rax, 1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ifelse
+  evenStep:
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRegImm32 rax, rax, 1
+  ifcont:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, spin
+  done:
+    x64.movRegReg r8, rax
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#13
+  __rc_chk#14:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic#13
+  __rc_ok#12:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-header-branching-into-two-hot-arms-is-not-rotated.test:4: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-header-branching-into-two-hot-arms-is-not-rotated.test:16: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 10
+    x64.callDirect stepTo
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect stepTo
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-header-branching-into-two-hot-arms-is-not-rotated.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

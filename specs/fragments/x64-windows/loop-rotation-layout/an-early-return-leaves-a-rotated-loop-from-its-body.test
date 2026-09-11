@@ -1,0 +1,149 @@
+// Test: an-early-return-leaves-a-rotated-loop-from-its-body
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function indexOf(a WordArray, n Word, target Word) returns Word
+	for i in 0 upto n 'scan'
+		if (try a.get(i) otherwise panic("indexOf: i < n = a.count()")) == target 'hit'
+			return i
+		end 'hit'
+	end 'scan'
+	return -1
+end 'indexOf'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(4)
+	a.push(8)
+	a.push(15)
+	return indexOf(a, n: 3, target: 15) * 10 + indexOf(a, n: 3, target: 99) + 5
+end 'main'
+---
+ExitCode: 24
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @indexOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 80
+    x64.movRegImm32 rsi, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.jmp forhdr
+  __rc_ok:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
+  tryok:
+    x64.cmpRegReg r9, rax
+    x64.jcc notEqual, forstep
+  hit:
+    x64.movRegReg r8, rsi
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+  forstep:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, __rc_ok
+  forexit:
+    x64.movRegImm r8, 18446744073709551615
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.movRegReg r9, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-early-return-leaves-a-rotated-loop-from-its-body.test:7: indexOf: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 15
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 15
+    x64.movRegReg rcx, rbx
+    x64.callDirect indexOf
+    x64.imulRegRegImm32 r12, r8, 10
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 99
+    x64.movRegReg rcx, rbx
+    x64.callDirect indexOf
+    x64.leaRegRegReg rax, r12, r8
+    x64.leaRegRegImm32 r12, rax, 5
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-early-return-leaves-a-rotated-loop-from-its-body.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
