@@ -25,6 +25,7 @@ the roster rather than inside it.
 | `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
 | `maxon help [<command>]` | Print the command and option reference, whole or for one command |
 | `maxon lsp-server` | Speak the Language Server Protocol over stdio |
+| `maxon mcp-server` | Speak the Model Context Protocol over stdio |
 | `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events |
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went |
 | `maxon run <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
@@ -600,6 +601,36 @@ default: quietly running a different ladder would answer a question the caller n
 Speaks the Language Server Protocol over stdio: JSON-RPC bodies under `Content-Length` framing, the
 `initialize` / `shutdown` / `exit` lifecycle, and full text-document synchronization. Normally launched
 by the VS Code extension rather than by hand.
+
+---
+
+### `maxon mcp-server`
+
+Speaks the Model Context Protocol (MCP) over stdio: newline-delimited JSON-RPC 2.0 requests on stdin,
+dispatches them to tools, and writes JSON-RPC responses to stdout. Provides AI coding agents and
+assistants (e.g. Antigravity, Claude Code, Cursor) with structured tools for working on Maxon projects.
+
+**Usage:**
+```bash
+maxon mcp-server [--dev]
+```
+
+**Standard Tools (for Maxon users):**
+- `build`: Build a Maxon project or source file (`maxon build`)
+- `run`: Compile and run a Maxon program (`maxon run`)
+- `test`: Run unit tests in a Maxon project (`maxon test`)
+- `fmt`: Format Maxon source files in place (`maxon fmt`)
+- `check`: Verify code syntax and incremental types (`maxon verify-warm-rebuild`)
+- `dump_ir`: Dump compiler intermediate representation (`maxon build --emit-ir`)
+- `lookup_error_code`: Look up explanations and documentation for compiler error codes (e.g. `E1002`, `E3094`)
+- `info`: Inspect compiler version, commit, executable path, and host target
+
+**Developer Tools (`--dev` mode):**
+When launched with `--dev`, the MCP server exposes additional tools and options for developers contributing to the Maxon compiler codebase itself:
+- `build`: Enhanced with `repoRoot` targeting and `from` (custom compiler binary path)
+- `run_spec_test`: Run compiler spec tests with filters, target selection, and network options
+- `run_scale_test`: Run compiler memory and CPU scale benchmarks across test rungs
+- `spec_test_outcome`: Run targeted spec tests and report structured pass/fail verdicts
 
 ---
 

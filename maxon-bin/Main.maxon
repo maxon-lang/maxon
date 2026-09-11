@@ -58,6 +58,8 @@ module let BuildSubcommandName = "build"
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
 let LspServerCommandName = "lsp-server"
+module let McpServerCommandName = "mcp-server"
+let DevFlag = "--dev"
 let ScaleTestCommandName = "scale-test"
 
 module let OutputFlagName = "-o"
@@ -405,6 +407,7 @@ function main() returns ExitCode
 		fmt gives runFmt(args)
 		help gives runHelp(args)
 		lspServer gives runLspServer()
+		mcpServer gives runMcpServerCommand(args)
 		monitor gives runMonitor(args)
 		profile gives runProfile(args)
 		run gives runRun(args)
@@ -1715,6 +1718,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		fmt gives 1
 		help gives 1
 		lspServer gives 1
+		mcpServer gives 1
 		monitor gives 1
 		profile gives 1
 		run gives OwnFailureExit
@@ -1740,6 +1744,14 @@ end 'versionLine'
 // the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
 // where a pipe can reach it.
 //
+function runMcpServerCommand(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {McpServerCommandName} [{DevFlag}]") 'unexpectedArgument'
+		return 1
+	end 'unexpectedArgument'
+
+	return runMcpServer(args.devMode)
+end 'runMcpServerCommand'
+
 // ⚠ It reads NO positional, so the FIRST one is already the typo `refusedPositionalBeyond` exists to
 // name — `maxon version 1.2.3` must not print an answer that ignores half of what was typed.
 function runVersion(args MaxonArgs) returns ExitCode
@@ -1835,6 +1847,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `.maxon` files, skipping `build.maxon`, anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
+		mcpServer gives CommandReference.create(McpServerCommandName, arguments: "[{DevFlag}]", summary: "Speak the Model Context Protocol over stdio.", detail: "JSON-RPC bodies over newline-delimited stdio, providing MCP tools for compiling, testing, inspecting, and formatting Maxon code. With {DevFlag}, also exposes compiler development tools.", audience: CommandAudience.usingTheCompiler)
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
 		run gives CommandReference.create(RunCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under a host cache area ({RunCacheRootVariable} first, then LOCALAPPDATA or TEMP on Windows and TMPDIR or /tmp elsewhere) and reused while the program's sources, the standard library and this compiler all still hash the same. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
@@ -1882,6 +1895,7 @@ enum HelpOption
 	testNoTiming
 	testColor
 	dryRun
+	devMode
 end 'HelpOption'
 
 // One option's entry. ⭐ **THE COMMANDS ARE A FIELD, NOT A `(build, test)` PREFIX ON THE SENTENCE**,
@@ -1928,6 +1942,7 @@ function optionReference(option HelpOption) returns OptionReference
 		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test])
 		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test])
 		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade])
+		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, spec_test_outcome, worktree targeting).", commands: [MaxonCommand.mcpServer])
 	end 'whichOption'
 end 'optionReference'
 
@@ -2189,6 +2204,7 @@ enum MaxonCommand
 	// withdrawn flag spellings for the same question are refused by name at `WithdrawnHelpFlag`.
 	help
 	lspServer
+	mcpServer
 
 	// `maxon monitor` — run a `--debugstream` binary with a DebugStream ring attached and print the
 	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
@@ -2399,6 +2415,9 @@ module type MaxonArgs
 	// `--dry-run` (upgrade only): say what would run, and run nothing.
 	export var dryRun as bool
 
+	// `--dev` (mcp-server only): expose compiler contributor tools.
+	export var devMode as bool
+
 	// ⭐ Set when an argument names an option this driver ONCE HAD and deliberately withdrew. A
 	// separate field from `badOption` because the two owe the reader different sentences and `main`
 	// prints them in different words: an unknown option was never understood, a withdrawn one was and
@@ -2414,7 +2433,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", anyOptionButDryRun: "", badOption: "", dryRun: false, withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", anyOptionButDryRun: "", badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -2734,7 +2753,9 @@ module type MaxonArgs
 				// ⛔ ALSO A BAD OPTION: only `upgrade` has a dry run, and `main` exempts it from `badOption`.
 				// Any other command that took the flag would do for real what the caller asked to see first.
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
-			end 'dryRunFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
+			end 'dryRunFlag' else if arg == DevFlag 'devFlag'
+				parsed.devMode = true
+			end 'devFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
 				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnVersionFlag` and
 				// `withdrawnOptionMessage`. Both spellings are matched EXACTLY: anything longer that merely
 				// starts with one of them names no option this driver ever had, and belongs on the anonymous

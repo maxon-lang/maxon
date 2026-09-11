@@ -74,6 +74,7 @@ statically-typed, compiled language:
   `maxon-bin/.maxon/maxon`. It emits standalone executables for every target it supports, with no
   external runtime — see [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the current list.
 - **Language Server (LSP)** — `maxon lsp-server`, for IDE integration.
+- **Model Context Protocol (MCP)** — `maxon mcp-server`, for AI coding agent tool integration.
 - **VS Code extension** — syntax highlighting and language features.
 
 ## Install

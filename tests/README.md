@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Sixteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Seventeen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -24,6 +24,7 @@ SERVER its tests spawn.
 | `harness-fixtures/` | `spec-test` → `HarnessSelfTest` | `FixturesRelativeDir` |
 | `harness-gates/` | `spec-test` → `HarnessSelfTest` | `GatesRelativeDir` |
 | `lsp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
+| `mcp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
 | `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
@@ -148,6 +149,11 @@ tests/
     first-program-ranged-type.test.maxon    its "Adding a ranged type" prints `listening on 8080`, exit 0
     first-program-labeled-blocks.test.maxon its "Labeled blocks" prints `iteration 0` to `iteration 9`, exit 0
     first-program-try-otherwise.test.maxon  its "Fallible operations" prints `seat 1: Grace` then the fallback `seat 5: empty`, exit 0
+  mcp/
+    McpHarness.maxon                        the shared JSON-RPC stdio harness and JSON helpers
+    standard.test.maxon                     standard user-facing MCP server tests (8 standard tools)
+    dev.test.maxon                          contributor MCP server tests (11 tools + --dev)
+    rebuild.test.maxon                      compiler rebuild while MCP server is running (--timeout=60000)
 ```
 
 ## The six rules, and the hazard each one answers
@@ -174,7 +180,7 @@ Two independent reasons, and the second is the one that bites:
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
 `profile/ProfileHarness.maxon`, `run/RunHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon` and `examples/ExamplesHarness.maxon` are each their corpus's shared half,
+`define/DefineHarness.maxon`, `examples/ExamplesHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
 `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
@@ -241,7 +247,7 @@ Written down because a limit nobody states gets mistaken for coverage.
   tree-wide sweep tests what the tree actually contains. The `sizeof`/`countof`
   divergence was found by `grep`, not by a case.
   ⭐ **RUN IT AS A DIAGNOSTIC THE MOMENT A FORMATTING DEFECT IS SUSPECTED**: format all
-  453 real `.maxon` files — `maxon-bin/`, `stdlib/`, `maxon-dev-mcp/` — in a tree copy
+  real `.maxon` files — `maxon-bin/`, `stdlib/` — in a tree copy
   outside the repo and read what moved. It is not wired in as a gate because it is slow
   and needs that copy. Against a formatter believed correct it should touch the 8 files
   it is known to touch and nothing else.
@@ -514,3 +520,24 @@ Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs fi
 `-o` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
 out of the document as it stands and written into `temp/examples/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.
+
+## `mcp/` — JSON-RPC MCP server for end users and compiler contributors
+
+The Model Context Protocol (MCP) server runs over standard I/O using newline-delimited JSON-RPC 2.0.
+`McpHarness.maxon` provides the shared harness for spawning the compiler as an MCP server, exchanging
+JSON-RPC messages, and inspecting structured responses.
+
+- `standard.test.maxon` gates the default end-user mode (`maxon mcp-server`), verifying initialization,
+  the 8 standard tools (`build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`),
+  their input schemas, execution, and error handling.
+- `dev.test.maxon` gates contributor mode (`maxon mcp-server --dev`), verifying advertisement of 11 tools
+  (including `run_spec_test`, `run_scale_test`, `spec_test_outcome`), `repoRoot` and `from` schema additions,
+  and checkout validation.
+- `rebuild.test.maxon` tests that the compiler can be rebuilt while `maxon mcp-server` is actively running.
+  During self-rebuild, the running executable image is vacated to `.previous` and replaced on disk; the
+  MCP server process survives the replacement and continues serving subsequent JSON-RPC requests.
+
+⚠ **`rebuild.test.maxon` REBUILDS THE COMPILER AND EXCEEDS THE DEFAULT 5,000 ms DEADLINE**:
+Rebuilding `maxon-bin` compiles ~160,000 lines of code (~25 s). Run the rebuild case with a raised timeout:
+`maxon test tests/mcp -t=rebuild --timeout=60000`.
+

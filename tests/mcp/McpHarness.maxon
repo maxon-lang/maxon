@@ -1,0 +1,223 @@
+// McpHarness.maxon — Shared test harness for testing `maxon mcp-server`
+// and `maxon mcp-server --dev`.
+//
+// Spawns the compiler under test, pipes newline-delimited JSON-RPC requests
+// to stdin, and collects and parses the JSON-RPC responses from stdout.
+
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+export function executableSuffix() returns String
+	#if os(Windows)
+		return ".exe"
+	#else
+		return ""
+	#endif
+end 'executableSuffix'
+
+export function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
+	let binary = relative.resolve(Directory.currentPath())
+	if not File.exists(binary) 'noBinary'
+		panic("McpHarness: compiler binary not found at {binary.path}")
+	end 'noBinary'
+	return binary
+end 'testedCompilerPath'
+
+export typealias JsonDocArray = Array with JsonDoc
+
+type McpRun
+	export var stdout as String
+	export var stderr as String
+	export var exitCode as ExitInt
+
+	export static function create(stdout String, stderr String, exitCode ExitInt) returns McpRun
+		return Self{stdout: stdout, stderr: stderr, exitCode: exitCode}
+	end 'create'
+end 'McpRun'
+
+typealias RequestId = int(1 to i64.max)
+
+export function initRequest(id RequestId = 1) returns String
+	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"initialize\",\"params\":\{\}\}"
+end 'initRequest'
+
+export function initializedNotification() returns String
+	return "\{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"\}"
+end 'initializedNotification'
+
+export function toolsListRequest(id RequestId = 2) returns String
+	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/list\",\"params\":\{\}\}"
+end 'toolsListRequest'
+
+export function toolCallRequest(id RequestId, name String, argumentsJson String = "\{\}") returns String
+	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":\{\"name\":\"{name}\",\"arguments\":{argumentsJson}\}\}"
+end 'toolCallRequest'
+
+export function unknownMethodRequest(method String = "unknown/method", id RequestId = 1) returns String
+	return "\{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":\{\}\}"
+end 'unknownMethodRequest'
+
+export function runMcp(requests StringArray, devMode bool = false) returns McpRun
+	var argv = StringArray.create()
+	argv.push("mcp-server")
+	if devMode 'dev'
+		argv.push("--dev")
+	end 'dev'
+
+	var stdin = ""
+	let n = requests.count()
+	for i in 0 upto n 'each'
+		let r = try requests.get(i) otherwise continue
+		stdin = "{stdin}{r}\n"
+	end 'each'
+
+	var config = Configuration.create(Executable.path(testedCompilerPath()))
+	config.arguments = argv
+	config.standardInput = InputSource.bytes(stdin)
+
+	let out = try config.run() otherwise (e) 'fail'
+		panic("runMcp: failed to spawn: {e.displayReason()}")
+	end 'fail'
+
+	return McpRun.create(out.stdout, stderr: out.stderr, exitCode: out.exitCode())
+end 'runMcp'
+
+export function runMcpSingle(request String, devMode bool = false) returns McpRun
+	var reqs = StringArray.create()
+	reqs.push(request)
+	return runMcp(reqs, devMode: devMode)
+end 'runMcpSingle'
+
+export type StreamingMcpSession
+	export var server as StreamingSubprocess
+
+	export static function start(devMode bool = false) returns StreamingMcpSession
+		var argv = StringArray.create()
+		argv.push("mcp-server")
+		if devMode 'dev'
+			argv.push("--dev")
+		end 'dev'
+
+		let binary = testedCompilerPath()
+		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
+			panic("StreamingMcpSession: failed to spawn mcp server: {e.displayReason()}")
+		end 'spawnFailed'
+
+		return StreamingMcpSession{server: spawned}
+	end 'start'
+
+	export function sendLine(line String) throws SubprocessError
+		try self.server.writeStdinLine(line)
+	end 'sendLine'
+
+	export function readResponseDoc() returns JsonDoc throws SubprocessError
+		let line = try self.server.readStdoutLine()
+		return try Json.parse(line) otherwise panic("StreamingMcpSession: invalid JSON response: {line}")
+	end 'readResponseDoc'
+
+	export function close() returns ExitInt throws SubprocessError
+		self.server.closeStdin()
+		let code = try self.server.waitWithTimeout(10000) otherwise (e) 'waitErr'
+			self.server.release()
+			throw e
+		end 'waitErr'
+		self.server.release()
+		return code
+	end 'close'
+end 'StreamingMcpSession'
+
+export function responseDocs(run McpRun) returns JsonDocArray
+	var docs = JsonDocArray.create()
+	for line in run.stdout.split("\n") 'each'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'blank'
+			continue
+		end 'blank'
+		let doc = try Json.parse(trimmed) otherwise continue
+		docs.push(doc)
+	end 'each'
+	return docs
+end 'responseDocs'
+
+export function hasChildKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+	try doc.getChild(parent, key: key) otherwise return false
+	return true
+end 'hasChildKey'
+
+export function resultNode(doc JsonDoc) returns JsonNodeId
+	return try doc.getChild(doc.root, key: "result") otherwise panic("response has no result")
+end 'resultNode'
+
+function errorNode(doc JsonDoc) returns JsonNodeId
+	return try doc.getChild(doc.root, key: "error") otherwise panic("response has no error")
+end 'errorNode'
+
+export function toolNames(doc JsonDoc) returns StringArray
+	var names = StringArray.create()
+	let resId = resultNode(doc)
+	let toolsId = try doc.getChild(resId, key: "tools") otherwise return names
+	let count = try doc.arrayLength(toolsId) otherwise return names
+	for i in 0 upto count 'each'
+		let toolId = try doc.arrayAt(toolsId, index: i) otherwise continue
+		let name = try doc.getString(toolId, key: "name") otherwise continue
+		names.push(name)
+	end 'each'
+	return names
+end 'toolNames'
+
+export function containsString(arr StringArray, target String) returns bool
+	let n = arr.count()
+	for i in 0 upto n 'each'
+		let s = try arr.get(i) otherwise continue
+		if s.equals(target) 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'containsString'
+
+export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
+	var props = StringArray.create()
+	let resId = resultNode(doc)
+	let toolsId = try doc.getChild(resId, key: "tools") otherwise return props
+	let count = try doc.arrayLength(toolsId) otherwise return props
+	for i in 0 upto count 'each'
+		let toolId = try doc.arrayAt(toolsId, index: i) otherwise continue
+		let name = try doc.getString(toolId, key: "name") otherwise continue
+		if name.equals(toolName) 'found'
+			let schemaId = try doc.getChild(toolId, key: "inputSchema") otherwise return props
+			let propsId = try doc.getChild(schemaId, key: "properties") otherwise return props
+			let node = doc.get(propsId)
+			let keyCount = node.keys.count()
+			for k in 0 upto keyCount 'eachKey'
+				let keyName = try node.keys.get(k) otherwise continue
+				props.push(keyName)
+			end 'eachKey'
+			return props
+		end 'found'
+	end 'each'
+	return props
+end 'toolPropertyKeys'
+
+export function toolCallText(doc JsonDoc) returns String
+	let resId = resultNode(doc)
+	let contentId = try doc.getChild(resId, key: "content") otherwise return ""
+	let firstElemId = try doc.arrayAt(contentId, index: 0) otherwise return ""
+	return try doc.getString(firstElemId, key: "text") otherwise ""
+end 'toolCallText'
+
+export function toolCallIsError(doc JsonDoc) returns bool
+	let resId = resultNode(doc)
+	return try doc.getBool(resId, key: "isError") otherwise false
+end 'toolCallIsError'
+
+export function rpcErrorCode(doc JsonDoc) returns JsonInt
+	let errId = errorNode(doc)
+	return try doc.getInt(errId, key: "code") otherwise 0
+end 'rpcErrorCode'
+
+export function rpcErrorMessage(doc JsonDoc) returns String
+	let errId = errorNode(doc)
+	return try doc.getString(errId, key: "message") otherwise ""
+end 'rpcErrorMessage'

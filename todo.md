@@ -1,4 +1,3 @@
-- optimizer loop for fannkuch
 - claude skills (submit issue, etc)
 - libraries
 - A typealias (or any named type) used in a function's SIGNATURE must have visibility >= that

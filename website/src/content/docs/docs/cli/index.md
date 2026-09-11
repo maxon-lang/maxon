@@ -24,6 +24,7 @@ This document covers the Maxon command-line interface and project system.
 | `maxon spec-test [options]` | Run spec tests |
 | `maxon monitor <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
 | `maxon lsp-server` | Start the language server (LSP) |
+| `maxon mcp-server [--dev]` | Start the Model Context Protocol (MCP) server for AI coding agents |
 
 ---
 
@@ -199,6 +200,19 @@ maxon monitor app.exe
 ### `maxon lsp-server`
 
 Starts the language server for IDE integration. Communicates over stdin/stdout using the Language Server Protocol. Normally launched automatically by the VS Code extension.
+
+---
+
+### `maxon mcp-server`
+
+Starts the native Model Context Protocol (MCP) server for AI coding agent integration (Claude Desktop, Cursor, Antigravity, VS Code). Communicates over stdin/stdout using JSON-RPC 2.0.
+
+```bash
+maxon mcp-server        # standard mode: 8 tools (build, run, test, fmt, check, dump_ir, lookup_error_code, info)
+maxon mcp-server --dev  # developer mode: adds spec-test, scale-test, and repoRoot options
+```
+
+See the [MCP Server Guide](/docs/cli/mcp-server/) for client configuration examples, full tool documentation, and parameter schemas.
 
 ---
 

@@ -8,8 +8,8 @@
 // ⚠ THE ENTRY POINT IS `build`, NOT `main`. A manifest holds TASKS, and `build` is the one this
 // command asks for by name.
 //
-// ⚠ TWO TARGETS, SO A BARE `maxon build` LISTS THEM rather than picking one. Name the one you want:
-// `maxon build maxon-bin` or `maxon build dev-mcp`.
+// ⚠ A BARE `maxon build` BUILDS THE SOLE TARGET (`maxon-bin`).
+// To build explicitly: `maxon build maxon-bin`.
 //
 // ⛔ `maxon-bin`'s OUTPUT IS THE COMPILER'S OWN SLOT, so building it REPLACES THE BINARY RUNNING THE
 // COMMAND. The compiler renames its running image to `maxon.previous` first — an OS will not let a
@@ -133,12 +133,7 @@ export function build() returns ExitCode
 	let version = releaseVersion()
 
 	var targets = BuildConfigArray.create()
-	// ⚠ ONLY THE COMPILER TAKES THE DEFINES. `--define` refuses a name no file declares, and `dev-mcp`
-	// compiles a different source root with no `Version.maxon` under it — handing it these would be
-	// three E3149s. The `version:` beside them is a different fact: the binary's own metadata, which
-	// every target has.
 	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon", version: version, defines: versionDefines(version)))
-	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp", version: version))
 	Build.buildTargets(targets)
 	return 0
 end 'build'

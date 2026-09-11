@@ -1,0 +1,1730 @@
+// McpServer.maxon — `maxon mcp-server` command implementation.
+//
+// Built-in Model Context Protocol (MCP) server for Maxon users and developers
+// building Maxon projects with AI-assisted editors (e.g. Antigravity, Claude Code, Cursor).
+// Speaks JSON-RPC 2.0 over newline-delimited stdio.
+//
+// Tools provided:
+//   - `build`: Compile a Maxon project or file (`maxon build`)
+//   - `run`: Compile and execute a Maxon program (`maxon run`)
+//   - `test`: Run a project's unit tests (`maxon test`)
+//   - `fmt`: Format Maxon source files in place (`maxon fmt`)
+//   - `check`: Verify code syntax and incremental types (`maxon verify-warm-rebuild`)
+//   - `dump_ir`: Dump compiler intermediate representation (`maxon build --emit-ir`)
+//   - `lookup_error_code`: Look up explanations for Maxon compiler error codes (e.g. E1002, E3094)
+//   - `info`: Inspect compiler version, host environment, and targets
+
+let McpProtocolVersion = "2024-11-05"
+let ServerName = "maxon"
+
+enum McpError implements Error
+	notFound
+end 'McpError'
+
+union OptionalNode
+	some(id JsonNodeId)
+	none
+end 'OptionalNode'
+
+typealias RpcErrorCode = int(i32.min to i32.max)
+
+typealias BytePos = int(0 to u64.max)
+typealias ByteLength = int(0 to u64.max)
+typealias TestCount = int(0 to u64.max)
+typealias FindResult = int(-1 to i64.max)
+
+let SlashByte = 0x2F
+let BackslashByte = 0x5C
+let PassPrefix = "PASS "
+let FailPrefix = "FAIL "
+
+union RepoRootResult
+	resolved(path FilePath)
+	err(msg String)
+end 'RepoRootResult'
+
+type SpecSummary
+	export var passed as TestCount = 0
+	export var total as TestCount = 0
+	export var parsed as bool = false
+
+	export static function empty() returns SpecSummary
+		return Self{}
+	end 'empty'
+
+	export static function withCounts(passed TestCount, total TestCount) returns SpecSummary
+		return Self{passed: passed, total: total, parsed: true}
+	end 'withCounts'
+end 'SpecSummary'
+
+type McpParsedInt
+	export var value as TestCount
+	export var rest as String
+
+	export static function create(value TestCount, rest String) returns McpParsedInt
+		return Self{value: value, rest: rest}
+	end 'create'
+end 'McpParsedInt'
+
+type SpecTestEntry
+	export var spec as String
+	export var name as String
+	export var passed as bool
+
+	export static function create(spec String, name String, passed bool) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed}
+	end 'create'
+end 'SpecTestEntry'
+
+typealias SpecTestEntryArray = Array with SpecTestEntry
+
+type SpecFailureSummary
+	export var spec as String
+	export var message as String
+
+	export static function create(spec String, message String) returns SpecFailureSummary
+		return Self{spec: spec, message: message}
+	end 'create'
+end 'SpecFailureSummary'
+
+typealias SpecFailureSummaryArray = Array with SpecFailureSummary
+
+type SpecReport
+	export var tests as SpecTestEntryArray
+	export var failures as SpecFailureSummaryArray
+
+	export static function create(tests SpecTestEntryArray, failures SpecFailureSummaryArray) returns SpecReport
+		return Self{tests: tests, failures: failures}
+	end 'create'
+end 'SpecReport'
+
+type VerdictLabel
+	export var spec as String
+	export var name as String
+	export var rest as String
+
+	export static function create(spec String, name String, rest String) returns VerdictLabel
+		return Self{spec: spec, name: name, rest: rest}
+	end 'create'
+end 'VerdictLabel'
+
+// =============================================================================
+// JSON-RPC Node Copying
+// =============================================================================
+
+function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	return match node.kind 'k'
+		jsonNull gives dst.add(JsonNode.nullNode())
+		jsonBool gives dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber gives dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString gives dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray gives copyJsonArray(src, node: node, dst: dst)
+		jsonObject gives copyJsonObject(src, node: node, dst: dst)
+	end 'k'
+end 'copyJsonNode'
+
+function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let childId = try node.children.get(i) otherwise panic("copyJsonArray: child OOB")
+		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyJsonArray'
+
+function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise panic("copyJsonObject: key OOB")
+		let childId = try node.children.get(i) otherwise panic("copyJsonObject: child OOB")
+		keys.push(k)
+		children.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'copyJsonObject'
+
+// =============================================================================
+// JSON-RPC Framing & Responses
+// =============================================================================
+
+function findChildKey(doc JsonDoc, parent JsonNodeId, key String) returns JsonNodeId throws McpError
+	let node = doc.get(parent)
+	let n = node.keys.count()
+	for i in 0 upto n 'scan'
+		let k = try node.keys.get(i) otherwise continue
+		if k.equals(key) 'hit'
+			return try node.children.get(i) otherwise throw McpError.notFound
+		end 'hit'
+	end 'scan'
+	throw McpError.notFound
+end 'findChildKey'
+
+function resolveChildKey(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNode
+	let childId = try findChildKey(doc, parent: parent, key: key) otherwise return OptionalNode.none
+	return OptionalNode.some(childId)
+end 'resolveChildKey'
+
+function sendRpcResult(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId)
+	var envelope = JsonDoc.create()
+	let rpcVer = envelope.add(JsonNode.stringNode("2.0"))
+	let copiedId = copyJsonNode(reqDoc, srcId: idNode, dst: envelope)
+	let copiedRes = copyJsonNode(resultDoc, srcId: resultRoot, dst: envelope)
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	children.push(rpcVer)
+	keys.push("id")
+	children.push(copiedId)
+	keys.push("result")
+	children.push(copiedRes)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	print("{Json.stringify(envelope)}\n")
+end 'sendRpcResult'
+
+function sendRpcError(reqDoc JsonDoc, idNode JsonNodeId, code RpcErrorCode, message String)
+	var envelope = JsonDoc.create()
+	let rpcVer = envelope.add(JsonNode.stringNode("2.0"))
+	let copiedId = copyJsonNode(reqDoc, srcId: idNode, dst: envelope)
+
+	var errKeys = StringArray.create()
+	var errChildren = JsonNodeIdArray.create()
+	errKeys.push("code")
+	errChildren.push(envelope.add(JsonNode.numberNode(code as JsonFloat)))
+	errKeys.push("message")
+	errChildren.push(envelope.add(JsonNode.stringNode(message)))
+	let errObj = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	children.push(rpcVer)
+	keys.push("id")
+	children.push(copiedId)
+	keys.push("error")
+	children.push(errObj)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	print("{Json.stringify(envelope)}\n")
+end 'sendRpcError'
+
+function sendToolResult(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool)
+	var envelope = JsonDoc.create()
+	let typeId = envelope.add(JsonNode.stringNode("text"))
+	let textId = envelope.add(JsonNode.stringNode(payloadText))
+
+	var itemKeys = StringArray.create()
+	var itemChildren = JsonNodeIdArray.create()
+	itemKeys.push("type")
+	itemChildren.push(typeId)
+	itemKeys.push("text")
+	itemChildren.push(textId)
+	let item = envelope.add(JsonNode.objectNode(itemKeys, children: itemChildren))
+
+	var contentArr = JsonNodeIdArray.create()
+	contentArr.push(item)
+	let contentId = envelope.add(JsonNode.arrayNode(contentArr))
+
+	var resKeys = StringArray.create()
+	var resChildren = JsonNodeIdArray.create()
+	resKeys.push("content")
+	resChildren.push(contentId)
+	resKeys.push("isError")
+	resChildren.push(envelope.add(JsonNode.boolNode(isError)))
+	let resultRoot = envelope.add(JsonNode.objectNode(resKeys, children: resChildren))
+
+	sendRpcResult(reqDoc, idNode: idNode, resultDoc: envelope, resultRoot: resultRoot)
+end 'sendToolResult'
+
+function formatSubprocessResult(res CollectedOutput) returns String
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("success")
+	children.push(doc.add(JsonNode.boolNode(res.succeeded())))
+
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(res.exitCode() as JsonFloat)))
+
+	keys.push("stdout")
+	children.push(doc.add(JsonNode.stringNode(res.stdout)))
+
+	keys.push("stderr")
+	children.push(doc.add(JsonNode.stringNode(res.stderr)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return Json.stringifyPrettyNode(doc, root: doc.root)
+end 'formatSubprocessResult'
+
+function formatErrorPayload(message String) returns String
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("error")
+	children.push(doc.add(JsonNode.stringNode(message)))
+
+	keys.push("success")
+	children.push(doc.add(JsonNode.boolNode(false)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return Json.stringifyPrettyNode(doc, root: doc.root)
+end 'formatErrorPayload'
+
+// =============================================================================
+// Schema Helpers
+// =============================================================================
+
+function makeProperty(doc JsonDoc, propType String, description String) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(doc.add(JsonNode.stringNode(propType)))
+	keys.push("description")
+	children.push(doc.add(JsonNode.stringNode(description)))
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'makeProperty'
+
+function makeArrayProperty(doc JsonDoc, itemType String, description String) returns JsonNodeId
+	var itemKeys = StringArray.create()
+	var itemChildren = JsonNodeIdArray.create()
+	itemKeys.push("type")
+	itemChildren.push(doc.add(JsonNode.stringNode(itemType)))
+	let itemObj = doc.add(JsonNode.objectNode(itemKeys, children: itemChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(doc.add(JsonNode.stringNode("array")))
+	keys.push("description")
+	children.push(doc.add(JsonNode.stringNode(description)))
+	keys.push("items")
+	children.push(itemObj)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'makeArrayProperty'
+
+function addToolDescriptor(doc JsonDoc, name String, description String, propKeys StringArray, propChildren JsonNodeIdArray, requiredKeys StringArray) returns JsonNodeId
+	let propsObj = doc.add(JsonNode.objectNode(propKeys, children: propChildren))
+
+	var reqChildren = JsonNodeIdArray.create()
+	let nReq = requiredKeys.count()
+	for i in 0 upto nReq 'each'
+		let r = try requiredKeys.get(i) otherwise continue
+		reqChildren.push(doc.add(JsonNode.stringNode(r)))
+	end 'each'
+	let reqArr = doc.add(JsonNode.arrayNode(reqChildren))
+
+	var schemaKeys = StringArray.create()
+	var schemaChildren = JsonNodeIdArray.create()
+	schemaKeys.push("type")
+	schemaChildren.push(doc.add(JsonNode.stringNode("object")))
+	schemaKeys.push("properties")
+	schemaChildren.push(propsObj)
+	if nReq > 0 'hasReq'
+		schemaKeys.push("required")
+		schemaChildren.push(reqArr)
+	end 'hasReq'
+	let schemaObj = doc.add(JsonNode.objectNode(schemaKeys, children: schemaChildren))
+
+	var toolKeys = StringArray.create()
+	var toolChildren = JsonNodeIdArray.create()
+	toolKeys.push("name")
+	toolChildren.push(doc.add(JsonNode.stringNode(name)))
+	toolKeys.push("description")
+	toolChildren.push(doc.add(JsonNode.stringNode(description)))
+	toolKeys.push("inputSchema")
+	toolChildren.push(schemaObj)
+	return doc.add(JsonNode.objectNode(toolKeys, children: toolChildren))
+end 'addToolDescriptor'
+
+// =============================================================================
+// Request Handlers
+// =============================================================================
+
+function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId)
+	var doc = JsonDoc.create()
+	let protoVer = doc.add(JsonNode.stringNode(McpProtocolVersion))
+
+	var emptyKeys = StringArray.create()
+	var emptyChildren = JsonNodeIdArray.create()
+	let emptyTools = doc.add(JsonNode.objectNode(emptyKeys, children: emptyChildren))
+
+	var capKeys = StringArray.create()
+	var capChildren = JsonNodeIdArray.create()
+	capKeys.push("tools")
+	capChildren.push(emptyTools)
+	let caps = doc.add(JsonNode.objectNode(capKeys, children: capChildren))
+
+	var infoKeys = StringArray.create()
+	var infoChildren = JsonNodeIdArray.create()
+	infoKeys.push("name")
+	infoChildren.push(doc.add(JsonNode.stringNode(ServerName)))
+	infoKeys.push("version")
+	infoChildren.push(doc.add(JsonNode.stringNode(CompilerVersion)))
+	let serverInfo = doc.add(JsonNode.objectNode(infoKeys, children: infoChildren))
+
+	var resKeys = StringArray.create()
+	var resChildren = JsonNodeIdArray.create()
+	resKeys.push("protocolVersion")
+	resChildren.push(protoVer)
+	resKeys.push("capabilities")
+	resChildren.push(caps)
+	resKeys.push("serverInfo")
+	resChildren.push(serverInfo)
+	let resultId = doc.add(JsonNode.objectNode(resKeys, children: resChildren))
+
+	sendRpcResult(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: resultId)
+end 'handleInitialize'
+
+function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool)
+	var doc = JsonDoc.create()
+	var toolsArr = JsonNodeIdArray.create()
+
+	// 1. build
+	var bKeys = StringArray.create()
+	var bVals = JsonNodeIdArray.create()
+	bKeys.push("path")
+	bVals.push(makeProperty(doc, propType: "string", description: "Path to source file or project directory to build. Defaults to '.'"))
+	bKeys.push("output")
+	bVals.push(makeProperty(doc, propType: "string", description: "Output executable path (-o)"))
+	bKeys.push("target")
+	bVals.push(makeProperty(doc, propType: "string", description: "Target triple or target name in build.maxon"))
+	bKeys.push("emitIr")
+	bVals.push(makeProperty(doc, propType: "boolean", description: "Emit intermediate representation (--emit-ir)"))
+	if devMode 'bDev'
+		bKeys.push("from")
+		bVals.push(makeProperty(doc, propType: "string", description: "Optional path to the compiler to build WITH (--from=<path>)."))
+		bKeys.push("repoRoot")
+		bVals.push(makeProperty(doc, propType: "string", description: "Optional absolute path to the Maxon repository root."))
+	end 'bDev'
+	var bReqs = StringArray.create()
+	toolsArr.push(addToolDescriptor(doc, name: "build", description: "Build a Maxon project or source file using `maxon build`.", propKeys: bKeys, propChildren: bVals, requiredKeys: bReqs))
+
+	// 2. run
+	var rKeys = StringArray.create()
+	var rVals = JsonNodeIdArray.create()
+	rKeys.push("path")
+	rVals.push(makeProperty(doc, propType: "string", description: "Path to the .maxon file to run"))
+	rKeys.push("arguments")
+	rVals.push(makeArrayProperty(doc, itemType: "string", description: "Command-line arguments to pass to the program"))
+	var rReqs = StringArray.create()
+	rReqs.push("path")
+	toolsArr.push(addToolDescriptor(doc, name: "run", description: "Compile and run a Maxon program using `maxon run`.", propKeys: rKeys, propChildren: rVals, requiredKeys: rReqs))
+
+	// 3. test
+	var tKeys = StringArray.create()
+	var tVals = JsonNodeIdArray.create()
+	tKeys.push("path")
+	tVals.push(makeProperty(doc, propType: "string", description: "Path to project directory containing tests. Defaults to '.'"))
+	tKeys.push("filter")
+	tVals.push(makeProperty(doc, propType: "string", description: "Substring pattern to filter tests by name"))
+	var tReqs = StringArray.create()
+	toolsArr.push(addToolDescriptor(doc, name: "test", description: "Run unit tests in a Maxon project using `maxon test`.", propKeys: tKeys, propChildren: tVals, requiredKeys: tReqs))
+
+	// 4. fmt
+	var fKeys = StringArray.create()
+	var fVals = JsonNodeIdArray.create()
+	fKeys.push("path")
+	fVals.push(makeProperty(doc, propType: "string", description: "Path to file or directory to format in place. Defaults to '.'"))
+	var fReqs = StringArray.create()
+	toolsArr.push(addToolDescriptor(doc, name: "fmt", description: "Format Maxon source code in place using `maxon fmt`.", propKeys: fKeys, propChildren: fVals, requiredKeys: fReqs))
+
+	// 5. check
+	var cKeys = StringArray.create()
+	var cVals = JsonNodeIdArray.create()
+	cKeys.push("path")
+	cVals.push(makeProperty(doc, propType: "string", description: "Path to the .maxon file to verify"))
+	var cReqs = StringArray.create()
+	cReqs.push("path")
+	toolsArr.push(addToolDescriptor(doc, name: "check", description: "Check a Maxon source file for syntax and type errors using `maxon verify-warm-rebuild`.", propKeys: cKeys, propChildren: cVals, requiredKeys: cReqs))
+
+	// 6. lookup_error_code
+	var lKeys = StringArray.create()
+	var lVals = JsonNodeIdArray.create()
+	lKeys.push("code")
+	lVals.push(makeProperty(doc, propType: "string", description: "Error code to look up (e.g. 'E1002', 'E2001', 'E3094', '3014')"))
+	var lReqs = StringArray.create()
+	lReqs.push("code")
+	toolsArr.push(addToolDescriptor(doc, name: "lookup_error_code", description: "Look up explanations and documentation for a Maxon compiler error code.", propKeys: lKeys, propChildren: lVals, requiredKeys: lReqs))
+
+	// 7. dump_ir
+	var dKeys = StringArray.create()
+	var dVals = JsonNodeIdArray.create()
+	dKeys.push("path")
+	dVals.push(makeProperty(doc, propType: "string", description: "Path to the .maxon source file"))
+	var dReqs = StringArray.create()
+	dReqs.push("path")
+	toolsArr.push(addToolDescriptor(doc, name: "dump_ir", description: "Dump the compiler intermediate representation (IR) for a Maxon source file.", propKeys: dKeys, propChildren: dVals, requiredKeys: dReqs))
+
+	// 8. info
+	var iKeys = StringArray.create()
+	var iVals = JsonNodeIdArray.create()
+	var iReqs = StringArray.create()
+	toolsArr.push(addToolDescriptor(doc, name: "info", description: "Get Maxon compiler version, host environment, and target information.", propKeys: iKeys, propChildren: iVals, requiredKeys: iReqs))
+
+	if devMode 'devTools'
+		// 9. run_spec_test
+		var stKeys = StringArray.create()
+		var stVals = JsonNodeIdArray.create()
+		stKeys.push("filter")
+		stVals.push(makeProperty(doc, propType: "string", description: "Optional pattern passed to --filter=<pattern>; ONE case-insensitive substring of the `<spec>/<test>` label."))
+		stKeys.push("directory")
+		stVals.push(makeProperty(doc, propType: "string", description: "Optional spec directory (default: 'specs')."))
+		stKeys.push("updateRequired")
+		stVals.push(makeProperty(doc, propType: "boolean", description: "Pass --update-required to regenerate committed RequiredIR blocks."))
+		stKeys.push("log")
+		stVals.push(makeProperty(doc, propType: "string", description: "Optional logging spec passed to --log=<value> (e.g. 'codegen:trace')."))
+		stKeys.push("network")
+		stVals.push(makeProperty(doc, propType: "boolean", description: "Pass --network to ALSO run live network fragments."))
+		stKeys.push("target")
+		stVals.push(makeProperty(doc, propType: "string", description: "Optional cross-compile target passed to --target=<value> (e.g. 'wasm32-wasi')."))
+		stKeys.push("workers")
+		stVals.push(makeProperty(doc, propType: "integer", description: "Number of worker subprocesses (--workers=<n>)."))
+		stKeys.push("repoRoot")
+		stVals.push(makeProperty(doc, propType: "string", description: "Optional absolute path to the Maxon repository root."))
+		var stReqs = StringArray.create()
+		toolsArr.push(addToolDescriptor(doc, name: "run_spec_test", description: "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts.", propKeys: stKeys, propChildren: stVals, requiredKeys: stReqs))
+
+		// 10. run_scale_test
+		var scKeys = StringArray.create()
+		var scVals = JsonNodeIdArray.create()
+		scKeys.push("rungs")
+		scVals.push(makeProperty(doc, propType: "integer", description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the program."))
+		scKeys.push("repeat")
+		scVals.push(makeProperty(doc, propType: "integer", description: "How many times each rung is compiled (1-25, default 3). CPU takes minimum; memory cross-checks."))
+		scKeys.push("note")
+		scVals.push(makeProperty(doc, propType: "string", description: "Record this run in docs/optimization-log.md with this text as the reason."))
+		scKeys.push("emitCorpus")
+		scVals.push(makeProperty(doc, propType: "string", description: "Dump generated corpus to this directory and compile nothing."))
+		scKeys.push("log")
+		scVals.push(makeProperty(doc, propType: "string", description: "Optional logging spec passed to --log=<value>."))
+		scKeys.push("repoRoot")
+		scVals.push(makeProperty(doc, propType: "string", description: "Optional absolute path to the Maxon repository root."))
+		var scReqs = StringArray.create()
+		toolsArr.push(addToolDescriptor(doc, name: "run_scale_test", description: "Run the maxon scaling instrument: compile a ladder of generated programs and report memory and CPU measurements.", propKeys: scKeys, propChildren: scVals, requiredKeys: scReqs))
+
+		// 11. spec_test_outcome
+		var soKeys = StringArray.create()
+		var soVals = JsonNodeIdArray.create()
+		soKeys.push("filter")
+		soVals.push(makeProperty(doc, propType: "string", description: "Pattern passed to --filter=<pattern>. Typically a test name like 'arithmetic/addition'."))
+		soKeys.push("target")
+		soVals.push(makeProperty(doc, propType: "string", description: "Optional cross-compile target passed to --target=<value>."))
+		soKeys.push("network")
+		soVals.push(makeProperty(doc, propType: "boolean", description: "Pass --network to ALSO run live network fragments."))
+		soKeys.push("repoRoot")
+		soVals.push(makeProperty(doc, propType: "string", description: "Optional absolute path to the Maxon repository root."))
+		var soReqs = StringArray.create()
+		soReqs.push("filter")
+		toolsArr.push(addToolDescriptor(doc, name: "spec_test_outcome", description: "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus failure summary.", propKeys: soKeys, propChildren: soVals, requiredKeys: soReqs))
+	end 'devTools'
+
+	let toolsListId = doc.add(JsonNode.arrayNode(toolsArr))
+	var resKeys = StringArray.create()
+	var resChildren = JsonNodeIdArray.create()
+	resKeys.push("tools")
+	resChildren.push(toolsListId)
+	let resultId = doc.add(JsonNode.objectNode(resKeys, children: resChildren))
+
+	sendRpcResult(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: resultId)
+end 'handleToolsList'
+
+// =============================================================================
+// Tool Execution
+// =============================================================================
+
+function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String, defaultVal String) returns String
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getString(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalStringArg'
+
+function getOptionalIntArg(doc JsonDoc, args OptionalNode, key String, defaultVal JsonInt) returns JsonInt
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getInt(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalIntArg'
+
+function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, defaultVal bool) returns bool
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getBool(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalBoolArg'
+
+function getOptionalStringArrayArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
+	var result = StringArray.create()
+	var parentId = 0 as JsonNodeId
+	match args 'a'
+		none then return result
+		some(id) then parentId = id
+	end 'a'
+
+	let childRes = resolveChildKey(doc, parent: parentId, key: key)
+	var childId = 0 as JsonNodeId
+	match childRes 'cr'
+		none then return result
+		some(id) then childId = id
+	end 'cr'
+
+	let count = try doc.arrayLength(childId) otherwise return result
+	for i in 0 upto count 'each'
+		let elemId = try doc.arrayAt(childId, index: i) otherwise continue
+		let elemNode = doc.get(elemId)
+		if elemNode.kind == JsonKind.jsonString 'isStr'
+			result.push(elemNode.stringValue)
+		end 'isStr'
+	end 'each'
+	return result
+end 'getOptionalStringArrayArg'
+
+function parentDirOrThrow(path FilePath) returns FilePath throws McpError
+	let bytes = path.path.toByteArray()
+	let n = bytes.count()
+	var i = n
+
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: bytes.get OOB")
+
+		if b != SlashByte and b != BackslashByte 'notSep'
+			continue
+		end 'notSep'
+
+		if i == 0 'leadingSep'
+			if n == 1 'isPosixRoot'
+				throw McpError.notFound
+			end 'isPosixRoot'
+
+			let root = sliceBytes(bytes, from: 0, until: 1)
+			return try FilePath.from(root) otherwise panic("parentDirOrThrow: lone separator")
+		end 'leadingSep'
+
+		let parentStr = sliceBytes(bytes, from: 0, until: i)
+		return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: invalid parent")
+	end 'scan'
+
+	throw McpError.notFound
+end 'parentDirOrThrow'
+
+function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
+	var out = ByteArray.create()
+	for i in from upto until 'copy'
+		let b = try bytes.get(i) otherwise panic("sliceBytes: get OOB")
+		out.push(b)
+	end 'copy'
+	return String.from(out)
+end 'sliceBytes'
+
+function childPath(parent FilePath, segment String) returns FilePath
+	let joined = "{parent.path}/{segment}"
+	return try FilePath.from(joined) otherwise panic("childPath: invalid path")
+end 'childPath'
+
+function isMaxonCheckout(dir FilePath) returns bool
+	let stdlibDir = childPath(dir, segment: "stdlib")
+	if not Directory.exists(stdlibDir) 'noStdlib'
+		return false
+	end 'noStdlib'
+	let binDir = childPath(dir, segment: "maxon-bin")
+	return Directory.exists(binDir)
+end 'isMaxonCheckout'
+
+function findRepoRoot(exePath FilePath) returns FilePath throws McpError
+	var dir = try parentDirOrThrow(exePath) otherwise throw McpError.notFound
+	for _ in 0 upto 16 'walk'
+		if dir.isAbsolute() and isMaxonCheckout(dir) 'found'
+			return dir
+		end 'found'
+		dir = try parentDirOrThrow(dir) otherwise throw McpError.notFound
+	end 'walk'
+	throw McpError.notFound
+end 'findRepoRoot'
+
+function resolveTargetRepoRoot(reqDoc JsonDoc, args OptionalNode, exePath FilePath) returns RepoRootResult
+	let raw = getOptionalStringArg(reqDoc, args: args, key: "repoRoot", defaultVal: "")
+	if not raw.isEmpty() 'hasExplicit'
+		let candidate = try FilePath.from(raw) otherwise return RepoRootResult.err("repoRoot \"{raw}\" is not a valid filesystem path")
+		if not candidate.isAbsolute() 'notAbs'
+			return RepoRootResult.err("repoRoot \"{raw}\" is relative. It must be an absolute path to a Maxon checkout.")
+		end 'notAbs'
+		if not isMaxonCheckout(candidate) 'notCheckout'
+			return RepoRootResult.err("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing stdlib/ or maxon-bin/)")
+		end 'notCheckout'
+		return RepoRootResult.resolved(candidate)
+	end 'hasExplicit'
+
+	let discovered = try findRepoRoot(exePath) otherwise 'noDisc'
+		return RepoRootResult.resolved(try FilePath.from(".") otherwise panic("'.' is valid"))
+	end 'noDisc'
+	return RepoRootResult.resolved(discovered)
+end 'resolveTargetRepoRoot'
+
+function formatArgv(exePath FilePath, argv StringArray) returns String
+	var out = exePath.path
+	let n = argv.count()
+	for i in 0 upto n 'each'
+		let a = try argv.get(i) otherwise continue
+		out = "{out} {a}"
+	end 'each'
+	return out
+end 'formatArgv'
+
+function combineStreams(stdout String, stderr String) returns String
+	if stdout.isEmpty() 'noOut'
+		return stderr
+	end 'noOut'
+	if stderr.isEmpty() 'noErr'
+		return stdout
+	end 'noErr'
+	return "{stdout}\n{stderr}"
+end 'combineStreams'
+
+function lastBytes(s String, max ByteLength) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	if n <= max 'fits'
+		return s
+	end 'fits'
+	return sliceBytes(bytes, from: (n - max) as BytePos, until: n as BytePos)
+end 'lastBytes'
+
+function isAsciiDigit(b Byte) returns bool
+	return b >= 0x30 and b <= 0x39
+end 'isAsciiDigit'
+
+function restAfterLeadingDigits(line String) returns String throws McpError
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	var i = 0
+
+	while i < n 'digits'
+		let b = try bytes.get(i) otherwise panic("restAfterLeadingDigits: get OOB")
+		if not isAsciiDigit(b) 'endOfDigits'
+			break
+		end 'endOfDigits'
+		i = i + 1
+	end 'digits'
+
+	if i == 0 'noDigits'
+		throw McpError.notFound
+	end 'noDigits'
+
+	return sliceBytes(bytes, from: i, until: n)
+end 'restAfterLeadingDigits'
+
+function isSummaryLine(line String) returns bool
+	let digits = try restAfterLeadingDigits(line) otherwise 'notANumber'
+		return false
+	end 'notANumber'
+
+	return digits.startsWith(" passed, ")
+end 'isSummaryLine'
+
+function firstSlash(s String) returns FindResult
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise panic("firstSlash: bytes.get OOB")
+		if b == 0x2F or b == 0x5C 'sep'
+			return i as FindResult
+		end 'sep'
+		i = i + 1
+	end 'scan'
+
+	return -1
+end 'firstSlash'
+
+function joinLines(lines StringArray) returns String
+	var s = ""
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let l = try lines.get(i) otherwise continue
+		if i == 0 'first'
+			s = l
+		end 'first' else 'rest'
+			s = "{s}\n{l}"
+		end 'rest'
+	end 'each'
+	return s
+end 'joinLines'
+
+function parseVerdictLabel(line String, prefix String) returns VerdictLabel throws McpError
+	let bytes = line.toByteArray()
+	let body = sliceBytes(bytes, from: prefix.byteLength(), until: bytes.count())
+	let bodyBytes = body.toByteArray()
+
+	let slash = firstSlash(body)
+	if slash < 0 'noSlash'
+		throw McpError.notFound
+	end 'noSlash'
+
+	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
+
+	let nameStart = (slash + 1) as BytePos
+	let total = bodyBytes.count()
+	var colon = nameStart
+
+	while colon < total 'findColon'
+		let b = try bodyBytes.get(colon) otherwise panic("parseVerdictLabel: get OOB")
+		if b == 0x3A 'foundColon'
+			break
+		end 'foundColon'
+		colon = colon + 1
+	end 'findColon'
+
+	let name = sliceBytes(bodyBytes, from: nameStart, until: colon).trim()
+	if name.isEmpty() 'noName'
+		throw McpError.notFound
+	end 'noName'
+
+	let reasonStart = (colon + 1) as BytePos if colon < total else total
+	let rest = sliceBytes(bodyBytes, from: reasonStart, until: total).trim()
+	return VerdictLabel.create(spec, name: name, rest: rest)
+end 'parseVerdictLabel'
+
+function parseReport(combined String) returns SpecReport
+	var tests = SpecTestEntryArray.create()
+	var failures = SpecFailureSummaryArray.create()
+
+	let lines = combined.split("\n")
+	let n = lines.count()
+	var i = 0
+
+	while i < n 'eachLine'
+		let line = try lines.get(i) otherwise panic("parseReport: lines.get OOB")
+		i = i + 1
+
+		if line.startsWith(PassPrefix) 'passed'
+			let label = try parseVerdictLabel(line, prefix: PassPrefix) otherwise 'notALabel'
+				continue
+			end 'notALabel'
+
+			tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: true))
+			continue
+		end 'passed'
+
+		if not line.startsWith(FailPrefix) 'notAVerdict'
+			continue
+		end 'notAVerdict'
+
+		let label = try parseVerdictLabel(line, prefix: FailPrefix) otherwise 'notALabel'
+			continue
+		end 'notALabel'
+
+		tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: false))
+
+		var reason = StringArray.create()
+		reason.push(label.rest)
+
+		while i < n 'reasonLines'
+			let next = try lines.get(i) otherwise panic("parseReport: lines.get OOB")
+
+			if next.startsWith(PassPrefix) or next.startsWith(FailPrefix) 'nextVerdict'
+				break
+			end 'nextVerdict'
+
+			if isSummaryLine(next.trim()) 'summary'
+				break
+			end 'summary'
+
+			reason.push(next)
+			i = i + 1
+		end 'reasonLines'
+
+		failures.push(SpecFailureSummary.create(label.spec, message: "{label.name}: {joinLines(reason).trim()}"))
+	end 'eachLine'
+
+	return SpecReport.create(tests, failures: failures)
+end 'parseReport'
+
+function parseLeadingInt(s String) returns McpParsedInt throws McpError
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	var value = 0 as TestCount
+	var anyDigits = false
+
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise panic("parseLeadingInt: get OOB")
+
+		if b < 0x30 or b > 0x39 'notDigit'
+			break
+		end 'notDigit'
+
+		value = value * 10 + ((b - 0x30) as TestCount)
+		anyDigits = true
+		i = i + 1
+	end 'scan'
+
+	if not anyDigits 'noDigits'
+		throw McpError.notFound
+	end 'noDigits'
+
+	let rest = sliceBytes(bytes, from: i, until: n)
+	return McpParsedInt.create(value, rest: rest)
+end 'parseLeadingInt'
+
+function findByteSequence(haystack ByteArray, needle String) returns BytePos throws McpError
+	let needleBytes = needle.toByteArray()
+	let nLen = needleBytes.count()
+	let hLen = haystack.count()
+
+	if nLen == 0 'empty'
+		return 0
+	end 'empty'
+
+	if nLen > hLen 'tooLong'
+		throw McpError.notFound
+	end 'tooLong'
+
+	let maxStart = hLen - nLen
+
+	for start in 0 upto maxStart + 1 'scan'
+		var matched = true
+
+		for k in 0 upto nLen 'inner'
+			let hb = try haystack.get(start + k) otherwise panic("findByteSequence: haystack get OOB")
+			let nb = try needleBytes.get(k) otherwise panic("findByteSequence: needleBytes get OOB")
+
+			if hb != nb 'ne'
+				matched = false
+				break
+			end 'ne'
+		end 'inner'
+
+		if matched 'hit'
+			return start
+		end 'hit'
+	end 'scan'
+
+	throw McpError.notFound
+end 'findByteSequence'
+
+function sliceAfter(s String, marker String) returns String throws McpError
+	let bytes = s.toByteArray()
+	let pos = try findByteSequence(bytes, needle: marker)
+	let start = pos + marker.byteLength()
+	return sliceBytes(bytes, from: start, until: bytes.count())
+end 'sliceAfter'
+
+function parseSummaryLine(line String) returns SpecSummary throws McpError
+	let passedMarker = " passed, "
+	let failedMarker = " failed"
+
+	let passed = try parseLeadingInt(line)
+
+	if not passed.rest.startsWith(passedMarker) 'notASummary'
+		throw McpError.notFound
+	end 'notASummary'
+
+	let afterPassed = try sliceAfter(passed.rest, marker: passedMarker)
+	let failed = try parseLeadingInt(afterPassed)
+
+	if not failed.rest.startsWith(failedMarker) 'notASummary'
+		throw McpError.notFound
+	end 'notASummary'
+
+	return SpecSummary.withCounts(passed.value, total: passed.value + failed.value)
+end 'parseSummaryLine'
+
+function parseSummary(combined String) returns SpecSummary
+	let lines = combined.split("\n")
+	var i = lines.count()
+
+	while i > 0 'scanBackwards'
+		i = i - 1
+		let line = try lines.get(i) otherwise panic("parseSummary: lines.get OOB")
+		let summary = try parseSummaryLine(line.trim()) otherwise 'notTheSummary'
+			continue
+		end 'notTheSummary'
+
+		return summary
+	end 'scanBackwards'
+
+	return SpecSummary.empty()
+end 'parseSummary'
+
+function executeBuildTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, devMode bool)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	let outputArg = getOptionalStringArg(reqDoc, args: args, key: "output", defaultVal: "")
+	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+	let emitIr = getOptionalBoolArg(reqDoc, args: args, key: "emitIr", defaultVal: false)
+
+	var workingDir = try FilePath.from(".") otherwise panic("'.' is valid")
+	var compilerBin = exePath
+
+	if devMode 'devBuild'
+		let rootRes = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
+		var rootError = ""
+		match rootRes 'rr'
+			resolved(p) then workingDir = p
+			err(msg) then rootError = msg
+		end 'rr'
+		if not rootError.isEmpty() 'badRoot'
+			sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload(rootError), isError: true)
+			return
+		end 'badRoot'
+
+		let fromArg = getOptionalStringArg(reqDoc, args: args, key: "from", defaultVal: "")
+		if not fromArg.isEmpty() 'hasFrom'
+			let candidate = try FilePath.from(fromArg) otherwise 'badFrom'
+				sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Invalid 'from' path: {fromArg}"), isError: true)
+				return
+			end 'badFrom'
+			if not File.exists(candidate) 'noFrom'
+				sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Compiler binary in 'from' does not exist: {fromArg}"), isError: true)
+				return
+			end 'noFrom'
+			compilerBin = candidate
+		end 'hasFrom'
+	end 'devBuild'
+
+	var argv = StringArray.create()
+	argv.push("build")
+
+	if devMode and (pathArg.isEmpty() or pathArg.equals(".")) and File.exists(childPath(workingDir, segment: "build.maxon")) 'defaultCompilerTarget'
+		argv.push("maxon-bin")
+	end 'defaultCompilerTarget' else if not pathArg.isEmpty() and not pathArg.equals(".") 'hasPath'
+		argv.push(pathArg)
+	end 'hasPath'
+
+	if not outputArg.isEmpty() 'hasOut'
+		argv.push("-o")
+		argv.push(outputArg)
+	end 'hasOut'
+	if not targetArg.isEmpty() 'hasTgt'
+		argv.push(targetArg)
+	end 'hasTgt'
+	if emitIr 'hasIr'
+		argv.push("--emit-ir")
+	end 'hasIr'
+
+	let res = try Subprocess.run(Executable.path(compilerBin), arguments: argv, workingDirectory: workingDir) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run build: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeBuildTool'
+
+function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	if pathArg.isEmpty() 'missingPath'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Missing required 'path' argument"), isError: true)
+		return
+	end 'missingPath'
+
+	let extraArgs = getOptionalStringArrayArg(reqDoc, args: args, key: "arguments")
+
+	var argv = StringArray.create()
+	argv.push("run")
+	argv.push(pathArg)
+	let n = extraArgs.count()
+	for i in 0 upto n 'each'
+		let a = try extraArgs.get(i) otherwise continue
+		argv.push(a)
+	end 'each'
+
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run program: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeRunTool'
+
+function executeTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ".")
+	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
+
+	var argv = StringArray.create()
+	argv.push("test")
+	if not pathArg.isEmpty() and not pathArg.equals(".") 'hasPath'
+		argv.push(pathArg)
+	end 'hasPath'
+	if not filterArg.isEmpty() 'hasFilter'
+		argv.push("--filter={filterArg}")
+	end 'hasFilter'
+
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run tests: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeTestTool'
+
+function executeFmtTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ".")
+
+	var argv = StringArray.create()
+	argv.push("fmt")
+	if not pathArg.isEmpty() and not pathArg.equals(".") 'hasPath'
+		argv.push(pathArg)
+	end 'hasPath'
+
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run fmt: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeFmtTool'
+
+function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	if pathArg.isEmpty() 'missingPath'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Missing required 'path' argument"), isError: true)
+		return
+	end 'missingPath'
+
+	var argv = StringArray.create()
+	argv.push("verify-warm-rebuild")
+	argv.push(pathArg)
+
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run check: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeCheckTool'
+
+function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	if pathArg.isEmpty() 'missingPath'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Missing required 'path' argument"), isError: true)
+		return
+	end 'missingPath'
+
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push(pathArg)
+	argv.push("--emit-ir")
+
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run dump_ir: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: formatSubprocessResult(res), isError: not res.succeeded())
+end 'executeDumpIrTool'
+
+function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FilePath)
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("name")
+	children.push(doc.add(JsonNode.stringNode(ServerName)))
+
+	keys.push("version")
+	children.push(doc.add(JsonNode.stringNode(CompilerVersion)))
+
+	keys.push("commit")
+	children.push(doc.add(JsonNode.stringNode(CompilerCommit)))
+
+	keys.push("commitDate")
+	children.push(doc.add(JsonNode.stringNode(CompilerCommitDate)))
+
+	keys.push("executable")
+	children.push(doc.add(JsonNode.stringNode(exePath.toString())))
+
+	keys.push("success")
+	children.push(doc.add(JsonNode.boolNode(true)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	sendToolResult(reqDoc, idNode: idNode, payloadText: Json.stringifyPrettyNode(doc, root: doc.root), isError: false)
+end 'executeInfoTool'
+
+function findErrorCodeDocumentation(code String) returns String
+	let stdlib = try locateStdlibDir() otherwise 'noStdlib'
+		return ""
+	end 'noStdlib'
+
+	let repoRoot = try stdlib.parent() otherwise 'noRepoRoot'
+		return ""
+	end 'noRepoRoot'
+
+	let regPath = repoRoot.join("maxon-bin/Compiler/ErrorCodeRegistry.maxon")
+	if not File.exists(regPath) 'notFound'
+		return ""
+	end 'notFound'
+
+	let text = try File.readText(regPath) otherwise return ""
+	let lines = text.split("\n")
+	let n = lines.count()
+	var docAcc = StringArray.create()
+	let targetPattern = "= \"{code}\""
+
+	for i in 0 upto n 'each'
+		let raw = try lines.get(i) otherwise continue
+		let line = raw.trim()
+
+		if line.startsWith("//") 'doc'
+			let b = line.toByteArray()
+			if b.count() > 2 'hasC'
+				var commentBytes = ByteArray.create()
+				let bLen = b.count()
+				for idx in 2 upto bLen 'cCopy'
+					let byteVal = try b.get(idx) otherwise continue
+					commentBytes.push(byteVal)
+				end 'cCopy'
+				docAcc.push(String.from(commentBytes).trim())
+			end 'hasC'
+		end 'doc' else 'notDoc'
+			if line.contains(targetPattern) 'hit'
+				var full = ""
+				let nDoc = docAcc.count()
+				for j in 0 upto nDoc 'join'
+					let d = try docAcc.get(j) otherwise continue
+					if not d.isEmpty() 'hasD'
+						full = d if full.isEmpty() else "{full} {d}"
+					end 'hasD'
+				end 'join'
+				return full
+			end 'hit'
+			docAcc.clear()
+		end 'notDoc'
+	end 'each'
+
+	return ""
+end 'findErrorCodeDocumentation'
+
+function stageForErrorCode(code String) returns String
+	let b = code.toByteArray()
+	if b.count() < 2 'tooShort'
+		return "General Compiler Diagnostic"
+	end 'tooShort'
+
+	let digitByte = try b.get(1) otherwise 'noDigit'
+		return "General Compiler Diagnostic"
+	end 'noDigit'
+
+	if digitByte == 0x31 's1'
+		return "Lexer (character encoding, string literals, escapes, comments)"
+	end 's1'
+	if digitByte == 0x32 's2'
+		return "Parser (syntax, grammar, block matching, expected tokens)"
+	end 's2'
+	if digitByte == 0x33 's3'
+		return "Semantic Analysis (type checking, borrowing, visibility, declaration lookup)"
+	end 's3'
+	if digitByte == 0x34 's4'
+		return "Intermediate Representation (IR generation)"
+	end 's4'
+	if digitByte == 0x35 's5'
+		return "Code Generation (native machine code emission)"
+	end 's5'
+	if digitByte == 0x36 's6'
+		return "Binary Writer / Linker (executable formatting and linking)"
+	end 's6'
+	if digitByte == 0x39 's9'
+		return "Internal Compiler Diagnostic"
+	end 's9'
+
+	return "General Compiler Diagnostic"
+end 'stageForErrorCode'
+
+function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+	let rawCode = getOptionalStringArg(reqDoc, args: args, key: "code", defaultVal: "").trim()
+	if rawCode.isEmpty() 'missingCode'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Missing required 'code' argument (e.g. 'E1002' or '3014')"), isError: true)
+		return
+	end 'missingCode'
+
+	let normalizedCode = rawCode.toUpper() if (rawCode.startsWith("E") or rawCode.startsWith("e")) else "E{rawCode}"
+	let stage = stageForErrorCode(normalizedCode)
+	let foundDoc = findErrorCodeDocumentation(normalizedCode)
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("code")
+	children.push(doc.add(JsonNode.stringNode(normalizedCode)))
+
+	keys.push("stage")
+	children.push(doc.add(JsonNode.stringNode(stage)))
+
+	let docText = foundDoc if not foundDoc.isEmpty() else "Documentation in ErrorCodeRegistry for {normalizedCode} under stage {stage}."
+	keys.push("documentation")
+	children.push(doc.add(JsonNode.stringNode(docText)))
+
+	keys.push("success")
+	children.push(doc.add(JsonNode.boolNode(true)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	sendToolResult(reqDoc, idNode: idNode, payloadText: Json.stringifyPrettyNode(doc, root: doc.root), isError: false)
+end 'executeLookupErrorCodeTool'
+
+function executeSpecTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let rootRes = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
+	var repoRoot = try FilePath.from(".") otherwise panic("'.' is valid")
+	var rootError = ""
+	match rootRes 'rr'
+		resolved(p) then repoRoot = p
+		err(msg) then rootError = msg
+	end 'rr'
+	if not rootError.isEmpty() 'badRoot'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload(rootError), isError: true)
+		return
+	end 'badRoot'
+
+	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
+	let dirArg = getOptionalStringArg(reqDoc, args: args, key: "directory", defaultVal: "specs")
+	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
+	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
+	let network = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
+	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+	let workers = getOptionalIntArg(reqDoc, args: args, key: "workers", defaultVal: 0)
+
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	if not dirArg.isEmpty() and not dirArg.equals("specs") 'hasDir'
+		argv.push(dirArg)
+	end 'hasDir'
+	if not filterArg.isEmpty() 'hasFilter'
+		argv.push("--filter={filterArg}")
+	end 'hasFilter'
+	if updateRequired 'hasUr'
+		argv.push("--update-required")
+	end 'hasUr'
+	if not logArg.isEmpty() 'hasLog'
+		argv.push("--log={logArg}")
+	end 'hasLog'
+	if network 'hasNet'
+		argv.push("--network")
+	end 'hasNet'
+	if not targetArg.isEmpty() 'hasTgt'
+		argv.push("--target={targetArg}")
+	end 'hasTgt'
+	if workers > 0 'hasWorkers'
+		argv.push("--workers={workers}")
+	end 'hasWorkers'
+
+	let startTime = Clock.nowMs()
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv, workingDirectory: repoRoot, timeoutMs: 600000) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run spec-test: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+	let durationMs = Clock.elapsedMs(startTime)
+
+	let combined = combineStreams(res.stdout, stderr: res.stderr)
+	let summary = parseSummary(combined)
+	let memoryLeak = res.exitCode() == 101
+
+	var failed = 0
+	if summary.parsed and summary.total >= summary.passed 'calcFail'
+		failed = summary.total - summary.passed
+	end 'calcFail'
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("command")
+	children.push(doc.add(JsonNode.stringNode(formatArgv(exePath, argv: argv))))
+	keys.push("passed")
+	children.push(doc.add(JsonNode.numberNode(summary.passed as JsonFloat)))
+	keys.push("failed")
+	children.push(doc.add(JsonNode.numberNode(failed as JsonFloat)))
+	keys.push("total")
+	children.push(doc.add(JsonNode.numberNode(summary.total as JsonFloat)))
+	keys.push("durationMs")
+	children.push(doc.add(JsonNode.numberNode(durationMs as JsonFloat)))
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(res.exitCode() as JsonFloat)))
+	keys.push("memoryLeak")
+	children.push(doc.add(JsonNode.boolNode(memoryLeak)))
+	keys.push("summaryParsed")
+	children.push(doc.add(JsonNode.boolNode(summary.parsed)))
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: 4096))))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	let payload = Json.stringifyPrettyNode(doc, root: doc.root)
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload, isError: not res.succeeded())
+end 'executeSpecTestTool'
+
+function executeScaleTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let rootRes = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
+	var repoRoot = try FilePath.from(".") otherwise panic("'.' is valid")
+	var rootError = ""
+	match rootRes 'rr'
+		resolved(p) then repoRoot = p
+		err(msg) then rootError = msg
+	end 'rr'
+	if not rootError.isEmpty() 'badRoot'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload(rootError), isError: true)
+		return
+	end 'badRoot'
+
+	let resultRelPath = ".scale-tmp/scale-result.json"
+	let resultPath = childPath(repoRoot, segment: resultRelPath)
+	try File.delete(resultPath) otherwise ignore
+
+	let rungs = getOptionalIntArg(reqDoc, args: args, key: "rungs", defaultVal: 0)
+	let repeat = getOptionalIntArg(reqDoc, args: args, key: "repeat", defaultVal: 0)
+	let note = getOptionalStringArg(reqDoc, args: args, key: "note", defaultVal: "")
+	let emitCorpus = getOptionalStringArg(reqDoc, args: args, key: "emitCorpus", defaultVal: "")
+	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
+
+	var argv = StringArray.create()
+	argv.push("scale-test")
+	argv.push("--result-json={resultPath.path}")
+	if rungs > 0 'hasRungs'
+		argv.push("--rungs={rungs}")
+	end 'hasRungs'
+	if repeat > 0 'hasRepeat'
+		argv.push("--repeat={repeat}")
+	end 'hasRepeat'
+	if not note.isEmpty() 'hasNote'
+		argv.push("--note={note}")
+	end 'hasNote'
+	if not emitCorpus.isEmpty() 'hasCorpus'
+		argv.push("--emit-corpus={emitCorpus}")
+	end 'hasCorpus'
+	if not logArg.isEmpty() 'hasLog'
+		argv.push("--log={logArg}")
+	end 'hasLog'
+
+	let startTime = Clock.nowMs()
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv, workingDirectory: repoRoot, timeoutMs: 600000) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run scale-test: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+	let durationMs = Clock.elapsedMs(startTime)
+
+	let combined = combineStreams(res.stdout, stderr: res.stderr)
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("command")
+	children.push(doc.add(JsonNode.stringNode(formatArgv(exePath, argv: argv))))
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(res.exitCode() as JsonFloat)))
+	keys.push("durationMs")
+	children.push(doc.add(JsonNode.numberNode(durationMs as JsonFloat)))
+
+	let resultText = try File.readText(resultPath) otherwise 'noResult'
+		keys.push("error")
+		children.push(doc.add(JsonNode.stringNode("scale-test wrote no result document — it exited {res.exitCode()} before completing. The tail of its output is in `rawTail`.")))
+		keys.push("rawTail")
+		children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: 4096))))
+		doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+		let payload = Json.stringifyPrettyNode(doc, root: doc.root)
+		sendToolResult(reqDoc, idNode: idNode, payloadText: payload, isError: not res.succeeded())
+		return
+	end 'noResult'
+
+	let parsed = try Json.parse(resultText) otherwise 'badJson'
+		keys.push("error")
+		children.push(doc.add(JsonNode.stringNode("scale-test result document is not valid JSON.")))
+		keys.push("rawTail")
+		children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: 4096))))
+		doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+		let payload = Json.stringifyPrettyNode(doc, root: doc.root)
+		sendToolResult(reqDoc, idNode: idNode, payloadText: payload, isError: not res.succeeded())
+		return
+	end 'badJson'
+
+	keys.push("result")
+	children.push(copyJsonNode(parsed, srcId: parsed.root, dst: doc))
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: 4096))))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	let payload = Json.stringifyPrettyNode(doc, root: doc.root)
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload, isError: not res.succeeded())
+end 'executeScaleTestTool'
+
+function executeSpecOutcomeTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
+	if filterArg.isEmpty() 'missingFilter'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Missing required 'filter' argument"), isError: true)
+		return
+	end 'missingFilter'
+
+	let rootRes = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
+	var repoRoot = try FilePath.from(".") otherwise panic("'.' is valid")
+	var rootError = ""
+	match rootRes 'rr'
+		resolved(p) then repoRoot = p
+		err(msg) then rootError = msg
+	end 'rr'
+	if not rootError.isEmpty() 'badRoot'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload(rootError), isError: true)
+		return
+	end 'badRoot'
+
+	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+	let network = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
+
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("specs")
+	argv.push("--filter={filterArg}")
+	if network 'hasNet'
+		argv.push("--network")
+	end 'hasNet'
+	if not targetArg.isEmpty() 'hasTgt'
+		argv.push("--target={targetArg}")
+	end 'hasTgt'
+
+	let startTime = Clock.nowMs()
+	let res = try Subprocess.run(Executable.path(exePath), arguments: argv, workingDirectory: repoRoot, timeoutMs: 600000) otherwise (err) 'spawnErr'
+		sendToolResult(reqDoc, idNode: idNode, payloadText: formatErrorPayload("Failed to run spec-test: {err.displayReason()}"), isError: true)
+		return
+	end 'spawnErr'
+	let durationMs = Clock.elapsedMs(startTime)
+
+	let combined = combineStreams(res.stdout, stderr: res.stderr)
+	let memoryLeak = res.exitCode() == 101
+	let report = parseReport(combined)
+
+	var passed = 0
+	var failed = 0
+	let testCount = report.tests.count()
+	for i in 0 upto testCount 'tally'
+		let entry = try report.tests.get(i) otherwise continue
+		if entry.passed 'p'
+			passed = passed + 1
+		end 'p' else 'f'
+			failed = failed + 1
+		end 'f'
+	end 'tally'
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("filter")
+	children.push(doc.add(JsonNode.stringNode(filterArg)))
+	keys.push("total")
+	children.push(doc.add(JsonNode.numberNode((passed + failed) as JsonFloat)))
+	keys.push("passed")
+	children.push(doc.add(JsonNode.numberNode(passed as JsonFloat)))
+	keys.push("failed")
+	children.push(doc.add(JsonNode.numberNode(failed as JsonFloat)))
+	keys.push("durationMs")
+	children.push(doc.add(JsonNode.numberNode(durationMs as JsonFloat)))
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(res.exitCode() as JsonFloat)))
+	keys.push("memoryLeak")
+	children.push(doc.add(JsonNode.boolNode(memoryLeak)))
+
+	var testNodeIds = JsonNodeIdArray.create()
+	for i in 0 upto testCount 'eachT'
+		let t = try report.tests.get(i) otherwise continue
+		var tKeys = StringArray.create()
+		var tChildren = JsonNodeIdArray.create()
+		tKeys.push("spec")
+		tChildren.push(doc.add(JsonNode.stringNode(t.spec)))
+		tKeys.push("test")
+		tChildren.push(doc.add(JsonNode.stringNode(t.name)))
+		tKeys.push("status")
+		let statusStr = "PASS" if t.passed else "FAIL"
+		tChildren.push(doc.add(JsonNode.stringNode(statusStr)))
+		testNodeIds.push(doc.add(JsonNode.objectNode(tKeys, children: tChildren)))
+	end 'eachT'
+	keys.push("tests")
+	children.push(doc.add(JsonNode.arrayNode(testNodeIds)))
+
+	var failNodeIds = JsonNodeIdArray.create()
+	let failCount = report.failures.count()
+	for i in 0 upto failCount 'eachF'
+		let f = try report.failures.get(i) otherwise continue
+		var fKeys = StringArray.create()
+		var fChildren = JsonNodeIdArray.create()
+		fKeys.push("spec")
+		fChildren.push(doc.add(JsonNode.stringNode(f.spec)))
+		fKeys.push("message")
+		fChildren.push(doc.add(JsonNode.stringNode(f.message)))
+		failNodeIds.push(doc.add(JsonNode.objectNode(fKeys, children: fChildren)))
+	end 'eachF'
+	keys.push("failures")
+	children.push(doc.add(JsonNode.arrayNode(failNodeIds)))
+
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: 4096))))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	let payload = Json.stringifyPrettyNode(doc, root: doc.root)
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload, isError: not res.succeeded())
+end 'executeSpecOutcomeTool'
+
+function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId, exePath FilePath, devMode bool)
+	let toolName = try reqDoc.getString(paramsId, key: "name") otherwise 'noName'
+		sendRpcError(reqDoc, idNode: idNode, code: -32602, message: "Missing 'name' in tools/call params")
+		return
+	end 'noName'
+
+	let argsRes = resolveChildKey(reqDoc, parent: paramsId, key: "arguments")
+	let argsNode = match argsRes 'ar'
+		none gives OptionalNode.none
+		some(id) gives OptionalNode.some(id)
+	end 'ar'
+
+	if toolName.equals("build") 'tBuild'
+		executeBuildTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath, devMode: devMode)
+		return
+	end 'tBuild'
+
+	if toolName.equals("run") 'tRun'
+		executeRunTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+		return
+	end 'tRun'
+
+	if toolName.equals("test") 'tTest'
+		executeTestTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+		return
+	end 'tTest'
+
+	if toolName.equals("fmt") 'tFmt'
+		executeFmtTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+		return
+	end 'tFmt'
+
+	if toolName.equals("check") 'tCheck'
+		executeCheckTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+		return
+	end 'tCheck'
+
+	if toolName.equals("dump_ir") 'tDumpIr'
+		executeDumpIrTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+		return
+	end 'tDumpIr'
+
+	if toolName.equals("info") 'tInfo'
+		executeInfoTool(reqDoc, idNode: idNode, exePath: exePath)
+		return
+	end 'tInfo'
+
+	if toolName.equals("lookup_error_code") 'tLookup'
+		executeLookupErrorCodeTool(reqDoc, idNode: idNode, args: argsNode)
+		return
+	end 'tLookup'
+
+	if devMode 'devDispatch'
+		if toolName.equals("run_spec_test") 'tSpecTest'
+			executeSpecTestTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+			return
+		end 'tSpecTest'
+
+		if toolName.equals("run_scale_test") 'tScaleTest'
+			executeScaleTestTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+			return
+		end 'tScaleTest'
+
+		if toolName.equals("spec_test_outcome") 'tSpecOutcome'
+			executeSpecOutcomeTool(reqDoc, idNode: idNode, args: argsNode, exePath: exePath)
+			return
+		end 'tSpecOutcome'
+	end 'devDispatch'
+
+	sendRpcError(reqDoc, idNode: idNode, code: -32601, message: "Unknown tool: {toolName}")
+end 'handleToolsCall'
+
+function handleRpcMessage(line String, exePath FilePath, devMode bool)
+	var doc = try Json.parse(line) otherwise 'badJson'
+		var errDoc = JsonDoc.create()
+		let nullId = errDoc.add(JsonNode.nullNode())
+		sendRpcError(errDoc, idNode: nullId, code: -32700, message: "Parse error - invalid JSON")
+		return
+	end 'badJson'
+
+	let root = doc.root
+	let rootNode = doc.get(root)
+	if rootNode.kind != JsonKind.jsonObject 'notObj'
+		var errDoc = JsonDoc.create()
+		let nullId = errDoc.add(JsonNode.nullNode())
+		sendRpcError(errDoc, idNode: nullId, code: -32600, message: "Invalid Request - expected JSON object")
+		return
+	end 'notObj'
+
+	let idRes = resolveChildKey(doc, parent: root, key: "id")
+	let idNode = match idRes 'ir'
+		none gives doc.add(JsonNode.nullNode())
+		some(id) gives id
+	end 'ir'
+	let isNotification = doc.get(idNode).kind == JsonKind.jsonNull
+
+	let method = try doc.getString(root, key: "method") otherwise 'noMethod'
+		if not isNotification 'respond'
+			sendRpcError(doc, idNode: idNode, code: -32600, message: "Invalid Request - missing 'method'")
+		end 'respond'
+		return
+	end 'noMethod'
+
+	if method.equals("initialize") 'init'
+		handleInitialize(doc, idNode: idNode)
+		return
+	end 'init'
+
+	if method.equals("notifications/initialized") 'initd'
+		return
+	end 'initd'
+
+	if method.equals("tools/list") 'tl'
+		handleToolsList(doc, idNode: idNode, devMode: devMode)
+		return
+	end 'tl'
+
+	if method.equals("tools/call") 'tc'
+		let paramsRes = resolveChildKey(doc, parent: root, key: "params")
+		match paramsRes 'pr'
+			none then sendRpcError(doc, idNode: idNode, code: -32602, message: "Missing 'params' for tools/call")
+			some(paramsId) then handleToolsCall(doc, idNode: idNode, paramsId: paramsId, exePath: exePath, devMode: devMode)
+		end 'pr'
+		return
+	end 'tc'
+
+	if not isNotification 'unknownMethod'
+		sendRpcError(doc, idNode: idNode, code: -32601, message: "Method not found: {method}")
+	end 'unknownMethod'
+end 'handleRpcMessage'
+
+// =============================================================================
+// Server Entry Point
+// =============================================================================
+
+export function runMcpServer(devMode bool) returns ExitCode
+	let exePath = try Process.executablePath() otherwise 'noExe'
+		printError("maxon {McpServerCommandName}: failed to determine executable path\n")
+		return 1
+	end 'noExe'
+
+	var stdin = Console.stdin()
+
+	while true 'serverLoop'
+		let line = try stdin.readLine() otherwise 'eof'
+			return 0
+		end 'eof'
+
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'empty'
+			continue
+		end 'empty'
+
+		handleRpcMessage(trimmed, exePath: exePath, devMode: devMode)
+	end 'serverLoop'
+
+	return 0
+end 'runMcpServer'

@@ -1,0 +1,166 @@
+// dev.test.maxon — Tests for `maxon mcp-server --dev` (compiler contributor mode).
+//
+// Verifies:
+// 1. All 11 tools advertised (8 standard + 3 dev tools)
+// 2. Build tool inputSchema exposes `repoRoot` and `from`
+// 3. Contributor tools inputSchemas expose required arguments
+// 4. `repoRoot` validation (relative path refusal, non-checkout refusal)
+// 5. Argument validation for contributor tools (from, filter, repoRoot)
+
+test 'dev mcp-server tools/list advertises 11 tools including contributor tools'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolsListRequest(2))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no tools/list doc")
+
+	let names = toolNames(doc)
+	try Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mcp-server must advertise exactly 11 tools")
+
+	// Standard tools
+	try Expect.isTrue(containsString(names, target: "build"))
+	try Expect.isTrue(containsString(names, target: "run"))
+	try Expect.isTrue(containsString(names, target: "test"))
+	try Expect.isTrue(containsString(names, target: "fmt"))
+	try Expect.isTrue(containsString(names, target: "check"))
+	try Expect.isTrue(containsString(names, target: "dump_ir"))
+	try Expect.isTrue(containsString(names, target: "lookup_error_code"))
+	try Expect.isTrue(containsString(names, target: "info"))
+
+	// Contributor tools
+	try Expect.isTrue(containsString(names, target: "run_spec_test"), message: "missing run_spec_test in dev mode")
+	try Expect.isTrue(containsString(names, target: "run_scale_test"), message: "missing run_scale_test in dev mode")
+	try Expect.isTrue(containsString(names, target: "spec_test_outcome"), message: "missing spec_test_outcome in dev mode")
+end 'dev mcp-server tools/list advertises 11 tools including contributor tools'
+
+test 'dev mcp-server build tool inputSchema exposes repoRoot and from'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolsListRequest(2))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no doc")
+
+	let props = toolPropertyKeys(doc, toolName: "build")
+	try Expect.isTrue(containsString(props, target: "path"))
+	try Expect.isTrue(containsString(props, target: "output"))
+	try Expect.isTrue(containsString(props, target: "target"))
+	try Expect.isTrue(containsString(props, target: "emitIr"))
+	try Expect.isTrue(containsString(props, target: "repoRoot"), message: "repoRoot must be exposed in dev mode")
+	try Expect.isTrue(containsString(props, target: "from"), message: "from must be exposed in dev mode")
+end 'dev mcp-server build tool inputSchema exposes repoRoot and from'
+
+test 'dev mcp-server contributor tools expose repoRoot in inputSchema'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolsListRequest(2))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no doc")
+
+	let specProps = toolPropertyKeys(doc, toolName: "run_spec_test")
+	try Expect.isTrue(containsString(specProps, target: "repoRoot"))
+	try Expect.isTrue(containsString(specProps, target: "filter"))
+
+	let scaleProps = toolPropertyKeys(doc, toolName: "run_scale_test")
+	try Expect.isTrue(containsString(scaleProps, target: "repoRoot"))
+	try Expect.isTrue(containsString(scaleProps, target: "rungs"))
+
+	let outcomeProps = toolPropertyKeys(doc, toolName: "spec_test_outcome")
+	try Expect.isTrue(containsString(outcomeProps, target: "repoRoot"))
+	try Expect.isTrue(containsString(outcomeProps, target: "filter"))
+end 'dev mcp-server contributor tools expose repoRoot in inputSchema'
+
+test 'dev mcp-server relative repoRoot is refused'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot must be an error")
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "is relative. It must be an absolute path")
+end 'dev mcp-server relative repoRoot is refused'
+
+test 'dev mcp-server non-checkout repoRoot is refused'
+	#if os(Windows)
+		let nonCheckout = "C:/non_checkout_dir"
+	#else
+		let nonCheckout = "/non_checkout_dir"
+	#endif
+
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"repoRoot\":\"{nonCheckout}\"\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc), message: "non-checkout repoRoot must be an error")
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "is not a Maxon checkout")
+end 'dev mcp-server non-checkout repoRoot is refused'
+
+test 'dev mcp-server spec_test_outcome requires filter argument'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "spec_test_outcome", argumentsJson: "\{\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc))
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "Missing required 'filter' argument")
+end 'dev mcp-server spec_test_outcome requires filter argument'
+
+test 'dev mcp-server build with nonexistent from binary is refused'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"from\":\"nonexistent/compiler/binary.exe\"\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc), message: "nonexistent from binary must be an error")
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "Compiler binary in 'from' does not exist")
+end 'dev mcp-server build with nonexistent from binary is refused'
+
+test 'dev mcp-server run_spec_test relative repoRoot is refused'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "run_spec_test", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot for run_spec_test must be an error")
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "is relative. It must be an absolute path")
+end 'dev mcp-server run_spec_test relative repoRoot is refused'
+
+test 'dev mcp-server run_scale_test relative repoRoot is refused'
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: "run_scale_test", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
+
+	let run = runMcp(reqs, devMode: true)
+	let docs = responseDocs(run)
+	let doc = try docs.get(1) otherwise panic("no call doc")
+
+	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot for run_scale_test must be an error")
+	let text = toolCallText(doc)
+	try Expect.contains(text, needle: "is relative. It must be an absolute path")
+end 'dev mcp-server run_scale_test relative repoRoot is refused'
