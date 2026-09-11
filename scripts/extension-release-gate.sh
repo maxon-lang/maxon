@@ -14,6 +14,9 @@
 #
 # ⚠ THE EXTENSION'S VERSION IS ITS OWN, NOT THE COMPILER'S. Lockstep would republish a byte-identical
 # extension under a new number at every compiler release and make its version history meaningless.
+# It is a calendar version, YEAR.MONTH.PATCH (`2026.9.0`), so it is never read as a compiler version:
+# a release takes the year and month it ships in, a second one that month bumps PATCH, and no part has
+# a leading zero, which the Marketplace refuses.
 #
 # Usage:
 #   scripts/extension-release-gate.sh            decide against the newest release tag
@@ -62,7 +65,8 @@ now="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$Exten
 if [ "$was" = "$now" ]; then
 	echo "extension-release-gate: the extension changed since $previous but its version is still $now." >&2
 	echo "  vsce refuses to republish an existing version, so this release would publish the compiler and" >&2
-	echo "  then fail to publish the extension. Bump \"version\" in $ExtensionManifest." >&2
+	echo "  then fail to publish the extension. Set \"version\" in $ExtensionManifest to this month's" >&2
+	echo "  YEAR.MONTH.0, or bump PATCH if the extension already shipped this month." >&2
 	echo "" >&2
 	echo "  Commits touching $ExtensionPath/:" >&2
 	printf '%s\n' "$changed" | sed 's/^/    /' >&2

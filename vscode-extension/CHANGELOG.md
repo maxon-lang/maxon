@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0
+Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
+
+## 2026.9.0
 
 ### Added
 

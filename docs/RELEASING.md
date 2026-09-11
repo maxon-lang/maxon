@@ -165,7 +165,7 @@ rebuilds.
 |---|---|
 | **Homebrew** | `installer/homebrew/generate.sh` → `dist/homebrew/maxon.rb`, for arm64 macOS and x64/arm64 Linux. `homebrew.yml` installs and `brew test`s it on all three before committing it to `maxon-lang/homebrew-tap` as `Formula/maxon.rb`. ⛔ Installs as `maxon-lang/tap/maxon` and cannot be shortened: bare `maxon` is Maxon Computer's **cask**. |
 | **Docker** | `installer/docker/Dockerfile`, built by `docker.yml` from the release's own archives into `ghcr.io/maxon-lang/maxon` — `debian` (the default) and `distroless` variants, amd64 and arm64, each built on its own runner and tested before anything is pushed. Tags `X.Y.Z` and `X.Y` (plus `X` from 1.0), with `-distroless` for the second variant; `latest` and `distroless` move only when the version is the newest release. ⚠ GHCR creates the package private: make it public once, in the organisation's package settings. |
-| **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. |
+| **VS Code** | `vscode-extension/`, published to the Marketplace and Open VSX from the same `.vsix`. Its version is a calendar version, `YEAR.MONTH.PATCH` (`2026.9.0`), independent of the compiler's so the two are never confused: a release takes the month it ships in, a second that month bumps PATCH, no leading zeros. `scripts/extension-release-gate.sh` refuses a changed extension whose version did not move. |
 
 ---
 
